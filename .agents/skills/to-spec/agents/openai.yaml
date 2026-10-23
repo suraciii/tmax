@@ -1,0 +1,3 @@
+interface:
+  display_name: "To spec"
+  short_description: "Write specs following specs/AGENTS.md"

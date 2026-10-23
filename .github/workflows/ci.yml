@@ -1,0 +1,67 @@
+name: Main CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Main full verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Run full gate with evidence
+        run: just verify "$RUNNER_TEMP/verification"
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-verification-evidence
+          path: ${{ runner.temp }}/verification
+          if-no-files-found: error
+
+  portable:
+    name: CLI (${{ matrix.os }}, Rust ${{ matrix.rust }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+        rust: [stable]
+        include:
+          - os: ubuntu-24.04
+            rust: '1.88.0'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release CLI
+        run: cargo build --locked --release --workspace
+      - name: Exercise release CLI
+        shell: bash
+        run: |
+          ./target/release/tmax --help
+          ./target/release/tmax --version

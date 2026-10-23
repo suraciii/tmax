@@ -1,0 +1,15 @@
+[package]
+name = "tmax-cli"
+description = "tmax command-line application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "tmax"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true

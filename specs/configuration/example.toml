@@ -1,0 +1,208 @@
+# Illustrative private persistence at ~/.tmax/tmax.toml; schema version stays 1.
+# Not implemented runtime support, onboarding input, or a file callers must author.
+# Explicit CLI resource arguments create/update settings; Web is optional.
+# Secret references denote provisioned protected storage under ~/.tmax.
+# No clear secrets belong here; these illustrative references are not usable keys.
+version = 1
+
+# Explicit illustrative proxy choice, not a claim that this local proxy is running.
+# Direct policy canonically omits [network]; manual mode = "direct" remains valid.
+# This policy governs tmax-owned outbound work, not native-agent networking.
+[network]
+mode = "proxy"
+proxy_url = "http://127.0.0.1:8080"
+
+# One independent proxy and shared key; no Agent registration is needed to serve it.
+# Initial explicit proxy configure provisions this protected reference once.
+[proxy]
+listen = "127.0.0.1:17840"
+key_ref = "local-proxy"
+autostart = false
+
+[providers.opencode-go]
+metadata = "opencode-go"
+region = "default"
+
+[providers.opencode-go.auth]
+method = "api-key"
+key_ref = "go-primary"
+
+[providers.opencode-go.subscription]
+plan = "OpenCode Go"
+
+# Incremental provider setup does not require authentication or registered models.
+# Its published singleton default needs no explicit region/base selector.
+[providers.opencode-go-setup]
+metadata = "opencode-go"
+
+[providers.opencode-go.models."deepseek-v4.1-flash"]
+tier = "L0"
+priority = 80
+timezone = "Etc/UTC"
+
+[providers.opencode-go.models."glm-5.3-flash"]
+tier = "L1"
+priority = 50
+
+[providers.opencode-go.models."kimi-k3"]
+tier = "L2"
+priority = 40
+
+# Declare coverage only after these concrete registrations; scopes are user choices.
+# Manual observations are runtime data registered by CLI, never values in this TOML.
+[providers.opencode-go.inputs.weekly-allowance]
+kind = "quota"
+source = "manual"
+scope = "example-weekly-allowance"
+models = ["deepseek-v4.1-flash"]
+max_age_seconds = 3600
+
+[providers.opencode-go.inputs.reset-announcement]
+kind = "reset"
+source = "manual"
+scope = "example-reset-announcement"
+models = ["deepseek-v4.1-flash"]
+max_age_seconds = 86400
+
+# The first matching rule replaces priority; a later larger score does not win.
+# Rule kind comes from its input; without fresh values both skip to base priority.
+[[providers.opencode-go.models."deepseek-v4.1-flash".priority_rules]]
+id = "use-weekly-allowance"
+input = "weekly-allowance"
+priority = 120
+reset_within_seconds = 21600
+remaining_at_least_percent = "75.0"
+
+# Illustrative preferred hours, not a claim about this product's current tariffs.
+[providers.opencode-go.models."deepseek-v4.1-flash".priority_rules.time_window]
+weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+start = "08:00"
+end = "20:00"
+
+[[providers.opencode-go.models."deepseek-v4.1-flash".priority_rules]]
+id = "prefer-before-reset"
+input = "reset-announcement"
+priority = 130
+enabled = true
+reset_within_seconds = 21600
+
+[providers.opencode-go-2]
+metadata = "opencode-go"
+
+[providers.opencode-go-2.overrides]
+name = "OpenCode Go secondary"
+
+[providers.opencode-go-2.auth]
+method = "api-key"
+key_ref = "go-secondary"
+
+[providers.opencode-go-2.subscription]
+plan = "OpenCode Go"
+
+[providers.opencode-go-2.models."deepseek-v4.1-flash"]
+tier = "L0"
+priority = 70
+
+# Only this instance's output limit changes; other metadata remains inherited.
+[providers.opencode-go-2.models."deepseek-v4.1-flash".overrides.limit]
+output = 8192
+
+[providers.deepseek]
+metadata = "deepseek"
+
+# A known exact base selects the endpoint set; other protocols use its known map.
+[providers.deepseek.endpoints]
+messages = "https://api.deepseek.com/anthropic"
+
+[providers.deepseek.auth]
+method = "api-key"
+key_ref = "deepseek-personal"
+
+# Official DeepSeek's request ID differs from the scenario alias ID below.
+[providers.deepseek.models."deepseek-flash"]
+tier = "L0"
+priority = 60
+timezone = "Asia/Shanghai"
+
+# An illustrative user preference, not a declaration of current official tariffs.
+[[providers.deepseek.models."deepseek-flash".schedule]]
+weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+start = "00:00"
+end = "08:00"
+priority = 100
+
+[providers.deepseek.models."deepseek-v4-pro"]
+tier = "L3"
+priority = 30
+
+# One custom provider can expose several exact bases without copying its identity.
+# These reserved example URLs are not real or verified service endpoints.
+# Omitted responses is unavailable; no base, /v1 path, or protocol is inferred.
+[providers.custom-gateway]
+integration = "custom"
+
+[providers.custom-gateway.endpoints]
+chat-completions = "https://gateway.example/openai/v1"
+messages = "https://gateway.example/anthropic"
+
+[[model_aliases]]
+id = "L0"
+protocol = "chat-completions"
+tier = "L0"
+
+[[model_aliases]]
+id = "L1"
+protocol = "chat-completions"
+tier = "L1"
+
+[[model_aliases]]
+id = "L2"
+protocol = "chat-completions"
+tier = "L2"
+
+[[model_aliases]]
+id = "L3"
+protocol = "chat-completions"
+tier = "L3"
+
+[[model_aliases]]
+id = "deepseek-v4.1-flash"
+protocol = "chat-completions"
+continuity = "session"
+candidates = [
+  "opencode-go/deepseek-v4.1-flash",
+  "opencode-go-2/deepseek-v4.1-flash",
+  "deepseek/deepseek-flash",
+]
+
+# The settings above also form a standalone proxy configuration without Agents.
+# Absolute paths illustrate native-owned scopes, not defaults or tmax-owned data.
+# Read-only native discovery must establish an actual qualified path before apply.
+# ONE target can contain both upstream and proxy native provider entries.
+[agents.omp]
+agent = "omp"
+scope = "/home/example/omp-profile"
+default = { provider = "tmax", id = "deepseek-v4.1-flash", protocol = "chat-completions" }
+
+# The native provider name is local to this target, not another upstream instance.
+# Upstream-source IDs have no redundant tmax provider prefix.
+[agents.omp.providers.official]
+provider = "deepseek"
+models = [
+  { id = "deepseek-flash", protocol = "chat-completions" },
+]
+
+# Native display may be tmax/deepseek-v4.1-flash; wire IDs have no native prefix.
+# Alias continuity comes from the shared definition, never this selection.
+# This native subset configures the model picker; it is NOT a proxy access list.
+# Application needs the ready local listener and current shared proxy key.
+[agents.omp.providers.tmax]
+proxy = true
+models = [
+  { id = "deepseek-v4.1-flash", protocol = "chat-completions" },
+  { id = "L0", protocol = "chat-completions" },
+  { id = "L1", protocol = "chat-completions" },
+  { id = "L2", protocol = "chat-completions" },
+  { id = "L3", protocol = "chat-completions" },
+  { id = "opencode-go-2/deepseek-v4.1-flash", protocol = "chat-completions" },
+]
