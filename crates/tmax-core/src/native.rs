@@ -1,0 +1,2574 @@
+//! Native application is deliberately separate from desired-state persistence.
+//!
+//! Each adapter declares a concrete native schema, credential owner, precedence,
+//! and exact researched version. Config files are edited at owned paths, never
+//! regenerated from imported native state. Exact originals and written bytes are
+//! encrypted before the first external write. A write-ahead record survives an
+//! interruption, and three-way restoration preserves unowned later edits.
+//! Native auth inspection projects root namespace presence only, skipping every
+//! credential value without materializing, retaining, or exporting it.
+mod adapters;
+mod document;
+pub use adapters::supported_roles;
+
+use crate::{
+    Error, Request, Result,
+    config::{self, AgentTarget, Auth, Config},
+    secrets,
+    storage::{self, Store},
+};
+use adapters::{Entry, File};
+use document::Format;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Component, Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
+use zeroize::Zeroize;
+
+const INDEX: &str = "native/recovery.json";
+const LOGINS: &str = "native/logins.json";
+const MAX_NATIVE_BYTES: u64 = 8 * 1024 * 1024;
+#[derive(Default, Serialize, Deserialize)]
+struct Index {
+    records: Vec<Record>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Record {
+    id: String,
+    owner: String,
+    target: String,
+    agent: String,
+    scope: PathBuf,
+    payload_ref: String,
+    secret_refs: Vec<String>,
+    state: String,
+    files: Vec<FileRecord>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct FileRecord {
+    path: PathBuf,
+    format: Format,
+    original_absent: bool,
+    after_revision: String,
+    fields: Vec<Field>,
+    written: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Field {
+    path: Vec<String>,
+    after_hash: String,
+    before_hash: String,
+    observed_hash: String,
+    released: bool,
+}
+#[derive(Serialize, Deserialize)]
+struct Payload {
+    files: Vec<Capture>,
+}
+#[derive(Serialize, Deserialize)]
+struct Capture {
+    path: PathBuf,
+    before: Option<String>,
+    after: String,
+    exact_original_safe: bool,
+    baseline_values: Vec<(Vec<String>, Option<Value>)>,
+}
+#[derive(Default, Serialize, Deserialize)]
+struct Logins {
+    entries: Vec<LoginRecord>,
+}
+#[derive(Serialize, Deserialize)]
+struct LoginRecord {
+    provider: String,
+    target: String,
+    scope: PathBuf,
+    agent: String,
+    native_provider: String,
+    credential_id: Option<String>,
+    session_ref: String,
+    state: String,
+    source_revision: String,
+}
+struct Inputs {
+    file: File,
+    before: Option<String>,
+    observed: Option<String>,
+    after: String,
+    fields: Vec<Field>,
+    exact_original_safe: bool,
+    baseline_values: Vec<(Vec<String>, Option<Value>)>,
+}
+
+fn baseline<'a>(
+    capture: Option<&'a Capture>,
+    original: &'a Value,
+    path: &[String],
+) -> Option<&'a Value> {
+    match capture.and_then(|c| c.baseline_values.iter().find(|(p, _)| p == path)) {
+        Some((_, value)) => value.as_ref(),
+        None => document::get(original, path),
+    }
+}
+fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+fn field_hash(value: Option<&Value>) -> String {
+    value
+        .map(|v| digest(v.to_string().as_bytes()))
+        .unwrap_or_else(|| "absent".into())
+}
+fn revision(text: Option<&str>) -> String {
+    text.map(|s| digest(s.as_bytes()))
+        .unwrap_or_else(|| "absent".into())
+}
+fn unavailable() -> Error {
+    Error::new(
+        "native_scope_unavailable",
+        "Native scope or configuration is unavailable; inspect the exact selected native path",
+    )
+}
+fn scope(store: &Store, path: &Path) -> Result<PathBuf> {
+    let path = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        store.root.join(path)
+    };
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(Error::new(
+            "invalid_native_scope",
+            "Native scope must not contain parent traversal",
+        ));
+    }
+    let canonical = fs::canonicalize(&path).map_err(|_| unavailable())?;
+    if !canonical.is_dir() {
+        return Err(unavailable());
+    }
+    if canonical == store.root || canonical.starts_with(&store.root) {
+        return Err(Error::new(
+            "invalid_native_scope",
+            "Native scopes must remain outside tmax-owned storage",
+        ));
+    }
+    Ok(canonical)
+}
+fn read_native(path: &Path) -> Result<Option<String>> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(unavailable()),
+    };
+    if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > MAX_NATIVE_BYTES {
+        return Err(Error::new(
+            "unsafe_native_file",
+            "Native configuration must be a bounded regular file, not a symlink",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.nlink() > 1 {
+            return Err(Error::new(
+                "unsafe_native_file",
+                "Hard-linked native configuration cannot be independently managed",
+            ));
+        }
+    }
+    let bytes = fs::read(path).map_err(|_| unavailable())?;
+    String::from_utf8(bytes).map(Some).map_err(|_| {
+        Error::new(
+            "native_config_invalid",
+            "Native configuration must be UTF-8; no content was imported",
+        )
+    })
+}
+fn target<'a>(config: &'a Config, id: &str) -> Result<&'a AgentTarget> {
+    config
+        .agents
+        .get(id)
+        .ok_or_else(|| Error::new("unknown_resource", "Agent target is not configured"))
+}
+fn executable(agent: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|p| p.join(agent))
+            .find(|p| p.is_file())
+    })
+}
+fn native_command(agent: &str, scope: &Path) -> Result<tokio::process::Command> {
+    let executable = executable(agent).ok_or_else(|| {
+        Error::new(
+            "native_not_installed",
+            "The selected native executable is not on PATH",
+        )
+    })?;
+    let mut cmd = tokio::process::Command::new(executable);
+    cmd.current_dir(scope).kill_on_drop(true);
+    match agent {
+        "codex" => {
+            cmd.env("CODEX_HOME", scope);
+        }
+        "pi" => {
+            cmd.env("PI_CODING_AGENT_DIR", scope);
+        }
+        "omp" => {
+            cmd.env("PI_CODING_AGENT_DIR", scope)
+                .env_remove("OMP_PROFILE")
+                .env_remove("PI_PROFILE");
+        }
+        "opencode" => {
+            cmd.env("OPENCODE_CONFIG_DIR", scope)
+                .env("OPENCODE_DB", scope.join("opencode.db"))
+                .env("XDG_DATA_HOME", scope.join("native-data"))
+                .env("XDG_CONFIG_HOME", scope.join("native-config"))
+                .env("XDG_CACHE_HOME", scope.join("native-cache"))
+                .env("XDG_STATE_HOME", scope.join("native-state"));
+        }
+        "hermes" => {
+            cmd.env("HERMES_HOME", scope);
+        }
+        _ => return Err(Error::new("unsupported_agent", "Unknown native adapter")),
+    }
+    Ok(cmd)
+}
+fn detected_version(agent: &str, text: &str) -> Option<String> {
+    text.split_whitespace().find_map(|word| {
+        let word = if agent == "omp" {
+            word.strip_prefix("omp/").unwrap_or(word)
+        } else {
+            word
+        };
+        let word = word.trim_start_matches('v');
+        (word.starts_with(|c: char| c.is_ascii_digit())
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".+-_".contains(c)))
+        .then(|| word.to_owned())
+    })
+}
+fn hermes_provenance_runtime(executable: &Path) -> Option<(PathBuf, PathBuf)> {
+    // Resolve only the concrete researched shell-launcher forms as inert code
+    // metadata. Neither the repair-capable wrapper nor its bootstrap runs.
+    let mut launcher = fs::canonicalize(executable).ok()?;
+    for _ in 0..4 {
+        let text = read_native(&launcher).ok()??;
+        let exec = text.lines().find_map(|line| line.strip_prefix("exec "))?;
+        if let Some(next) = exec.strip_suffix(" \"$@\"") {
+            let next = next.trim_matches('"');
+            if !Path::new(next).is_absolute() || next.chars().any(char::is_whitespace) {
+                return None;
+            }
+            launcher = fs::canonicalize(next).ok()?;
+            continue;
+        }
+        let (python, _) = exec.split_once(" -I -c '")?;
+        if !Path::new(python).is_absolute() || python.chars().any(char::is_whitespace) {
+            return None;
+        }
+        let decoded = text.replace("'\"'\"'", "'");
+        let root = decoded.lines().find_map(|line| {
+            line.strip_prefix("sys.path.insert(0, '")
+                .and_then(|rest| rest.strip_suffix("')"))
+        })?;
+        if !Path::new(root).is_absolute() || !Path::new(root).is_dir() {
+            return None;
+        }
+        return Some((PathBuf::from(python), PathBuf::from(root)));
+    }
+    None
+}
+async fn hermes_version(path: &Path) -> Option<Vec<u8>> {
+    // --version performs network update checks; --print-runtime-command can
+    // repair interrupted source updates. Read launcher metadata, then invoke
+    // only the native stdlib provenance API, with no bootstrap or bytecode write.
+    let (program, root) = hermes_provenance_runtime(&executable("hermes")?)?;
+    let root = serde_json::to_string(root.to_str()?).ok()?;
+    let code = format!(
+        "import sys;sys.dont_write_bytecode=True;sys.path.insert(0,{root});from hermes_cli.version_info import get_version_info; print(get_version_info().derived_version)"
+    );
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(["-I", "-B", "-c", &code])
+        .env("HERMES_HOME", path)
+        .env("HERMES_DISABLE_LAZY_INSTALLS", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .current_dir(path)
+        .kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let output = tokio::time::timeout(Duration::from_secs(10), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    (output.status.success() && output.stdout.len() < 4096).then_some(output.stdout)
+}
+fn auth_namespace_from_reader(reader: impl std::io::Read, selected: &str) -> Result<bool> {
+    struct Namespace<'a>(&'a str);
+    impl<'de> serde::de::Visitor<'de> for Namespace<'_> {
+        type Value = bool;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a native credential namespace mapping")
+        }
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> std::result::Result<bool, M::Error> {
+            let mut present = false;
+            while let Some(name) = map.next_key::<String>()? {
+                present |= name == self.0;
+                map.next_value::<serde::de::IgnoredAny>()?;
+            }
+            Ok(present)
+        }
+    }
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let found=serde::de::Deserializer::deserialize_map(&mut deserializer,Namespace(selected)).map_err(|_|Error::new("native_auth_metadata_unavailable","Native credential namespace metadata is malformed; credential values were not materialized"))?;
+    deserializer.end().map_err(|_| {
+        Error::new(
+            "native_auth_metadata_unavailable",
+            "Native credential namespace metadata contains trailing data",
+        )
+    })?;
+    Ok(found)
+}
+fn auth_namespace_present(path: &Path, selected: &str) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(unavailable()),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_NATIVE_BYTES
+    {
+        return Err(Error::new(
+            "native_auth_metadata_unavailable",
+            "Native credential namespace metadata is not a bounded regular file",
+        ));
+    }
+    let file = fs::File::open(path).map_err(|_| unavailable())?;
+    auth_namespace_from_reader(std::io::Read::take(file, MAX_NATIVE_BYTES + 1), selected)
+}
+async fn version(agent: &str, path: &Path) -> Value {
+    let Some(exe) = executable(agent) else {
+        return json!({"state":"not_installed","version":null,"compatibility":"unknown","qualified_version":adapters::qualified_version(agent)});
+    };
+    let output = if agent == "hermes" {
+        hermes_version(path).await
+    } else {
+        match native_command(agent, path) {
+            Ok(mut cmd) => {
+                cmd.arg("--version")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null());
+                match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
+                    Ok(Ok(output)) if output.status.success() && output.stdout.len() < 4096 => {
+                        Some(output.stdout)
+                    }
+                    _ => None,
+                }
+            }
+            Err(_) => None,
+        }
+    };
+    let found = output
+        .as_deref()
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|text| detected_version(agent, text));
+    let exact = found.as_deref() == Some(adapters::qualified_version(agent));
+    json!({"executable":exe,"version":found,"state":if found.is_some(){"detected"}else{"unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
+}
+fn default_scope(store: &Store, agent: &str) -> PathBuf {
+    let env = match agent {
+        "codex" => "CODEX_HOME",
+        "pi" | "omp" => "PI_CODING_AGENT_DIR",
+        "hermes" => "HERMES_HOME",
+        "opencode" => "OPENCODE_CONFIG_DIR",
+        _ => "",
+    };
+    if let Some(path) = std::env::var_os(env).filter(|v| !v.is_empty()) {
+        return PathBuf::from(path);
+    }
+    match agent {
+        "codex" => store.home.join(".codex"),
+        "pi" => store.home.join(".pi/agent"),
+        "omp" => {
+            let root = std::env::var_os("PI_CONFIG_DIR")
+                .map(PathBuf::from)
+                .filter(|p| p.components().all(|c| matches!(c, Component::Normal(_))))
+                .map(|p| store.home.join(p))
+                .unwrap_or_else(|| store.home.join(".omp"));
+            match std::env::var_os("OMP_PROFILE").filter(|p| !p.is_empty()) {
+                Some(p) => root.join("profiles").join(p).join("agent"),
+                None => root.join("agent"),
+            }
+        }
+        "opencode" => std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| store.home.join(".config"))
+            .join("opencode"),
+        "hermes" => store.home.join(".hermes"),
+        _ => PathBuf::new(),
+    }
+}
+fn configuration_files(agent: &str, path: &Path) -> Vec<PathBuf> {
+    let names: &[&str] = match agent {
+        "codex" => &["config.toml"],
+        "pi" => &["models.json", "settings.json"],
+        "omp" => &["models.yml", "models.yaml", "models.json", "config.yml"],
+        "opencode" => &["opencode.jsonc", "opencode.json"],
+        "hermes" => &["config.yaml"],
+        _ => &[],
+    };
+    names.iter().map(|n| path.join(n)).collect()
+}
+fn auth_paths(agent: &str, path: &Path) -> Vec<PathBuf> {
+    match agent {
+        "codex" | "pi" | "hermes" => vec![path.join("auth.json")],
+        "omp" => vec![path.join("auth.json"), path.join("agent.db")],
+        "opencode" => vec![path.join("opencode.db")],
+        _ => vec![],
+    }
+}
+fn safe_files(agent: &str, path: &Path) -> Vec<Value> {
+    configuration_files(agent,path).into_iter().map(|p| match read_native(&p) { Ok(text) => json!({"path":p,"present":text.is_some(),"revision":revision(text.as_deref()),"content":"not_imported"}), Err(e) => json!({"path":p,"state":"unavailable","reason_code":e.code}) }).collect()
+}
+fn profile_paths(store: &Store, agent: &str) -> Vec<PathBuf> {
+    let root = match agent {
+        "omp" => store.home.join(".omp/profiles"),
+        "hermes" => store.home.join(".hermes/profiles"),
+        _ => return vec![],
+    };
+    let mut profiles = Vec::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                let path = if agent == "omp" {
+                    entry.path().join("agent")
+                } else {
+                    entry.path()
+                };
+                if path.is_dir() {
+                    profiles.push(path);
+                }
+            }
+        }
+    }
+    profiles.sort();
+    profiles
+}
+
+pub async fn discover(store: &Store, agent: Option<&str>, path: Option<&str>) -> Result<Value> {
+    if path.is_some() && agent.is_none() {
+        return Err(Error::new(
+            "invalid_arguments",
+            "An explicit native path requires --agent",
+        ));
+    }
+    if agent.is_some_and(|a| !adapters::AGENTS.contains(&a)) {
+        return Err(Error::new(
+            "unsupported_agent",
+            "Supported agents are codex, pi, omp, opencode, and hermes",
+        ));
+    }
+    let mut installations = Vec::new();
+    for a in adapters::AGENTS
+        .into_iter()
+        .filter(|a| agent.is_none_or(|wanted| wanted == *a))
+    {
+        let selected = path
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_scope(store, a));
+        let resolved = scope(store, &selected);
+        // Version commands are finite read-only native flags. Inspection never
+        // starts a native server, calls model discovery, or evaluates key helpers.
+        let evidence = version(a, resolved.as_deref().unwrap_or(&store.home)).await;
+        let scopes = profile_paths(store, a);
+        installations.push(json!({"target":null,"agent":a,"path":resolved.as_ref().unwrap_or(&selected),"scope_state":if resolved.is_ok(){"available"}else{"unavailable"},"installation":evidence,"profiles":scopes,"files":safe_files(a,&selected),"credential_scopes":auth_paths(a,&selected).iter().map(|p|json!({"path":p,"present":p.exists(),"contents":"not_read","owner":a})).collect::<Vec<_>>(),"precedence":adapters::precedence(a),"supported_roles":supported_roles(a),"imported":false}));
+    }
+    Ok(if path.is_some() {
+        installations.remove(0)
+    } else {
+        json!({"installations":installations})
+    })
+}
+fn owner(store: &Store, target: &str) -> Result<Option<String>> {
+    secrets::owner_identity(store, "agent", target)
+}
+fn record_for<'a>(index: &'a Index, identity: Option<&str>, scope: &Path) -> Option<&'a Record> {
+    identity.and_then(|identity| {
+        index.records.iter().rev().find(|r| {
+            r.owner == identity
+                && r.scope == scope
+                && r.state != "restored"
+                && r.state != "discarded"
+        })
+    })
+}
+fn validate_record(record: &Record) -> Result<()> {
+    if !record.scope.is_absolute()
+        || record.files.iter().any(|f| {
+            f.path.parent() != Some(record.scope.as_path()) || f.path.file_name().is_none()
+        })
+    {
+        return Err(Error::new(
+            "recovery_invalid",
+            "Native recovery paths do not match their captured scope",
+        ));
+    }
+    Ok(())
+}
+fn field_drift(record: &Record, read_credentials: bool) -> Result<Vec<Value>> {
+    validate_record(record)?;
+    let mut drift = Vec::new();
+    for file in &record.files {
+        if file.format == Format::Credential && !read_credentials {
+            continue;
+        }
+        let text = read_native(&file.path)?;
+        let value = document::parse(text.as_deref().unwrap_or(""), file.format)?;
+        for field in &file.fields {
+            let current = field_hash(document::get(&value, &field.path));
+            if current != field.after_hash
+                && current != field.before_hash
+                && current != field.observed_hash
+            {
+                drift.push(json!({"path":file.path,"field":field.path,"reason_code":"native_owned_field_changed"}));
+            }
+        }
+    }
+    Ok(drift)
+}
+fn record_view(record: &Record) -> Value {
+    let drift = field_drift(record, false);
+    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":"encrypted","files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":["agent restore --recovery","agent recovery discard"]})
+}
+
+pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> {
+    let target = target(config, id)?;
+    let path = scope(store, &target.scope)?;
+    let index: Index = store.read_json(INDEX)?;
+    let identity = owner(store, id)?;
+    let record = record_for(&index, identity.as_deref(), &path);
+    let mut blockers = Vec::new();
+    if target.default.is_none()
+        || target.providers.is_empty()
+        || target.providers.values().any(|p| p.models.is_empty())
+    {
+        blockers.push(json!({"code":"target_incomplete","message":"Explicit provider selections and default are required for application"}));
+    }
+    let plan = entries(store, config, id, target, &path, true, None).await;
+    if let Err(e) = &plan {
+        blockers.push(json!({"code":e.code,"field":e.field,"message":e.message}));
+    }
+    if let Some(record) = record {
+        blockers.extend(field_drift(record, false)?);
+    }
+    let installed = version(&target.agent, &path).await;
+    if installed["compatibility"] != "documented" {
+        blockers.push(json!({"code":"native_version_unknown","message":"Only the exact researched native version has schema evidence; unknown is not an incompatibility claim"}));
+    }
+    Ok(
+        json!({"target":id,"agent":target.agent,"path":path,"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider {json!({"provider":p})}else{json!({"proxy":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"precedence":adapters::precedence(&target.agent),"files":safe_files(&target.agent,&path),"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":record.map(|r|r.state.as_str()).unwrap_or("not_applied"),"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(record_view)}),
+    )
+}
+
+async fn entries(
+    store: &Store,
+    config: &Config,
+    id: &str,
+    target: &AgentTarget,
+    path: &Path,
+    _dry_run: bool,
+    _unlock: Option<&[u8]>,
+) -> Result<(Vec<Entry>, Vec<String>)> {
+    let mut entries = Vec::new();
+    let mut references = Vec::new();
+    let logins: Logins = store.read_json(LOGINS)?;
+    for (name, binding) in &target.providers {
+        if binding.models.is_empty() {
+            return Err(Error::new(
+                "target_incomplete",
+                "Every native provider entry requires an explicit model selection",
+            ));
+        }
+        let protocols: BTreeSet<&str> =
+            binding.models.iter().map(|m| m.protocol.as_str()).collect();
+        if protocols.len() != 1 && matches!(target.agent.as_str(), "codex" | "hermes") {
+            return Err(Error::new(
+                "incompatible",
+                "This native provider has one effective transport; select separate native entries for different protocols",
+            ));
+        }
+        let protocol = *protocols
+            .first()
+            .ok_or_else(|| Error::new("target_incomplete", "Select a native protocol"))?;
+        if target.agent == "codex" && protocol != "responses" {
+            return Err(Error::new(
+                "incompatible",
+                "Codex custom providers require the Responses native protocol",
+            ));
+        }
+        let mut canonical = None;
+        let mut model_routes = BTreeMap::new();
+        let (base, key_ref, login_provider) = if let Some(provider_id) = &binding.provider {
+            let provider = config.providers.get(provider_id).ok_or_else(|| {
+                Error::new(
+                    "unresolved_reference",
+                    "Native upstream provider does not resolve",
+                )
+            })?;
+            if !provider.enabled {
+                return Err(Error::new(
+                    "model_unavailable",
+                    "Native upstream provider is disabled",
+                ));
+            }
+            let integration = crate::integrations::integration_id(provider)?;
+            for selected in &binding.models {
+                let model = provider.models.get(&selected.id).ok_or_else(|| {
+                    Error::new(
+                        "unresolved_reference",
+                        "Native upstream model does not resolve",
+                    )
+                })?;
+                if !model.enabled {
+                    return Err(Error::new(
+                        "model_unavailable",
+                        "Native upstream model is disabled",
+                    ));
+                }
+                if !crate::integrations::protocols(provider, &selected.id)?
+                    .iter()
+                    .any(|p| p == &selected.protocol)
+                {
+                    return Err(Error::new(
+                        "incompatible",
+                        "Selected upstream model does not declare the native protocol",
+                    ));
+                }
+                if integration == "opencode-go"
+                    && selected.id == "deepseek-v4.1-flash"
+                    && selected.protocol != "chat-completions"
+                {
+                    return Err(Error::new(
+                        "compatibility_unavailable",
+                        "Exact OpenCode Go DeepSeek Flash Responses support is unknown; documented Chat Completions remains available",
+                    ));
+                }
+            }
+            if integration == "opencode-go" {
+                match target.agent.as_str() {
+                    "pi" => canonical = Some("opencode-go".to_owned()),
+                    "hermes" => {}
+                    _ => {
+                        return Err(Error::new(
+                            "compatibility_unavailable",
+                            "This exact native client lacks qualified per-conversation Go header coverage; pi 1.2.0 and Hermes 0.22.1 have separately sourced direct paths",
+                        ));
+                    }
+                }
+            }
+            if integration == "kimi-coding-plan"
+                && target.agent == "hermes"
+                && protocol == "messages"
+            {
+                return Err(Error::new(
+                    "incompatible",
+                    "This Hermes Messages path substitutes a Claude Code identity for Kimi; tmax does not configure client impersonation. The documented native Chat Completions path remains available",
+                ));
+            }
+            let bases = crate::integrations::resolve(provider)?;
+            for selected in &binding.models {
+                let endpoint = bases.get(&selected.protocol).cloned().ok_or_else(|| {
+                    Error::new(
+                        "incompatible",
+                        "The upstream integration has no endpoint for a selected native protocol",
+                    )
+                })?;
+                if model_routes
+                    .insert(selected.id.clone(), (selected.protocol.clone(), endpoint))
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        "native_namespace_conflict",
+                        "One native provider/model ID cannot simultaneously name two protocol variants",
+                    ));
+                }
+            }
+            let base = bases.get(protocol).cloned().ok_or_else(|| {
+                Error::new(
+                    "incompatible",
+                    "The upstream integration has no endpoint for this native protocol",
+                )
+            })?;
+            match provider.auth.as_ref() {
+                Some(Auth::ApiKey { key_ref }) => (base, Some(key_ref.clone()), None),
+                Some(Auth::Login { via, session_ref }) => {
+                    if via != id {
+                        return Err(Error::new(
+                            "native_login_consumer_unqualified",
+                            "A native-owned session cannot be copied to another target; select its declared owner or a qualified gateway",
+                        ));
+                    }
+                    let native_provider = match (integration, target.agent.as_str()) {
+                        ("codex-subscription", "codex" | "opencode") => "openai",
+                        ("codex-subscription", "pi" | "omp" | "hermes") => "openai-codex",
+                        ("kimi-coding-plan", "omp") => "kimi-code",
+                        _ => {
+                            return Err(Error::new(
+                                "native_login_unqualified",
+                                "This provider does not have a qualified login flow for this native owner",
+                            ));
+                        }
+                    };
+                    let source_revision = login_source_revision(target, path);
+                    let record = logins.entries.iter().find(|l| {
+                        l.provider == *provider_id
+                            && l.target == id
+                            && l.scope == path
+                            && l.source_revision == source_revision
+                            && l.state == "signed_in"
+                            && session_ref.as_deref() == Some(&l.session_ref)
+                    });
+                    if record.is_none() {
+                        return Err(Error::new(
+                            "credential_unavailable",
+                            "Sign in explicitly through the selected native owner; no ambient session is adopted",
+                        ));
+                    }
+                    (base, None, Some(native_provider.to_owned()))
+                }
+                None => {
+                    return Err(Error::new(
+                        "credential_unavailable",
+                        "Configure the selected provider's API key or native login before application",
+                    ));
+                }
+            }
+        } else if binding.proxy == Some(true) {
+            let proxy = config.proxy.as_ref().ok_or_else(|| {
+                Error::new("model_unavailable", "The sole proxy is not configured")
+            })?;
+            let status = crate::service::status(store).await?;
+            let desired_revision = config::load(store)?.revision;
+            let ready = &status["proxy"];
+            if ready["ready"] != true
+                || ready["listen"] != proxy.listen
+                || ready["key_ref"] != proxy.key_ref
+                || ready["config_revision"] != desired_revision
+            {
+                return Err(Error::new(
+                    "proxy_not_ready",
+                    "Explicitly start the configured proxy and activate the matching complete snapshot and shared key before native application",
+                ));
+            }
+            for m in &binding.models {
+                if let Some(alias) = config
+                    .model_aliases
+                    .iter()
+                    .find(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
+                {
+                    if alias.continuity.as_deref().unwrap_or("session") == "session"
+                        && !(target.agent == "pi" && m.protocol == "chat-completions")
+                    {
+                        return Err(Error::new(
+                            "compatibility_unavailable",
+                            "This native route lacks a qualified new/resumed session-origin boundary; pi 1.2.0 Chat Completions supports timestamped UUIDv7 affinity, while other routes retain fixed/stateless use",
+                        ));
+                    }
+                } else {
+                    let (p, model) = config::model(config, &m.id)?;
+                    if !p.enabled
+                        || !model.enabled
+                        || !crate::integrations::protocols(p, config::qualified(&m.id)?.1)?
+                            .iter()
+                            .any(|p| p == &m.protocol)
+                    {
+                        return Err(Error::new(
+                            "model_unavailable",
+                            "Selected public concrete proxy model is not published for this protocol",
+                        ));
+                    }
+                }
+            }
+            (
+                format!("http://{}", proxy.listen),
+                Some(proxy.key_ref.clone()),
+                None,
+            )
+        } else {
+            return Err(Error::new(
+                "invalid_configuration",
+                "Native entry requires exactly one upstream or proxy source",
+            ));
+        };
+        if model_routes.is_empty() {
+            for selected in &binding.models {
+                if model_routes
+                    .insert(
+                        selected.id.clone(),
+                        (selected.protocol.clone(), base.clone()),
+                    )
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        "native_namespace_conflict",
+                        "One native model ID cannot name two protocol variants",
+                    ));
+                }
+            }
+        }
+        if key_ref.is_some()
+            && target.agent == "pi"
+            && auth_namespace_present(
+                &path.join("auth.json"),
+                canonical.as_deref().unwrap_or(name),
+            )?
+        {
+            return Err(Error::new(
+                "native_credential_precedence_unknown",
+                "The selected exact native provider namespace has saved authentication that can override this key reference; resolve it through the native owner or select an independent scope. Credential values were not materialized",
+            ));
+        }
+        let key = key_ref.inspect(|reference| {
+            references.push(reference.clone());
+        });
+        entries.push(Entry {
+            name: name.clone(),
+            base,
+            protocol: protocol.into(),
+            key,
+            login_provider,
+            canonical,
+            proxy: binding.proxy == Some(true),
+            models: binding.models.iter().map(|m| m.id.clone()).collect(),
+            model_routes,
+        });
+    }
+    if target.default.is_none() || entries.is_empty() {
+        return Err(Error::new(
+            "target_incomplete",
+            "Explicit native provider selections and default are required before application",
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for entry in &entries {
+        if !names.insert(entry.native_name()) {
+            return Err(Error::new(
+                "native_scope_conflict",
+                "Two desired entries resolve to one native provider/authentication namespace",
+            ));
+        }
+    }
+    Ok((entries, references))
+}
+fn leaves(value: &Value, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, Value)>) {
+    if let Some(map) = value.as_object().filter(|m| !m.is_empty()) {
+        for (k, v) in map {
+            path.push(k.clone());
+            leaves(v, path, out);
+            path.pop();
+        }
+    } else {
+        out.push((path.clone(), value.clone()));
+    }
+}
+fn source_guard(store: &Store) -> Result<String> {
+    Ok(config::load(store)?.revision)
+}
+fn recheck(store: &Store, expected: &str, path: &Path, before: Option<&str>) -> Result<()> {
+    if source_guard(store)? != expected
+        || revision(read_native(path)?.as_deref()) != revision(before)
+    {
+        return Err(Error::new(
+            "inputs_changed",
+            "Configuration content changed during native execution; no newer content was overwritten",
+        ));
+    }
+    Ok(())
+}
+fn protect_payload(
+    store: &Store,
+    id: &str,
+    owner: &str,
+    target: &str,
+    payload: &Payload,
+    unlock: Option<&[u8]>,
+) -> Result<String> {
+    let mut bytes = serde_json::to_vec(payload).map_err(|_| {
+        Error::new(
+            "recovery_unavailable",
+            "Cannot encode protected native recovery",
+        )
+    })?;
+    let result = secrets::put(store, &format!("agent:{owner}:{target}"), &bytes, unlock);
+    bytes.zeroize();
+    result.map_err(|e| {
+        Error::new(
+            &e.code,
+            &format!("Native recovery {id} could not be protected; no native write was attempted"),
+        )
+    })
+}
+fn decode_payload(store: &Store, record: &Record, unlock: Option<&[u8]>) -> Result<Payload> {
+    let bytes = secrets::get(store, &record.payload_ref, unlock)?;
+    let payload: Payload = serde_json::from_slice(&bytes).map_err(|_| {
+        Error::new(
+            "recovery_invalid",
+            "Protected native recovery is not readable",
+        )
+    })?;
+    if payload.files.len() != record.files.len()
+        || payload
+            .files
+            .iter()
+            .zip(&record.files)
+            .any(|(a, b)| a.path != b.path || revision(Some(&a.after)) != b.after_revision)
+    {
+        return Err(Error::new(
+            "recovery_invalid",
+            "Protected native recovery does not match safe retained metadata",
+        ));
+    }
+    Ok(payload)
+}
+fn conflicts(index: &Index, identity: Option<&str>, files: &[File]) -> Result<()> {
+    for record in &index.records {
+        if matches!(record.state.as_str(), "restored" | "discarded")
+            || identity == Some(&record.owner)
+        {
+            continue;
+        }
+        if files
+            .iter()
+            .any(|f| record.files.iter().any(|r| r.path == f.path))
+        {
+            return Err(Error::new(
+                "native_scope_conflict",
+                "Another retained target owns settings in this shared native scope; inspect and restore that owner before applying",
+            ));
+        }
+    }
+    Ok(())
+}
+fn namespace_conflicts(file: &File, current: &Value, previous: Option<&Record>) -> Result<()> {
+    for root in ["providers", "model_providers"] {
+        if let Some(names) = file.desired.get(root).and_then(Value::as_object) {
+            for name in names.keys() {
+                if current.get(root).and_then(|p| p.get(name)).is_some()
+                    && !previous.is_some_and(|r| {
+                        r.files.iter().any(|f| {
+                            f.path == file.path
+                                && f.fields.iter().any(|f| {
+                                    f.path.first().is_some_and(|p| p == root)
+                                        && f.path.get(1) == Some(name)
+                                })
+                        })
+                    })
+                {
+                    return Err(Error::new(
+                        "native_namespace_conflict",
+                        "An existing native provider entry is not owned by this target; choose a nonconflicting native entry name",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn apply(
+    store: &Store,
+    config: &Config,
+    id: &str,
+    dry_run: bool,
+    unlock: Option<&[u8]>,
+) -> Result<Value> {
+    apply_inner(store, config, id, dry_run, unlock, None).await
+}
+pub async fn apply_request(store: &Store, config: &Config, request: &Request) -> Result<Value> {
+    let id = request
+        .operands
+        .first()
+        .ok_or_else(|| Error::new("invalid_arguments", "An agent target is required"))?;
+    apply_inner(store, config, id, request.dry_run, None, Some(request)).await
+}
+async fn apply_inner(
+    store: &Store,
+    config: &Config,
+    id: &str,
+    dry_run: bool,
+    unlock: Option<&[u8]>,
+    request: Option<&Request>,
+) -> Result<Value> {
+    let target = target(config, id)?;
+    let path = scope(store, &target.scope)?;
+    let _configuration = if dry_run {
+        None
+    } else {
+        Some(store.lock("configuration")?)
+    };
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(store.lock("native")?)
+    };
+    let saved = config::load(store)?;
+    if serde_json::to_value(&saved.config).map_err(|_| unavailable())?
+        != serde_json::to_value(config).map_err(|_| unavailable())?
+    {
+        return Err(Error::new(
+            "inputs_changed",
+            "The desired configuration changed before native execution; inspect the current authority",
+        ));
+    }
+    let expected = saved.revision;
+    let mut index: Index = store.read_json(INDEX)?;
+    let identity = owner(store, id)?;
+    let previous = record_for(&index, identity.as_deref(), &path).cloned();
+    if previous
+        .as_ref()
+        .is_some_and(|r| r.state == "write_pending" || r.state == "recovery_required")
+    {
+        return Err(Error::new(
+            "recovery_required",
+            "An interrupted native operation has retained recovery; restore its exact record before applying again",
+        ));
+    }
+    let (mut entries, secret_refs) =
+        entries(store, config, id, target, &path, dry_run, unlock).await?;
+    let files = adapters::build(target, &path, &entries);
+    for entry in &mut entries {
+        if let Some(key) = &mut entry.key {
+            key.zeroize();
+        }
+    }
+    let mut files = files?;
+    conflicts(&index, identity.as_deref(), &files)?;
+    if let Some(previous) = &previous {
+        for f in &previous.files {
+            if !files.iter().any(|p| p.path == f.path) {
+                files.push(File {
+                    path: f.path.clone(),
+                    format: f.format,
+                    desired: json!({}),
+                });
+            }
+        }
+    }
+    let mut previews = Vec::new();
+    let mut observed_inputs = Vec::new();
+    let mut desired_unchanged = previous
+        .as_ref()
+        .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
+    for file in &files {
+        if file.format == Format::Credential
+            && file.path.exists()
+            && !previous.as_ref().is_some_and(|r| {
+                r.files
+                    .iter()
+                    .any(|f| f.path == file.path && !f.fields.is_empty())
+            })
+        {
+            return Err(Error::new(
+                "native_namespace_conflict",
+                "The native credential artifact already exists and is not currently owned by this target; it was not read",
+            ));
+        }
+        #[cfg(unix)]
+        if file.format == Format::Credential && file.path.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            if fs::symlink_metadata(&file.path)
+                .map_err(|_| unavailable())?
+                .permissions()
+                .mode()
+                & 0o077
+                != 0
+            {
+                return Err(Error::new(
+                    "unsafe_native_file",
+                    "Native credential handoff requires owner-only file permissions; no broader file was read",
+                ));
+            }
+        }
+        if dry_run && file.format == Format::Credential {
+            previews.push(json!({"path":file.path,"present":file.path.exists(),"credential_handoff":"private native-owned credential file, referenced by the documented native key command/file mechanism","plaintext_native_store":true,"content_revision":"checked_only_on_execution","secret_reads":false}));
+            continue;
+        }
+        let before = read_native(&file.path)?;
+        let current = document::parse(before.as_deref().unwrap_or(""), file.format)?;
+        namespace_conflicts(file, &current, previous.as_ref())?;
+        if let Some(old) = previous
+            .as_ref()
+            .and_then(|r| r.files.iter().find(|f| f.path == file.path))
+        {
+            for field in &old.fields {
+                if field_hash(document::get(&current, &field.path)) != field.after_hash {
+                    return Err(Error::new("native_conflict","An owned native setting changed after application; inspect it before apply or restore").field(field.path.join(".")));
+                }
+            }
+        }
+        let mut fields = Vec::new();
+        leaves(&file.desired, &mut Vec::new(), &mut fields);
+        fields.retain(|(p, _)| !p.is_empty());
+        if file.format != Format::Credential {
+            let old_fields = previous
+                .as_ref()
+                .and_then(|r| r.files.iter().find(|f| f.path == file.path))
+                .map(|f| &f.fields);
+            desired_unchanged &= old_fields.is_some_and(|old| {
+                old.len() == fields.len()
+                    && fields.iter().all(|(p, v)| {
+                        old.iter().any(|f| f.path == *p) && document::get(&current, p) == Some(v)
+                    })
+            });
+        }
+        previews.push(json!({"path":file.path,"revision":revision(before.as_deref()),"owned_fields":fields.iter().map(|(p,_)|p).collect::<Vec<_>>(),"credential_handoff":"native command/file reference to a private native-owned credential artifact; no inline config secret or token import"}));
+        observed_inputs.push((file.path.clone(), before));
+    }
+    if dry_run {
+        return Ok(
+            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":supported_roles(&target.agent),"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"encrypted exact native bytes before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
+        );
+    }
+    let installed = version(&target.agent, &path).await;
+    if installed["compatibility"] != "documented" {
+        return Err(Error::new(
+            "native_version_unknown",
+            "The detected native version differs from the exact researched schema; inspect version evidence before applying. This is unknown support, not a prohibition claim",
+        ));
+    }
+    if desired_unchanged {
+        return Ok(
+            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"unlock_requested":false,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
+        );
+    }
+    let unlocked = if unlock.is_none() {
+        request.map(secrets::unlock).transpose()?.flatten()
+    } else {
+        None
+    };
+    let unlock = unlock.or_else(|| unlocked.as_deref().map(Vec::as_slice));
+    for file in &mut files {
+        if file.format == Format::Credential
+            && let Some(reference) = file.desired.as_str()
+        {
+            let bytes = secrets::get(store, reference, unlock)?;
+            let key = std::str::from_utf8(&bytes).map_err(|_| {
+                Error::new("invalid_credential", "Native handoff requires a UTF-8 key")
+            })?;
+            if key.is_empty()
+                || key.trim() != key
+                || key.chars().any(|c| c == '\r' || c == '\n' || c == '\0')
+            {
+                return Err(Error::new(
+                    "invalid_credential",
+                    "Native key commands trim output; exact handoff requires a nonempty single-line key without surrounding whitespace",
+                ));
+            }
+            file.desired = Value::String(key.to_owned());
+        }
+    }
+    let previous_payload = previous
+        .as_ref()
+        .map(|r| decode_payload(store, r, unlock))
+        .transpose()?;
+    let mut prepared = Vec::new();
+    for file in files {
+        let before = read_native(&file.path)?;
+        let current = document::parse(before.as_deref().unwrap_or(""), file.format)?;
+        let observed = observed_inputs
+            .iter()
+            .find(|(path, _)| *path == file.path)
+            .and_then(|(_, text)| text.as_deref());
+        if revision(before.as_deref()) != revision(observed) {
+            return Err(Error::new(
+                "inputs_changed",
+                "Native bytes changed while qualifying this operation; no newer content was overwritten",
+            ));
+        }
+        let original = previous_payload
+            .as_ref()
+            .and_then(|p| p.files.iter().find(|f| f.path == file.path));
+        let original_text = original
+            .map(|p| p.before.clone())
+            .unwrap_or_else(|| before.clone());
+        let original_value = document::parse(original_text.as_deref().unwrap_or(""), file.format)?;
+        if file.format == Format::Credential {
+            let after = file.desired.as_str().unwrap_or("").to_owned();
+            let hash_value = if after.is_empty() {
+                None
+            } else {
+                Some(Value::String(digest(after.as_bytes())))
+            };
+            let fields = vec![Field {
+                path: vec!["$credential".into()],
+                before_hash: field_hash(document::get(&original_value, &["$credential".into()])),
+                after_hash: field_hash(hash_value.as_ref()),
+                observed_hash: field_hash(document::get(&current, &["$credential".into()])),
+                released: after.is_empty(),
+            }];
+            let exact_original_safe = original.is_none_or(|p| {
+                p.exact_original_safe && before.as_deref() == Some(p.after.as_str())
+            });
+            prepared.push(Inputs {
+                file,
+                before: original_text,
+                observed: before,
+                after,
+                fields,
+                exact_original_safe,
+                baseline_values: vec![],
+            });
+            continue;
+        }
+        let mut desired = Vec::new();
+        leaves(&file.desired, &mut Vec::new(), &mut desired);
+        desired.retain(|(p, _)| !p.is_empty());
+        let mut after = before.clone().unwrap_or_default();
+        let mut fields = Vec::new();
+        let mut baseline_values = Vec::new();
+        if let Some(old) = previous
+            .as_ref()
+            .and_then(|r| r.files.iter().find(|f| f.path == file.path))
+        {
+            for old_field in &old.fields {
+                if !desired.iter().any(|(p, _)| *p == old_field.path) {
+                    let old = baseline(original, &original_value, &old_field.path);
+                    baseline_values.push((old_field.path.clone(), old.cloned()));
+                    if document::get(&current, &old_field.path) != old {
+                        after = document::set(&after, file.format, &old_field.path, old)?;
+                    }
+                    fields.push(Field {
+                        path: old_field.path.clone(),
+                        before_hash: field_hash(old),
+                        after_hash: field_hash(old),
+                        observed_hash: field_hash(document::get(&current, &old_field.path)),
+                        released: true,
+                    });
+                }
+            }
+        }
+        for (field, value) in desired {
+            if document::get(&current, &field) != Some(&value) {
+                after = document::set(&after, file.format, &field, Some(&value))?;
+            }
+            let inherited = previous
+                .as_ref()
+                .and_then(|r| r.files.iter().find(|f| f.path == file.path))
+                .is_some_and(|f| f.fields.iter().any(|f| f.path == field));
+            let before_value = if inherited {
+                baseline(original, &original_value, &field)
+            } else {
+                document::get(&current, &field)
+            };
+            baseline_values.push((field.clone(), before_value.cloned()));
+            fields.push(Field {
+                before_hash: field_hash(before_value),
+                after_hash: field_hash(Some(&value)),
+                observed_hash: field_hash(document::get(&current, &field)),
+                path: field,
+                released: false,
+            });
+        }
+        let exact_original_safe = original
+            .is_none_or(|p| p.exact_original_safe && before.as_deref() == Some(p.after.as_str()))
+            && baseline_values
+                .iter()
+                .all(|(path, value)| value.as_ref() == document::get(&original_value, path));
+        prepared.push(Inputs {
+            file,
+            before: original_text,
+            observed: before,
+            after,
+            fields,
+            exact_original_safe,
+            baseline_values,
+        });
+    }
+    let recovery_id = previous
+        .as_ref()
+        .map(|r| r.id.clone())
+        .unwrap_or_else(|| format!("native-{}", uuid::Uuid::new_v4()));
+    let stable = identity.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let payload = Payload {
+        files: prepared
+            .iter()
+            .map(|p| Capture {
+                path: p.file.path.clone(),
+                before: p.before.clone(),
+                after: p.after.clone(),
+                exact_original_safe: p.exact_original_safe,
+                baseline_values: p.baseline_values.clone(),
+            })
+            .collect(),
+    };
+    let payload_ref = protect_payload(store, &recovery_id, &stable, id, &payload, unlock)?;
+    let mut record = Record {
+        id: recovery_id.clone(),
+        owner: stable,
+        target: id.into(),
+        agent: target.agent.clone(),
+        scope: path.clone(),
+        payload_ref,
+        secret_refs,
+        state: "write_pending".into(),
+        files: prepared
+            .iter()
+            .map(|p| FileRecord {
+                path: p.file.path.clone(),
+                format: p.file.format,
+                original_absent: p.before.is_none(),
+                after_revision: revision(Some(&p.after)),
+                fields: p.fields.clone(),
+                written: false,
+            })
+            .collect(),
+    };
+    if let Some(at) = index.records.iter().position(|r| r.id == recovery_id) {
+        index.records[at] = record.clone();
+    } else {
+        index.records.push(record.clone());
+    }
+    store.write_json(INDEX, &index)?;
+    let mut changed = Vec::new();
+    let mut unchanged = Vec::new();
+    for (n, prepared) in prepared.iter().enumerate() {
+        let input = match read_native(&prepared.file.path) {
+            Ok(input) => input,
+            Err(e) => {
+                return partial(
+                    store,
+                    &mut index,
+                    &mut record,
+                    changed,
+                    unchanged,
+                    &e.code,
+                    "Native configuration became unavailable after recovery capture",
+                );
+            }
+        };
+        if revision(input.as_deref()) != revision(prepared.observed.as_deref()) {
+            return partial(
+                store,
+                &mut index,
+                &mut record,
+                changed,
+                unchanged,
+                "inputs_changed",
+                "Native bytes changed after recovery capture, including comments",
+            );
+        }
+        let result = recheck(
+            store,
+            &expected,
+            &prepared.file.path,
+            prepared.observed.as_deref(),
+        )
+        .and_then(|_| {
+            if input.as_deref() == Some(prepared.after.as_str()) {
+                Ok(())
+            } else if prepared.file.format == Format::Credential && prepared.after.is_empty() {
+                match fs::remove_file(&prepared.file.path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(_) => Err(unavailable()),
+                }
+            } else {
+                storage::atomic_write(&prepared.file.path, prepared.after.as_bytes())
+            }
+        });
+        if let Err(e) = result {
+            return partial(
+                store,
+                &mut index,
+                &mut record,
+                changed,
+                unchanged,
+                &e.code,
+                "Native write did not complete; inspect the protected recovery record",
+            );
+        }
+        if input.as_deref() == Some(prepared.after.as_str()) {
+            unchanged.push(prepared.file.path.clone());
+        } else {
+            changed.push(prepared.file.path.clone());
+        }
+        record.files[n].written = true;
+        if let Some(r) = index.records.iter_mut().find(|r| r.id == record.id) {
+            *r = record.clone();
+        }
+        if store.write_json(INDEX, &index).is_err() {
+            return Ok(
+                json!({"_code":"partial_native_apply","target":id,"changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"state":"recovery_required","reason_code":"recovery_metadata_write_failed","native_reload":"not_attempted"}),
+            );
+        }
+    }
+    for file in &mut record.files {
+        file.fields.retain(|field| !field.released);
+        for field in &mut file.fields {
+            field.observed_hash = field.after_hash.clone();
+        }
+    }
+    record.state = "applied_reload_pending".into();
+    if let Some(r) = index.records.iter_mut().find(|r| r.id == record.id) {
+        *r = record.clone();
+    }
+    if store.write_json(INDEX, &index).is_err() {
+        return Ok(
+            json!({"_code":"partial_native_apply","target":id,"changed_files":changed,"recovery":record.id,"reason_code":"recovery_metadata_write_failed","state":"recovery_required"}),
+        );
+    }
+    if let Some(old) = previous
+        && old.payload_ref != record.payload_ref
+    {
+        let _ = secrets::remove(store, &old.payload_ref);
+    }
+    Ok(
+        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"precedence":adapters::precedence(&target.agent)}),
+    )
+}
+fn partial(
+    store: &Store,
+    index: &mut Index,
+    record: &mut Record,
+    changed: Vec<PathBuf>,
+    unchanged: Vec<PathBuf>,
+    code: &str,
+    message: &str,
+) -> Result<Value> {
+    record.state = "recovery_required".into();
+    if let Some(r) = index.records.iter_mut().find(|r| r.id == record.id) {
+        *r = record.clone();
+    }
+    let persisted = store.write_json(INDEX, index).is_ok();
+    Ok(
+        json!({"_code":"partial_native_apply","target":record.target,"state":"recovery_required","changed_files":changed,"unchanged_files":unchanged,"remaining_files":record.files.iter().filter(|f|!f.written).map(|f|&f.path).collect::<Vec<_>>(),"reason_code":code,"message":message,"recovery":record.id,"recovery_metadata_updated":persisted,"native_reload":"not_attempted"}),
+    )
+}
+
+fn restore_text(
+    current: Option<&str>,
+    file: &FileRecord,
+    capture: &Capture,
+) -> Result<Option<String>> {
+    if file.format == Format::Credential {
+        let actual = document::parse(current.unwrap_or(""), Format::Credential)?;
+        let observed = field_hash(document::get(&actual, &["$credential".into()]));
+        if revision(current) != revision(Some(&capture.after))
+            && revision(current) != revision(capture.before.as_deref())
+            && !file.fields.iter().any(|f| f.observed_hash == observed)
+        {
+            return Err(Error::new(
+                "native_conflict",
+                "The native credential artifact changed after handoff; its opaque bytes were not imported or overwritten",
+            ));
+        }
+        return Ok(capture.before.clone());
+    }
+    if current == Some(capture.after.as_str()) && capture.exact_original_safe {
+        return Ok(capture.before.clone());
+    }
+    let mut text = current.unwrap_or("").to_owned();
+    let original = document::parse(capture.before.as_deref().unwrap_or(""), file.format)?;
+    let actual = document::parse(&text, file.format)?;
+    for field in &file.fields {
+        let hash = field_hash(document::get(&actual, &field.path));
+        if hash != field.after_hash && hash != field.before_hash && hash != field.observed_hash {
+            return Err(Error::new("native_conflict","A later edit changed a tmax-owned native field; restoration stopped without overwriting it").field(field.path.join(".")));
+        }
+    }
+    for field in file.fields.iter().rev() {
+        let before = baseline(Some(capture), &original, &field.path);
+        let value = document::parse(&text, file.format)?;
+        if document::get(&value, &field.path) != before {
+            text = document::set(&text, file.format, &field.path, before)?;
+        }
+    }
+    // Remove only containers tmax introduced and which now have no settings.
+    // User-added fields survive; comments force a conflict rather than deletion.
+    let mut parents: BTreeSet<Vec<String>> = BTreeSet::new();
+    for field in &file.fields {
+        for n in 1..field.path.len() {
+            parents.insert(field.path[..n].to_vec());
+        }
+    }
+    let mut parents: Vec<_> = parents.into_iter().collect();
+    parents.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    for parent in parents {
+        let value = document::parse(&text, file.format)?;
+        if document::get(&original, &parent).is_none()
+            && document::get(&value, &parent)
+                .is_some_and(|v| v.as_object().is_some_and(|m| m.is_empty()))
+        {
+            text = document::set(&text, file.format, &parent, None)?;
+        }
+    }
+    if capture.before.is_none()
+        && document::parse(&text, file.format)?
+            .as_object()
+            .is_some_and(|m| m.is_empty())
+        && !text.contains('#')
+        && !text.contains("//")
+        && !text.contains("/*")
+    {
+        Ok(None)
+    } else {
+        Ok(Some(text))
+    }
+}
+pub async fn restore(
+    store: &Store,
+    id: &str,
+    dry_run: bool,
+    unlock: Option<&[u8]>,
+) -> Result<Value> {
+    restore_inner(store, id, dry_run, unlock, None).await
+}
+pub async fn restore_request(store: &Store, request: &Request) -> Result<Value> {
+    let id = request
+        .arguments
+        .get("recovery")
+        .and_then(|v| v.first())
+        .or_else(|| request.operands.first())
+        .ok_or_else(|| {
+            Error::new(
+                "invalid_arguments",
+                "An agent target or exact recovery handle is required",
+            )
+        })?;
+    restore_inner(store, id, request.dry_run, None, Some(request)).await
+}
+async fn restore_inner(
+    store: &Store,
+    id: &str,
+    dry_run: bool,
+    unlock: Option<&[u8]>,
+    request: Option<&Request>,
+) -> Result<Value> {
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(store.lock("native")?)
+    };
+    let mut index: Index = store.read_json(INDEX)?;
+    let selected = if index.records.iter().any(|r| r.id == id) {
+        id.to_owned()
+    } else {
+        let identity=owner(store,id)?.ok_or_else(||Error::new("unknown_resource","No recovery belongs to this target identity; use an exact retained recovery handle"))?;
+        index
+            .records
+            .iter()
+            .rev()
+            .find(|r| r.owner == identity && r.state != "restored" && r.state != "discarded")
+            .map(|r| r.id.clone())
+            .ok_or_else(|| {
+                Error::new(
+                    "unknown_resource",
+                    "No remaining native recovery belongs to this target",
+                )
+            })?
+    };
+    let mut record = index
+        .records
+        .iter()
+        .find(|r| r.id == selected)
+        .cloned()
+        .ok_or_else(|| Error::new("unknown_resource", "Native recovery handle is not retained"))?;
+    validate_record(&record)?;
+    if record.state == "discarded" {
+        return Err(Error::new(
+            "unknown_resource",
+            "Native recovery was explicitly discarded",
+        ));
+    }
+    if record.state == "restored" {
+        return Ok(json!({"recovery":selected,"state":"already_restored","native_writes":false}));
+    }
+    let conflicts = field_drift(&record, !dry_run)?;
+    if !conflicts.is_empty() {
+        return Err(Error::new(
+            "native_conflict",
+            "Owned native fields differ from both their captured originals and tmax writes; inspect recovery conflicts before restoration",
+        ));
+    }
+    if dry_run {
+        return Ok(
+            json!({"target":record.target,"recovery":selected,"dry_run":true,"files":record.files.iter().map(|f|&f.path).collect::<Vec<_>>(),"restoration":"three_way_owned_fields_only","secret_reads":false,"native_writes":false,"native_reload":"required_after_execution"}),
+        );
+    }
+    let unlocked = if unlock.is_none() {
+        request.map(secrets::unlock).transpose()?.flatten()
+    } else {
+        None
+    };
+    let unlock = unlock.or_else(|| unlocked.as_deref().map(Vec::as_slice));
+    let payload = decode_payload(store, &record, unlock)?;
+    let mut prepared = Vec::new();
+    for (file, capture) in record.files.iter().zip(&payload.files) {
+        let before = read_native(&file.path)?;
+        let after = restore_text(before.as_deref(), file, capture)?;
+        prepared.push((file.path.clone(), before, after));
+    }
+    record.state = "recovery_required".into();
+    if let Some(r) = index.records.iter_mut().find(|r| r.id == selected) {
+        *r = record.clone();
+    }
+    store.write_json(INDEX, &index)?;
+    let mut changed = Vec::new();
+    let mut unchanged = Vec::new();
+    for (path, before, after) in prepared {
+        let current = match read_native(&path) {
+            Ok(current) => current,
+            Err(e) => {
+                return partial(
+                    store,
+                    &mut index,
+                    &mut record,
+                    changed,
+                    unchanged,
+                    &e.code,
+                    "Native restore input became unavailable after earlier effects",
+                );
+            }
+        };
+        if revision(current.as_deref()) != revision(before.as_deref()) {
+            return partial(
+                store,
+                &mut index,
+                &mut record,
+                changed,
+                unchanged,
+                "inputs_changed",
+                "Native content changed during restoration",
+            );
+        }
+        if before == after {
+            unchanged.push(path);
+            continue;
+        }
+        let result = match after {
+            Some(text) => storage::atomic_write(&path, text.as_bytes()),
+            None => fs::remove_file(&path).map_err(|_| unavailable()),
+        };
+        if let Err(e) = result {
+            return partial(
+                store,
+                &mut index,
+                &mut record,
+                changed,
+                unchanged,
+                &e.code,
+                "A native restore write did not complete; earlier restored files remain reported",
+            );
+        }
+        changed.push(path);
+    }
+    record.state = "restored".into();
+    if let Some(r) = index.records.iter_mut().find(|r| r.id == selected) {
+        *r = record.clone();
+    }
+    if store.write_json(INDEX, &index).is_err() {
+        return Ok(
+            json!({"_code":"partial_native_apply","recovery":selected,"changed_files":changed,"state":"restored_metadata_pending","reason_code":"recovery_metadata_write_failed"}),
+        );
+    }
+    Ok(
+        json!({"_code":"awaiting_native_reload","target":record.target,"agent":record.agent,"recovery":selected,"state":"restored_reload_pending","changed_files":changed,"unchanged_files":unchanged,"preserved":"unrelated settings and later unowned edits","credential_logout":false,"proxy_key_revoked":false,"native_reload":"required","recovery_retained":true}),
+    )
+}
+
+pub async fn recovery(store: &Store, request: &Request) -> Result<Value> {
+    let action = request.command.last().map(String::as_str).unwrap_or("");
+    let _lock = if action == "discard" && !request.dry_run {
+        Some(store.lock("native")?)
+    } else {
+        None
+    };
+    let mut index: Index = store.read_json(INDEX)?;
+    match action {
+        "list" => {
+            let selected = request.arguments.get("target").and_then(|v| v.first());
+            let stable = selected.map(|id| owner(store, id)).transpose()?.flatten();
+            Ok(
+                json!({"records":index.records.iter().filter(|r|r.state!="discarded" && selected.is_none_or(|target|stable.as_deref()==Some(&r.owner)||r.target==*target)).map(record_view).collect::<Vec<_>>()}),
+            )
+        }
+        "inspect" => {
+            let id = request.operands.first().ok_or_else(|| {
+                Error::new(
+                    "invalid_arguments",
+                    "An exact native recovery handle is required",
+                )
+            })?;
+            let record = index
+                .records
+                .iter()
+                .find(|r| r.id == *id && r.state != "discarded")
+                .ok_or_else(|| {
+                    Error::new("unknown_resource", "Native recovery handle is not retained")
+                })?;
+            Ok(record_view(record))
+        }
+        "discard" => {
+            let id = request.operands.first().ok_or_else(|| {
+                Error::new(
+                    "invalid_arguments",
+                    "An exact native recovery handle is required",
+                )
+            })?;
+            let record = index
+                .records
+                .iter_mut()
+                .find(|r| r.id == *id && r.state != "discarded")
+                .ok_or_else(|| {
+                    Error::new("unknown_resource", "Native recovery handle is not retained")
+                })?;
+            if request.dry_run {
+                return Ok(
+                    json!({"recovery":id,"dry_run":true,"discard":"protected restoration information only","native_writes":false,"credentials_deleted":false}),
+                );
+            }
+            secrets::remove(store, &record.payload_ref)?;
+            record.state = "discarded".into();
+            // Keep non-secret dependency tombstones: discarding the ability to
+            // restore does not prove a plaintext native key was removed.
+            store.write_json(INDEX, &index)?;
+            Ok(
+                json!({"recovery":id,"state":"discarded","native_writes":false,"credentials_deleted":false,"proxy_key_revoked":false}),
+            )
+        }
+        _ => Err(Error::new(
+            "unsupported_operation",
+            "Unknown native recovery operation",
+        )),
+    }
+}
+pub fn secret_references(store: &Store, reference: &str) -> Result<Value> {
+    let index = match store.read_json::<Index>(INDEX) {
+        Ok(index) => index,
+        Err(_) => {
+            return Ok(
+                json!({"state":"unknown","resources":[],"reason_code":"native_recovery_metadata_unavailable"}),
+            );
+        }
+    };
+    let mut resources = Vec::new();
+    for record in &index.records {
+        if record.payload_ref == reference && record.state != "discarded" {
+            resources.push(json!({"kind":"native_recovery","id":record.id,"scope":record.scope}));
+        }
+        if record.state != "restored" && record.secret_refs.iter().any(|r| r == reference) {
+            resources.push(json!({"kind":"native_handoff","id":record.target,"scope":record.scope,"recovery":record.id,"state":record.state}));
+        }
+    }
+    Ok(
+        json!({"state":if resources.is_empty(){"unreferenced"}else{"referenced"},"resources":resources,"reason_code":null}),
+    )
+}
+
+pub fn login_source_agents(integration: &str) -> &'static [&'static str] {
+    match integration {
+        "codex-subscription" => &["codex", "pi", "omp", "opencode", "hermes"],
+        "kimi-coding-plan" => &["omp"],
+        _ => &[],
+    }
+}
+fn login_source_revision(target: &AgentTarget, path: &Path) -> String {
+    digest(format!("{}\0{}", target.agent, path.display()).as_bytes())
+}
+fn login_provider(config: &Config, provider: &str, target: &AgentTarget) -> Result<&'static str> {
+    let provider = config
+        .providers
+        .get(provider)
+        .ok_or_else(|| Error::new("unknown_resource", "Provider is not configured"))?;
+    match (
+        crate::integrations::integration_id(provider)?,
+        target.agent.as_str(),
+    ) {
+        ("codex-subscription", "codex" | "opencode") => Ok("openai"),
+        ("codex-subscription", "pi" | "omp" | "hermes") => Ok("openai-codex"),
+        ("kimi-coding-plan", "omp") => Ok("kimi-code"),
+        _ => Err(Error::new(
+            "unsupported_authentication",
+            "This access product has no qualified native login for the selected agent. API-key entry is not login authentication",
+        )),
+    }
+}
+// Version-qualified, read-only metadata projection. Never SELECT `data` or
+// identity_key: those columns contain native credential/session material.
+async fn omp_oauth_count(path: &Path, provider: &str) -> Result<u64> {
+    if executable("sqlite3").is_none() {
+        return Err(Error::new(
+            "native_metadata_reader_unavailable",
+            "Qualified omp account isolation requires the read-only sqlite3 metadata reader",
+        ));
+    }
+    let db = path.join("agent.db");
+    if !db.exists() {
+        return Ok(0);
+    }
+    let mut cmd = tokio::process::Command::new("sqlite3");
+    cmd.args(["-readonly"]).arg(db).arg(format!("SELECT count(*) FROM auth_credentials WHERE provider='{}' AND credential_type='oauth' AND disabled_cause IS NULL;",provider.replace('\'',"''"))).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(5), cmd.output())
+        .await
+        .map_err(|_| {
+            Error::new(
+                "native_metadata_unavailable",
+                "Native account metadata inspection timed out",
+            )
+        })?
+        .map_err(|_| {
+            Error::new(
+                "native_metadata_unavailable",
+                "Cannot inspect native account metadata",
+            )
+        })?;
+    if !output.status.success() || output.stdout.len() > 64 {
+        return Err(Error::new(
+            "native_metadata_unavailable",
+            "The scoped native account schema is unavailable; no credential values were selected",
+        ));
+    }
+    std::str::from_utf8(&output.stdout)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .ok_or_else(|| {
+            Error::new(
+                "native_metadata_unavailable",
+                "Native account count is unavailable",
+            )
+        })
+}
+async fn opencode_accounts(path: &Path) -> Result<Vec<String>> {
+    let mut cmd = native_command("opencode", path)?;
+    cmd.args(["auth", "list", "--standalone", "--format", "json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let output = tokio::time::timeout(Duration::from_secs(30), cmd.output())
+        .await
+        .map_err(|_| {
+            Error::new(
+                "native_metadata_unavailable",
+                "Native private-server account inspection timed out",
+            )
+        })?
+        .map_err(|_| unavailable())?;
+    if !output.status.success() || output.stdout.len() > 1024 * 1024 {
+        return Err(Error::new(
+            "native_metadata_unavailable",
+            "Native private-server account metadata is unavailable",
+        ));
+    }
+    let summary: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
+        Error::new(
+            "native_metadata_unavailable",
+            "Native account summary does not match the researched version",
+        )
+    })?;
+    let integrations = summary.as_array().ok_or_else(|| {
+        Error::new(
+            "native_metadata_unavailable",
+            "Native account summary has an unknown shape",
+        )
+    })?;
+    let mut accounts = Vec::new();
+    for integration in integrations.iter().filter(|i| i["id"] == "openai") {
+        let connections = integration["connections"].as_array().ok_or_else(|| {
+            Error::new(
+                "native_metadata_unavailable",
+                "Native connection metadata is unavailable",
+            )
+        })?;
+        for connection in connections.iter().filter(|c| c["type"] == "credential") {
+            if connection["method"] != "oauth" {
+                return Err(Error::new(
+                    "native_scope_conflict",
+                    "The native OpenAI integration has a different saved authentication method",
+                ));
+            }
+            accounts.push(
+                connection["id"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        Error::new(
+                            "native_metadata_unavailable",
+                            "Native credential ID is unavailable",
+                        )
+                    })?
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(accounts)
+}
+async fn codex_authenticated(path: &Path) -> Result<bool> {
+    let mut cmd = native_command("codex", path)?;
+    cmd.args(["login", "status"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    tokio::time::timeout(Duration::from_secs(10), cmd.status())
+        .await
+        .map_err(|_| {
+            Error::new(
+                "native_metadata_unavailable",
+                "Native auth status timed out",
+            )
+        })?
+        .map(|s| s.success())
+        .map_err(|_| unavailable())
+}
+pub fn rename_target(store: &Store, old: &str, new: &str) -> Result<()> {
+    let _lock = store.lock("native")?;
+    let stable = owner(store, old)?;
+    let mut index: Index = store.read_json(INDEX)?;
+    for record in &mut index.records {
+        if stable.as_deref() == Some(&record.owner) {
+            record.target = new.into();
+        }
+    }
+    let mut logins: Logins = store.read_json(LOGINS)?;
+    for login in &mut logins.entries {
+        if login.target == old {
+            login.target = new.into();
+        }
+    }
+    store.write_json(INDEX, &index)?;
+    store.write_json(LOGINS, &logins)?;
+    secrets::rename_owner(store, "agent", old, new)
+}
+pub fn remove_target(store: &Store, id: &str) -> Result<()> {
+    let _lock = store.lock("native")?;
+    let mut logins: Logins = store.read_json(LOGINS)?;
+    for login in &mut logins.entries {
+        if login.target == id {
+            login.state = "source_removed".into();
+        }
+    }
+    store.write_json(LOGINS, &logins)?;
+    secrets::detach_owner(store, "agent", id)
+}
+pub async fn login(
+    store: &Store,
+    config: &Config,
+    provider: &str,
+    via: &str,
+    dry_run: bool,
+) -> Result<Value> {
+    native_auth(store, config, provider, via, dry_run, false).await
+}
+pub async fn logout(
+    store: &Store,
+    config: &Config,
+    provider: &str,
+    via: &str,
+    dry_run: bool,
+) -> Result<Value> {
+    native_auth(store, config, provider, via, dry_run, true).await
+}
+async fn native_auth(
+    store: &Store,
+    config: &Config,
+    provider: &str,
+    via: &str,
+    dry_run: bool,
+    logout: bool,
+) -> Result<Value> {
+    let target = target(config, via)?;
+    let path = scope(store, &target.scope)?;
+    let native_provider = login_provider(config, provider, target)?;
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(store.lock("native")?)
+    };
+    let mut logins: Logins = store.read_json(LOGINS)?;
+    let source_revision = login_source_revision(target, &path);
+    if config.providers.iter().any(|(id, p)| {
+        id != provider && matches!(p.auth.as_ref(),Some(Auth::Login{via:other,..}) if other==via)
+    }) || logins.entries.iter().any(|l| {
+        l.provider != provider
+            && l.scope == path
+            && l.agent == target.agent
+            && l.state != "signed_out"
+    }) {
+        return Err(Error::new(
+            "native_scope_conflict",
+            "This native authorization scope is already selected by another provider instance; use an independent supported native scope",
+        ));
+    }
+    let existing = logins.entries.iter().find(|l| {
+        l.provider == provider
+            && l.target == via
+            && l.scope == path
+            && l.source_revision == source_revision
+    });
+    if !logout
+        && existing.is_none()
+        && target.agent != "opencode"
+        && auth_paths(&target.agent, &path).iter().any(|p| p.exists())
+    {
+        return Err(Error::new(
+            "native_ambient_login_not_adopted",
+            "This scope already contains native authentication. Use an independent scope for an explicit sign-in; tmax neither reads nor adopts the existing credentials",
+        ));
+    }
+    if logout && existing.is_none() {
+        return Err(Error::new(
+            "native_ambient_login_not_adopted",
+            "No explicit tmax-managed native login belongs to this provider and scope; ambient credentials are not signed out",
+        ));
+    }
+    let mut command = Vec::<String>::new();
+    match (target.agent.as_str(), logout) {
+        ("codex", false) => command.extend(["login", "--device-auth"].map(String::from)),
+        ("codex", true) => command.push("logout".into()),
+        ("opencode", false) => command.extend(
+            [
+                "auth",
+                "login",
+                "openai",
+                "--method",
+                "chatgpt-headless",
+                "--standalone",
+            ]
+            .map(String::from),
+        ),
+        ("opencode", true) => {
+            let credential=existing.and_then(|l|l.credential_id.as_deref()).ok_or_else(||Error::new("recovery_required","The selected native OpenCode account ID is unavailable; inspect the owner scope"))?;
+            command
+                .extend(["auth", "logout", "openai", credential, "--standalone"].map(String::from));
+        }
+        ("omp", false) => command.extend(["login", native_provider].map(String::from)),
+        ("hermes", false) => command.extend(
+            [
+                "auth",
+                "add",
+                native_provider,
+                "--type",
+                "oauth",
+                "--no-browser",
+            ]
+            .map(String::from),
+        ),
+        ("hermes", true) => {
+            command.extend(["logout", "--provider", native_provider].map(String::from))
+        }
+        ("pi", _) | ("omp", true) => command.push("--no-session".into()),
+        _ => {
+            return Err(Error::new(
+                "native_login_unqualified",
+                "No supported native owner command is qualified",
+            ));
+        }
+    }
+    if dry_run {
+        return Ok(
+            json!({"provider":provider,"via":via,"agent":target.agent,"path":path,"dry_run":true,"native_command":command,"native_owner":target.agent,"credential_scope":auth_paths(&target.agent,&path),"identity":"unknown","shared_consumers":config.agents.iter().filter(|(_,a)|a.agent==target.agent && scope(store,&a.scope).is_ok_and(|p|p==path)).map(|(id,_)|id).collect::<Vec<_>>(),"effects":{"native_authorization_may_change_on_execution":true,"native_token_import":false,"processes_started":false},"recovery":"Repeat independent sign-in through the same native owner to reestablish intended authorization; no token rollback or ambient adoption"}),
+        );
+    }
+    let installed = version(&target.agent, &path).await;
+    if installed["compatibility"] != "documented" {
+        return Err(Error::new(
+            "native_version_unknown",
+            "Native login commit and recovery are qualified only for the exact researched owner version",
+        ));
+    }
+    if target.agent == "codex" && existing.is_none() && codex_authenticated(&path).await? {
+        return Err(Error::new(
+            "native_ambient_login_not_adopted",
+            "The native configured keyring/file already has authorization for this CODEX_HOME; an ambient session is not adopted",
+        ));
+    }
+    if target.agent == "hermes" && !logout {
+        let config_file = path.join("config.yaml");
+        let text = read_native(&config_file)?;
+        let cfg = document::parse(text.as_deref().unwrap_or(""), Format::Yaml)?;
+        if cfg
+            .get("auth")
+            .and_then(|a| a.get("adopt_external_logins"))
+            .is_some_and(|v| !v.is_boolean())
+        {
+            return Err(Error::new(
+                "native_config_invalid",
+                "Hermes external-login adoption setting has an invalid type",
+            ));
+        }
+        if existing.is_some_and(|l| l.state == "signed_in") {
+            return Err(Error::new(
+                "native_login_recovery_unqualified",
+                "Hermes auth add creates a rotating credential pool. Sign out this selected independent scope first; adding another pooled login cannot qualify a pin",
+            ));
+        }
+    }
+    if target.agent == "omp" {
+        let cfg = document::parse(
+            read_native(&path.join("config.yml"))?
+                .as_deref()
+                .unwrap_or(""),
+            Format::Yaml,
+        )?;
+        if std::env::var_os("OMP_AUTH_BROKER_URL").is_some()
+            || cfg.pointer("/auth/broker/url").is_some()
+        {
+            return Err(Error::new(
+                "native_login_unqualified",
+                "This target uses an auth broker rather than its local native credential scope; select an independent local profile",
+            ));
+        }
+        if path == store.home.join(".omp/agent") && std::env::var_os("XDG_DATA_HOME").is_some() {
+            return Err(Error::new(
+                "native_scope_ambiguous",
+                "The default omp database can follow XDG migration; use an independent explicit agent directory for qualified login ownership",
+            ));
+        }
+        if omp_oauth_count(&path, native_provider).await? > 1 {
+            return Err(Error::new(
+                "native_scope_conflict",
+                "Several native OAuth accounts can rotate in this scope; a single selected authorization is required",
+            ));
+        }
+    }
+    let session_ref = existing
+        .map(|l| l.session_ref.clone())
+        .unwrap_or_else(|| format!("native-session-{}", uuid::Uuid::new_v4()));
+    let prior_credential = existing.and_then(|l| l.credential_id.clone());
+    let mut native_credential_id = prior_credential.clone();
+    let mut cmd = native_command(&target.agent, &path)?;
+    let interactive_ui = target.agent == "pi" || (target.agent == "omp" && logout);
+    // Native login remains interactive and owns its browser/device flow. Route
+    // native UI to the terminal, never the machine-readable management result.
+    #[cfg(unix)]
+    {
+        let mut terminal = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .map_err(|_| {
+                Error::new(
+                    "interactive_required",
+                    "Native sign-in/sign-out requires an interactive controlling terminal",
+                )
+            })?;
+        if interactive_ui {
+            use std::io::Write;
+            let action = if logout {
+                "/logout".to_owned()
+            } else {
+                format!("/login {native_provider}")
+            };
+            writeln!(terminal,"tmax selected native scope {}. Complete {action} in the native owner, select only {native_provider}, then exit the native UI. tmax will not import tokens.",path.display()).map_err(|_|unavailable())?;
+        }
+        cmd.stdin(Stdio::from(
+            terminal.try_clone().map_err(|_| unavailable())?,
+        ))
+        .stdout(Stdio::from(
+            terminal.try_clone().map_err(|_| unavailable())?,
+        ))
+        .stderr(Stdio::from(terminal));
+    }
+    #[cfg(not(unix))]
+    {
+        cmd.stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+    }
+    logins
+        .entries
+        .retain(|l| !(l.provider == provider && l.target == via && l.scope == path));
+    logins.entries.push(LoginRecord {
+        provider: provider.into(),
+        target: via.into(),
+        scope: path.clone(),
+        agent: target.agent.clone(),
+        native_provider: native_provider.into(),
+        credential_id: prior_credential.clone(),
+        session_ref: session_ref.clone(),
+        state: "native_effect_uncertain".into(),
+        source_revision,
+    });
+    store.write_json(LOGINS, &logins)?;
+    if target.agent == "hermes" && !logout {
+        let mut guard = match native_command("hermes", &path) {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                return Ok(
+                    json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","reason_code":e.code,"native_login_attempted":false,"managed_use_blocked":true}),
+                );
+            }
+        };
+        guard
+            .args(["config", "set", "auth.adopt_external_logins", "false"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if !guard.status().await.is_ok_and(|s| s.success()) {
+            return Ok(
+                json!({"_code":"partial_native_apply","provider":provider,"via":via,"path":path,"state":"native_effect_uncertain","native_login_attempted":false,"native_settings_guard":"may_have_changed","managed_use_blocked":true,"recovery":"Inspect native auth.adopt_external_logins before independent owner sign-in; no external tokens are adopted"}),
+            );
+        }
+    }
+    if target.agent == "opencode" {
+        let accounts = match opencode_accounts(&path).await {
+            Ok(accounts) => accounts,
+            Err(e) => {
+                return Ok(
+                    json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","reason_code":e.code,"native_login_attempted":false,"managed_use_blocked":true}),
+                );
+            }
+        };
+        if accounts.len() > 1
+            || accounts
+                .first()
+                .is_some_and(|id| Some(id) != prior_credential.as_ref())
+        {
+            return Ok(
+                json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","reason_code":"native_ambient_login_not_adopted","native_login_attempted":false,"managed_use_blocked":true,"recovery":"Use a fresh independent OpenCode native server database; no discovered saved account is adopted"}),
+            );
+        }
+        if !logout && let Some(credential) = &prior_credential {
+            let mut remove = match native_command("opencode", &path) {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    return Ok(
+                        json!({"_code":"partial_native_apply","provider":provider,"state":"native_effect_uncertain","reason_code":e.code,"managed_use_blocked":true}),
+                    );
+                }
+            };
+            remove
+                .args(["auth", "logout", "openai", credential, "--standalone"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if !remove.status().await.is_ok_and(|s| s.success()) {
+                return Ok(
+                    json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","managed_use_blocked":true,"recovery":"Complete sign-out of the recorded native account before independent sign-in"}),
+                );
+            }
+        }
+    }
+    cmd.args(&command);
+    let result = cmd.status().await;
+    let mut success = result.as_ref().is_ok_and(|s| s.success());
+    if target.agent == "pi" && success {
+        success = if let Ok(mut check) = native_command("pi", &path) {
+            check
+                .args([
+                    "auth",
+                    "check",
+                    "--provider",
+                    native_provider,
+                    "--json",
+                    "--no-refresh",
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            match tokio::time::timeout(Duration::from_secs(10), check.output()).await {
+                Ok(Ok(output)) if output.stdout.len() < 4096 => {
+                    serde_json::from_slice::<Value>(&output.stdout).is_ok_and(|v| {
+                        if logout {
+                            v["status"] == "not_ready"
+                                || (v["status"] == "ready" && v["authType"] != "oauth")
+                        } else {
+                            v["status"] == "ready"
+                                && v["authType"] == "oauth"
+                                && path.join("auth.json").exists()
+                        }
+                    })
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+    }
+    if target.agent == "omp" && success {
+        success = omp_oauth_count(&path, native_provider)
+            .await
+            .is_ok_and(|count| count == if logout { 0 } else { 1 });
+    }
+    if target.agent == "codex" && success {
+        success = codex_authenticated(&path)
+            .await
+            .is_ok_and(|ready| ready != logout);
+    }
+    if target.agent == "opencode" && success {
+        match opencode_accounts(&path).await {
+            Ok(accounts) if logout => success = accounts.is_empty(),
+            Ok(accounts) if accounts.len() == 1 => {
+                native_credential_id = accounts.into_iter().next()
+            }
+            _ => success = false,
+        }
+    }
+    let state = if success {
+        if logout { "signed_out" } else { "signed_in" }
+    } else {
+        "native_effect_uncertain"
+    };
+    if let Some(login) = logins
+        .entries
+        .iter_mut()
+        .find(|l| l.session_ref == session_ref)
+    {
+        login.state = state.into();
+        login.credential_id = native_credential_id;
+    }
+    let committed = store.write_json(LOGINS, &logins).is_ok();
+    Ok(
+        json!({"_code":if success&&committed{"awaiting_native_reload"}else{"partial_native_apply"},"provider":provider,"via":via,"agent":target.agent,"path":path,"state":if committed{state}else{"native_changed_local_commit_failed"},"session_ref":if success&&!logout&&committed{Some(session_ref)}else{None},"identity":"unknown","native_owner":target.agent,"native_session_imported":false,"native_authorization_may_have_changed":true,"managed_use_blocked":!success||!committed||logout,"native_consumers":"May already be affected outside tmax; unchanged desired configuration is not rollback evidence","recovery":"Reestablish the intended authorization through this exact native owner and scope; do not copy tokens or adopt another ambient login"}),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn hermes_provenance_resolution_never_executes_repair_capable_launcher() {
+        let directory = tempfile::tempdir().unwrap();
+        let outer = directory.path().join("hermes");
+        let inner = directory.path().join("native-launcher");
+        let marker = directory.path().join("wrapper-executed");
+        fs::write(
+            &outer,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nexec {} \"$@\"\n",
+                marker.display(),
+                inner.display()
+            ),
+        )
+        .unwrap();
+        fs::write(&inner,format!("#!/bin/sh\nexec /unexecuted/python -I -c 'import sys\nsys.path.insert(0, '\"'\"'{}'\"'\"')\nimport hermes_bootstrap\n' \"$@\"\n",directory.path().display())).unwrap();
+        let (python, source) = hermes_provenance_runtime(&outer).unwrap();
+        assert_eq!(python, PathBuf::from("/unexecuted/python"));
+        assert_eq!(source, directory.path());
+        assert!(!marker.exists());
+    }
+    #[test]
+    fn hermes_provenance_refuses_unqualified_dynamic_launcher_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let launcher = directory.path().join("hermes");
+        fs::write(&launcher, "#!/bin/sh\nexec \"$HERMES_PYTHON\" \"$@\"\n").unwrap();
+        assert!(hermes_provenance_runtime(&launcher).is_none());
+    }
+    #[test]
+    fn credential_namespace_projection_ignores_all_values() {
+        let metadata=br#"{"unrelated":{"type":"oauth","nested":[{"access":"never-materialized"}]},"selected":{"key":"never-materialized"}}"#;
+        assert!(auth_namespace_from_reader(metadata.as_slice(), "selected").unwrap());
+        assert!(!auth_namespace_from_reader(metadata.as_slice(), "absent").unwrap());
+        assert!(!auth_namespace_from_reader(b"{}".as_slice(), "selected").unwrap());
+        assert!(
+            auth_namespace_from_reader(b"{\"selected\":\"incomplete".as_slice(), "selected")
+                .is_err()
+        );
+    }
+    #[test]
+    fn installed_version_prefixes_remain_exact() {
+        assert_eq!(
+            detected_version("omp", "omp/18.12.6\n").as_deref(),
+            Some("18.12.6")
+        );
+        assert_eq!(
+            detected_version("codex", "codex-cli 0.162.1\n").as_deref(),
+            Some("0.162.1")
+        );
+        assert_eq!(
+            detected_version("hermes", "Hermes v0.22.1+683.g848fc0a\n").as_deref(),
+            Some("0.22.1+683.g848fc0a")
+        );
+    }
+    fn record(text: &str, before: Option<&str>, format: Format) -> (FileRecord, Capture) {
+        let path = PathBuf::from("/isolated/settings.json");
+        (
+            FileRecord {
+                path: path.clone(),
+                format,
+                original_absent: before.is_none(),
+                after_revision: revision(Some(text)),
+                fields: vec![Field {
+                    path: vec!["model".into()],
+                    before_hash: field_hash(
+                        before
+                            .and_then(|b| document::parse(b, format).ok())
+                            .as_ref()
+                            .and_then(|v| v.get("model")),
+                    ),
+                    after_hash: field_hash(document::parse(text, format).unwrap().get("model")),
+                    observed_hash: "absent".into(),
+                    released: false,
+                }],
+                written: true,
+            },
+            Capture {
+                path,
+                before: before.map(str::to_owned),
+                after: text.into(),
+                exact_original_safe: true,
+                baseline_values: vec![],
+            },
+        )
+    }
+    #[test]
+    fn three_way_restore_preserves_later_unrelated_settings_and_comments() {
+        let (f, c) = record(
+            "{\"model\":\"new\",\"temperature\":0.5}",
+            Some("{\"model\":\"old\",\"temperature\":0.5}"),
+            Format::Json,
+        );
+        let restored = restore_text(
+            Some("{// user later\n\"model\":\"new\",\"temperature\":0.9}"),
+            &f,
+            &c,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(restored.contains("// user later"));
+        assert_eq!(
+            document::parse(&restored, Format::Json).unwrap(),
+            json!({"model":"old","temperature":0.9})
+        );
+    }
+    #[test]
+    fn three_way_restore_refuses_owned_user_edits() {
+        let (f, c) = record(
+            "{\"model\":\"new\"}",
+            Some("{\"model\":\"old\"}"),
+            Format::Json,
+        );
+        assert_eq!(
+            restore_text(Some("{\"model\":\"user\"}"), &f, &c)
+                .unwrap_err()
+                .code,
+            "native_conflict"
+        );
+    }
+    #[test]
+    fn exact_restore_recovers_original_bytes() {
+        let (f, c) = record(
+            "{\"model\":\"new\"}",
+            Some("{\n  \"model\": \"old\" // keep\n}\n"),
+            Format::Json,
+        );
+        assert_eq!(restore_text(Some(&c.after), &f, &c).unwrap(), c.before);
+    }
+    #[test]
+    fn restore_never_overwrites_a_changed_native_credential_artifact() {
+        let path = PathBuf::from("/isolated/native-owned.key");
+        let file = FileRecord {
+            path: path.clone(),
+            format: Format::Credential,
+            original_absent: true,
+            after_revision: revision(Some("selected-key")),
+            fields: vec![],
+            written: true,
+        };
+        let capture = Capture {
+            path,
+            before: None,
+            after: "selected-key".into(),
+            exact_original_safe: true,
+            baseline_values: vec![],
+        };
+        let error = restore_text(Some("native-owner-replaced-key"), &file, &capture).unwrap_err();
+        assert_eq!(error.code, "native_conflict");
+        assert!(!error.message.contains("native-owner-replaced-key"));
+        assert_eq!(
+            restore_text(Some("selected-key"), &file, &capture).unwrap(),
+            None
+        );
+    }
+    #[test]
+    fn three_way_restore_keeps_later_owned_container_comments() {
+        let path = PathBuf::from("/isolated/settings.json");
+        let after = "{\"providers\":{\"managed\":{\"baseURL\":\"https://example.invalid\"}}}";
+        let file = FileRecord {
+            path: path.clone(),
+            format: Format::Json,
+            original_absent: true,
+            after_revision: revision(Some(after)),
+            fields: vec![Field {
+                path: vec!["providers".into(), "managed".into(), "baseURL".into()],
+                before_hash: field_hash(None),
+                after_hash: field_hash(Some(&json!("https://example.invalid"))),
+                observed_hash: field_hash(None),
+                released: false,
+            }],
+            written: true,
+        };
+        let capture = Capture {
+            path,
+            before: None,
+            after: after.into(),
+            exact_original_safe: true,
+            baseline_values: vec![],
+        };
+        let error=restore_text(Some("{\"providers\":{\"managed\":{/* later owner note */\"baseURL\":\"https://example.invalid\"}}}"),&file,&capture).unwrap_err();
+        assert_eq!(error.code, "native_conflict");
+    }
+    #[test]
+    fn discarded_native_handoff_still_blocks_secret_cleanup() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_owned());
+        let record = Record {
+            id: "native-record".into(),
+            owner: "stable".into(),
+            target: "removed".into(),
+            agent: "pi".into(),
+            scope: home.path().join("native"),
+            payload_ref: "capture".into(),
+            secret_refs: vec!["upstream-ref".into()],
+            state: "discarded".into(),
+            files: vec![],
+        };
+        store
+            .write_json(
+                INDEX,
+                &Index {
+                    records: vec![record],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            secret_references(&store, "upstream-ref").unwrap()["state"],
+            "referenced"
+        );
+    }
+    #[tokio::test]
+    async fn dry_restore_creates_no_locks_and_reads_no_protected_payload() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_owned());
+        let native = home.path().join("native");
+        fs::create_dir(&native).unwrap();
+        let record = Record {
+            id: "native-record".into(),
+            owner: "stable".into(),
+            target: "removed".into(),
+            agent: "pi".into(),
+            scope: native,
+            payload_ref: "missing-protected-payload".into(),
+            secret_refs: vec![],
+            state: "write_pending".into(),
+            files: vec![],
+        };
+        store
+            .write_json(
+                INDEX,
+                &Index {
+                    records: vec![record],
+                },
+            )
+            .unwrap();
+        let result = restore(&store, "native-record", true, None).await.unwrap();
+        assert_eq!(result["secret_reads"], false);
+        assert!(!store.root.join("locks/native.lock").exists());
+    }
+}

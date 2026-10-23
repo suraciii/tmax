@@ -43,6 +43,32 @@ With no arguments the binary prints its help and exits with status 0. `--help`
 and `--version` print the requested text. Unknown arguments are rejected with a
 nonzero exit status.
 
+## Runtime prerequisites and protection
+
+The personal authority is resolved from the operating-system user account, not
+`HOME`, the working directory, or a CLI configuration selector. All tmax-owned
+state is under that account's `~/.tmax`; native configuration and native-owned
+credential artifacts remain in their explicitly selected native scopes.
+
+The current resident/control implementation requires Unix local sockets. Linux
+login startup uses `systemctl --user` and only tmax's owned registration. Missing
+session services or protected credentials are visible prerequisites, not reasons
+to start inference implicitly. Other platform resident/startup paths report
+their unsupported boundary explicitly.
+
+Persistent secrets and credential-bearing recovery use Argon2id (64 MiB, three
+passes, one lane) with per-entry salt, and ChaCha20Poly1305 authenticated
+encryption with per-entry nonce. Unlock material is supplied through qualified
+hidden terminal or inherited-pipe input and is not saved beside ciphertext.
+Safe inventory and recovery metadata remain inspectable while locked. Native
+credential-file handoff is version-qualified, restricted, and explicitly
+disclosed; it is not an export command or token-import feature.
+
+Installed native agent versions, effective configuration precedence, and provider
+permission remain independent prerequisites. A successful parser/apply/restore
+check is not a hosted-provider streaming, tool-call, identity, or entitlement
+verification. Run only explicitly requested paid probes with authorized access.
+
 ## Verification gates
 
 ```bash

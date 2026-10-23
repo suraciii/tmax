@@ -1031,6 +1031,9 @@ owns its provider-specific acceptance boundary and external evidence.
 
 ## Implementation status
 
-Only CLI help and version behavior currently exist. Provider management,
-catalog integration, subscription queries, agent adapters, the Web interface, and
-the proxy described here are not implemented. This is a design contract, not a release claim.
+The workspace includes shared management, configuration, routing/input,
+protected-storage, native-adapter, Web, and proxy implementations. Runtime
+qualification is scoped to actual versions, native scopes, credentials,
+operations, and transports. Local tests or parser checks do not establish
+provider entitlement or a verified hosted-provider tool-call conversation.
+This specification remains a design and acceptance contract, not a release claim.

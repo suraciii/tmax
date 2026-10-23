@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tmax-cli"]
+members = ["crates/tmax-cli", "crates/tmax-core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,9 @@ publish = false
 
 [workspace.dependencies]
 clap = "4"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tmax-core = { path = "crates/tmax-core" }
 
 [profile.release]
 lto = "thin"

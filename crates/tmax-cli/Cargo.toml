@@ -13,3 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+tmax-core.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

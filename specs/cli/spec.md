@@ -193,7 +193,8 @@ There is no automatic retry/replay engine or human-policy escalation.
 
 ## Implementation status
 
-Only no-argument help, root help/version flags, and argument errors exist in
-`crates/tmax-cli/src/main.rs`. They retain current text behavior. Management
-commands, nested help, protected input, dry-run, JSON results, and management exit
-categories are specified, not implemented; this document makes no runtime claim.
+The command surface is implemented by `tmax-cli`, with shared semantic validation
+and operations in `tmax-core`. Help/version remain offline text; management
+commands use the shared result envelope and explicit effect boundaries. Native
+and provider qualification remain independently scoped; this document does not
+claim that every external integration has passed end-to-end verification.

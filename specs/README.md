@@ -30,8 +30,9 @@ and the invariants it protects.
 - [Diagnostics](diagnostics/spec.md) — scoped status evidence, historical selection
   reasons, bounded in-memory request history, and cleanup.
 
-Shared vocabulary lives in [CONTEXT.md](../CONTEXT.md). Product management
-features are specified but not yet implemented; the executable currently
-provides only help and version output.
+Shared vocabulary lives in [CONTEXT.md](../CONTEXT.md). The executable and shared
+runtime implement management, configuration, native adapters, Web, and proxy
+operations. These specifications remain the acceptance authority, not evidence
+that every provider, native version, permission, or transport has been verified.
 
 See [AGENTS.md](AGENTS.md) for how specifications are written and owned.

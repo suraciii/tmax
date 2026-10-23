@@ -2,7 +2,7 @@
 
 This specification owns scoped runtime values used by priority rules, their
 provenance, acquisition, freshness, publication, and retention. It defines target
-behavior, not implemented or verified runtime support. The
+behavior independently of source availability or end-to-end verification. The
 [configuration schema](../../configuration/spec.md#provider-input-declarations)
 owns declaration fields and validation; the
 [CLI input contract](../../cli/providers/inputs/spec.md#provider-input-operations) owns

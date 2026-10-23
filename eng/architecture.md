@@ -5,24 +5,75 @@ the existing crates.
 
 ## Runtime boundary
 
-Program execution enters through the `tmax` binary. The binary owns argument
-parsing and exits with the status the command surface specifies. It holds no
-library code that another consumer depends on yet.
+Program execution enters through the `tmax` binary. `tmax-cli` owns Clap grammar,
+offline help, presentation selection, and process exit. `tmax-core` owns the
+shared domain, semantic validation, persistence, operations, and resident runtime.
 
-When the workspace gains a library crate, this page records the boundary: the
-facade the binary calls, the types that own parameters, and the stages that share
-one derivation. Until then, `crates/tmax-cli/src/main.rs` is the whole runtime.
+The shared facade is `execute(Request) -> Response`. A request contains a finite
+command path, grammar-ordered operands, canonical named arguments, optional
+dry-run, and an optional file revision guard. It is not a configuration-document
+or shell-command interface. CLI and Web call the same operation owner. The
+validated `Config` types own persisted field semantics; the command catalog and
+finite editable-field definitions also drive Web controls.
 
 ## Feature ownership
 
-Feature ownership stays inside a crate:
+- `tmax-cli/src/` owns command grammar and presentation, not business rules.
+- `tmax-core/src/config.rs` owns typed desired configuration, validation, content
+  revisions, and comment-preserving save constraints.
+- `operations/` owns finite resource mutations and effect/result boundaries.
+- `integrations.rs` owns endpoint/operation declarations and explicit outbound
+  transport; `catalog.rs` owns downloaded versus accepted metadata.
+- `routing.rs` and `inputs.rs` own exact priority evaluation, scoped facts,
+  coherent revisions, and guarded publication.
+- `observations.rs` owns bounded retained provider facts and separate latest
+  attempts, guarded by provider incarnation, authorization, endpoint/source
+  contract, and captured publication revision. Renames preserve the identity;
+  removal/recreation and authorization changes cannot revive old results.
+- `native/` owns five distinct native schemas, credential handoff, supported
+  login owners, conflict detection, and protected three-way restoration.
+- `storage.rs` and `secrets.rs` own OS-home resolution, restricted atomic writes,
+  encrypted secrets/recovery, safe inventory, and protected channels.
+- `service/`, `proxy.rs`, and `diagnostics.rs` own resident identity/lifecycle,
+  browser protections, same-protocol bounded forwarding, persistent continuity,
+  and bounded in-memory request evidence.
 
-- `crates/tmax-cli/src/` owns the command surface, its argument types, and its
-  exit statuses.
+Configuration save, service activation, OS startup registration, and native
+application remain separate observable failure boundaries. No module introduces
+another desired-state authority or protocol-conversion layer.
 
-New capabilities follow the same rule: one owning module per capability, and one
-authoritative home per rule. A capability that gains a product contract lives in
-`specs/`; see [specs/AGENTS.md](../specs/AGENTS.md).
+Retained session changes are staged, persisted, and only then published in RAM.
+A failed binding-store write leaves the previous live bindings authoritative;
+blocked sessions never bypass that state after a session-to-stateless edit.
+Dry-run uses the same blocker rules over the resident or durable retained state,
+returning bounded opaque handles rather than native session identifiers. It does
+not publish bindings, reserve work, resolve secrets, or initialize storage.
+
+Provider observation time is not an invented expiry. The declared DeepSeek
+balance source establishes a dated, exact-as-of observation, not a validity
+interval; subsequent routing evaluations report temporal qualification unknown.
+Manual subscription metadata does not establish API balance, account ownership,
+or entitlement. Failed refreshes retain the prior fact with a distinct latest
+attempt. Discovery observations never register concrete models implicitly.
+
+## Local verification boundary
+
+Real CLI and browser workflows are exercised under a dedicated passwd-backed OS
+account, never through a production `HOME` override. Installed agent parser,
+application/restoration, and synthetic loopback session/protocol tests are
+separate qualifications from provider-authorized hosted inference. Native
+configuration application may correctly require a native reload; it does not
+claim that a running native process already adopted the change.
+
+The runtime admission limit is 16 concurrent requests with no waiting queue and
+a 4MiB request-body limit. A local-fixture run of 17 held requests observed 16
+accepted and one HTTP503, and a 5MiB body was rejected with HTTP413. Explicit
+cancel-active interrupted one observed active request; ordinary stop refused it.
+The separate 16KiB downstream-chunk and 64KiB response-inspection limits are
+implementation bounds. A deterministic history measurement retained 256 records,
+accounting for 2,163,456 resident-record bytes and 417,096 serialized bytes, below
+the 32KiB-per-record / 8MiB-total accounting budgets. This accounting includes
+owned capacities and conservative JSON-entry overhead, not total process RSS.
 
 ## See also
 

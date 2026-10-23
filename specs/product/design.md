@@ -420,7 +420,7 @@ required by the product contract, not copied from another gateway's defaults.
 Management HTTP paths remain implementation-facing details, constrained by the
 shared operation and local browser-protection contracts.
 
-These are implementation and integration obligations, not permission to weaken
-the product contracts or add protocol conversion. Neither the target command
-grammar nor the configuration example claims that management commands or a
-loader already exist.
+These implementation and integration obligations do not permit weakening the
+product contracts or adding protocol conversion. The target command grammar and
+configuration example are not evidence of provider entitlement or end-to-end
+native-route qualification.

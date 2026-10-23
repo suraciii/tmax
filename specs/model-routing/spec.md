@@ -6,7 +6,8 @@ model aliases, tiers, priority-rule evaluation, and selection continuity.
 the facts used by quota and reset rules. [Product](../product/spec.md) owns
 provider instances, Agent provider configuration, the model proxy, and security. Shared terms are in
 [CONTEXT.md](../../CONTEXT.md).
-This is a design contract; no routing runtime is implemented.
+This is the routing acceptance contract; runtime evidence remains scoped to the
+specific snapshot, native client, operation, and provider authorization exercised.
 
 The [configuration contract](../configuration/spec.md) owns private persistence of
 these rules and supplies a [complete example](../configuration/example.toml).
