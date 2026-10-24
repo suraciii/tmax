@@ -513,6 +513,7 @@ the fixed destination of an existing session.
 | `id` | Required exact public model-alias ID |
 | `protocol` | Required `chat-completions`, `responses`, or `messages` |
 | `candidates` | Required nonempty unique array of registered qualified concrete names; bare provider IDs and alias references are invalid |
+| `candidate_reasoning_effort` | Optional map from exact members of `candidates` to nonempty effort strings without whitespace/control characters; omission or an empty map means no overrides. Values require the positive effective capability declaration and supported native protocol in [Request parameters](../model-routing/spec.md#request-parameters). |
 | `enabled` | Optional boolean, default true |
 | `continuity` | Optional `session` or `stateless`, default `session`; shared by every caller. Stateless requests still require qualified independent request context. |
 
@@ -522,10 +523,19 @@ empty, duplicate, or unregistered candidates are invalid configuration. Disabled
 or currently unavailable registered candidates remain references, not automatic
 replacements. Selection, priority ownership, continuity evidence, and activation
 blockers follow [Model aliases](../model-routing/spec.md#model-aliases).
+Removing or replacing candidate membership removes overrides for departed
+candidates. Renaming a provider or concrete model carries its map keys to the new
+qualified name; renaming an alias preserves its candidate settings. Setting or
+clearing one candidate's effort preserves other candidates' entries. Explicit
+duplicate/conflicting edits and clearing an absent entry are errors. Unknown map
+members or unsupported values/protocols are invalid choices, not passthrough.
+
 
 Alias definitions contain no upstream credentials, copied provider metadata,
-per-alias priorities, or request-parameter defaults. A new provider instance is
-not implicitly added to an explicit candidate list.
+per-alias priorities, alias-wide parameter defaults, or arbitrary request
+parameters. Only explicit candidate reasoning effort has the narrow behavior in
+[Request parameters](../model-routing/spec.md#request-parameters). A new provider
+instance is not implicitly added to an explicit candidate list.
 
 ## Agent targets
 
@@ -559,9 +569,10 @@ merge unrelated sources, or silently choose one.
 
 `roles` only maps supported native model roles. It cannot define access roles,
 sampling values, reasoning settings, or agent-specific precedence overrides.
-Native configuration remains the owner of request parameters. The same applies
-to metadata `temperature` and `reasoning_options`: they describe capability, not
-values to send. See [Request parameters](../model-routing/spec.md#request-parameters).
+Native configuration remains the owner of native request preferences; gateway
+candidate effort does not rewrite those settings. Metadata `temperature` and
+`reasoning_options` describe capability, not values to send. See
+[Request parameters](../model-routing/spec.md#request-parameters).
 
 ### Native provider entries
 

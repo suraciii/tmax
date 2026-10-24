@@ -2699,6 +2699,7 @@ mod tests {
         let (_directory, store, original) = fixture();
         let mut config = original.clone();
         config.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
             id: "custom-name".into(),
             protocol: "chat-completions".into(),
             candidates: vec!["p/m".into()],
@@ -2756,6 +2757,7 @@ mod tests {
             .insert("other".into(), config::Model::default());
         for id in ["historical", "same-source", "empty"] {
             config.model_aliases.push(config::ModelAlias {
+                candidate_reasoning_effort: Default::default(),
                 id: id.into(),
                 protocol: "chat-completions".into(),
                 candidates: vec!["p/m".into()],
@@ -2846,6 +2848,7 @@ mod tests {
         let (_directory, store, original) = fixture();
         let mut config = original.clone();
         config.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
             id: "historical".into(),
             protocol: "chat-completions".into(),
             candidates: vec!["p/m".into()],

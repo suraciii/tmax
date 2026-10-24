@@ -235,6 +235,7 @@ fn adoption_impact(
     }
     // Reuse explicit-override constraints without persisting this projection.
     crate::config::validate(&candidate)?;
+    crate::reasoning::validate(config, Some(proposed))?;
     let mut aliases = BTreeMap::new();
     for alias in &config.model_aliases {
         let affected: Vec<_> = models
@@ -809,6 +810,79 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
         assert_eq!(
             std::fs::read(&native_file).unwrap(),
             b"unchanged native configuration"
+        );
+    }
+
+    #[tokio::test]
+    async fn candidate_effort_catalog_adoption_rejects_removed_values_but_honors_explicit_overrides()
+     {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::at(temporary.path().to_path_buf());
+        let (mut config, mut old, mut new) = fixture();
+        old.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
+            json!([{"type":"effort","values":["high","max"]}]);
+        new.providers.get_mut("directory").unwrap()["models"]["a"] =
+            old.providers["directory"]["models"]["a"].clone();
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
+            json!([{"type":"effort","values":["high"]}]);
+        config.model_aliases[0]
+            .candidate_reasoning_effort
+            .insert("account/a".into(), "max".into());
+        let document = toml::to_string(&config).unwrap();
+        store.write_raw("tmax.toml", document.as_bytes()).unwrap();
+        store.write_json("catalog/accepted.json", &old).unwrap();
+        store.write_json("catalog/latest.json", &new).unwrap();
+        let accepted_before = std::fs::read(store.root.join("catalog/accepted.json")).unwrap();
+        for dry_run in [true, false] {
+            let request = Request {
+                command: vec!["catalog".into(), "apply".into()],
+                operands: Vec::new(),
+                arguments: BTreeMap::from([("revision".into(), vec!["new".into()])]),
+                dry_run,
+                if_revision: None,
+            };
+            let error = handle(&store, &config, &request).await.unwrap_err();
+            assert_eq!(error.code, "reasoning_effort_incompatible");
+            assert_eq!(
+                error.field.as_deref(),
+                Some("model_aliases.explicit.candidate_reasoning_effort.account/a")
+            );
+            assert_eq!(
+                std::fs::read(store.root.join("catalog/accepted.json")).unwrap(),
+                accepted_before
+            );
+            assert_eq!(
+                std::fs::read(store.root.join("tmax.toml")).unwrap(),
+                document.as_bytes()
+            );
+        }
+        config
+            .providers
+            .get_mut("account")
+            .unwrap()
+            .models
+            .get_mut("a")
+            .unwrap()
+            .overrides
+            .reasoning_options = Some(vec![crate::config::ReasoningOption {
+            r#type: "effort".into(),
+            values: Some(vec!["max".into()]),
+        }]);
+        let impact = adoption_impact(&config, Some(&old), &new).unwrap();
+        assert!(
+            impact["metadata_changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|change| {
+                    !change["path"].as_str().is_some_and(|path| {
+                        path.starts_with("providers.account.models.a.metadata.reasoning_options")
+                    })
+                })
+        );
+        assert_eq!(
+            config.model_aliases[0].candidate_reasoning_effort["account/a"],
+            "max"
         );
     }
 

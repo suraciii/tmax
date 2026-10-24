@@ -74,6 +74,30 @@ struct Reply {
     version: String,
     result: Result<Value>,
 }
+struct InferenceListener(TcpListener);
+impl axum::serve::Listener for InferenceListener {
+    type Io = tokio::net::TcpStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (stream, address) = axum::serve::Listener::accept(&mut self.0).await;
+            match stream.set_nodelay(true) {
+                Ok(()) => return (stream, address),
+                Err(error) => {
+                    eprintln!(
+                        "tmax: rejecting inference connection: cannot set TCP_NODELAY: {error}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.0.local_addr()
+    }
+}
+
 struct Surface {
     address: SocketAddr,
     shutdown: watch::Sender<bool>,
@@ -264,6 +288,7 @@ impl Resident {
         }
         let previous = self.runtime.snapshot.read().expect("snapshot lock").clone();
         let metadata = crate::catalog::read(&self.store, "accepted")?.map(Arc::new);
+        crate::reasoning::validate(&loaded.config, metadata.as_deref())?;
         let snapshot = if let Some(gateway) = &loaded.config.gateway {
             let retained = previous
                 .as_ref()
@@ -352,6 +377,7 @@ impl Resident {
         }
         let client = crate::integrations::client(&current.config)?;
         let metadata = crate::catalog::read(&self.store, "accepted")?.map(Arc::new);
+        crate::reasoning::validate(&current.config, metadata.as_deref())?;
         let same = self
             .inference
             .as_ref()
@@ -410,7 +436,7 @@ impl Resident {
         let (shutdown, mut cancelled) = watch::channel(false);
         let runtime = self.runtime.clone();
         let task = tokio::spawn(async move {
-            let _ = axum::serve(listener, crate::gateway::router(runtime))
+            let _ = axum::serve(InferenceListener(listener), crate::gateway::router(runtime))
                 .with_graceful_shutdown(async move {
                     let _ = cancelled.changed().await;
                 })

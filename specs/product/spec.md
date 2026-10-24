@@ -609,11 +609,12 @@ and available usage information. Cancellation must end upstream consumption as
 far as the upstream transport supports. Alias replacement, routing headers,
 and authorized credential handling must not become protocol translation.
 
-Inference request parameters remain owned by the agent's native settings and
-request. Provider/model metadata overrides describe capabilities, not sampling
-defaults or reasoning choices. tmax must not introduce provider-, model-alias-,
-or agent-level request-parameter overrides; the detailed boundary is in
-[Request parameters](../model-routing/spec.md#request-parameters).
+Native settings and requests own inference parameters except explicitly chosen
+alias-candidate reasoning effort under
+[Request parameters](../model-routing/spec.md#request-parameters). Provider/model
+metadata remains capability information, not a selected effort, sampling default,
+or generation budget. No provider-, concrete-model-, alias-wide-, or agent-level
+arbitrary request-parameter override is introduced.
 
 Each in-flight request must keep its selected concrete or alias ID, provider,
 model, and authorization. Configuration changes must expose their impact before
@@ -995,7 +996,8 @@ credentials; do not claim readiness or add a fallback.
     field validation, reference checks, explicit reload, saved/loaded/applied state
     separation, invalid-file startup, and concurrent-write rejection. Configure
     every supported setting through CLI operations without authoring documents.
-    Preserve native request parameters instead of injecting metadata capabilities.
+    Preserve native request parameters except explicit candidate reasoning effort;
+    never turn metadata capabilities into chosen request values.
 18. Remove providers and targets only after references are explicitly resolved.
     Distinguish retained native files and secrets from removed desired settings;
     stopping management must not silently sign out or revoke upstream access.

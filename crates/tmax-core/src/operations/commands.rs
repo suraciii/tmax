@@ -439,14 +439,14 @@ const COMMANDS: &[Command] = &[
         path: "model alias add",
         min: 1,
         max: 1,
-        options: "protocol candidate set clear",
+        options: "protocol candidate candidate-reasoning-effort clear-candidate-reasoning-effort set clear",
         mutation: true,
     },
     Command {
         path: "model alias update",
         min: 1,
         max: 1,
-        options: "protocol new-protocol candidate set clear",
+        options: "protocol new-protocol candidate candidate-reasoning-effort clear-candidate-reasoning-effort set clear",
         mutation: true,
     },
     Command {
@@ -822,7 +822,7 @@ const COMMANDS: &[Command] = &[
     },
 ];
 pub fn catalog() -> Value {
-    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="gateway configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method" if c.path=="provider login-start"=>vec!["browser","device"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"model"),"switch":matches!(name,"new-codex"|"all-day"|"last"|"gateway"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation,"revision_guard":c.supports_revision()})}).collect::<Vec<_>>())
+    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="gateway configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method" if c.path=="provider login-start"=>vec!["browser","device"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"candidate-reasoning-effort"|"clear-candidate-reasoning-effort"|"model"),"switch":matches!(name,"new-codex"|"all-day"|"last"|"gateway"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation,"revision_guard":c.supports_revision()})}).collect::<Vec<_>>())
 }
 fn operand_labels(path: &str) -> &'static [&'static str] {
     match path {
@@ -927,6 +927,8 @@ pub fn validate(r: &Request) -> Result<()> {
                 | "weekday"
                 | "date"
                 | "candidate"
+                | "candidate-reasoning-effort"
+                | "clear-candidate-reasoning-effort"
         ) || (key == "model" && path.starts_with("provider input "));
         if values.is_empty()
             || (!repeated && values.len() != 1)

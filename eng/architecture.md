@@ -56,6 +56,18 @@ Manual subscription metadata does not establish API balance, account ownership,
 or entitlement. Failed refreshes retain the prior fact with a distinct latest
 attempt. Discovery observations never register concrete models implicitly.
 
+Inference HTTP connections use `TCP_NODELAY` so separate response headers and
+streamed body chunks do not wait for Nagle buffering and a peer's delayed ACK.
+The listener rejects a connection if it cannot configure that socket option.
+The upstream client remains shared by the loaded snapshot, and response bodies
+remain pull-driven; this transport setting does not change admission limits,
+inspection bounds, cancellation, or forwarding semantics.
+
+Selection without a native binding key does not acquire the session-binding
+mutex. Requests with a key retain serialized binding checks and durable writes.
+The loaded-snapshot authority still excludes configuration activation during
+selection.
+
 ## Local verification boundary
 
 Real CLI and browser workflows are exercised under a dedicated passwd-backed OS

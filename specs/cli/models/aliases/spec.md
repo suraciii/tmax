@@ -23,10 +23,10 @@ owns concrete/alias inspection syntax.
 | `enabled` | Boolean; clear restores true. |
 | `continuity` | `session` or `stateless`; clear restores `session`. Applies to every caller of this definition, not native Agent selections. |
 
-`EDIT` accepts only these fields. Concrete mappings remain fixed and accept no
-continuity edit. Stateless selection still requires client/upstream qualification;
-it cannot bypass supplier conversation requirements or make a shared key a safe
-conversation identity.
+Scalar `EDIT` accepts only `enabled` and `continuity`; use the separate
+candidate reasoning-effort options below for per-candidate overrides. Concrete
+mappings remain fixed and accept no continuity edit. Stateless selection still
+requires client/upstream qualification; it cannot bypass conversation rules.
 
 | Candidate or identity condition | Observable contract |
 | --- | --- |
@@ -61,3 +61,37 @@ executed workflow.
 | Inspect continuity | Effective continuity and whether it is explicit or the `session` default. |
 | Session impact | Remove/disable and candidate/continuity changes report affected existing sessions under [configuration impact](../../configuration/spec.md#configuration-impact-data); never retarget or revive old bindings. |
 | Full detail | Definitions and candidate explanations belong in model inspect/explain, not routine mutation summaries. |
+
+### Per-candidate reasoning effort
+
+Both `model alias add` and `model alias update` accept repeatable
+`--candidate-reasoning-effort QUALIFIED=EFFORT` and
+`--clear-candidate-reasoning-effort QUALIFIED` options. Each candidate may be
+set or cleared at most once per mutation; duplicates and setting and clearing
+the same candidate are rejected. A set requires `QUALIFIED` to be a current
+alias candidate and `EFFORT` to be a nonempty supported value. The value must
+appear in that concrete candidate's effective positive `reasoning_options`
+metadata (`type = "effort"` with explicit `values`); `reasoning = true` alone
+is not enough. Invalid effort or protocol mutations exit 2 and identify
+`candidate_reasoning_effort`.
+
+A configured value is fixed for that exact candidate and takes precedence over
+the caller's native effort when it is selected. Without a configured value, the
+gateway preserves the caller's explicit or omitted effort. Chat Completions
+and Responses accept configured effort; Messages rejects it. Updating an entry
+preserves unrelated map entries. Removing or replacing a candidate drops that
+candidate's map entry; explicit clear removes the named entry. These options do
+not add a global default, universal effort vocabulary, or other request
+parameters.
+
+```sh
+tmax model alias add coding --protocol chat-completions \
+  --candidate provider-a/model-a --candidate provider-b/model-b \
+  --candidate-reasoning-effort provider-a/model-a=EFFORT_A \
+  --candidate-reasoning-effort provider-b/model-b=EFFORT_B
+tmax model alias update coding --protocol chat-completions \
+  --clear-candidate-reasoning-effort provider-a/model-a
+```
+
+Replace the generic candidate names with registered offerings and each effort
+placeholder with a value supported by that candidate's effective metadata.

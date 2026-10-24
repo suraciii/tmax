@@ -34,8 +34,9 @@ pub fn capability_mismatch(
     model: &crate::config::Model,
     metadata: Option<&crate::catalog::Snapshot>,
     body: &Value,
+    effort: Option<(&str, &str)>,
 ) -> Option<&'static str> {
-    capabilities::mismatch(provider, model_id, model, metadata, body)
+    capabilities::mismatch(provider, model_id, model, metadata, body, effort)
 }
 const BINDING_LIMIT: usize = 2048;
 const BINDING_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -403,8 +404,11 @@ impl Runtime {
             && (alias.is_some()
                 || native_context::has_remote_state(body)
                 || context.as_ref().is_some_and(|c| c.created_at.is_some()));
-        let mut bindings = self.bindings.lock().expect("bindings mutex");
-        if let Some(key) = &key
+        let mut bindings = key
+            .as_ref()
+            .map(|_| self.bindings.lock().expect("bindings mutex"));
+        if let Some(bindings) = bindings.as_mut()
+            && let Some(key) = &key
             && let Some(binding) = bindings.entries.get_mut(key)
         {
             if let Some(reason) = binding.blocked.as_ref() {
@@ -420,7 +424,7 @@ impl Runtime {
             );
             if let Some(reason) = binding_blocker(config, binding, &identities) {
                 binding.blocked = Some(reason.into());
-                save_bindings(&self.store, &bindings)?;
+                save_bindings(&self.store, bindings)?;
                 return Err(Error::new(
                     reason,
                     "Retained destination is incompatible; it will not be reassigned",
@@ -434,6 +438,9 @@ impl Runtime {
                 model,
                 snapshot.metadata.as_deref(),
                 body,
+                config
+                    .candidate_effort(public_id, protocol, &binding.provider, &binding.model)
+                    .map(|effort| (protocol, effort)),
             ) {
                 return Err(Error::new(
                     reason,
@@ -441,7 +448,7 @@ impl Runtime {
                 ));
             }
             client_contract(provider, &native)?;
-            let evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"offering_identity":binding.offering_identity},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
+            let evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"offering_identity":binding.offering_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
             return Ok(Choice {
                 selection: crate::routing::Selection {
                     provider: binding.provider.clone(),
@@ -456,9 +463,14 @@ impl Runtime {
             });
         }
         if retain
-            && !context
-                .as_ref()
-                .is_some_and(|c| c.can_start_binding(body, protocol, bindings.epoch, now))
+            && !context.as_ref().is_some_and(|c| {
+                c.can_start_binding(
+                    body,
+                    protocol,
+                    bindings.as_ref().expect("qualified binding lock").epoch,
+                    now,
+                )
+            })
         {
             return Err(Error::new(
                 "original_binding_unavailable",
@@ -522,6 +534,7 @@ impl Runtime {
             }
         }
         if retain {
+            let bindings = bindings.as_mut().expect("qualified binding lock");
             selection.evidence["scope_handle"] = json!(
                 context
                     .as_ref()
@@ -552,7 +565,7 @@ impl Runtime {
             };
             let key = key.expect("qualified binding key");
             bindings.entries.insert(key.clone(), binding);
-            if let Err(error) = save_bindings(&self.store, &bindings) {
+            if let Err(error) = save_bindings(&self.store, bindings) {
                 bindings.entries.remove(&key);
                 return Err(error);
             }
@@ -596,7 +609,7 @@ fn retained_explanation(
     Ok(json!({
         "session":session,"session_source":source,"public_id":public_id,"protocol":protocol,
         "selection_reason":"retained_destination",
-        "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"offering_identity":binding.offering_identity},
+        "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"offering_identity":binding.offering_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
         "continuation":{"state":if blocker.is_some(){"blocked"}else{"retained"},"reason_code":blocker,"stored_blocker":binding.blocked},
         "original_decision":safe_evidence(&binding.decision),"fresh_ranking":"not_evaluated","authorization":"not_verified"
     }))
@@ -980,6 +993,15 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
     let Some(provider) = snapshot.config.providers.get(&selection.provider) else {
         return flight.reject(StatusCode::BAD_REQUEST, "provider_unavailable", "selection");
     };
+    if let Some(effort) = snapshot.config.candidate_effort(
+        &public_id,
+        protocol,
+        &selection.provider,
+        &selection.model,
+    ) && let Err(error) = crate::reasoning::apply(&mut body, protocol, effort)
+    {
+        return flight.reject(StatusCode::BAD_REQUEST, &error.code, "model_validation");
+    }
     if let Err(e) = crate::integrations::check_request(provider, &selection.model, protocol, &body)
     {
         return flight.reject(StatusCode::BAD_REQUEST, &e.code, "model_validation");
@@ -1702,6 +1724,7 @@ mod tests {
             config.providers.get_mut(id).unwrap().auth = Some(Auth::ApiKey { key_ref: reference });
         }
         config.model_aliases.push(crate::config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
             id: "dynamic".into(),
             protocol: "chat-completions".into(),
             candidates: vec!["p/m".into(), "q/m".into()],
@@ -1733,6 +1756,193 @@ mod tests {
         *authority = Some(Arc::new(test_snapshot(new, revision)));
     }
     #[test]
+    fn context_free_selection_does_not_wait_for_session_bindings() {
+        let (_temporary, runtime, config) = fixture();
+        let snapshot = test_snapshot(&config, "fixture-1");
+        let bindings = runtime.bindings.lock().unwrap();
+        let worker_runtime = runtime.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let choice = worker_runtime.choose(
+                &snapshot,
+                "p/m",
+                "chat-completions",
+                &json!({"messages":[{"role":"user","content":"synthetic"}]}),
+                &HeaderMap::new(),
+                Utc::now(),
+            );
+            sender.send(choice).unwrap();
+        });
+        let choice = receiver.recv_timeout(Duration::from_secs(5));
+        drop(bindings);
+        worker.join().unwrap();
+        let choice = choice
+            .expect("context-free selection waited for session state")
+            .unwrap();
+        assert_eq!(choice.selection.provider, "p");
+        assert_eq!(choice.selection.model, "m");
+    }
+
+    #[test]
+    fn candidate_effort_precedes_filtering_and_retained_requests_without_rerouting() {
+        let (_temporary, runtime, original) = fixture();
+        let mut config = original.clone();
+        for (provider, values) in [("p", vec!["low", "high"]), ("q", vec!["max"])] {
+            config
+                .providers
+                .get_mut(provider)
+                .unwrap()
+                .models
+                .get_mut("m")
+                .unwrap()
+                .overrides
+                .reasoning_options = Some(vec![crate::config::ReasoningOption {
+                r#type: "effort".into(),
+                values: Some(values.into_iter().map(String::from).collect()),
+            }]);
+        }
+        publish(&runtime, &original, &config, "effort-capabilities");
+        let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+        let body = json!({"messages":[{"role":"user","content":"x"}],"reasoning_effort":"max"});
+        let first = runtime
+            .choose(
+                &test_snapshot(&config, "no-override"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &native_headers(at),
+                at,
+            )
+            .unwrap();
+        assert_eq!(first.selection.provider, "q");
+        let previous = config.clone();
+        config.model_aliases[0]
+            .candidate_reasoning_effort
+            .insert("p/m".into(), "high".into());
+        publish(&runtime, &previous, &config, "fixed-high");
+        let next = at + chrono::Duration::seconds(1);
+        let headers = native_headers(next);
+        let fixed = runtime
+            .choose(
+                &test_snapshot(&config, "fixed-high"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                next,
+            )
+            .unwrap();
+        assert_eq!(fixed.selection.provider, "p");
+        assert_eq!(
+            fixed.selection.evidence["selection"]["candidate_reasoning_effort"],
+            "high"
+        );
+        let previous = config.clone();
+        config.model_aliases[0]
+            .candidate_reasoning_effort
+            .insert("p/m".into(), "low".into());
+        config
+            .providers
+            .get_mut("q")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .priority = 100;
+        publish(&runtime, &previous, &config, "fixed-low");
+        let retained = runtime
+            .choose(
+                &test_snapshot(&config, "fixed-low"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                next,
+            )
+            .unwrap();
+        assert_eq!(retained.selection.provider, "p");
+        assert_eq!(
+            retained.selection.evidence["selection_reason"],
+            "retained_destination"
+        );
+        let retained_evidence = safe_evidence(&retained.selection.evidence);
+        assert_eq!(
+            retained_evidence["selected"]["candidate_reasoning_effort"],
+            "low"
+        );
+        assert_eq!(
+            retained_evidence["original_decision"]["selection"]["candidate_reasoning_effort"],
+            "high"
+        );
+        let conflict =
+            json!({"messages":[{"role":"user","content":"x"}],"thinking":{"type":"disabled"}});
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&config, "conflict"),
+                    "dynamic",
+                    "chat-completions",
+                    &conflict,
+                    &headers,
+                    next
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_toggle_conflict"
+        );
+        let previous = config.clone();
+        config.model_aliases[0]
+            .candidate_reasoning_effort
+            .insert("p/m".into(), "max".into());
+        publish(&runtime, &previous, &config, "unsupported");
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&config, "unsupported"),
+                    "dynamic",
+                    "chat-completions",
+                    &body,
+                    &headers,
+                    next
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_effort_incompatible"
+        );
+        let previous = config.clone();
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .overrides
+            .reasoning_options = Some(vec![crate::config::ReasoningOption {
+            r#type: "toggle".into(),
+            values: None,
+        }]);
+        publish(&runtime, &previous, &config, "toggle-only");
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&config, "toggle-only"),
+                    "dynamic",
+                    "chat-completions",
+                    &body,
+                    &headers,
+                    next
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_effort_unavailable"
+        );
+        assert_eq!(body["reasoning_effort"], "max");
+    }
+    #[test]
     fn arbitrary_aliases_use_only_explicit_members_across_calendar_boundaries() {
         let (_temporary, runtime, original) = fixture();
         let mut config = original.clone();
@@ -1762,6 +1972,7 @@ mod tests {
             ("my.custom-name", vec!["q/m"]),
         ] {
             config.model_aliases.push(crate::config::ModelAlias {
+                candidate_reasoning_effort: Default::default(),
                 id: id.into(),
                 protocol: "chat-completions".into(),
                 candidates: members.into_iter().map(String::from).collect(),

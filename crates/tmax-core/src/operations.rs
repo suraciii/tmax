@@ -114,6 +114,15 @@ fn error_response(operation: &str, error: Error, dry_run: bool) -> Response {
             code,
             "unresolved_reference" | "unknown_resource" | "unsupported_operation"
         )
+        || (error.field.as_deref().is_some_and(|field| {
+            field.starts_with("model_aliases.") && field.contains(".candidate_reasoning_effort.")
+        }) && matches!(
+            code,
+            "reasoning_incompatible"
+                | "reasoning_effort_incompatible"
+                | "reasoning_effort_unavailable"
+                | "candidate_reasoning_protocol_unsupported"
+        ))
     {
         2
     } else {
@@ -1001,6 +1010,28 @@ mod tests {
     }
     use super::*;
     #[test]
+    fn candidate_effort_configuration_errors_are_invalid_input_not_runtime_failures() {
+        for code in [
+            "reasoning_incompatible",
+            "reasoning_effort_incompatible",
+            "reasoning_effort_unavailable",
+            "candidate_reasoning_protocol_unsupported",
+        ] {
+            let configured = error_response(
+                "model alias update",
+                Error::new(code, "Unsupported configured candidate effort")
+                    .field("model_aliases.fast.candidate_reasoning_effort.p/m"),
+                false,
+            );
+            assert_eq!(configured.exit_code, 2);
+            assert_eq!(configured.body["code"], code);
+            assert_eq!(configured.body["status"], "error");
+            let runtime =
+                error_response("gateway probe", Error::new(code, "Runtime mismatch"), false);
+            assert_eq!(runtime.exit_code, 4);
+        }
+    }
+    #[test]
     fn completed_native_writes_are_success_with_a_reload_reminder() {
         for operation in ["agent apply", "agent restore"] {
             let response = success_response(
@@ -1352,6 +1383,7 @@ mod tests {
             },
         );
         config.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
             id: "custom-name".into(),
             protocol: "chat-completions".into(),
             candidates: vec!["p/m".into()],

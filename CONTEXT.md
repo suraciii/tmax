@@ -112,6 +112,11 @@ one or more concrete offerings. Names such as L0 and L1 have no built-in meaning
 an alias names access through the gateway, not a new model or identical weights.
 _Avoid_: Virtual model, provider alias, separately managed account pool
 
+**Alias candidate**:
+One concrete model offering explicitly included in a particular model alias.
+Its alias-local reasoning choice may differ from the same offering in another alias.
+_Avoid_: Provider pool, route-wide model default
+
 **Observed usage**:
 Usage measured from requests that passed through tmax. It is not a provider's
 account-wide usage report or an authoritative bill.
