@@ -242,7 +242,6 @@ pub(super) fn fields(owner: &str) -> &'static [(&'static str, &'static str)] {
         ],
         "model" => &[
             ("enabled", "boolean"),
-            ("tier", "string"),
             ("priority", "integer"),
             ("timezone", "string"),
             ("overrides.name", "string"),
@@ -814,9 +813,6 @@ fn mutate(root: &mut Value, r: &Request, store: &Store) -> Result<(Json, Vec<(St
             if r.command.len() == 4 {
                 let pos = alias_position(root, id, protocol)?;
                 let alias = &mut aliases_mut(root)?[pos];
-                if alias.get("tier").is_some() {
-                    return Err(error());
-                }
                 let candidates = alias
                     .get_mut("candidates")
                     .and_then(Value::as_array_mut)
@@ -1088,19 +1084,15 @@ fn endpoints(p: &mut Value, r: &Request) -> Result<()> {
     Ok(())
 }
 fn alias_source(a: &mut Value, r: &Request, required_source: bool) -> Result<()> {
-    let tier = arg(r, "tier");
     let candidates = args(r, "candidate");
-    if tier.is_some() && !candidates.is_empty() {
-        return Err(error());
+    if required_source && candidates.is_empty() {
+        return Err(Error::new(
+            "invalid_arguments",
+            "Add at least one registered concrete model with --candidate provider-id/model-id",
+        )
+        .field("candidate"));
     }
-    if required_source && tier.is_none() && candidates.is_empty() {
-        return Err(error());
-    }
-    if let Some(tier) = tier {
-        remove(a, &["candidates"])?;
-        put(a, &["tier"], string(tier))?;
-    } else if !candidates.is_empty() {
-        remove(a, &["tier"])?;
+    if !candidates.is_empty() {
         put(a, &["candidates"], strings(candidates))?;
     }
     Ok(())
@@ -1592,6 +1584,112 @@ mod regressions {
             if_revision: None,
         }
     }
+    #[tokio::test]
+    async fn alias_edits_replace_members_preserve_references_and_reject_partial_invalid_saves() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().into());
+        store.write_raw("tmax.toml", b"# personal settings\nversion=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\n[providers.p.models.a]\npriority=7\n[providers.p.models.b]\n").unwrap();
+        let alias_request = |tail: &[&str], candidates: &[&str]| Request {
+            command: ["model", "alias"]
+                .into_iter()
+                .chain(tail.iter().copied())
+                .map(String::from)
+                .collect(),
+            operands: vec!["L9".into()],
+            arguments: BTreeMap::from([
+                ("protocol".into(), vec!["chat-completions".into()]),
+                (
+                    "candidate".into(),
+                    candidates.iter().map(|s| s.to_string()).collect(),
+                ),
+            ]),
+            dry_run: false,
+            if_revision: None,
+        };
+        let original = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        let missing = execute(&store, &alias_request(&["add"], &[]))
+            .await
+            .unwrap_err();
+        assert_eq!(missing.code, "invalid_arguments");
+        assert_eq!(missing.field.as_deref(), Some("candidate"));
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            original
+        );
+        execute(&store, &alias_request(&["add"], &["p/a"]))
+            .await
+            .unwrap();
+        execute(&store, &alias_request(&["update"], &["p/b", "p/a"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            config::load(&store).unwrap().config.model_aliases[0].candidates,
+            ["p/b", "p/a"]
+        );
+        let mut disable = alias_request(&["update"], &[]);
+        disable
+            .arguments
+            .insert("set".into(), vec!["enabled".into(), "false".into()]);
+        execute(&store, &disable).await.unwrap();
+        let loaded = config::load(&store).unwrap();
+        assert!(!loaded.config.model_aliases[0].enabled);
+        assert_eq!(loaded.config.model_aliases[0].candidates, ["p/b", "p/a"]);
+        for invalid in [
+            alias_request(&["candidates", "add"], &["p/a"]),
+            alias_request(&["candidates", "add"], &["missing/model"]),
+            alias_request(&["candidates", "remove"], &["p/a", "p/b"]),
+            request(&["model", "update"], &["p/a"], &["tier", "L0"]),
+        ] {
+            let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
+            assert!(execute(&store, &invalid).await.is_err());
+            assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), before);
+        }
+        execute(&store, &alias_request(&["update"], &["p/b"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            config::load(&store).unwrap().config.model_aliases[0].candidates,
+            ["p/b"]
+        );
+        execute(&store, &alias_request(&["candidates", "add"], &["p/a"]))
+            .await
+            .unwrap();
+        execute(&store, &alias_request(&["candidates", "remove"], &["p/b"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            config::load(&store).unwrap().config.model_aliases[0].candidates,
+            ["p/a"]
+        );
+        assert!(
+            execute(&store, &request(&["provider", "remove"], &["p"], &[]))
+                .await
+                .is_err()
+        );
+        execute(
+            &store,
+            &request(&["model", "rename"], &["p/a", "new/with/slash"], &[]),
+        )
+        .await
+        .unwrap();
+        execute(
+            &store,
+            &request(&["provider", "rename"], &["p", "renamed"], &[]),
+        )
+        .await
+        .unwrap();
+        let loaded = config::load(&store).unwrap();
+        assert_eq!(
+            loaded.config.model_aliases[0].candidates,
+            ["renamed/new/with/slash"]
+        );
+        assert_eq!(
+            loaded.config.providers["renamed"].models["new/with/slash"].priority,
+            7
+        );
+        assert!(loaded.document.to_string().contains("# personal settings"));
+    }
+
     #[tokio::test]
     async fn actual_update_preserves_inline_siblings_comments_and_reports_no_service() {
         let temp = tempfile::tempdir().unwrap();

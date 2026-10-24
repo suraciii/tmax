@@ -218,7 +218,7 @@ the consulted prices or treat a reference catalog cost as the full tariff.
 A user may express a deliberate pricing-based preference through the existing
 [time rules](../../model-routing/spec.md#time-rules), including a saved time zone
 and explicit date overrides. Pricing refreshes must not create holiday rules,
-change tiers or priorities, rewrite schedules, or retarget a conversation.
+change priorities or alias candidates, rewrite schedules, or retarget a conversation.
 Unknown or stale tariff data must remain labeled as such; it must not prevent
 otherwise qualified inference or trigger an automatic cheapest-model decision.
 

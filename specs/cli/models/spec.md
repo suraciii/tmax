@@ -14,7 +14,7 @@ saved fields. Use [common CLI rules](../spec.md),
 | --- | --- |
 | `model list [--provider ID] [--protocol P] [--kind KIND]` | Compact concrete/alias identities, declared protocol support, shared publication, and availability. `KIND` is `concrete` or `alias`; omission includes both. |
 | `model inspect QUALIFIED [--protocol P]` | Concrete offering details across all supported protocols; optional protocol filters the details. Include effective metadata/provenance, local overrides, revision-scoped local array indices, capabilities, priority/rules, and file/loaded differences. |
-| `model inspect ID [--protocol P]` | Inspect a model alias's definition, source, candidates, shared continuity, and availability. Without protocol, infer only one uniquely configured alias ID. Ambiguous IDs require `--protocol`. |
+| `model inspect ID [--protocol P]` | Inspect a model alias's definition, candidates, shared continuity, and availability. Without protocol, infer only one uniquely configured alias ID. Ambiguous IDs require `--protocol`. |
 
 | Inspection fact | Contract |
 | --- | --- |
@@ -57,7 +57,6 @@ These fields describe supported controls, not chosen request parameters.
 | Model `FIELD` | Scalar type and clear behavior |
 | --- | --- |
 | `enabled` | Boolean; clear restores true. |
-| `tier` | `L0`–`L3`; clear means unclassified. |
 | `priority` | Signed integer; clear restores zero. |
 | `timezone` | IANA-zone string; clear only if no schedule/signal time gate requires it. |
 | `overrides.name`, `overrides.description`, `overrides.family`, `overrides.knowledge`, `overrides.release_date`, `overrides.last_updated` | Strings; clear restores inheritance. Date-like catalog metadata stays a string, not a local subscription/time-rule date. |
@@ -92,18 +91,17 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 
 | Command | Effect-free explanation |
 | --- | --- |
-| `model explain ID --protocol P [--target TARGET --agent-provider NAME] [--at INSTANT] [--session SESSION] [--state STATE]` | Explain a public proxy model without managed-target prerequisites, optionally assessing a named native entry's client requirements. |
-| `model explain --tier TIER --protocol P --target TARGET [--at INSTANT] [--state STATE]` | Resolve `L0`, `L1`, `L2`, or `L3` for a declared native scope without editing it. |
-| `model explain --tier TIER --protocol P --agent AGENT --path PATH [--at INSTANT] [--state STATE]` | Resolve a tier for an explicitly inspected undeclared native path without registering it. |
+| `model explain ID --protocol P [--target TARGET [--agent-provider ENTRY] \| --agent AGENT --path PATH] [--at INSTANT] [--session SESSION] [--state STATE]` | Explain an explicit model ID without managed-target prerequisites, optionally assessing a declared target, its named native entry, or an undeclared native scope. |
 
 | Explanation context | Operand and selection contract |
 | --- | --- |
 | Public ID without native context | `ID` is a public qualified concrete or alias ID; use proxy requirements. |
-| Public/native ID with entry context | Require `--target` and `--agent-provider` together and an existing entry. Upstream-source `ID` is exact under its provider; proxy-source `ID` is the public proxy ID. The entry need not have selected the model. |
+| Declared target without entry | `--target TARGET` assesses the public qualified concrete or alias ID against the target's native requirements. No saved model/default/role selection is required. |
+| Public/native ID with entry context | `--agent-provider ENTRY` requires `--target TARGET` and an existing entry. Upstream-source `ID` is the exact unqualified upstream model ID under its provider; proxy-source `ID` is the public qualified concrete or alias ID. The entry need not have selected the model. |
 | Native entry assessment | Assess native support, supplier restrictions, and credential handoff, not permission or a private model list. Incomplete target selections/default do not block explanation. Never infer context from a shared key or similar entry name. |
-| Tier explanation | Require exactly one scope: declared `--target`, or undeclared `--agent` plus `--path`. Reject ID, `--agent-provider`, and `--session`. |
-| Undeclared tier scope | Use the same qualified inspection as `agent inspect --agent AGENT --path PATH`; do not register or import the scope. |
-| Tier candidates | Registered tier offerings, not native imports; neither scope needs saved model/default/role selections. A tool name/readable native login is not proof of supplier compatibility or access. |
+| Undeclared native scope | `--agent AGENT --path PATH` assesses the public qualified concrete or alias ID with the same qualified inspection as `agent inspect --agent AGENT --path PATH`; do not register or import the scope. |
+| Context selectors | Omit all selectors, choose `--target` with optional `--agent-provider`, or choose both `--agent` and `--path`. Reject mixed or incomplete selectors. |
+| Candidate scope | Use only the explicit alias candidates or the requested concrete offering, not native imports. A tool name/readable native login is not proof of supplier compatibility or access. |
 
 | Explanation evidence or boundary | Contract |
 | --- | --- |
@@ -112,7 +110,7 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 | Candidate evidence | Return selected/excluded offerings, reasons/ties, effective priority, ordered signal-rule explanations, calendar fallback, zone/UTC offset, next boundary, and provenance/freshness under the [priority result contract](rules/spec.md#priority-evaluation-data). |
 | Support/access | Distinguish documented, verified, incompatible, and unknown support; missing qualification/credentials remain blocked/unknown, not fabricated access. |
 | Alias continuity | Shared by every caller of the definition; native selections/defaults/roles do not override it. |
-| `--session SESSION` | Inspect an existing proxy handle for this public ID/protocol, with or without native entry context. Return its retained destination or blocked continuation, not a new-session winner. Reject with upstream-source entries or `--tier`. |
+| `--session SESSION` | Inspect an existing proxy handle matching this public ID/protocol, with or without native context. Return its retained destination or blocked continuation, not a new-session winner. Reject upstream-source entries. |
 | Conversation identity | Shared key/model alone is not identity. Session-stable forwarding requires supported native conversation identity and scope; never invent a session or reconstruct conversation history. |
 | Retained target attribution | Independent evidence when present, not a consequence of the shared key. |
 | Effects | No settings/native writes, secret retrieval, login refresh, inference start/quota use, session reservation, execution handle, or hidden apply step. Reject dry-run. |
@@ -124,7 +122,7 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 | `kind` | `target` | `agent_provider` | `agent` | `path` |
 | --- | --- | --- | --- | --- |
 | `proxy` | null | null | null | null |
-| `agent_provider` | Declared `TARGET` | Target-local `NAME`, not an upstream instance ID | Target's tool identity | Target's resolved native path |
+| `agent_provider` | Declared `TARGET` | Target-local `ENTRY`, not an upstream instance ID | Target's tool identity | Target's resolved native path |
 | `agent_target` | Declared `TARGET` | null | Target's tool identity | Target's resolved native path |
 | `native_scope` | null | null | Explicit `AGENT` | Inspected resolved native path |
 
@@ -133,14 +131,14 @@ All context fields other than `kind` are strings or null.
 | Other model-explanation data | Contract |
 | --- | --- |
 | `data.source` | Present only for `kind = agent_provider`; exactly `{provider: string}` or `{proxy: true}`. |
-| `data.requested` | `{id, tier, protocol}`, with exactly one nonnull ID/tier. |
+| `data.requested` | Exactly `{id, protocol}`; both are required strings. |
 | `data.continuity` | `session` or `stateless` for alias proxy explanations; otherwise null. |
 | Selection/session evidence | Follow the model contract and retain captured revisions; no authorization or target-permission result. |
 
 Examples: `tmax model explain L0 --protocol chat-completions`,
 `tmax model explain L0 --protocol chat-completions --target pi-main --agent-provider local`,
 `tmax model explain deepseek-flash --protocol chat-completions --target pi-main --agent-provider upstream`,
-`tmax model explain --tier L0 --protocol chat-completions --target pi-main`,
-`tmax model explain --tier L0 --protocol chat-completions --agent pi --path /home/user/.pi/agent`,
+`tmax model explain L0 --protocol chat-completions --target pi-main`,
+`tmax model explain L0 --protocol chat-completions --agent pi --path /home/user/.pi/agent`,
 and `tmax model explain L0 --protocol chat-completions --session SESSION`.
 Use a returned current session handle; it is retained-data identity, not approval.

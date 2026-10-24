@@ -11,10 +11,10 @@ owns concrete/alias inspection syntax.
 
 | Command | Requested change |
 | --- | --- |
-| `model alias add ID --protocol P (--tier TIER \| --candidate QUALIFIED...) [EDIT]` | Create exactly `(protocol, id)` with one source; edit `enabled` and/or `continuity`. |
-| `model alias update ID --protocol P [--new-protocol P] [--tier TIER \| --candidate QUALIFIED...] [EDIT]` | Edit scalar fields and/or completely replace the candidate source. At least one change is required. |
-| `model alias candidates add ID --protocol P --candidate QUALIFIED...` | Append to an existing explicit list; reject duplicates and tier sources. |
-| `model alias candidates remove ID --protocol P --candidate QUALIFIED...` | Remove named explicit members; reject missing members and an empty result. |
+| `model alias add ID --protocol P --candidate QUALIFIED... [EDIT]` | Create exactly `(protocol, id)` with a required nonempty candidate list; edit `enabled` and/or `continuity`. |
+| `model alias update ID --protocol P [--new-protocol P] [--candidate QUALIFIED...] [EDIT]` | Edit scalar fields and/or completely replace the candidate list. At least one change is required. |
+| `model alias candidates add ID --protocol P --candidate QUALIFIED...` | Append candidates to the existing list; reject duplicates. |
+| `model alias candidates remove ID --protocol P --candidate QUALIFIED...` | Remove named members; reject missing members and an empty result. |
 | `model alias rename OLD NEW --protocol P` | Rename the public ID and target selections/references with no old-ID redirect. |
 | `model alias remove ID --protocol P` | Remove the definition after reference checks. |
 
@@ -31,17 +31,17 @@ conversation identity.
 | Candidate or identity condition | Observable contract |
 | --- | --- |
 | Explicit `--candidate` operands | Preserve order; accept only registered qualified concrete offerings. Reject alias candidates, recursive aliases, bare providers, duplicates, and an empty list. |
-| `model alias update --candidate` | Replace the complete list, switching from a tier when present; never append implicitly. |
-| `--tier TIER` | `L0`–`L3`; replace any previous list. An empty tier is valid but unavailable. |
-| Update omits both source forms | Preserve the existing source; never guess a source change or add a provider. |
+| `model alias update --candidate` | Replace the complete list with the repeated operands; never append implicitly. |
+| Update omits `--candidate` | Preserve the existing list; never guess a membership change or add a provider. |
+| Alias ID | Arbitrary user-defined name; `L0`, `L1`, and `coding` have no built-in candidate membership or ranking. |
 | Publication | Derive the shared list from enabled definitions; no separate proxy-model enrollment or per-client list. |
 | `--new-protocol P` | Change identity only after collision and old-reference checks. Remove old `(protocol, id)` references first; never convert protocols or silently change a target's protocol. |
 
 ```sh
-tmax model alias add L0 --protocol chat-completions --tier L0
+tmax model alias add L0 --protocol chat-completions --candidate deepseek/deepseek-flash
 tmax model alias add deepseek-v4.1-flash --protocol chat-completions --candidate opencode-go/deepseek-v4.1-flash --candidate opencode-go-2/deepseek-v4.1-flash --candidate deepseek/deepseek-flash
 tmax model alias update L0 --protocol chat-completions --set enabled false
-tmax model alias update L0 --protocol chat-completions --clear enabled --tier L1
+tmax model alias update L0 --protocol chat-completions --clear enabled
 tmax model alias update L0 --protocol chat-completions --candidate deepseek/deepseek-flash
 tmax model alias update L0 --protocol chat-completions --set continuity stateless
 tmax model alias update L0 --protocol chat-completions --clear continuity
@@ -57,7 +57,7 @@ executed workflow.
 
 | Alias result | Contract |
 | --- | --- |
-| Mutation summary | `(protocol, id)`, changed scalar fields or source/members, and saved/loaded outcome. |
+| Mutation summary | `(protocol, id)`, changed scalar fields or candidates, and saved/loaded outcome. |
 | Inspect continuity | Effective continuity and whether it is explicit or the `session` default. |
 | Session impact | Remove/disable and candidate/continuity changes report affected existing sessions under [configuration impact](../../configuration/spec.md#configuration-impact-data); never retarget or revive old bindings. |
 | Full detail | Definitions and candidate explanations belong in model inspect/explain, not routine mutation summaries. |

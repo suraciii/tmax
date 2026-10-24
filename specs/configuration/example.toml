@@ -36,16 +36,13 @@ plan = "OpenCode Go"
 metadata = "opencode-go"
 
 [providers.opencode-go.models."deepseek-v4.1-flash"]
-tier = "L0"
 priority = 80
 timezone = "Etc/UTC"
 
 [providers.opencode-go.models."glm-5.3-flash"]
-tier = "L1"
 priority = 50
 
 [providers.opencode-go.models."kimi-k3"]
-tier = "L2"
 priority = 40
 
 # Declare coverage only after these concrete registrations; scopes are user choices.
@@ -100,7 +97,6 @@ key_ref = "go-secondary"
 plan = "OpenCode Go"
 
 [providers.opencode-go-2.models."deepseek-v4.1-flash"]
-tier = "L0"
 priority = 70
 
 # Only this instance's output limit changes; other metadata remains inherited.
@@ -120,7 +116,6 @@ key_ref = "deepseek-personal"
 
 # Official DeepSeek's request ID differs from the scenario alias ID below.
 [providers.deepseek.models."deepseek-flash"]
-tier = "L0"
 priority = 60
 timezone = "Asia/Shanghai"
 
@@ -132,7 +127,6 @@ end = "08:00"
 priority = 100
 
 [providers.deepseek.models."deepseek-v4-pro"]
-tier = "L3"
 priority = 30
 
 # One custom provider can expose several exact bases without copying its identity.
@@ -145,25 +139,30 @@ integration = "custom"
 chat-completions = "https://gateway.example/openai/v1"
 messages = "https://gateway.example/anthropic"
 
+# Alias IDs are caller-chosen names with no built-in rank or candidate membership.
 [[model_aliases]]
 id = "L0"
 protocol = "chat-completions"
-tier = "L0"
+candidates = [
+  "opencode-go/deepseek-v4.1-flash",
+  "opencode-go-2/deepseek-v4.1-flash",
+  "deepseek/deepseek-flash",
+]
 
 [[model_aliases]]
 id = "L1"
 protocol = "chat-completions"
-tier = "L1"
+candidates = ["opencode-go/glm-5.3-flash"]
 
 [[model_aliases]]
 id = "L2"
 protocol = "chat-completions"
-tier = "L2"
+candidates = ["opencode-go/kimi-k3"]
 
 [[model_aliases]]
 id = "L3"
 protocol = "chat-completions"
-tier = "L3"
+candidates = ["deepseek/deepseek-v4-pro"]
 
 [[model_aliases]]
 id = "deepseek-v4.1-flash"

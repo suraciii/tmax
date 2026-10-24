@@ -2578,7 +2578,6 @@ mod tests {
                 provider: Some("p"),
                 proxy: false,
             }),
-            tier: None,
         };
         let before = crate::routing::explain_native(
             &store,

@@ -239,14 +239,7 @@ fn adoption_impact(
     for alias in &config.model_aliases {
         let affected: Vec<_> = models
             .keys()
-            .filter(|name| {
-                if let Some(candidates) = &alias.candidates {
-                    candidates.contains(name)
-                } else {
-                    crate::config::model(config, name)
-                        .is_ok_and(|(_, model)| model.tier == alias.tier)
-                }
-            })
+            .filter(|name| alias.candidates.contains(name))
             .cloned()
             .collect();
         if !affected.is_empty() {
@@ -564,10 +557,8 @@ integration = 'custom'
 [providers.account.endpoints]
 chat-completions = 'http://127.0.0.1:9999/v1'
 [providers.account.models.a]
-tier = 'L1'
 priority = 0
 [providers.account.models.b]
-tier = 'L1'
 priority = 100
 [proxy]
 listen = '127.0.0.1:19876'
@@ -577,9 +568,9 @@ id = 'explicit'
 protocol = 'chat-completions'
 candidates = ['account/a', 'account/b']
 [[model_aliases]]
-id = 'tier'
+id = 'alternate'
 protocol = 'chat-completions'
-tier = 'L1'
+candidates = ['account/a', 'account/b']
 [agents.direct]
 agent = 'pi'
 scope = '/synthetic/catalog-direct'
@@ -591,7 +582,7 @@ agent = 'pi'
 scope = '/synthetic/catalog-aliases'
 [agents.aliases.providers.local]
 proxy = true
-models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'tier', protocol = 'chat-completions'}]
+models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', protocol = 'chat-completions'}]
 "#,
         )
         .unwrap();
@@ -649,7 +640,7 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'tier', protoc
             assert_eq!(change["resource"]["id"], "account/a");
         }
         assert_eq!(changes.len(), 5);
-        for alias in ["explicit", "tier"] {
+        for alias in ["explicit", "alternate"] {
             let route = impact["affected_routes"]
                 .as_array()
                 .unwrap()

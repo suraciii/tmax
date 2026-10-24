@@ -152,20 +152,10 @@ impl Context<'_> {
                     false
                 }
             };
-            if let Some(candidates) = &alias.candidates {
-                for candidate in candidates {
-                    let (provider, model) = config::qualified(candidate)?;
-                    if supports(provider, model) {
-                        return Ok(());
-                    }
-                }
-            } else {
-                for (provider, p) in &config.providers {
-                    for (model, offering) in &p.models {
-                        if offering.tier == alias.tier && supports(provider, model) {
-                            return Ok(());
-                        }
-                    }
+            for candidate in &alias.candidates {
+                let (provider, model) = config::qualified(candidate)?;
+                if supports(provider, model) {
+                    return Ok(());
                 }
             }
             return Err(failure.unwrap_or_else(|| {

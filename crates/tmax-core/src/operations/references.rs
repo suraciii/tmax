@@ -35,21 +35,19 @@ pub(super) fn guard(config: &Config, request: &Request) -> Result<()> {
         None
     };
     for alias in &config.model_aliases {
-        if let Some(candidates) = &alias.candidates {
-            for candidate in candidates {
-                let relevant = if path == "provider remove" {
-                    qualified(candidate)?.0 == id
-                } else {
-                    path == "model remove" && candidate == id
-                };
-                if relevant {
-                    add(
-                        "model_alias",
-                        alias.id.clone(),
-                        Some(alias.protocol.clone()),
-                    );
-                    break;
-                }
+        for candidate in &alias.candidates {
+            let relevant = if path == "provider remove" {
+                qualified(candidate)?.0 == id
+            } else {
+                path == "model remove" && candidate == id
+            };
+            if relevant {
+                add(
+                    "model_alias",
+                    alias.id.clone(),
+                    Some(alias.protocol.clone()),
+                );
+                break;
             }
         }
     }
@@ -177,8 +175,7 @@ mod tests {
         config.model_aliases.push(crate::config::ModelAlias {
             id: "alias".into(),
             protocol: "chat-completions".into(),
-            tier: None,
-            candidates: Some(vec!["p/model".into()]),
+            candidates: vec!["p/model".into()],
             enabled: true,
             continuity: None,
         });

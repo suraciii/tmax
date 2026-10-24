@@ -124,8 +124,8 @@ in these specifications.
   interpolation. Booleans are exactly `true` or `false`. Integers/numbers obey
   schema ranges and finiteness. Dates, enums, URLs, and zones obey their schemas.
 - Clear removes an optional field/object and restores its documented default,
-  inheritance, unclassified state, or unknown fact. It does not write null, zero,
-  false, or an empty string. Required fields cannot be cleared into invalid state.
+  inheritance, or unknown fact. It does not write null, zero, false, or an empty
+  string. Required fields cannot be cleared into invalid state.
 - False, zero, and permitted empty strings are explicit overrides. Dedicated list
   replacement can write an empty list; clearing the override restores inheritance.
 - Apply clears, then sets, as one change regardless of argv order. Reject duplicate

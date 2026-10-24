@@ -58,15 +58,10 @@ The exact `provider-id/model-id` reference to a local provider instance and its
 model offering, independent of wire protocol. It is not a catalog ID, proxy alias, or upstream URL.
 _Avoid_: Display label, catalog model ID, proxy model ID
 
-**Model tier**:
-A user-assigned model-offering class, with L0 through L3 as the initial levels.
-L0 expresses the lowest-cost role and L3 the flagship role, not a live price or benchmark guarantee.
-_Avoid_: Priority, reasoning effort, provider plan
-
 **Effective priority**:
 A model offering's preference score at a particular instant, after applying
 evaluable user-defined priority rules. Higher scores rank eligible candidates first.
-_Avoid_: Model tier, routing weight, measured price
+_Avoid_: Routing weight, measured price
 
 **Priority rule**:
 A user-defined condition and replacement preference score for one model offering.
@@ -112,9 +107,9 @@ native configuration.
 _Avoid_: Agent operating mode, permission-management service
 
 **Model alias**:
-A user-defined request model ID within a native protocol, mapped to one or more
-concrete offerings selected explicitly or through a tier. It names access through
-the proxy, not a new model or a claim that its candidates have identical weights.
+A user-defined request model ID within a native protocol, mapped explicitly to
+one or more concrete offerings. Names such as L0 and L1 have no built-in meaning;
+an alias names access through the proxy, not a new model or identical weights.
 _Avoid_: Virtual model, provider alias, separately managed account pool
 
 **Observed usage**:

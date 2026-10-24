@@ -39,6 +39,12 @@ a field path and actionable error. A rejected file must not be partially applied
 Errors, dry runs, and other results must redact secret values, including values
 accidentally placed in unsupported fields.
 
+In the desired authority, concrete model and model-alias `tier` fields are
+unsupported and must be rejected as unknown fields with their paths. Loading,
+saving, or reloading that authority must not infer replacement candidates or
+perform an automatic conversion. The [usage guide](../../docs/usage.md) describes
+explicit user-chosen conversion.
+
 Models containing dots or slashes use quoted table keys. IDs are exact and
 case-sensitive. Provider-ID and qualified-model parsing follow
 [Qualified model names](../model-routing/spec.md#qualified-model-names).
@@ -103,6 +109,16 @@ file. The accepted metadata snapshot is retained under `~/.tmax`; an inaccessibl
 snapshot must not be replaced by newly downloaded defaults without explicit
 catalog application. Declaration validation must not launch sign-in, start a proxy,
 or apply native configuration.
+
+Historical operational snapshots are not desired authority. Supported legacy
+records may normalize removed fields in memory without read-time writes.
+Explicit candidates remain unchanged; former tier-backed membership comes only
+from the same historical snapshot, including disabled offerings. Historical empty
+membership stays unavailable internally, not valid desired configuration.
+Corrupt records fail closed. Normalization must preserve provider, offering,
+authorization, input/head, and session identities and permanent blockers.
+Canonical snapshots may persist only through existing guarded mutations.
+Users must not need to edit or delete operational routing/session JSON.
 
 ### Invalid-authority recovery
 
@@ -375,7 +391,6 @@ and late-result rejection belong to the input lifecycle, not configuration loadi
 | Field | Type and meaning |
 | --- | --- |
 | `enabled` | Boolean, default true for an explicitly declared offering |
-| `tier` | Optional `L0`, `L1`, `L2`, or `L3`; omission means unclassified |
 | `priority` | Signed TOML integer, default zero |
 | `overrides` | Model metadata differences, not inference request parameters |
 | `timezone` | IANA zone, required when `schedule` is nonempty or any signal rule has `time_window` |
@@ -478,19 +493,16 @@ the fixed destination of an existing session.
 | --- | --- |
 | `id` | Required exact public model-alias ID |
 | `protocol` | Required `chat-completions`, `responses`, or `messages` |
-| `tier` | One of `L0`, `L1`, `L2`, or `L3`; mutually exclusive with `candidates` |
-| `candidates` | Nonempty unique array of registered qualified concrete names; bare provider IDs and alias references are invalid |
+| `candidates` | Required nonempty unique array of registered qualified concrete names; bare provider IDs and alias references are invalid |
 | `enabled` | Optional boolean, default true |
 | `continuity` | Optional `session` or `stateless`, default `session`; shared by every caller. Stateless requests still require qualified independent request context. |
 
-Exactly one of `tier` or `candidates` is required.
-
 Duplicate `(protocol, id)` pairs and collisions with registered concrete public
-IDs in the same protocol scope are invalid, including disabled entries. An empty
-tier is valid configuration but has no usable destination. Disabled or currently
-unavailable candidates remain references, not automatic replacements. Selection,
-priority ownership, continuity evidence, and activation blockers follow
-[Model aliases](../model-routing/spec.md#model-aliases-and-candidate-sources).
+IDs in the same protocol scope are invalid, including disabled entries. Missing,
+empty, duplicate, or unregistered candidates are invalid configuration. Disabled
+or currently unavailable registered candidates remain references, not automatic
+replacements. Selection, priority ownership, continuity evidence, and activation
+blockers follow [Model aliases](../model-routing/spec.md#model-aliases).
 
 Alias definitions contain no upstream credentials, copied provider metadata,
 per-alias priorities, or request-parameter defaults. A new provider instance is
@@ -665,7 +677,7 @@ Native agents retain ownership of their own networking.
 
 Validation must distinguish syntax/type/reference errors from incomplete setup
 and external availability: a missing local reference is invalid; absent target
-selections/default, a locked key, stale catalog, empty tier, or not-yet-qualified
+selections/default, a locked key, stale catalog, or not-yet-qualified
 agent combination is reported with its actual scope and cannot be presented as
 verified access. Dry runs do not perform inference or upstream verification.
 
@@ -794,7 +806,7 @@ concurrency rules, not a separate approval or persisted-plan system.
 and official DeepSeek with explicit known-region and known-base selections,
 one custom provider with two explicit protocol bases, a global outbound proxy
 policy, metadata overrides, optional subscription labels, six concrete models,
-L0–L3 model aliases, a three-source scenario alias with shared continuity,
+arbitrarily named `L0`–`L3` aliases with explicit candidates, a three-source scenario alias with shared continuity,
 scheduled priority, provider-local manual quota/reset declarations and ordered
 signal rules, and one omp target containing both upstream and proxy native
 provider entries. It also shows a provider using its published singleton default
@@ -802,7 +814,7 @@ without authentication/models. The proxy/provider/alias settings are valid
 without the Agent target; target incompleteness is defined above rather than
 required by proxy setup. Manual observed values stay outside TOML and use
 [explicit CLI record operations](../cli/providers/inputs/spec.md#provider-input-operations).
-Its scopes, tiers, and priorities are illustrative caller choices, not current
+Its scopes, candidate lists, and priorities are illustrative caller choices, not current
 quota, reset, price, or capability claims. Native scope paths and secret references
 require actual local provisioning and qualification.
 
