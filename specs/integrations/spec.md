@@ -395,9 +395,8 @@ unavailable, report that limitation instead of changing other consumers.
 
 A native login-source target may be declared with empty model selections and no
 default. Missing model application does not invalidate the source or prevent its
-qualified native sign-in. Until required model selections, default, credentials,
-and qualification are complete, the target remains explicitly unavailable for
-native model application and gateway inference. Every present model, default,
+qualified native sign-in. Native model application requires the selections, credentials, and adapter
+requirements defined by the [Agent contract](../cli/agents/spec.md#agent-application-and-recovery). Every present model, default,
 and role reference must still resolve under the configuration contract.
 
 ### Provider-specific compatibility

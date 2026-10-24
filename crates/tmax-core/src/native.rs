@@ -233,18 +233,79 @@ fn target<'a>(config: &'a Config, id: &str) -> Result<&'a AgentTarget> {
         .get(id)
         .ok_or_else(|| Error::new("unknown_resource", "Agent target is not configured"))
 }
-fn executable(agent: &str) -> Option<PathBuf> {
+struct NativeExecutable {
+    program: PathBuf,
+    script: Option<PathBuf>,
+}
+impl From<PathBuf> for NativeExecutable {
+    fn from(program: PathBuf) -> Self {
+        Self {
+            program,
+            script: None,
+        }
+    }
+}
+#[cfg(windows)]
+fn npm_pi(directory: &Path, paths: &[PathBuf]) -> Option<NativeExecutable> {
+    if !directory.join("pi.cmd").is_file() {
+        return None;
+    }
+    let node = std::iter::once(directory.to_owned())
+        .chain(paths.iter().cloned())
+        .map(|directory| directory.join("node.exe"))
+        .find(|path| path.is_file())?;
+    for package in [
+        "@earendil-works/pi-coding-agent",
+        "@mariozechner/pi-coding-agent",
+    ] {
+        let root = directory.join("node_modules").join(package);
+        let manifest = read_native(&root.join("package.json"))
+            .ok()
+            .flatten()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let Some(manifest) = manifest else { continue };
+        if manifest["name"] != package {
+            continue;
+        }
+        let Some(bin) = manifest["bin"]["pi"].as_str() else {
+            continue;
+        };
+        // Read npm metadata; never execute or interpolate the batch/PowerShell shim.
+        let bin = Path::new(bin);
+        if !bin
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+        {
+            continue;
+        }
+        let script = root.join(bin);
+        if script.is_file() {
+            return Some(NativeExecutable {
+                program: node,
+                script: Some(script),
+            });
+        }
+    }
+    None
+}
+fn executable(agent: &str) -> Option<NativeExecutable> {
     let paths = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&paths) {
+    let paths: Vec<_> = std::env::split_paths(&paths).collect();
+    for directory in &paths {
         #[cfg(not(windows))]
         if directory.join(agent).is_file() {
-            return Some(directory.join(agent));
+            return Some(directory.join(agent).into());
         }
         #[cfg(windows)]
         {
             let binary = directory.join(format!("{agent}.exe"));
             if binary.is_file() {
-                return Some(binary);
+                return Some(binary.into());
+            }
+            if agent == "pi"
+                && let Some(executable) = npm_pi(directory, &paths)
+            {
+                return Some(executable);
             }
             // npm's official package includes a native binary. Never execute its
             // POSIX shim as a Windows executable or interpolate a shell command.
@@ -265,7 +326,7 @@ fn executable(agent: &str) -> Option<PathBuf> {
                             .join(triple)
                             .join(suffix);
                         if binary.is_file() {
-                            return Some(binary);
+                            return Some(binary.into());
                         }
                     }
                 }
@@ -281,7 +342,10 @@ fn native_command(agent: &str, scope: &Path) -> Result<tokio::process::Command> 
             "The selected native executable is not on PATH",
         )
     })?;
-    let mut cmd = tokio::process::Command::new(executable);
+    let mut cmd = tokio::process::Command::new(executable.program);
+    if let Some(script) = executable.script {
+        cmd.arg(script);
+    }
     cmd.current_dir(scope).kill_on_drop(true);
     match agent {
         "codex" => {
@@ -360,7 +424,7 @@ async fn hermes_version(path: &Path) -> Option<Vec<u8>> {
     // --version performs network update checks; --print-runtime-command can
     // repair interrupted source updates. Read launcher metadata, then invoke
     // only the native stdlib provenance API, with no bootstrap or bytecode write.
-    let (program, root) = hermes_provenance_runtime(&executable("hermes")?)?;
+    let (program, root) = hermes_provenance_runtime(&executable("hermes")?.program)?;
     let root = serde_json::to_string(root.to_str()?).ok()?;
     let code = format!(
         "import sys;sys.dont_write_bytecode=True;sys.path.insert(0,{root});from hermes_cli.version_info import get_version_info; print(get_version_info().derived_version)"
@@ -455,7 +519,7 @@ async fn version(agent: &str, path: &Path) -> Value {
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|text| detected_version(agent, text));
     let exact = found.as_deref() == Some(adapters::qualified_version(agent));
-    json!({"executable":exe,"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
+    json!({"executable":exe.script.as_ref().unwrap_or(&exe.program),"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
 }
 fn version_blocker(agent: &str, installation: &Value) -> Option<Value> {
     if installation["state"] == "not_installed" {
@@ -707,11 +771,11 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     if !available {
         blockers.push(json!({"code":"native_scope_unavailable","path":path,"reason_code":scope_reason,"message":"Select an existing native configuration directory or explicitly create the intended directory before applying"}));
     }
-    if (target.agent != "opencode" && target.default.is_none())
+    if (target.agent == "codex" && target.default.is_none())
         || target.providers.is_empty()
         || target.providers.values().any(|p| p.models.is_empty())
     {
-        blockers.push(json!({"code":"target_incomplete","message":"Explicit provider selections and default are required for application"}));
+        blockers.push(json!({"code":"target_incomplete","message":"Select providers and models before applying; Codex also requires a default model"}));
     }
     let mut pending = None;
     if available {
@@ -747,7 +811,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -989,10 +1053,10 @@ async fn entries(
             model_metadata,
         });
     }
-    if (target.agent != "opencode" && target.default.is_none()) || entries.is_empty() {
+    if (target.agent == "codex" && target.default.is_none()) || entries.is_empty() {
         return Err(Error::new(
             "target_incomplete",
-            "Explicit native provider selections and default are required before application",
+            "Select providers and models before applying; Codex also requires a default model",
         ));
     }
     let mut names = BTreeSet::new();
@@ -1017,7 +1081,14 @@ fn leaves(value: &Value, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, Val
         out.push((path.clone(), value.clone()));
     }
 }
-fn desired_fields(agent: &str, desired: &Value, current: &Value) -> Vec<(Vec<String>, Value)> {
+fn inline_credential(agent: &str, path: &[String]) -> bool {
+    agent == "hermes" && path.len() == 3 && path[0] == "providers" && path[2] == "api_key"
+}
+fn desired_fields(
+    agent: &str,
+    desired: &Value,
+    current: &Value,
+) -> Vec<(Vec<String>, Option<Value>)> {
     let mut fields = Vec::new();
     leaves(desired, &mut Vec::new(), &mut fields);
     fields.retain(|(path, value)| {
@@ -1033,6 +1104,27 @@ fn desired_fields(agent: &str, desired: &Value, current: &Value) -> Vec<(Vec<Str
                 .and_then(Value::as_object)
                 .is_some_and(|model| !model.is_empty()))
     });
+    let mut fields: Vec<_> = fields
+        .into_iter()
+        .map(|(path, value)| (path, Some(value)))
+        .collect();
+    if agent == "hermes" {
+        // Remove obsolete command references and competing environment keys for
+        // providers whose API key tmax now owns. Record these removals so restore
+        // can recover the original fields without changing unrelated providers.
+        if let Some(providers) = desired.get("providers").and_then(Value::as_object) {
+            for (name, provider) in providers {
+                if provider.get("api_key").is_some() {
+                    for obsolete in ["key_cmd", "key_env", "api_key_env"] {
+                        fields.push((
+                            vec!["providers".into(), name.clone(), obsolete.into()],
+                            None,
+                        ));
+                    }
+                }
+            }
+        }
+    }
     fields
 }
 
@@ -1064,11 +1156,12 @@ fn pending_native_changes(
                     && file.fields.iter().any(|field| {
                         !field.released
                             && field.path == *path
-                            && field.after_hash == field_hash(Some(value))
+                            && field.after_hash == field_hash(document::get(&current, path))
                     })
-                    && document::get(&current, path) == Some(value)
+                    && (inline_credential(&target.agent, path)
+                        || document::get(&current, path) == value.as_ref())
             }) {
-                changes.push(json!({"path":file.path,"field":path,"change":"set"}));
+                changes.push(json!({"path":file.path,"field":path,"change":if value.is_some(){"set"}else{"remove"}}));
             }
         }
         if let Some(previous) = previous {
@@ -1178,25 +1271,38 @@ fn conflicts(index: &Index, identity: Option<&str>, files: &[File]) -> Result<()
     }
     Ok(())
 }
-fn namespace_conflicts(file: &File, current: &Value, previous: Option<&Record>) -> Result<()> {
-    for root in ["providers", "model_providers"] {
-        if let Some(names) = file.desired.get(root).and_then(Value::as_object) {
-            for name in names.keys() {
-                if current.get(root).and_then(|p| p.get(name)).is_some()
-                    && !previous.is_some_and(|r| {
-                        r.files.iter().any(|f| {
-                            f.path == file.path
-                                && f.fields.iter().any(|f| {
-                                    f.path.first().is_some_and(|p| p == root)
-                                        && f.path.get(1) == Some(name)
-                                })
-                        })
-                    })
-                {
-                    return Err(Error::new(
-                        "native_namespace_conflict",
-                        "An existing native provider entry is not owned by this target; choose a nonconflicting native entry name",
-                    ));
+
+fn handoff_key(store: &Store, reference: &str) -> Result<Value> {
+    let bytes = secrets::get(store, reference)?;
+    let key = std::str::from_utf8(&bytes)
+        .map_err(|_| Error::new("invalid_credential", "Native handoff requires a UTF-8 key"))?;
+    if key.is_empty()
+        || key.trim() != key
+        || key.chars().any(|c| c == '\r' || c == '\n' || c == '\0')
+    {
+        return Err(Error::new(
+            "invalid_credential",
+            "Native key handoff requires a nonempty single-line key without surrounding whitespace",
+        ));
+    }
+    Ok(Value::String(key.to_owned()))
+}
+
+fn resolve_handoff(store: &Store, agent: &str, files: &mut [File]) -> Result<()> {
+    for file in files {
+        if file.format == Format::Credential {
+            if let Some(reference) = file.desired.as_str() {
+                file.desired = handoff_key(store, reference)?;
+            }
+        } else if agent == "hermes"
+            && let Some(providers) = file
+                .desired
+                .get_mut("providers")
+                .and_then(Value::as_object_mut)
+        {
+            for provider in providers.values_mut() {
+                if let Some(reference) = provider.get("api_key").and_then(Value::as_str) {
+                    provider["api_key"] = handoff_key(store, reference)?;
                 }
             }
         }
@@ -1307,7 +1413,6 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         }
         let before = read_native(&file.path)?;
         let current = document::parse(before.as_deref().unwrap_or(""), file.format)?;
-        namespace_conflicts(file, &current, previous.as_ref())?;
         if let Some(old) = previous
             .as_ref()
             .and_then(|r| r.files.iter().find(|f| f.path == file.path))
@@ -1327,11 +1432,27 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             desired_unchanged &= old_fields.is_some_and(|old| {
                 old.len() == fields.len()
                     && fields.iter().all(|(p, v)| {
-                        old.iter().any(|f| f.path == *p) && document::get(&current, p) == Some(v)
+                        old.iter().any(|f| f.path == *p)
+                            && (inline_credential(&target.agent, p)
+                                || document::get(&current, p) == v.as_ref())
                     })
             });
         }
-        previews.push(json!({"path":file.path,"revision":revision(before.as_deref()),"owned_fields":fields.iter().map(|(p,_)|p).collect::<Vec<_>>(),"credential_handoff":"native command/file reference to a private native-owned credential artifact; no inline config secret or token import"}));
+        let mut existing_entries = Vec::new();
+        for root in ["providers", "model_providers"] {
+            if let Some(entries) = file.desired.get(root).and_then(Value::as_object) {
+                for name in entries.keys() {
+                    if current
+                        .get(root)
+                        .and_then(|entries| entries.get(name))
+                        .is_some()
+                    {
+                        existing_entries.push(json!({"namespace":root,"name":name}));
+                    }
+                }
+            }
+        }
+        previews.push(json!({"existing_provider_entries":existing_entries,"path":file.path,"revision":revision(before.as_deref()),"owned_fields":fields.iter().map(|(p,_)|p).collect::<Vec<_>>(),"credential_handoff":if target.agent == "hermes" {"plaintext API key in current-user-restricted config.yaml; no token import"} else {"native command/file reference to a private native-owned credential artifact; no inline config secret or token import"}}));
         observed_inputs.push((file.path.clone(), before));
     }
     if dry_run {
@@ -1350,26 +1471,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"warnings":version_warnings(&installed),"native_reload":"still_required_or_unknown","effective":"not_verified"}),
         );
     }
-    for file in &mut files {
-        if file.format == Format::Credential
-            && let Some(reference) = file.desired.as_str()
-        {
-            let bytes = secrets::get(store, reference)?;
-            let key = std::str::from_utf8(&bytes).map_err(|_| {
-                Error::new("invalid_credential", "Native handoff requires a UTF-8 key")
-            })?;
-            if key.is_empty()
-                || key.trim() != key
-                || key.chars().any(|c| c == '\r' || c == '\n' || c == '\0')
-            {
-                return Err(Error::new(
-                    "invalid_credential",
-                    "Native key commands trim output; exact handoff requires a nonempty single-line key without surrounding whitespace",
-                ));
-            }
-            file.desired = Value::String(key.to_owned());
-        }
-    }
+    resolve_handoff(store, &target.agent, &mut files)?;
     let previous_payload = previous
         .as_ref()
         .map(|r| decode_payload(store, r))
@@ -1449,8 +1551,8 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             }
         }
         for (field, value) in desired {
-            if document::get(&current, &field) != Some(&value) {
-                after = document::set(&after, file.format, &field, Some(&value))?;
+            if document::get(&current, &field) != value.as_ref() {
+                after = document::set(&after, file.format, &field, value.as_ref())?;
             }
             let inherited = previous
                 .as_ref()
@@ -1464,7 +1566,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             baseline_values.push((field.clone(), before_value.cloned()));
             fields.push(Field {
                 before_hash: field_hash(before_value),
-                after_hash: field_hash(Some(&value)),
+                after_hash: field_hash(value.as_ref()),
                 observed_hash: field_hash(document::get(&current, &field)),
                 path: field,
                 released: false,
@@ -2740,6 +2842,222 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn model_only_application_preserves_defaults_roles_and_uses_its_own_scope() {
+        for agent in ["pi", "omp", "hermes"] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = Store::at(directory.path().to_owned());
+            let path = directory.path().join("native");
+            fs::create_dir(&path).unwrap();
+            let mut target = inspection_target(path.clone());
+            target.agent = agent.into();
+            target.default = None;
+            let original = json!({
+                "defaultProvider":"existing", "defaultModel":"unchanged",
+                "modelRoles":{"default":"existing/unchanged","smol":"existing/small"},
+                "model":{"provider":"existing","default":"unchanged","base_url":"https://existing.invalid"},
+                "auxiliary":{"vision":{"provider":"existing","model":"vision"}},
+                "providers":{"local":{"native_setting":"retained","key_cmd":"obsolete-command"},"unrelated":{"models":{"keep":{}}}}, "theme":"dark"
+            });
+            let (filename, format) = match agent {
+                "pi" => ("models.json", Format::Json),
+                "omp" => ("models.yml", Format::Yaml),
+                _ => ("config.yaml", Format::Yaml),
+            };
+            let text = if format == Format::Json {
+                serde_json::to_string(&original).unwrap()
+            } else {
+                serde_yaml::to_string(&original).unwrap()
+            };
+            fs::write(path.join(filename), &text).unwrap();
+            let mut config = Config::empty();
+            config.providers.insert(
+                "p".into(),
+                config::Provider {
+                    integration: Some("custom".into()),
+                    auth: Some(Auth::ApiKey {
+                        key_ref: "opaque-reference-not-read".into(),
+                    }),
+                    endpoints: BTreeMap::from([(
+                        "chat-completions".into(),
+                        "https://example.invalid/v1".into(),
+                    )]),
+                    models: BTreeMap::from([("first".into(), config::Model::default())]),
+                    ..Default::default()
+                },
+            );
+            config.agents.insert("managed".into(), target.clone());
+            store
+                .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+                .unwrap();
+            let preview = apply(&store, &config, "managed", true).await.unwrap();
+            assert!(preview["files"].as_array().unwrap().iter().any(|f| {
+                f["existing_provider_entries"]
+                    .as_array()
+                    .is_some_and(|entries| !entries.is_empty())
+            }));
+            assert_eq!(fs::read_to_string(path.join(filename)).unwrap(), text);
+            let (entries, _) = entries(&store, &config, "managed", &target, &path, true)
+                .await
+                .unwrap();
+            let files = adapters::build(&target, &path, &entries).unwrap();
+            assert_eq!(files.len(), if agent == "hermes" { 1 } else { 2 });
+            let file = files
+                .iter()
+                .find(|f| f.format != Format::Credential)
+                .unwrap();
+            assert_eq!(file.path, path.join(filename));
+            let mut rewritten = text.clone();
+            for (field, value) in desired_fields(agent, &file.desired, &original) {
+                rewritten = document::set(&rewritten, format, &field, value.as_ref()).unwrap();
+            }
+            let after = document::parse(&rewritten, format).unwrap();
+            for (field, value) in original.as_object().unwrap() {
+                if field != "providers" {
+                    assert_eq!(&after[field], value);
+                }
+            }
+            assert_eq!(
+                after["providers"]["unrelated"],
+                original["providers"]["unrelated"]
+            );
+            assert_eq!(after["providers"]["local"]["native_setting"], "retained");
+            if agent == "hermes" {
+                assert!(after["providers"]["local"]["api_key"].is_string());
+                assert!(after["providers"]["local"].get("key_cmd").is_none());
+            } else {
+                let credential = files
+                    .iter()
+                    .find(|f| f.format == Format::Credential)
+                    .unwrap();
+                assert_eq!(credential.path.parent(), Some(path.as_path()));
+                assert!(
+                    credential
+                        .path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("tmax-")
+                );
+            }
+        }
+    }
+    #[test]
+    fn hermes_inline_handoff_resolves_only_on_execution_and_tracks_key_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let reference = secrets::put(&store, "provider:p", b"synthetic-inline-key").unwrap();
+        let path = directory.path().join("config.yaml");
+        let mut target = inspection_target(directory.path().to_owned());
+        target.agent = "hermes".into();
+        target.default = None;
+        let mut files = vec![File {
+            path: path.clone(),
+            format: Format::Yaml,
+            desired: json!({"providers":{"local":{"api_key":reference}}}),
+        }];
+        let preview = files[0].desired.clone();
+        resolve_handoff(&store, "hermes", &mut files).unwrap();
+        assert_eq!(
+            files[0].desired["providers"]["local"]["api_key"],
+            "synthetic-inline-key"
+        );
+        fs::write(&path, serde_yaml::to_string(&files[0].desired).unwrap()).unwrap();
+        let fields = desired_fields("hermes", &files[0].desired, &json!({}))
+            .into_iter()
+            .map(|(path, value)| Field {
+                path,
+                before_hash: "absent".into(),
+                after_hash: field_hash(value.as_ref()),
+                observed_hash: "absent".into(),
+                released: false,
+            })
+            .collect();
+        let record = Record {
+            id: "recovery".into(),
+            owner: "stable".into(),
+            target: "managed".into(),
+            agent: "hermes".into(),
+            scope: directory.path().to_owned(),
+            payload_ref: "not-read".into(),
+            secret_refs: vec![reference.clone()],
+            state: "applied_reload_pending".into(),
+            files: vec![FileRecord {
+                path: path.clone(),
+                format: Format::Yaml,
+                original_absent: true,
+                after_revision: "retained".into(),
+                written: true,
+                fields,
+            }],
+        };
+        files[0].desired = preview;
+        assert!(
+            pending_native_changes(
+                &target,
+                &files,
+                std::slice::from_ref(&reference),
+                Some(&record)
+            )
+            .unwrap()
+            .is_empty()
+        );
+        let changed =
+            pending_native_changes(&target, &files, &["new-reference".into()], Some(&record))
+                .unwrap();
+        assert_eq!(changed[0]["field"], json!(["credential_reference"]));
+        fs::write(&path, "providers:\n  local:\n    api_key: user-edit\n").unwrap();
+        let drift = pending_native_changes(&target, &files, &[reference], Some(&record)).unwrap();
+        assert_eq!(drift[0]["field"], json!(["providers", "local", "api_key"]));
+        let diagnostics = serde_json::to_string(&(changed, drift)).unwrap();
+        assert!(
+            !diagnostics.contains("synthetic-inline-key") && !diagnostics.contains("user-edit")
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn npm_pi_resolves_official_package_without_executing_shims() {
+        let directory = tempfile::tempdir().unwrap();
+        let prefix = directory.path().join("npm with spaces");
+        let node_dir = directory.path().join("node with spaces");
+        fs::create_dir_all(&node_dir).unwrap();
+        fs::create_dir_all(&prefix).unwrap();
+        fs::write(prefix.join("pi.cmd"), "exit /b 1").unwrap();
+        for package in [
+            "@earendil-works/pi-coding-agent",
+            "@mariozechner/pi-coding-agent",
+        ] {
+            let root = prefix.join("node_modules").join(package);
+            fs::create_dir_all(root.join("dist/bundle")).unwrap();
+            fs::write(root.join("dist/bundle/cli.js"), "console.log('1.4.0')").unwrap();
+            fs::write(
+                root.join("package.json"),
+                serde_json::to_vec(&json!({"name":package,"bin":{"pi":"dist/bundle/cli.js"}}))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(npm_pi(&prefix, &[]).is_none());
+            fs::write(node_dir.join("node.exe"), "fixture").unwrap();
+            let found = npm_pi(&prefix, std::slice::from_ref(&node_dir)).unwrap();
+            assert_eq!(found.program, node_dir.join("node.exe"));
+            assert_eq!(found.script, Some(root.join("dist/bundle/cli.js")));
+            fs::write(prefix.join("node.exe"), "sibling").unwrap();
+            assert_eq!(
+                npm_pi(&prefix, std::slice::from_ref(&node_dir))
+                    .unwrap()
+                    .program,
+                prefix.join("node.exe")
+            );
+            fs::write(
+                root.join("package.json"),
+                serde_json::to_vec(&json!({"name":package,"bin":{"pi":"../outside.js"}})).unwrap(),
+            )
+            .unwrap();
+            assert!(npm_pi(&prefix, std::slice::from_ref(&node_dir)).is_none());
+            fs::remove_file(prefix.join("node.exe")).unwrap();
+            fs::remove_file(node_dir.join("node.exe")).unwrap();
+        }
+    }
+    #[tokio::test]
     async fn unavailable_scope_inspection_retains_desired_target_and_apply_stays_blocked() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
@@ -3387,7 +3705,7 @@ mod tests {
             };
             let fields = desired_fields(agent, &file.desired, &original);
             for (path, value) in fields {
-                rewritten = document::set(&rewritten, file.format, &path, Some(&value)).unwrap();
+                rewritten = document::set(&rewritten, file.format, &path, value.as_ref()).unwrap();
             }
             let after = document::parse(&rewritten, file.format).unwrap();
             assert_eq!(

@@ -69,7 +69,9 @@ Apply/restore resolve a referenced tmax secret only when the requested operation
 requires the key. Current-user-restricted tmax secret files are plaintext, not
 encrypted. An executed native key handoff can create a private, mode-0600
 **plaintext native-owned** key artifact, referenced through the agent's own key
-mechanism. New tmax recovery records also contain plaintext and are restricted
+mechanism. Hermes receives its API key in its current-user-restricted
+`config.yaml`, because installed versions may ignore `key_cmd`. Preview and
+inspection disclose this inline handoff without exposing the key. New tmax recovery records also contain plaintext and are restricted
 to the current OS account.
 
 Native recovery operations accept only supported storage formats. Unsupported

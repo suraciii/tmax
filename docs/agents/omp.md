@@ -5,6 +5,10 @@ Version: **18.12.6**. The upstream tag `v18.12.6` resolves to
 Consulted 2026-10-23. This is not stock pi's JSON or auth-file schema. See the
 [reference index](README.md) for shared evidence and security boundaries.
 
+Applying selected provider models does not require a tmax default. Omit
+`agent default set` to preserve the tool's existing defaults and unselected
+roles. Credentials are handed off inside this target's own configuration scope.
+
 ## Paths and precedence
 
 Default model configuration is `~/.omp/agent/models.yml`, then `models.yaml`.

@@ -296,9 +296,22 @@ fn key_command(path: &Path) -> Result<String> {
     }
     #[cfg(not(unix))]
     {
-        Ok(format!(
-            "powershell.exe -NoProfile -NonInteractive -Command \"[Console]::Out.Write([IO.File]::ReadAllText('{}'))\"",
+        use base64::Engine;
+        // Pi runs credential commands through Bash on Windows, while other
+        // tools use cmd.exe. Transport the PowerShell expression without outer
+        // shell expansion of backslashes, dollar signs, or quotes in the path.
+        let script = format!(
+            "[Console]::Out.Write([IO.File]::ReadAllText('{}'))",
             path.replace('\'', "''")
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        Ok(format!(
+            "powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
         ))
     }
 }
@@ -373,7 +386,6 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             Ok(vec![file(scope, "config.toml", Format::Toml, config)])
         }
         "pi" | "omp" => {
-            let default = required_default()?;
             for entry in entries {
                 let native_name = entry.native_name();
                 if entry.login_provider.is_some() {
@@ -402,29 +414,32 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 }
             }
             if target.agent == "pi" {
-                let d = entries
-                    .iter()
-                    .find(|e| e.name == default.provider)
-                    .ok_or_else(|| {
-                        Error::new("unresolved_reference", "Native default does not resolve")
-                    })?;
-                Ok(vec![
-                    file(
-                        scope,
-                        "models.json",
-                        Format::Json,
-                        json!({"providers":providers}),
-                    ),
-                    file(
+                let mut files = vec![file(
+                    scope,
+                    "models.json",
+                    Format::Json,
+                    json!({"providers":providers}),
+                )];
+                if let Some(default) = &target.default {
+                    let d = entries
+                        .iter()
+                        .find(|e| e.name == default.provider)
+                        .ok_or_else(|| {
+                            Error::new("unresolved_reference", "Native default does not resolve")
+                        })?;
+                    files.push(file(
                         scope,
                         "settings.json",
                         Format::Json,
                         json!({"defaultProvider":d.native_name(),"defaultModel":default.id}),
-                    ),
-                ])
+                    ));
+                }
+                Ok(files)
             } else {
                 let mut roles = serde_json::Map::new();
-                roles.insert("default".into(), json!(reference(default, entries)?));
+                if let Some(default) = &target.default {
+                    roles.insert("default".into(), json!(reference(default, entries)?));
+                }
                 for (role, r) in &target.roles {
                     roles.insert(role.clone(), json!(reference(r, entries)?));
                 }
@@ -434,15 +449,21 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     } else {
                         "models.yaml"
                     };
-                Ok(vec![
-                    file(scope, models, Format::Yaml, json!({"providers":providers})),
-                    file(
+                let mut files = vec![file(
+                    scope,
+                    models,
+                    Format::Yaml,
+                    json!({"providers":providers}),
+                )];
+                if !roles.is_empty() {
+                    files.push(file(
                         scope,
                         super::omp_main_settings(scope),
                         Format::Yaml,
                         json!({"modelRoles":roles}),
-                    ),
-                ])
+                    ));
+                }
+                Ok(files)
             }
         }
         "opencode" => {
@@ -479,7 +500,6 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             Ok(vec![file(scope, name, Format::Json, config)])
         }
         "hermes" => {
-            let default = required_default()?;
             let mut overrides = serde_json::Map::new();
             for entry in entries {
                 if entry.login_provider.is_some() {
@@ -503,23 +523,26 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                         (id.as_str(), model)
                     })
                     .collect();
-                providers.insert(entry.name.clone(),json!({"name":entry.name,"base_url":entry.base,"key_cmd":key_command(&credential_path(scope,entry))?,"transport":transport(&entry.protocol)?,"models":models}));
+                providers.insert(entry.name.clone(),json!({"name":entry.name,"base_url":entry.base,"api_key":entry.key,"transport":transport(&entry.protocol)?,"models":models}));
                 if entry.gateway {
                     providers[&entry.name]["session_affinity_header"] = json!("x-session-id");
                 }
             }
-            let active = entries
-                .iter()
-                .find(|e| e.name == default.provider)
-                .ok_or_else(|| {
-                    Error::new("unresolved_reference", "Native default does not resolve")
-                })?;
-            let mut config = json!({"providers":providers,"model":{"provider":active.native_name(),"default":default.id}});
+            let mut config = json!({"providers":providers});
+            if let Some(default) = &target.default {
+                let active = entries
+                    .iter()
+                    .find(|e| e.name == default.provider)
+                    .ok_or_else(|| {
+                        Error::new("unresolved_reference", "Native default does not resolve")
+                    })?;
+                config["model"] = json!({"provider":active.native_name(),"default":default.id});
+                if active.login_provider.is_none() {
+                    config["model"]["base_url"] = json!(active.base);
+                }
+            }
             if !overrides.is_empty() {
                 config["model_overrides"] = Value::Object(overrides);
-            }
-            if active.login_provider.is_none() {
-                config["model"]["base_url"] = json!(active.base);
             }
             for (role, r) in &target.roles {
                 let e = entries
@@ -543,7 +566,9 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
         )),
     }?;
     for entry in entries {
-        if let Some(key) = &entry.key {
+        if target.agent != "hermes"
+            && let Some(key) = &entry.key
+        {
             files.insert(
                 0,
                 File {
@@ -560,6 +585,30 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn windows_credential_command_survives_native_shells_and_literal_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("key with '$value & space.key");
+        std::fs::write(&path, b"synthetic-credential").unwrap();
+        let path = std::fs::canonicalize(path).unwrap();
+        let command = key_command(&path).unwrap();
+        let mut shells = vec![("cmd.exe".to_owned(), "/c")];
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            let bash = PathBuf::from(program_files).join("Git/bin/bash.exe");
+            if bash.is_file() {
+                shells.push((bash.to_string_lossy().into(), "-c"));
+            }
+        }
+        for (shell, flag) in shells {
+            let output = std::process::Command::new(shell)
+                .args([flag, &command])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, b"synthetic-credential");
+        }
+    }
     fn target(agent: &str) -> AgentTarget {
         AgentTarget {
             agent: agent.into(),

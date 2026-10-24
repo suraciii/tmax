@@ -300,7 +300,12 @@ fn yaml_edit(text: &str, path: &[String], value: Option<&Value>) -> Result<Strin
         for (i, (_, source_line)) in lines.iter().enumerate().take(hi).skip(lo) {
             let line = source_line.trim_end_matches(['\n', '\r']);
             let actual = line.len() - line.trim_start_matches(' ').len();
-            if actual != indent || line.trim_start().starts_with('#') {
+            let trimmed = line.trim_start();
+            if actual != indent
+                || trimmed.starts_with('#')
+                || trimmed == "-"
+                || trimmed.starts_with("- ")
+            {
                 continue;
             }
             if let Some(colon) = yaml_colon(&line[actual..]) {
@@ -318,7 +323,8 @@ fn yaml_edit(text: &str, path: &[String], value: Option<&Value>) -> Result<Strin
                 let line = lines[end].1;
                 let t = line.trim();
                 let actual = line.len() - line.trim_start_matches(' ').len();
-                if !t.is_empty() && !t.starts_with('#') && actual <= indent {
+                let sequence_item = actual == indent && (t == "-" || t.starts_with("- "));
+                if !t.is_empty() && !t.starts_with('#') && actual <= indent && !sequence_item {
                     break;
                 }
                 end += 1;
@@ -626,6 +632,34 @@ mod tests {
             parse(&edited, Format::Yaml).unwrap()["model"]["provider"],
             "new"
         );
+    }
+    #[test]
+    fn yaml_edits_indentless_model_sequences_and_following_siblings() {
+        let original = "# native config\nproviders:\n  local:\n    models:\n    - id: old\n      name: Old model\n    auth: oauth\n    unrelated: keep\n  other:\n    models: []\n";
+        let edited = set(
+            original,
+            Format::Yaml,
+            &["providers".into(), "local".into(), "auth".into()],
+            Some(&Value::from("apiKey")),
+        )
+        .unwrap();
+        let models = serde_json::json!([{"id":"new","api":"openai-completions"}]);
+        let edited = set(
+            &edited,
+            Format::Yaml,
+            &["providers".into(), "local".into(), "models".into()],
+            Some(&models),
+        )
+        .unwrap();
+        let result = parse(&edited, Format::Yaml).unwrap();
+        assert_eq!(result["providers"]["local"]["models"], models);
+        assert_eq!(result["providers"]["local"]["auth"], "apiKey");
+        assert_eq!(result["providers"]["local"]["unrelated"], "keep");
+        assert_eq!(
+            result["providers"]["other"]["models"],
+            serde_json::json!([])
+        );
+        assert!(edited.starts_with("# native config\n"));
     }
     #[test]
     fn toml_preserves_request_settings() {

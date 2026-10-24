@@ -5,6 +5,10 @@ Installed version: **0.22.1+683.g848fc0a**. Source revision:
 Consulted 2026-10-23. Source inspection used code and safe templates, not live
 native configuration or credential data. See the [reference index](README.md).
 
+Applying selected provider models does not require a tmax default. Omit
+`agent default set` to preserve the tool's existing defaults and unselected
+roles. Credentials are handed off inside this target's own configuration scope.
+
 ## Paths and precedence
 
 On Linux/macOS, default home is `~/.hermes`; Windows uses
@@ -119,7 +123,7 @@ modality lists are not written as invented Hermes fields. No alias aggregation
 or current-winner snapshot is generated. Existing native effort, request budgets,
 sampling, and unknown-model settings remain native-owned and are preserved.
 
-The primary tmax mapping writes a named provider's `name`, `base_url`, `key_cmd`,
+The primary tmax mapping writes a named provider's `name`, `base_url`, `api_key`,
 canonical `transport`, selected `models`, and explicitly selected
 `model.provider/default/base_url`. It does not translate Pi metadata into Hermes
 YAML or replace native catalog facts with fake zeros. It maps explicit qualified
@@ -155,9 +159,11 @@ providers:
       fixture-model: {}
 ```
 
-The adapter's actual protected handoff instead uses native `key_cmd` with an
-absolute private native-owned key artifact. This is disclosed plaintext native
-storage, not importing or mirroring another agent's login.
+The adapter writes `api_key` into current-user-restricted `config.yaml` and
+removes competing `key_cmd`/environment references for that provider. This
+disclosed plaintext handoff also works with installations that ignore
+`key_cmd` (including source revision `4d67ac617`). It does not import native
+logins. Restore recovers the original fields, including previous references.
 
 ## Authentication
 

@@ -118,7 +118,21 @@ target IDs; reused IDs do not select predecessor records. Exact-handle recovery
 works from the sole home with absent/invalid config without activating it.
 
 Apply rejects missing required selections or unavailable credentials and known
-incompatible schemas. OpenCode does not require a default selection.
+incompatible schemas. Pi, OMP, OpenCode, and Hermes do not require a default
+selection: applying model entries alone preserves native defaults and unselected
+roles. Separate settings files are not created or edited without selected
+defaults/roles. Codex requires a default because its review model shares the
+active provider. Each target receives its own credential handoff in its scope;
+no target depends on another tool's credential file. Hermes uses its native
+`api_key` field in current-user-restricted `config.yaml`; inspection and preview
+disclose the inline plaintext handoff without returning the value. Apply removes
+competing key commands/environment references only from the selected providers,
+retaining them for explicit restoration. Explicit apply can manage a selected
+provider name already present in native configuration: preview discloses the
+existing entry, changed fields are captured for restore, and unrelated fields
+remain intact. It does not import native settings into desired configuration.
+Conflicting ownership by another tmax target and later edits to owned fields
+remain blockers.
 Upstream entries use their referenced endpoints/auth and need no running tmax
 gateway or model aliases. Gateway entries use its local URL and the current shared
 key, requiring the matching ready listener and loaded snapshot. Start explicitly

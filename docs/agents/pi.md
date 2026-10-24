@@ -4,6 +4,12 @@ Revision: [`06a466935536f8c9bcacb2d5efc0fc021be1bdff`](https://github.com/earend
 Installed version: **1.2.0**. Consulted 2026-10-23. This is stock pi, not omp.
 See the [reference index](README.md) for safety and evidence boundaries.
 
+Applying selected provider models does not require a tmax default. Omit
+`agent default set` to preserve the tool's existing defaults and unselected
+roles. Credentials are handed off inside this target's own configuration scope.
+On Windows, discovery supports the official npm package through its `pi.cmd`
+installation marker and package entrypoint, launched directly with Node.js.
+
 ## Paths and precedence
 
 The default agent directory is `~/.pi/agent`. `PI_CODING_AGENT_DIR` or the SDK's
