@@ -142,6 +142,19 @@ pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Con
         independent: independent(protocol, body),
     })
 }
+/// Whether the request names a session at all, whether or not it is usable.
+///
+/// A request that carries either session header but disagrees with itself, or
+/// carries one from an unrecognized client, still named a session: the gateway
+/// must reject it rather than silently attribute it. Only a request carrying no
+/// session header is unattributed, and only that request may be attributed by
+/// the gateway itself.
+pub fn names_session(headers: &HeaderMap) -> bool {
+    ["x-opencode-session", "x-session-id"]
+        .iter()
+        .any(|name| headers.get(*name).is_some_and(|v| !v.as_bytes().is_empty()))
+}
+
 pub fn has_remote_state(body: &Value) -> bool {
     body.get("previous_response_id")
         .is_some_and(|v| !v.is_null())

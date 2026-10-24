@@ -9,7 +9,7 @@ use axum::{
     Router,
     body::{Body, Bytes, to_bytes},
     extract::State,
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, LazyLock, Mutex, RwLock},
     time::{Duration, Instant},
 };
 use tokio::sync::watch;
@@ -28,6 +28,8 @@ use zeroize::Zeroizing;
 mod capabilities;
 #[path = "service/native_context.rs"]
 mod native_context;
+#[path = "service/opencode_session.rs"]
+mod opencode_session;
 pub fn capability_mismatch(
     provider: &crate::config::Provider,
     model_id: &str,
@@ -361,7 +363,7 @@ impl Runtime {
     ) -> Result<Choice> {
         let config = &snapshot.config;
         let context = native_context::identify(headers, body, protocol);
-        let native = NativeRequirements::capture(context.as_ref());
+        let native = NativeRequirements::capture(headers, context.as_ref());
         if native_context::has_unbound_resources(body) {
             return Err(Error::new(
                 "original_resource_binding_unavailable",
@@ -703,9 +705,12 @@ pub enum NativeClient {
 pub struct NativeRequirements {
     pub client: NativeClient,
     pub go_session: bool,
+    /// Whether the client named a session at all, qualified or not. A client
+    /// that named one, even unusably, must be rejected rather than attributed.
+    pub unattributed: bool,
 }
 impl NativeRequirements {
-    fn capture(context: Option<&native_context::Context>) -> Self {
+    fn capture(headers: &HeaderMap, context: Option<&native_context::Context>) -> Self {
         Self {
             client: match context.map(|c| c.family) {
                 Some("pi") => NativeClient::Pi,
@@ -714,7 +719,20 @@ impl NativeRequirements {
                 _ => NativeClient::Unknown,
             },
             go_session: context.is_some_and(|c| c.go_session_header.is_some()),
+            // Attribution is only for a client that supplied no session header
+            // at all. A client whose headers are present but unusable — an
+            // unrecognized agent, or two headers disagreeing — is a rejected
+            // request, not an unattributed one.
+            unattributed: !native_context::names_session(headers),
         }
+    }
+    /// Whether the gateway can attribute `provider`'s requests itself. Only a
+    /// Go destination is eligible: the minted id is OpenCode's shape and is
+    /// meaningless to any other upstream.
+    fn gateway_attribution(&self, provider: &crate::config::Provider) -> bool {
+        self.unattributed
+            && crate::integrations::resolve(provider)
+                .is_ok_and(|bases| bases.values().any(|b| opencode_gateway_url(b)))
     }
 }
 pub fn native_mismatch(
@@ -726,7 +744,12 @@ pub fn native_mismatch(
         Ok("kimi-coding-plan") if matches!(provider.auth, Some(Auth::Login { .. })) => {
             Some("native_authorization_unqualified")
         }
-        Ok("opencode-go") if native.client == NativeClient::Unknown || !native.go_session => {
+        // Go answers a request naming no session with HTTP 400. A client that
+        // supplied no qualified session header would otherwise be unable to
+        // reach Go at all, so the gateway's own per-conversation attribution
+        // covers it. The user agent is still left truthful, and a client that
+        // did supply a session keeps exclusive ownership of that value.
+        Ok("opencode-go") if !native.go_session && !native.gateway_attribution(provider) => {
             Some("native_session_required")
         }
         Ok("kimi-coding-plan") if native.client == NativeClient::Unknown => {
@@ -1052,8 +1075,12 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
     };
     let mut outbound = snapshot
         .client
-        .post(upstream_url)
-        .headers(upstream_headers(&parts.headers, go_session_header))
+        .post(upstream_url.clone())
+        .headers(upstream_headers(
+            &parts.headers,
+            go_session_header,
+            &upstream_url,
+        ))
         .json(&body);
     if protocol == "messages"
         && crate::integrations::integration_id(provider).ok() != Some("opencode-go")
@@ -1163,7 +1190,42 @@ fn hop_header(name: &str) -> bool {
             | "upgrade"
     )
 }
-fn upstream_headers(headers: &HeaderMap, go_session_header: Option<&str>) -> HeaderMap {
+/// A bounded map of conversation seed to minted OpenCode session id, so a
+/// conversation's turns keep one id. Bounded by the module's own limit.
+fn session_seeds() -> &'static Mutex<opencode_session::Sessions> {
+    static SEEDS: LazyLock<Mutex<opencode_session::Sessions>> =
+        LazyLock::new(|| Mutex::new(opencode_session::Sessions::default()));
+    &SEEDS
+}
+
+/// Whether `url` names OpenCode's own gateway, whatever port or path it gives.
+/// Judged by the destination, not by the provider's configured name, so a
+/// renamed or re-based entry is still recognized.
+fn opencode_gateway_url(url: &str) -> bool {
+    let authority = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    let host = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority)
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    host == "opencode.ai" || host.ends_with(".opencode.ai")
+}
+
+fn upstream_headers(
+    headers: &HeaderMap,
+    go_session_header: Option<&str>,
+    upstream_url: &str,
+) -> HeaderMap {
     let mut out = HeaderMap::new();
     for (name, value) in headers {
         if !hop_header(name.as_str())
@@ -1190,7 +1252,45 @@ fn upstream_headers(headers: &HeaderMap, go_session_header: Option<&str>) -> Hea
         // provider-wide identity. Preserve the native header and truthful UA.
         out.insert("x-opencode-session", session.clone());
     }
+    // Go answers a request naming no session with HTTP 400. When the client
+    // supplied no session header at all, tmax attributes the request itself: an
+    // id in OpenCode's own shape, kept stable per conversation. This is routing
+    // attribution, not an invented client identity, and the truthful user agent
+    // is left untouched.
+    //
+    // Any value the client did send is authoritative and is never replaced,
+    // whatever its shape: a qualified native session is not OpenCode's format,
+    // and its exact value is what Go is meant to route by.
+    let client_supplied = out.contains_key("x-opencode-session");
+    if !client_supplied && opencode_gateway_url(upstream_url) {
+        let seed = conversation_seed(headers);
+        let id = session_seeds()
+            .lock()
+            .map(|mut sessions| sessions.session_id(&seed, Utc::now().into()))
+            .unwrap_or_else(|_| opencode_session::new_session_id(Utc::now().into()));
+        if let Ok(value) = HeaderValue::from_str(&id) {
+            out.insert("x-opencode-session", value.clone());
+            out.insert("x-opencode-session-id", value);
+        }
+    }
     out
+}
+
+/// What identifies one conversation, so its turns keep one minted id.
+///
+/// Only headers that name a conversation belong here. `x-opencode-request` is
+/// deliberately excluded: the real client sends it as the per-message id, so
+/// seeding on it would give every turn its own session and defeat the purpose.
+/// Message content is never read.
+fn conversation_seed(headers: &HeaderMap) -> String {
+    for name in ["x-opencode-session", "x-session-id"] {
+        if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok())
+            && !value.is_empty()
+        {
+            return format!("header:{name}={value}");
+        }
+    }
+    "anonymous".to_owned()
 }
 
 struct Observer {
@@ -2494,7 +2594,9 @@ mod tests {
                 at + chrono::Duration::milliseconds(1),
             )
             .unwrap();
-        assert_eq!(lower.selection.provider, "q");
+        // Pi's affinity header is gone, but the gateway can attribute the request
+        // itself for a Go destination, so p stays eligible instead of falling back.
+        assert_eq!(lower.selection.provider, "p");
         publish(&runtime, &stateless, &go, "native-context");
         let mut native = native_headers(at + chrono::Duration::seconds(1));
         let session = native["x-session-id"].clone();
@@ -2569,7 +2671,7 @@ mod tests {
                 .unwrap();
             assert_eq!(choice.selection.provider, "p");
             assert_eq!(choice.go_session_header, Some("x-session-id"));
-            let forwarded = upstream_headers(&headers, choice.go_session_header);
+            let forwarded = upstream_headers(&headers, choice.go_session_header, GO_URL);
             assert_eq!(forwarded["x-opencode-session"], headers["x-session-id"]);
             assert_eq!(forwarded["x-session-id"], headers["x-session-id"]);
             assert_eq!(forwarded["user-agent"], headers["user-agent"]);
@@ -2591,7 +2693,7 @@ mod tests {
             retained.selection.evidence["selection_reason"],
             "retained_destination"
         );
-        let forwarded = upstream_headers(&headers, retained.go_session_header);
+        let forwarded = upstream_headers(&headers, retained.go_session_header, GO_URL);
         assert_eq!(forwarded["x-opencode-session"], headers["x-session-id"]);
         let fresh = native_headers(at + chrono::Duration::seconds(1));
         let new = resumed
@@ -2604,7 +2706,7 @@ mod tests {
                 at + chrono::Duration::seconds(1),
             )
             .unwrap();
-        let forwarded_new = upstream_headers(&fresh, new.go_session_header);
+        let forwarded_new = upstream_headers(&fresh, new.go_session_header, GO_URL);
         assert_ne!(
             forwarded_new["x-opencode-session"],
             forwarded["x-opencode-session"]
@@ -2644,12 +2746,6 @@ mod tests {
         let at = Utc::now();
         runtime.bindings.lock().unwrap().epoch = at - chrono::Duration::seconds(1);
         let qualified = native_headers(at);
-        let mut missing = qualified.clone();
-        missing.remove("x-session-id");
-        let mut unknown = qualified.clone();
-        unknown.insert("user-agent", "generic-client".parse().unwrap());
-        let mut unknown_recommended = unknown.clone();
-        unknown_recommended.insert("x-opencode-session", qualified["x-session-id"].clone());
         let mut conflict = qualified.clone();
         conflict.insert("x-opencode-session", "conflicting-session".parse().unwrap());
         let mut hermes_affinity = qualified.clone();
@@ -2657,14 +2753,7 @@ mod tests {
         hermes_affinity.insert("x-session-id", "native-hermes-session".parse().unwrap());
         let body = json!({"model":"p/m","messages":[{"role":"user","content":"x"}]});
         let mut cases = Vec::new();
-        for headers in [
-            HeaderMap::new(),
-            missing.clone(),
-            unknown,
-            unknown_recommended,
-            conflict,
-            hermes_affinity,
-        ] {
+        for headers in [conflict, hermes_affinity] {
             cases.push((
                 "/v1/chat/completions",
                 body.clone(),
@@ -2673,7 +2762,6 @@ mod tests {
             ));
         }
         cases.extend([
-            ("/v1/chat/completions", json!({"model":"dynamic","messages":[{"role":"user","content":"x"}]}), missing, "native_session_required"),
             ("/v1/responses", json!({"model":"p/m","input":[{"role":"user","content":"x"}],"store":false}), qualified.clone(), "native_session_required"),
             ("/v1/chat/completions", json!({"model":"p/m","messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"test","parameters":{"type":"object"}}}]}), qualified, "tools_incompatible"),
         ]);
@@ -2688,9 +2776,11 @@ mod tests {
             request
                 .headers_mut()
                 .insert("authorization", "Bearer test-local-key".parse().unwrap());
+            let response = forward(State(runtime.clone()), request).await;
             assert_eq!(
-                forward(State(runtime.clone()), request).await.status(),
-                StatusCode::CONFLICT
+                response.status(),
+                StatusCode::CONFLICT,
+                "case {path} {body} {reason}"
             );
             expected.push(reason);
         }
@@ -2808,5 +2898,133 @@ mod tests {
             assert_eq!(inspected["record"]["execution"], "not_dispatched");
         }
         server.abort();
+    }
+
+    const GO_URL: &str = "https://opencode.ai/inference/go/openai/v1";
+
+    /// The shape OpenCode mints. Go's free tier rejects a malformed id outright.
+    fn is_session_shape(id: &str) -> bool {
+        let Some(rest) = id.strip_prefix("ses_") else {
+            return false;
+        };
+        if rest.len() != 26 {
+            return false;
+        }
+        let (clock, random) = rest.split_at(12);
+        clock.bytes().all(|b| b.is_ascii_hexdigit())
+            && random.bytes().all(|b| b.is_ascii_alphanumeric())
+    }
+
+    fn bare_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "omp/18.12.6".parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn a_client_without_a_session_gets_one_in_opencodes_own_shape() {
+        let headers = bare_headers();
+        let forwarded = upstream_headers(&headers, None, GO_URL);
+        let session = forwarded["x-opencode-session"].to_str().unwrap();
+        assert!(
+            is_session_shape(session),
+            "minted id {session} is not OpenCode's shape"
+        );
+        // Both spellings carry the same id, as the real client sends.
+        assert_eq!(forwarded["x-opencode-session-id"], session);
+        // The client's truthful identity is never replaced.
+        assert_eq!(forwarded["user-agent"], "omp/18.12.6");
+    }
+
+    /// The real client sends a per-message id in `x-opencode-request`, so it must
+    /// not become the conversation seed, or every turn would get its own session.
+    #[test]
+    fn one_conversation_keeps_one_session_id_across_turns() {
+        let mut first = bare_headers();
+        first.insert("x-opencode-request", "msg_turn_1".parse().unwrap());
+        let mut second = bare_headers();
+        second.insert("x-opencode-request", "msg_turn_2".parse().unwrap());
+        let minted = |headers: &HeaderMap| {
+            upstream_headers(headers, None, GO_URL)["x-opencode-session"].clone()
+        };
+        assert_eq!(minted(&first), minted(&second));
+        assert_eq!(minted(&first), minted(&first));
+    }
+
+    #[test]
+    fn a_client_supplied_session_is_forwarded_unchanged() {
+        let mut headers = bare_headers();
+        headers.insert(
+            "x-opencode-session",
+            "ses_qualified_native_conversation".parse().unwrap(),
+        );
+        let forwarded = upstream_headers(&headers, Some("x-opencode-session"), GO_URL);
+        assert_eq!(
+            forwarded["x-opencode-session"],
+            "ses_qualified_native_conversation"
+        );
+    }
+
+    #[test]
+    fn a_non_opencode_destination_gets_no_minted_session() {
+        for url in [
+            "https://api.kimi.com/coding/v1",
+            "https://opencode.example.com/v1",
+            "not-a-url",
+        ] {
+            let forwarded = upstream_headers(&bare_headers(), None, url);
+            assert!(
+                forwarded.get("x-opencode-session").is_none(),
+                "{url} must not receive an OpenCode session"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gateway_is_recognized_whatever_the_configured_name() {
+        for url in [
+            "https://opencode.ai/inference/go/openai/v1",
+            "https://opencode.ai:8443/zen/go/v1",
+            "https://api.opencode.ai/inference/go",
+            "https://opencode.ai./inference/go",
+        ] {
+            assert!(opencode_gateway_url(url), "{url}");
+        }
+    }
+
+    /// Go no longer rejects a client that supplied no session header, because the
+    /// gateway attributes that request itself. A client that did name a session,
+    /// even an unusable one, is still rejected: attribution must not paper over a
+    /// client that tried to name a session and got it wrong.
+    #[test]
+    fn an_unattributed_client_reaches_go_through_the_gateway_attribution() {
+        let (_temporary, _runtime, config) = fixture();
+        let mut go = config.clone();
+        let provider = go.providers.get_mut("p").unwrap();
+        provider.integration = Some("opencode-go".into());
+        provider.endpoints.clear();
+        let body = json!({"messages":[{"role":"user","content":"x"}]});
+        let unattributed = HeaderMap::new();
+        let mut unknown = HeaderMap::new();
+        unknown.insert("user-agent", "generic-client".parse().unwrap());
+        let mut conflicting = native_headers(Utc::now());
+        conflicting.insert("x-opencode-session", "a-different-session".parse().unwrap());
+        for headers in [&unattributed, &unknown, &conflicting] {
+            let context = native_context::identify(headers, &body, "chat-completions");
+            let native = NativeRequirements::capture(headers, context.as_ref());
+            assert!(
+                !native.go_session,
+                "no qualified session header is present in this request"
+            );
+            assert_eq!(
+                native_mismatch(provider, &native),
+                if native_context::names_session(headers) {
+                    Some("native_session_required")
+                } else {
+                    None
+                },
+                "headers {headers:?}"
+            );
+        }
     }
 }

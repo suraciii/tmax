@@ -236,6 +236,20 @@ owns the boundary. Source inspection qualifies the mechanism only; it does not
 establish Go's recognition of the header, coverage of every auxiliary Go-bound
 path, or successful Go inference.
 
+### When omp sends no session header
+
+The gate above is a provider-ID string match on `opencode-go`/`opencode-zen`,
+and the live session ID is projected only after session establishment, so the
+first requests of a session carry no header. A provider configured under any
+other name — a tmax-side name, for instance — never carries one.
+
+Routing omp through the tmax gateway covers that gap. When the client supplied no
+session header, the gateway attributes the request itself with an id in OpenCode's
+own shape, held stable per conversation, and forwards the truthful `omp/...`
+user agent unchanged. Any session value the client did supply is forwarded
+verbatim and must not be replaced. See the contract's
+[gateway attribution clause](../../specs/integrations/opencode-go/spec.md#conversation-and-client-identity).
+
 ## Qualification
 
 Retained installed evidence observed actual tmax apply, installed
