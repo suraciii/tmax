@@ -113,8 +113,8 @@ Common stable codes are `ok`, `dry_run_ready`, `dry_run_blocked`,
 `partial_native_apply`, `recovery_required`, `observation_failed`, `probe_failed`,
 `operation_failed`, and `cancelled`. Scoped provider reasons are not extra exit
 categories; messages are not identifiers. Missing declarations/invalid references
-are schema errors. Valid incomplete targets, locked credentials, empty tiers, or
-unqualified external combinations remain availability blockers, not invented access.
+are schema errors. Valid incomplete targets, locked credentials, or unqualified
+external combinations remain availability blockers, not invented access.
 
 Intentional save without native apply is successful. No-service edits/reload may
 exit 0 after validation, persistence when requested, and required startup

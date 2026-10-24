@@ -678,25 +678,10 @@ fn candidates(config: &Config, id: &str, protocol: &str) -> Result<(bool, Vec<(S
         if !alias.enabled {
             return Err(Error::new("disabled_model", "Model alias is disabled"));
         }
-        let names = if let Some(candidates) = &alias.candidates {
-            candidates.clone()
-        } else {
-            config
-                .providers
-                .iter()
-                .flat_map(|(p, provider)| {
-                    provider
-                        .models
-                        .iter()
-                        .filter(|(_, m)| m.tier == alias.tier)
-                        .map(move |(m, _)| format!("{p}/{m}"))
-                })
-                .collect()
-        };
-        let mut result = Vec::new();
-        for name in names {
-            let (p, m) = config::qualified(&name)?;
-            config::model(config, &name)?;
+        let mut result = Vec::with_capacity(alias.candidates.len());
+        for name in &alias.candidates {
+            let (p, m) = config::qualified(name)?;
+            config::model(config, name)?;
             result.push((p.into(), m.into()));
         }
         return Ok((true, result));
@@ -766,7 +751,6 @@ pub struct RequestRequirements<'a> {
 
 pub(crate) struct Advice<'a> {
     pub native: Option<crate::native::compatibility::Context<'a>>,
-    pub tier: Option<&'a str>,
 }
 
 enum SelectionView<'a> {
@@ -804,23 +788,7 @@ fn decision(
             context,
         ),
     };
-    let (alias, candidates) = if let Some(tier) = context.and_then(|context| context.tier) {
-        (
-            true,
-            config
-                .providers
-                .iter()
-                .flat_map(|(provider, p)| {
-                    p.models
-                        .iter()
-                        .filter(move |(_, model)| model.tier.as_deref() == Some(tier))
-                        .map(move |(model, _)| (provider.clone(), model.clone()))
-                })
-                .collect(),
-        )
-    } else {
-        candidates(config, id, protocol)?
-    };
+    let (alias, candidates) = candidates(config, id, protocol)?;
     let inventory = crate::secrets::inventory(store).ok();
     let authorization = context
         .and_then(|context| context.native.as_ref())
@@ -1107,7 +1075,7 @@ pub(crate) fn explain_loaded(
 mod tests {
     use super::*;
     #[test]
-    fn loaded_tier_advice_keeps_native_candidates_metadata_and_input_lineage_together() {
+    fn loaded_alias_advice_keeps_native_candidates_metadata_and_input_lineage_together() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().join("state"));
         let mut loaded = Config::empty();
@@ -1127,7 +1095,6 @@ mod tests {
                 models: [(
                     "m".into(),
                     Model {
-                        tier: Some("L0".into()),
                         priority: 7,
                         ..Default::default()
                     },
@@ -1136,6 +1103,13 @@ mod tests {
                 ..Default::default()
             },
         );
+        loaded.model_aliases.push(config::ModelAlias {
+            id: "L0".into(),
+            protocol: "chat-completions".into(),
+            candidates: vec!["old/m".into()],
+            enabled: true,
+            continuity: None,
+        });
         store
             .write_raw("tmax.toml", toml::to_string(&loaded).unwrap().as_bytes())
             .unwrap();
@@ -1161,6 +1135,7 @@ mod tests {
         let mut saved = loaded.clone();
         let provider = saved.providers.remove("old").unwrap();
         saved.providers.insert("new".into(), provider);
+        saved.model_aliases[0].candidates = vec!["new/m".into()];
         saved
             .providers
             .get_mut("new")
@@ -1180,7 +1155,6 @@ mod tests {
                 provider: None,
                 proxy: false,
             }),
-            tier: Some("L0"),
         };
         let evidence = explain_loaded(
             &store,
@@ -1213,7 +1187,6 @@ mod tests {
                 provider: None,
                 proxy: false,
             }),
-            tier: Some("L0"),
         };
         let evidence = explain_native(
             &store,

@@ -109,7 +109,6 @@ pub struct InputDeclaration {
 pub struct Model {
     #[serde(default = "yes")]
     pub enabled: bool,
-    pub tier: Option<String>,
     #[serde(default)]
     pub priority: i64,
     #[serde(default)]
@@ -124,7 +123,6 @@ impl Default for Model {
     fn default() -> Self {
         Self {
             enabled: true,
-            tier: None,
             priority: 0,
             overrides: ModelOverrides::default(),
             timezone: None,
@@ -229,8 +227,7 @@ pub struct PriorityRule {
 pub struct ModelAlias {
     pub id: String,
     pub protocol: String,
-    pub tier: Option<String>,
-    pub candidates: Option<Vec<String>>,
+    pub candidates: Vec<String>,
     #[serde(default = "yes")]
     pub enabled: bool,
     pub continuity: Option<String>,
@@ -439,6 +436,16 @@ fn unique<T: Ord>(values: &[T]) -> bool {
     set.len() == values.len()
 }
 pub fn validate(config: &Config) -> Result<()> {
+    validate_inner(config, false)
+}
+
+// Only historical operational snapshots can retain an unavailable empty membership.
+// Desired configuration always requires explicit, nonempty candidates.
+pub(crate) fn validate_retained_snapshot(config: &Config) -> Result<()> {
+    validate_inner(config, true)
+}
+
+fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
     if config.version != 1 {
         return Err(invalid("version"));
     }
@@ -501,12 +508,7 @@ pub fn validate(config: &Config) -> Result<()> {
         }
         for (name, m) in &p.models {
             let path = format!("{base}.models.{name}");
-            if name.is_empty()
-                || name.chars().any(char::is_control)
-                || m.tier
-                    .as_ref()
-                    .is_some_and(|t| !matches!(t.as_str(), "L0" | "L1" | "L2" | "L3"))
-            {
+            if name.is_empty() || name.chars().any(char::is_control) {
                 return Err(invalid(&path));
             }
             if let Some(l) = &m.overrides.limit
@@ -545,23 +547,17 @@ pub fn validate(config: &Config) -> Result<()> {
         if !valid_id(&a.id, true)
             || !PROTOCOLS.contains(&a.protocol.as_str())
             || !alias_ids.insert((&a.protocol, &a.id))
-            || (a.tier.is_some() == a.candidates.is_some())
-            || a.tier
-                .as_ref()
-                .is_some_and(|t| !matches!(t.as_str(), "L0" | "L1" | "L2" | "L3"))
             || a.continuity
                 .as_ref()
                 .is_some_and(|s| !matches!(s.as_str(), "session" | "stateless"))
         {
             return Err(invalid("model_aliases"));
         }
-        if let Some(c) = &a.candidates {
-            if c.is_empty() || !unique(c) {
-                return Err(invalid("model_aliases.candidates"));
-            }
-            for name in c {
-                model(config, name)?;
-            }
+        if (!allow_empty_aliases && a.candidates.is_empty()) || !unique(&a.candidates) {
+            return Err(invalid("model_aliases.candidates"));
+        }
+        for name in &a.candidates {
+            model(config, name)?;
         }
         if let Ok((p, _)) = model(config, &a.id)
             && crate::integrations::protocols(p, qualified(&a.id)?.1)?.contains(&a.protocol)
@@ -703,5 +699,49 @@ mod tests {
     fn unknown_schedule_fields_reject() {
         let s = "priority=1\nweekdays=['mon']\nall_day=true\nsecret='not-a-field'";
         assert!(toml::from_str::<Schedule>(s).is_err());
+    }
+    #[test]
+    fn aliases_require_nonempty_unique_registered_concrete_candidates() {
+        let base = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\n[providers.p.models.a]\n[providers.p.models.b]\n";
+        let alias = "[[model_aliases]]\nid='L0'\nprotocol='chat-completions'\n";
+        for candidates in [
+            "",
+            "candidates=[]\n",
+            "candidates=['p/a','p/a']\n",
+            "candidates=['p/missing']\n",
+            "candidates=['missing/a']\n",
+            "candidates=['p']\n",
+            "candidates=['L0']\n",
+        ] {
+            assert!(parse(&format!("{base}{alias}{candidates}")).is_err());
+        }
+        let config = parse(&format!(
+            "{base}{alias}candidates=['p/b','p/a']\n[[model_aliases]]\nid='l0'\nprotocol='chat-completions'\ncandidates=['p/a']\n[[model_aliases]]\nid='custom.L9'\nprotocol='chat-completions'\ncandidates=['p/b']\n"
+        ))
+        .unwrap();
+        assert_eq!(config.model_aliases[0].candidates, ["p/b", "p/a"]);
+        assert_eq!(config.model_aliases[1].id, "l0");
+        assert_eq!(config.model_aliases[2].id, "custom.L9");
+    }
+
+    #[test]
+    fn removed_product_tier_fields_are_rejected_instead_of_ignored() {
+        let provider = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\n[providers.p.models.a]\n";
+        for text in [
+            format!("{provider}tier='L0'\n"),
+            format!(
+                "{provider}[[model_aliases]]\nid='L0'\nprotocol='chat-completions'\ntier='L0'\n"
+            ),
+            format!(
+                "{provider}[[model_aliases]]\nid='L0'\nprotocol='chat-completions'\ncandidates=['p/a']\ntier='L0'\n"
+            ),
+        ] {
+            assert_eq!(parse(&text).unwrap_err().code, "invalid_configuration");
+        }
+    }
+
+    #[test]
+    fn documented_configuration_example_has_resolvable_explicit_alias_members() {
+        parse(include_str!("../../../specs/configuration/example.toml")).unwrap();
     }
 }

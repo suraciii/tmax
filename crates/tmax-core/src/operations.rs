@@ -509,7 +509,7 @@ fn model_list(config: &Config, r: &Request) -> Result<Value> {
                 if arg(r, "protocol").is_some_and(|proto| !protocols.iter().any(|p| p == proto)) {
                     continue;
                 }
-                entries.push(json!({"id":format!("{id}/{mid}"),"kind":"concrete","tier":m.tier,"enabled":p.enabled&&m.enabled,"published_protocols":if p.enabled&&m.enabled{protocols}else{Vec::new()},"availability":if p.auth.is_none(){"authentication_missing"}else{"unverified"}}));
+                entries.push(json!({"id":format!("{id}/{mid}"),"kind":"concrete","enabled":p.enabled&&m.enabled,"published_protocols":if p.enabled&&m.enabled{protocols}else{Vec::new()},"availability":if p.auth.is_none(){"authentication_missing"}else{"unverified"}}));
             }
         }
     }
@@ -518,7 +518,7 @@ fn model_list(config: &Config, r: &Request) -> Result<Value> {
             if arg(r, "protocol").is_some_and(|p| p != a.protocol) {
                 continue;
             }
-            entries.push(json!({"id":a.id,"protocol":a.protocol,"kind":"alias","tier":a.tier,"enabled":a.enabled,"published_protocols":if a.enabled{vec![a.protocol.as_str()]}else{Vec::new()},"continuity":a.continuity.as_deref().unwrap_or("session")}));
+            entries.push(json!({"id":a.id,"protocol":a.protocol,"kind":"alias","enabled":a.enabled,"published_protocols":if a.enabled{vec![a.protocol.as_str()]}else{Vec::new()},"continuity":a.continuity.as_deref().unwrap_or("session")}));
         }
     }
     Ok(json!({"models":entries}))
@@ -541,64 +541,42 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
     // The target, candidates and accepted metadata must belong to the same view.
     let c = loaded.as_ref().map(|(file, _)| &file.config).unwrap_or(c);
     let config = c;
-    let mut id = r.operands.first().cloned();
+    let mut id = operand(r, 0)?.to_owned();
     let protocol = required(r, "protocol")?;
-    let context = if let Some(tier) = arg(r, "tier") {
-        if !matches!(tier, "L0" | "L1" | "L2" | "L3") {
-            return Err(Error::new(
-                "invalid_arguments",
-                "Select a configured L0, L1, L2 or L3 tier",
-            ));
-        }
-        if id.is_some() || arg(r, "agent-provider").is_some() || arg(r, "session").is_some() {
-            return Err(Error::new(
-                "invalid_arguments",
-                "Tier advice cannot combine with model ID, entry or session",
-            ));
-        }
-        let context = if let Some(target) = arg(r, "target") {
-            let t = c
-                .agents
-                .get(target)
-                .ok_or_else(|| Error::new("unknown_resource", "Target is not configured"))?;
-            json!({"kind":"agent_target","target":target,"agent_provider":null,"agent":t.agent,"path":t.scope})
-        } else {
-            crate::native::discover(
-                store,
-                Some(required(r, "agent")?),
-                Some(required(r, "path")?),
-            )
-            .await?;
-            json!({"kind":"native_scope","target":null,"agent_provider":null,"agent":arg(r,"agent"),"path":arg(r,"path")})
-        };
-        id = Some(tier.into());
-        context
-    } else if let Some(target) = arg(r, "target") {
+    let target = arg(r, "target");
+    let agent = arg(r, "agent");
+    let path = arg(r, "path");
+    if target.is_some() && (agent.is_some() || path.is_some())
+        || agent.is_some() != path.is_some()
+        || arg(r, "agent-provider").is_some() && target.is_none()
+    {
+        return Err(Error::new(
+            "invalid_arguments",
+            "Select a declared target with an optional provider entry, or an agent and native path",
+        ));
+    }
+    let context = if let Some(target) = target {
         let t = c
             .agents
             .get(target)
             .ok_or_else(|| Error::new("unknown_resource", "Target is not configured"))?;
-        let name = required(r, "agent-provider")?;
-        let e = t.providers.get(name).ok_or_else(|| {
-            Error::new("unknown_resource", "Native provider entry not configured")
-        })?;
-        if let Some(provider) = &e.provider {
-            id = Some(format!(
-                "{provider}/{}",
-                id.ok_or_else(|| Error::new("invalid_arguments", "Model ID required"))?
-            ));
+        if let Some(name) = arg(r, "agent-provider") {
+            let e = t.providers.get(name).ok_or_else(|| {
+                Error::new("unknown_resource", "Native provider entry not configured")
+            })?;
+            if let Some(provider) = &e.provider {
+                id = format!("{provider}/{id}");
+            }
+            json!({"kind":"agent_provider","target":target,"agent_provider":name,"agent":t.agent,"path":t.scope})
+        } else {
+            json!({"kind":"agent_target","target":target,"agent_provider":null,"agent":t.agent,"path":t.scope})
         }
-        json!({"kind":"agent_provider","target":target,"agent_provider":name,"agent":t.agent,"path":t.scope})
+    } else if let (Some(agent), Some(path)) = (agent, path) {
+        crate::native::discover(store, Some(agent), Some(path)).await?;
+        json!({"kind":"native_scope","target":null,"agent_provider":null,"agent":agent,"path":path})
     } else {
-        if arg(r, "agent-provider").is_some() {
-            return Err(Error::new(
-                "invalid_arguments",
-                "Native provider context requires target",
-            ));
-        }
         json!({"kind":"proxy","target":null,"agent_provider":null,"agent":null,"path":null})
     };
-    let id = id.ok_or_else(|| Error::new("invalid_arguments", "Model ID or tier is required"))?;
     let entry = context["target"]
         .as_str()
         .zip(context["agent_provider"].as_str())
@@ -612,7 +590,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         }
         let mut data = crate::service::control(store, config, r, None).await?;
         data["context"] = context;
-        data["requested"] = json!({"id":r.operands.first(),"tier":null,"protocol":protocol});
+        data["requested"] = json!({"id":r.operands.first(),"protocol":protocol});
         data["native_assessment"] = json!({"state":"not_reassessed","reason":"retained_destination_inspection","authorization":"not_verified"});
         return Ok(data);
     }
@@ -627,7 +605,6 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
             });
     let advice = crate::routing::Advice {
         native: requirements,
-        tier: arg(r, "tier"),
     };
     let mut data = if let Some((_, metadata)) = &loaded {
         crate::routing::explain_loaded(
@@ -646,7 +623,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         data["native_assessment"] = json!({"state":"assessed","scope":"protocol_provider_client_and_credential_handoff","native_login_readiness":"safe_operation_metadata_checked_for_direct_login","installation_and_authorization":"not_verified","ranking_is_live_authorization_proof":false,"secret_reads":false,"native_apply":"not_requested"});
     }
     data["context"] = context;
-    data["requested"] = json!({"id":r.operands.first(),"tier":arg(r,"tier"),"protocol":protocol});
+    data["requested"] = json!({"id":r.operands.first(),"protocol":protocol});
     Ok(data)
 }
 pub(crate) fn network_view(c: &Config, revision: &str, exists: bool, state: &str) -> Value {
@@ -907,7 +884,7 @@ mod tests {
     }
     use super::*;
     #[tokio::test]
-    async fn incomplete_native_entry_and_tier_advice_exclude_the_same_protocol_that_apply_rejects()
+    async fn incomplete_native_entry_and_alias_advice_exclude_the_same_protocol_that_apply_rejects()
     {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().join("state"));
@@ -924,17 +901,21 @@ mod tests {
                 auth: Some(Auth::ApiKey {
                     key_ref: "not-resolved".into(),
                 }),
-                models: [(
-                    "m".into(),
-                    config::Model {
-                        tier: Some("L0".into()),
-                        ..Default::default()
-                    },
-                )]
+                models: [
+                    ("m".into(), config::Model::default()),
+                    ("org/model".into(), config::Model::default()),
+                ]
                 .into(),
                 ..Default::default()
             },
         );
+        config.model_aliases.push(config::ModelAlias {
+            id: "custom-name".into(),
+            protocol: "chat-completions".into(),
+            candidates: vec!["p/m".into()],
+            enabled: true,
+            continuity: None,
+        });
         config.agents.insert(
             "target".into(),
             config::AgentTarget {
@@ -958,25 +939,32 @@ mod tests {
             .unwrap();
         crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
         let original = std::fs::read(store.root.join("tmax.toml")).unwrap();
-        for tier in [false, true] {
+        for (id, entry, qualified) in [
+            ("m", Some("entry"), "p/m"),
+            ("org/model", Some("entry"), "p/org/model"),
+            ("custom-name", None, "p/m"),
+            ("p/m", None, "p/m"),
+        ] {
             let mut arguments = std::collections::BTreeMap::from([
                 ("protocol".into(), vec!["chat-completions".into()]),
                 ("target".into(), vec!["target".into()]),
             ]);
-            arguments.insert(
-                if tier { "tier" } else { "agent-provider" }.into(),
-                vec![if tier { "L0" } else { "entry" }.into()],
-            );
+            if let Some(entry) = entry {
+                arguments.insert("agent-provider".into(), vec![entry.into()]);
+            }
             let request = Request {
                 command: vec!["model".into(), "explain".into()],
-                operands: if tier { vec![] } else { vec!["m".into()] },
+                operands: vec![id.into()],
                 arguments,
                 dry_run: false,
                 if_revision: None,
             };
             let advice = explain(&store, &config, &request).await.unwrap();
             assert!(advice["selection"].is_null());
-            assert_eq!(advice["excluded_candidates"][0]["qualified_model"], "p/m");
+            assert_eq!(
+                advice["excluded_candidates"][0]["qualified_model"],
+                qualified
+            );
             assert_eq!(
                 advice["excluded_candidates"][0]["reason_code"],
                 "incompatible"
@@ -1020,6 +1008,47 @@ mod tests {
                 .code,
             "incompatible"
         );
+    }
+
+    #[tokio::test]
+    async fn ambiguous_native_explanation_scopes_fail_without_side_effects() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("absent"));
+        for selectors in [
+            vec![
+                ("target", "target"),
+                ("agent", "pi"),
+                ("path", "/unused/native"),
+            ],
+            vec![("agent-provider", "entry")],
+            vec![("agent", "pi")],
+            vec![("path", "/unused/native")],
+        ] {
+            let mut arguments = std::collections::BTreeMap::from([(
+                "protocol".into(),
+                vec!["chat-completions".into()],
+            )]);
+            arguments.extend(
+                selectors
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), vec![value.into()])),
+            );
+            let request = Request {
+                command: vec!["model".into(), "explain".into()],
+                operands: vec!["custom-name".into()],
+                arguments,
+                dry_run: false,
+                if_revision: None,
+            };
+            assert_eq!(
+                explain(&store, &Config::empty(), &request)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "invalid_arguments"
+            );
+            assert!(!store.root.exists());
+        }
     }
 
     #[test]

@@ -7,10 +7,6 @@ fn protocol_value(id: &'static str, help: &'static str) -> Arg {
     value(id, "P", help).value_parser(["chat-completions", "responses", "messages"])
 }
 
-fn tier_value(id: &'static str, help: &'static str) -> Arg {
-    value(id, "TIER", help).value_parser(["L0", "L1", "L2", "L3"])
-}
-
 fn agent_value(id: &'static str, help: &'static str) -> Arg {
     value(id, "AGENT", help).value_parser(["codex", "pi", "omp", "opencode", "hermes"])
 }
@@ -495,7 +491,7 @@ fn catalog_commands() -> Command {
 fn model_commands() -> Command {
     let model_fields = concat!(
         "Supported scalar model FIELD paths and values:\n",
-        "`enabled`: boolean, clear restores true; `tier`: `L0`–`L3`, clear restores unclassified; `priority`: signed integer, clear restores zero; `timezone`: IANA-zone string, clear only when no schedule/rule time gate requires it.\n",
+        "`enabled`: boolean, clear restores true; `priority`: signed integer, clear restores zero; `timezone`: IANA-zone string, clear only when no schedule/rule time gate requires it.\n",
         "`overrides.name`, `.description`, `.family`, `.knowledge`, `.release_date`, `.last_updated`: strings; date-like metadata remains a string. Clear restores inheritance.\n",
         "`overrides.attachment`, `.reasoning`, `.tool_call`, `.structured_output`, `.temperature`, `.open_weights`: booleans; clear restores inheritance.\n",
         "`overrides.limit.context`, `.input`, `.output`: nonnegative integers. `overrides.cost.input`, `.output`, `.reasoning`, `.cache_read`, `.cache_write`, `.cache_storage`: nonnegative finite numbers in catalog units. Clear restores each inherited fact.\n",
@@ -534,18 +530,16 @@ fn model_commands() -> Command {
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
     let rule = model_rule_commands();
     let alias = model_alias_commands();
-    let explain = leaf("explain", "Explain no-inference model selection or one retained session destination.", "Requires exactly one public model ID or --tier TIER plus explicit --protocol. Optional --at uses retained facts valid then; it never fetches or predicts. Use --target TARGET --agent-provider NAME together to assess an existing native entry. Tier explanation requires exactly one declared target or undeclared --agent plus --path scope. --session inspects an existing proxy session and cannot be combined with --tier or an upstream-source entry.\n\nReturns candidates/exclusions, rules, priorities, selection provenance, compatibility and unknown evidence. Does not write settings/native files, resolve secrets, refresh login, start inference, reserve a session, or probe. Rejects --dry-run.\n\nExit: 0 when explanation completes, including blocked/unknown availability; 2 for invalid operand combinations.\nExample: tmax model explain L0 --protocol chat-completions")
+    let explain = leaf("explain", "Explain no-inference model selection or one retained session destination.", "Requires a model ID and explicit --protocol. Use a public qualified concrete or alias ID, except with an upstream-source native entry: its ID is the exact upstream model ID under that entry's provider, including any slashes. Optional --at uses retained facts valid then; it never fetches or predicts. Assess native compatibility with --target TARGET, optionally --agent-provider NAME for an existing entry, or --agent AGENT --path PATH for an undeclared scope. Every context assesses only the requested offering or explicit alias candidates. --session inspects an existing proxy session and cannot use an upstream-source entry.\n\nReturns candidates/exclusions, rules, priorities, selection provenance, compatibility and unknown evidence. Does not write settings/native files, resolve secrets, refresh login, start inference, reserve a session, or probe. Rejects --dry-run.\n\nExit: 0 when explanation completes, including blocked/unknown availability; 2 for invalid operand combinations.\nExample: tmax model explain L0 --protocol chat-completions")
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
-        .arg(tier_value("tier", "L0, L1, L2, or L3.").conflicts_with("__operand_1"))
-        .arg(value("target", "TARGET", "Declared target for entry or tier context."))
-        .arg(value("agent-provider", "NAME", "Existing target-local provider entry."))
-        .arg(agent_value("agent", "Agent for undeclared native scope."))
-        .arg(value("path", "PATH", "Native scope path for undeclared tier context."))
+        .arg(value("target", "TARGET", "Declared target for native assessment.").conflicts_with_all(["agent", "path"]))
+        .arg(value("agent-provider", "NAME", "Existing target-local provider entry.").requires("target"))
+        .arg(agent_value("agent", "Agent for undeclared native scope.").requires("path"))
+        .arg(value("path", "PATH", "Native scope path for undeclared context.").requires("agent"))
         .arg(value("at", "INSTANT", "RFC 3339 explicit-offset evaluation instant."))
         .arg(value("session", "SESSION", "Existing retained proxy session handle."))
         .arg(value("state", "STATE", "file (default) or loaded.").value_parser(["file", "loaded"]))
-        .arg(positional(1, "ID", "Public qualified model ID; mutually exclusive with --tier.").conflicts_with("tier"))
-        .group(ArgGroup::new("selection").args(["__operand_1", "tier"]).required(true));
+        .arg(required_pos(1, "ID", "Public concrete/alias ID, or exact upstream ID with an upstream-source native entry."));
     let probe = mutation(leaf("probe", "Run one explicitly requested bounded potentially paid inference check.", "Requires a concrete QUALIFIED offering, protocol, and an integration-qualified transport. A probe may use paid quota/credit; inspect dry-run/capability help for known price and unknown charges. No alias fan-out, retries, or replay. This is not a non-inference health check.\n\nDry-run contacts no upstream and reads no credentials.\nExit: 0 when the requested probe completes; 3 when qualification/credential is required; 4 for request/transport/upstream failure.\nExample: tmax model probe deepseek/deepseek-flash --protocol chat-completions --transport http --dry-run")
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
         .arg(value("transport", "TRANSPORT", "Exact integration-qualified transport; see integration inspect.").required(true))
@@ -578,7 +572,7 @@ fn model_commands() -> Command {
         ))
         .subcommand(edit_args(
             mutation(
-                leaf_with_fields("update", "Edit supported scalar metadata/tier/priority fields for one offering.", "At least one edit is required. Clearing an optional override restores documented inheritance/default. Structured lists and reasoning options use dedicated operations.", model_fields)
+                leaf_with_fields("update", "Edit supported scalar metadata and priority fields for one offering.", "At least one edit is required. Clearing an optional override restores documented inheritance/default. Structured lists and reasoning options use dedicated operations.", model_fields)
                     .arg(required_pos(1, "QUALIFIED", "provider-id/model-id.")),
                 true,
                 true,
@@ -765,54 +759,50 @@ fn model_rule_commands() -> Command {
 }
 
 fn model_alias_commands() -> Command {
-    let alias_edit = "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session). Explicit candidates preserve order and accept registered qualified concrete offerings only. A tier source is L0–L3; empty tiers are valid but unavailable. Candidate lists do not accept aliases, recursive aliases, bare providers, or duplicates. Protocol and ID jointly identify an alias.";
+    let alias_edit = "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session). One or more explicit candidates are required, in user order, and accept registered qualified concrete offerings only. Candidate lists do not accept aliases, recursive aliases, bare providers, or duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.";
     let add = mutation(
         leaf_with_fields(
             "add",
-            "Create one protocol-qualified model alias backed by a tier or explicit candidates.",
-            "Requires exactly one source: --tier TIER or one-or-more --candidate QUALIFIED. Candidates form the complete ordered list.\n\nExit: 0 when saved; 2 for invalid ID/source; 4 for save/activation failure.\nExample: tmax model alias add L0 --protocol chat-completions --tier L0",
+            "Create one protocol-qualified model alias backed by explicit candidates.",
+            "Requires one-or-more --candidate QUALIFIED. Candidates form the complete ordered list.\n\nExit: 0 when saved; 2 for invalid ID/candidates; 4 for save/activation failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate deepseek/deepseek-flash",
             alias_edit,
         )
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
-        .arg(tier_value("tier", "L0, L1, L2, or L3; conflicts with candidates."))
-        .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete offering; repeat in order."))
+        .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete offering; repeat in order.").required(true))
         .arg(pair("set", "FIELD", "VALUE", "Set enabled or continuity.").long_help(alias_edit))
         .arg(repeated("clear", "FIELD", "Clear enabled or continuity.").long_help(alias_edit))
-        .arg(required_pos(1, "ID", "Public alias ID."))
-        .group(ArgGroup::new("alias_source").args(["tier", "candidate"]).required(true)),
+        .arg(required_pos(1, "ID", "Public alias ID.")),
         true,
         true,
     );
     let update = mutation(
         leaf_with_fields(
             "update",
-            "Edit alias fields and optionally replace its complete candidate source.",
-            "At least one change is required. --tier replaces a candidate list; repeated --candidate replaces the full list, never appends. If neither source flag appears, preserve the current source. --new-protocol changes identity only after collision/reference checks.\n\nExit: 0 when saved; 2 for invalid identity/source; 4 for save/activation failure.\nExample: tmax model alias update L0 --protocol chat-completions --set enabled false",
+            "Edit alias fields and optionally replace its complete candidate list.",
+            "At least one change is required. Repeated --candidate replaces the full list, never appends. Omit --candidate to preserve the current list. --new-protocol changes identity only after collision/reference checks.\n\nExit: 0 when saved; 2 for invalid identity/candidates; 4 for save/activation failure.\nExample: tmax model alias update L0 --protocol chat-completions --set enabled false",
             alias_edit,
         )
         .arg(protocol_value("protocol", "Current protocol identity.").required(true))
         .arg(protocol_value("new-protocol", "Optional new protocol identity."))
-        .arg(tier_value("tier", "Replace source with L0–L3."))
         .arg(repeated("candidate", "QUALIFIED", "Replace entire ordered candidate list."))
         .arg(pair("set", "FIELD", "VALUE", "Set enabled or continuity.").long_help(alias_edit))
         .arg(repeated("clear", "FIELD", "Clear enabled or continuity.").long_help(alias_edit))
-        .arg(required_pos(1, "ID", "Public alias ID."))
-        .group(ArgGroup::new("alias_source").args(["tier", "candidate"])),
+        .arg(required_pos(1, "ID", "Public alias ID.")),
         true,
         true,
     );
     let candidates = Command::new("candidates")
-        .about("Append or remove explicit candidates from an explicit-list alias.")
-        .subcommand(mutation(leaf("add", "Append new unique candidates to an explicit alias list.", "Rejects tier sources, duplicate members, and non-concrete/unregistered candidates. Candidate order is preserved.\n\nExit: 0 when saved; 2 for invalid member; 4 for save/activation failure.\nExample: tmax model alias candidates add L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
+        .about("Append or remove explicit candidates from an alias.")
+        .subcommand(mutation(leaf("add", "Append new unique candidates to an alias list.", "Rejects duplicate members and non-concrete/unregistered candidates. Candidate order is preserved.\n\nExit: 0 when saved; 2 for invalid member; 4 for save/activation failure.\nExample: tmax model alias candidates add L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
             .arg(protocol_value("protocol", "Alias protocol identity.").required(true))
             .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete candidate; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove named members from an explicit alias list.", "Rejects missing members and an empty resulting list. Does not convert a tier or select replacements.\n\nExit: 0 when saved; 2 for invalid member/result; 4 for save/activation failure.\nExample: tmax model alias candidates remove L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("remove", "Remove named members from an alias list.", "Rejects missing members and an empty resulting list. Does not select replacements.\n\nExit: 0 when saved; 2 for invalid member/result; 4 for save/activation failure.\nExample: tmax model alias candidates remove L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
             .arg(protocol_value("protocol", "Alias protocol identity.").required(true))
             .arg(repeated("candidate", "QUALIFIED", "Exact existing candidate to remove; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true));
     Command::new("alias")
-        .about("Manage public model aliases and their candidate sources/continuity.")
+        .about("Manage public model aliases and their explicit candidates/continuity.")
         .subcommand(add)
         .subcommand(update)
         .subcommand(candidates)

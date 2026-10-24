@@ -138,3 +138,77 @@ fn hidden_service_launchers_reject_extra_args() {
         assert!(!stderr.contains("LAUNCH-SECRET-MUST-NOT-ECHO"));
     }
 }
+
+#[test]
+fn alias_creation_requires_explicit_candidates_and_rejects_retired_selectors() {
+    for args in [
+        vec![
+            "model",
+            "alias",
+            "add",
+            "L0",
+            "--protocol",
+            "chat-completions",
+        ],
+        vec![
+            "model",
+            "alias",
+            "add",
+            "custom",
+            "--protocol",
+            "chat-completions",
+            "--tier",
+            "L0",
+        ],
+        vec![
+            "model",
+            "alias",
+            "update",
+            "custom",
+            "--protocol",
+            "chat-completions",
+            "--tier",
+            "L1",
+        ],
+        vec![
+            "model",
+            "explain",
+            "--tier",
+            "L0",
+            "--protocol",
+            "chat-completions",
+            "--target",
+            "target",
+        ],
+        vec!["model", "explain", "--protocol", "chat-completions"],
+    ] {
+        json_error(&tmax(&args));
+    }
+}
+
+#[test]
+fn explicit_model_native_context_selectors_reject_ambiguous_scopes_before_dispatch() {
+    for selector in [
+        vec![
+            "--target",
+            "target",
+            "--agent",
+            "pi",
+            "--path",
+            "/unused/native",
+        ],
+        vec!["--agent-provider", "entry"],
+        vec!["--agent", "pi"],
+        vec!["--path", "/unused/native"],
+    ] {
+        let mut args = vec![
+            "model",
+            "explain",
+            "custom",
+            "--protocol",
+            "chat-completions",
+        ];
+        args.extend(selector);
+        json_error(&tmax(&args));
+    }
+}

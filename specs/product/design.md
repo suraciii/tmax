@@ -23,10 +23,9 @@ an assistant or an approval/workflow system.
 | Saving desired settings differs from changing running agents | Watch every file or maintain per-field pending layers | Reload and executed management edits activate the whole valid file, including pending manual changes; native application remains separate |
 | Provider setup should not reconstruct another tool's state | Import providers and credentials from existing agents | Create providers from selected metadata or explicit custom settings; inspect agents only to configure them safely |
 | Agent configuration and inference forwarding are independent | Give each target a direct/proxy mode | Native provider entries refer to upstream access or the tmax proxy; one target can contain both, and the proxy needs no managed target |
-| Consumers need fixed or multi-source model access | Require a route for every concrete model or add a separate account pool | Concrete offerings map directly; model aliases select explicit offerings or a tier with existing priority rules |
-| Multiple agents need predictable model roles | Layer agent and project overrides over global L0 rules | Share user-wide priorities and protocol-qualified model aliases; distinct uses get explicit alias names |
+| Consumers need fixed or multi-offering model access | Require a route for every concrete model or add a separate account pool | Concrete offerings map directly; model aliases list explicit qualified offerings selected with existing priority rules |
+| Multiple agents need predictable model choices | Infer candidate groups from alias names or add per-agent priority overrides | Share offering priorities and protocol-qualified model aliases; each user-defined alias explicitly names its candidates |
 | Equal-priority subscriptions should have predictable use | Rotate or balance every new request | Deterministic primary/standby selection; new sessions may use another eligible candidate without moving established ones |
-| Model roles and costs change on different axes | Reassign model tiers whenever price changes | Keep tiers stable and evaluate the user's priority rules |
 | Peak pricing should change future selections | Cron jobs rewrite agent configuration or interrupt sessions | Evaluate schedules when selecting a new destination; retain established conversation selections |
 | Existing configuration belongs to the user | Regenerate whole agent config from tmax state | Track owned changes and compare against inputs captured within execution; unrelated settings and concurrent edits must survive |
 | Clients and providers speak different APIs | Normalize all traffic through a universal message format | Forward native protocols without translation, as selected by the user; reject incompatible agent configurations |
@@ -76,7 +75,7 @@ Agent configuration and proxy forwarding work independently or together.
 flowchart TB
     Catalog["models.dev metadata"]
     Provider["Upstream provider<br/>Credentials and optional subscription"]
-    Model["Concrete models<br/>Tier and priority"]
+    Model["Concrete models<br/>Priority and rules"]
     Alias["Model aliases<br/>Candidates and continuity"]
     Agent["Agent target<br/>Named native provider entries"]
     Proxy["Local model proxy<br/>Shared key and derived model list"]
@@ -96,11 +95,12 @@ not upstream accounts or permission grants. Preview, apply, conflict detection,
 and restoration act on that configuration. Removing a managed target does not
 remove the proxy or revoke its shared key.
 
-Model tiers, base priorities, time schedules, and signal rules belong to concrete
-offerings, not separate policy resources. Model aliases select a tier or explicit
-candidate set; scenario names such as deepseek-v4.1-flash need not correspond to
-tiers. Concrete configuration and proxy mappings require no model alias or
-duplicated route definition. The contract is in [Model selection](../model-routing/spec.md).
+Base priorities, time schedules, and signal rules belong to concrete offerings,
+not separate policy resources. Each model alias has a nonempty list of unique,
+registered qualified candidates. IDs such as L0, L1, or coding carry no selection
+semantics; only the explicit list defines membership. Concrete configuration and
+proxy mappings require no model alias or duplicated route definition. The contract
+is in [Model selection](../model-routing/spec.md).
 
 The local service owns the Web interface and the optional proxy listener. CLI-only
 configuration operations also work without a resident service. Both paths share
@@ -173,15 +173,15 @@ view, not a parent object with credentials or an active-account pointer.
 
 A model offering is identified by the local provider and exact upstream model ID.
 Two accounts therefore expose distinct qualified offerings even when their catalog
-metadata is identical. Their tiers and priority schedules can differ. Supported
+metadata is identical. Their priorities and schedules can differ. Supported
 protocols are capabilities of one offering, not extra model identities.
 
 The selected models.dev provider metadata is a baseline, not merely a lookup label.
 Effective supported fields combine that baseline with instance-local provider and
 per-model overrides. The saved configuration keeps the metadata reference and
 explicit differences, not a copied catalog. Removing an override restores the
-inherited value. Model enablement, tiers, schedules, subscription details, and
-authentication remain explicit local settings, not metadata inheritance.
+inherited value. Model enablement, priorities, schedules, subscription details,
+and authentication remain explicit local settings, not metadata inheritance.
 
 Upstream discovery may supply evidence or suggest a local change; it is not a
 hidden third metadata-precedence layer. The [catalog contract](../model-routing/spec.md#model-catalog)
@@ -200,7 +200,6 @@ instance. Proxy access can use that same fixed offering through a derived mappin
 or a model alias that selects among qualified offerings. There is no later account
 selector. To group two OpenCode Go subscriptions and official DeepSeek under one
 alias ID, explicitly list each provider/model pair; matching names are not enough.
-Tier-based aliases are another candidate source under the same concept.
 Equal-priority selection remains deterministic, not round-robin or implicitly
 weighted by credential count.
 
@@ -319,7 +318,7 @@ dispatch uses declared operations, not unrestricted path concatenation.
 
 The router derives fixed concrete mappings from enabled offerings, with no
 client-permission filter or separate publication list. Model aliases supply a
-public ID, protocol, candidate source, and continuity policy.
+public ID, protocol, explicit candidate list, and continuity policy.
 The [selection contract](../model-routing/spec.md) resolves alias candidates and
 their priorities under one snapshot; concrete access stays fixed. Established
 conversations retain their selection, and in-flight execution never changes at

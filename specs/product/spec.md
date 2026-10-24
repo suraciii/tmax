@@ -77,10 +77,10 @@ agent uses it, what will a change affect, and what quota or renewal information
 is actually known?
 
 Model management must support concrete models mapped directly to agent settings,
-user-assigned tiers and rule-driven dynamic priorities, and model aliases backed
-by one or more sources. Alias IDs may express tiers such as L0-L3 or uses such as
-deepseek-v4.1-flash. [Model selection](../model-routing/spec.md) owns their behavior,
-including time-based schedules.
+rule-driven dynamic priorities, and model aliases backed by explicit concrete
+candidates. Alias IDs such as L0, L1, coding, or deepseek-v4.1-flash are arbitrary
+user-defined names with no built-in meaning. [Model selection](../model-routing/spec.md)
+owns candidate validation, selection, and time-based schedules.
 
 Agent provider configuration and model proxying are independent capabilities.
 An agent target may contain both upstream provider entries and a tmax proxy entry
@@ -575,8 +575,9 @@ configuration, using qualified `provider-id/model-id` public names. They do not
 require another route resource. Concrete requests pin that offering; unknown or
 unavailable models must not cause registration, fuzzy lookup, or implicit fallback.
 
-A model alias maps a user-defined request model ID and native protocol to
-concrete candidates under [Model selection](../model-routing/spec.md#model-aliases-and-candidate-sources).
+A model alias maps a user-defined request model ID and native protocol to a
+required nonempty list of unique, registered qualified `provider-id/model-id`
+candidates under [Model selection](../model-routing/spec.md#model-aliases).
 It is not a new model, account pool, route resource, or protocol converter.
 The [multi-source example](../model-routing/spec.md#multi-source-model-alias-example)
 shows different upstream IDs behind one request ID. Concrete proxy access still
@@ -775,7 +776,7 @@ The supplementary Web interface must have these task-oriented areas:
 | --- | --- |
 | Overview | Provider-instance problems grouped by service, agent configuration state, proxy health, stale quota information, upcoming known renewal dates |
 | Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota and freshness |
-| Models | Concrete qualified offerings with metadata overrides, capabilities, tiers and schedules; model aliases with public names, candidate sources, and selection previews |
+| Models | Concrete qualified offerings with metadata overrides, capabilities, priorities and schedules; model aliases with public names, explicit candidate lists, and selection previews |
 | Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
 | Proxy | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
 
@@ -844,10 +845,11 @@ agent chooses operations from help and current state.
    native effects follow the authentication failure boundary. Unknown quota or
    renewal must not block otherwise qualified access.
 4. Register concrete offerings and add the target's native provider entries and
-   selected models, default, and native roles through CLI operations. A tier may
-   be resolved for an inspected target before choosing its concrete default.
-   Upstream entries need no proxy or model alias. Proxy entries can use a single
-   concrete offering; tiers, schedules, and model aliases are optional.
+   selected models, default, and native roles through CLI operations. Inspect a
+   requested concrete model or alias for the target before choosing its default;
+   do not infer a selection from the Agent or model name. Upstream entries need
+   no proxy or model alias. Proxy entries can use a single concrete offering;
+   schedules and model aliases are optional.
 5. For proxy use, explicitly configure, start, and validate the listener. Apply the target's
    desired configuration as a separate operation, optionally preceded by its
    dry run. Report written changes, outstanding native reload, and runtime
@@ -934,7 +936,8 @@ versions and provider-authorized credentials where a provider request is needed:
     Reject conflicting direct selections within a native shared scope; dry runs
     and actual results identify all targets affected by a requested shared-scope switch.
 11. Exercise the [model-selection acceptance boundary](../model-routing/spec.md#acceptance-boundary):
-    catalog refresh, instance-qualified IDs, tier isolation, schedules, and conversation continuity.
+    catalog refresh, instance-qualified IDs, explicit alias candidate lists,
+    schedules, and conversation continuity.
 12. Edit desired configuration through CLI, Web, and the text file without creating
     competing authorities. Detect concurrent edits; keep credentials and runtime
     observations out of ordinary configuration. Inspect native agent configuration
@@ -955,9 +958,11 @@ versions and provider-authorized credentials where a provider request is needed:
     requiring a model alias. Expose concrete proxy access from existing settings
     without storing redundant same-name routes or importing agent state.
 16. Configure a scenario model alias with explicit candidates from two OpenCode
-    Go instances and official DeepSeek. Keep the agent-visible choice stable while
-    new selections use eligible candidates and their exact upstream IDs. Model
-    availability must precede native selection; no selection callback may be assumed.
+    Go instances and official DeepSeek. Require a nonempty, unique list of
+    registered qualified offerings; arbitrary alias names confer no membership.
+    Keep the agent-visible choice stable while new selections use eligible
+    candidates and their exact upstream IDs. Model availability must precede
+    native selection; no selection callback may be assumed.
 17. Exercise the [configuration contract](../configuration/spec.md): persisted
     field validation, reference checks, explicit reload, saved/loaded/applied state
     separation, invalid-file startup, and concurrent-write rejection. Configure
@@ -979,11 +984,12 @@ versions and provider-authorized credentials where a provider request is needed:
     after a shared authorization changed; expose affected consumers and qualified
     recovery without claiming old authorization survived a failed local commit.
 21. Complete the first usable-agent path without a model alias, an inferred
-    tier, or an automatic paid probe. Resume after cancelled authentication,
+    model selection, or an automatic paid probe. Resume after cancelled authentication,
     a saved-but-not-active revision, or an agent awaiting reload without
     duplicating providers, overwriting native changes, or repeating completed writes.
-    Discover custom integration choices without catalog access, and preview a
-    tier for an unsaved native target without a placeholder model selection.
+    Discover custom integration choices without catalog access, and inspect a
+    requested concrete model or alias for an unsaved native target without a
+    placeholder model selection.
     Register a native login source before model/default completion without native
     writes, implicit login, or proxy startup.
 22. Follow the [diagnostics acceptance boundary](../diagnostics/spec.md#observable-acceptance):

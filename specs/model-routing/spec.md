@@ -1,7 +1,7 @@
 # Model selection and priority rules
 
 This specification owns model-catalog integration, concrete model references,
-model aliases, tiers, priority-rule evaluation, and selection continuity.
+model aliases, priority-rule evaluation, and selection continuity.
 [Input values and acquisition](inputs/spec.md#input-values-and-acquisition) owns
 the facts used by quota and reset rules. [Product](../product/spec.md) owns
 provider instances, Agent provider configuration, the model proxy, and security. Shared terms are in
@@ -11,8 +11,8 @@ specific snapshot, native client, operation, and provider authorization exercise
 
 The [configuration contract](../configuration/spec.md) owns private persistence of
 these rules and supplies a [complete example](../configuration/example.toml).
-Callers manage providers, models, tiers, priorities, schedules, named quota/reset
-rules, alias candidate sources, and target selections through explicit CLI
+Callers manage providers, models, priorities, schedules, named quota/reset
+rules, explicit alias candidates, and target selections through explicit CLI
 arguments; they need not author TOML, JSON, or YAML documents. Management changes follow the
 [CLI dry-run and execution contract](../cli/spec.md#dry-run-and-execution):
 optional `--dry-run` assesses current effects without mutation, reservation,
@@ -70,7 +70,7 @@ corresponding explicit configuration operation and show affected references.
 The catalog reference and canonical model identity must never replace local IDs.
 
 Provider integration, region/endpoints, authentication, optional subscription
-data, enabled-model selection, tiers, priorities, schedules, input declarations,
+data, enabled-model selection, priorities, schedules, input declarations,
 and priority rules are local settings, not fields inherited from models.dev.
 Endpoint consumers use the
 [integration resolver](../integrations/spec.md#endpoint-resolution), not metadata
@@ -117,7 +117,7 @@ explicit operation with the same impact reporting and current validation of
 existing overrides and model references.
 
 Refresh must preserve local IDs, integration, region/endpoints, authentication,
-subscription information, overrides, enabled models, tiers, priorities,
+subscription information, overrides, enabled models, priorities,
 schedules, input declarations, and priority rules. New directory entries are
 suggestions, not automatically enabled route candidates. The `api`, `env`, and
 `npm` metadata must not redirect existing credentials, read secrets, install
@@ -154,29 +154,23 @@ remain the permitted forwarding transformations under the
 Each model offering must have a stable local identity, provider instance, and
 exact upstream model ID, unique within that instance's namespace. Multiple native
 protocols may serve the offering with different capabilities and limits; protocol
-is not another component of identity. Tier and priority settings apply to the
+is not another component of identity. Priority settings apply to the
 offering and must survive catalog refresh. Different instances serving the same
 upstream model are distinct offerings with independent settings, even when both
 use the same catalog entry. Choosing an offering also chooses its authorization.
 
 Model IDs and capability metadata follow the catalog and evidence rules above.
-Discovery must not guess IDs or overwrite user-assigned tiers and priorities.
+Discovery must not guess IDs or overwrite user-assigned priorities.
 
-The user must be able to assign L0, L1, L2, or L3, or leave a model unclassified.
-L0 denotes the user's lowest-cost class and L3 the flagship class. L1 and L2 are
-intermediate classes whose placement the user controls. The product must not
-infer tiers from model names, reasoning effort, or provider subscription level.
-Time-dependent pricing must not automatically reclassify a model.
 
 Each offering must have an integer base priority, optional calendar overrides,
 and an optional ordered list of named [priority rules](#priority-rules). Higher
-priority means preferred, not a higher tier, a traffic weight, or a lower measured
-price. Zero and negative priorities remain eligible; disabling is a separate
-action. The initial base priority is zero. Priorities compare only among
-candidates of the requested alias. A high-priority L0 offering must not
-enter an L3 tier-based alias.
+priority means preferred, not a traffic weight or a lower measured price.
+Zero and negative priorities remain eligible; disabling is a separate action.
+The initial base priority is zero. Priorities compare only among the requested
+alias's explicit candidates and never add another offering to that list.
 
-Tier assignment, priority changes, and disable/remove actions must report
+Candidate edits, priority changes, and disable/remove actions must report
 which model aliases, Agent selections, and bound sessions they affect; optional
 `--dry-run` previews those effects. Distinguish new-selection changes from
 activation that blocks existing sessions under the
@@ -328,7 +322,7 @@ Historical evidence must obey the [diagnostic allowlist](../diagnostics/spec.md#
 
 An unknown input deactivates only dependent priority rules. A failed acquisition
 alone does not make an existing applicable head unknown or extend its expiry.
-Neither condition changes the offering's tier, enablement, candidate membership,
+Neither condition changes the offering's enablement, candidate membership,
 or authorization. A manual quota value, a reset announcement, or the act of
 matching a rule must not create quota-exhaustion exclusions, verify recovery, or
 authorize replay.
@@ -400,33 +394,30 @@ defaults. A disabled, unavailable, incompatible, or unknown offering must fail
 rather than search another provider, enroll a catalog model, or create
 configuration from a request.
 
-## Model aliases and candidate sources
+## Model aliases
 
 | Property | Contract |
 | --- | --- |
-| Public identity | Exact user-defined request model ID within a native protocol; it need not equal a tier, catalog model ID, or candidate's upstream model ID. |
+| Public identity | Exact user-defined request model ID within a native protocol; it need not equal a catalog model ID or candidate's upstream model ID. |
 | Meaning | A proxy mapping to one or more concrete offerings, not a new trained model, proof of identical weights or release versions, or protocol conversion. |
 | Definition | One shared [model-alias declaration](../configuration/spec.md#model-aliases), managed by [`model alias` commands](../cli/models/aliases/spec.md#model-alias-commands); no separate mapping, route, publication, or account-pool resource. |
 
-Candidate source must be either a tier or an explicit set of qualified concrete
-model names. These are alternatives, not lists that must be synchronized. Candidates
-must not be bare provider IDs or other model aliases. A one-candidate alias
-is allowed for a chosen public name, but it is never required to use a concrete model.
+Each alias must explicitly list one or more registered qualified concrete model
+names. The list must be nonempty and unique. Candidates must not be bare provider
+IDs or other model aliases. A one-candidate alias is allowed for a chosen public
+name, but an alias is never required to use a concrete model.
 
-Names match exactly: L0 is distinct from l0. The L0-L3 presets select their
-corresponding tiers, without inferring membership or enrolling unclassified models.
-The default L0 setup assigns L0 to chosen offerings and publishes the alias.
-Its candidates are precisely those offerings before eligibility filtering.
-New models and models of newly added instances remain unclassified.
+Names match exactly: `L0` is distinct from `l0`. Names such as `L0`, `L1`, and
+`coding` have no built-in classification, rank, preset, or membership behavior.
+The caller chooses every candidate; matching model names, catalog metadata,
+provider plans, or priority scores must not infer membership.
 
-An explicit-candidate alias does not change membership when a model's
-tier changes. A tier-based alias does, with affected membership reported
-by the operation and its optional dry run. A custom ID such as cheap may select
-L0, while a scenario-specific ID may explicitly select offerings from several
-services regardless of their assigned tiers. Unavailability must not expand
-either source to unconfigured candidates or other tiers.
+Adding a model or provider does not enroll it in an existing alias. Priority,
+schedule, and rule changes do not edit candidate lists. An unavailable candidate
+must not expand selection to an unconfigured offering. Explicit candidate edits
+report affected definitions and bound sessions under the continuity rules.
 
-Tiers, priorities, schedules, and ordered priority rules remain user-wide, not
+Priorities, schedules, and ordered priority rules remain user-wide, not
 overridden per Agent, project, or model alias. Model aliases are shared within
 their native-protocol scope. Compatibility and upstream authorization filter
 eligibility, not preference scores; there are no per-client model permissions.
@@ -478,7 +469,7 @@ missing.
 flowchart TB
     Request["Incoming request model: public ID and native protocol"] --> Kind{"Concrete or alias?"}
     Kind -->|Concrete| Fixed["Resolve its one qualified concrete offering"]
-    Kind -->|Alias| Candidates["Expand the alias's tier or explicit concrete candidates"]
+    Kind -->|Alias| Candidates["Resolve the alias's explicit concrete candidates"]
     Fixed --> Eligible["Check native protocol, capabilities, and authorization"]
     Candidates --> Eligible
     Eligible --> Model["Keep concrete fixed; select an alias candidate by effective priority"]
@@ -536,8 +527,8 @@ opted-in service acquisition may publish facts independently under the input
 authority; request admission neither starts it nor waits for it.
 
 Known unavailable candidates may be skipped before dispatch. If no candidate
-remains, return an actionable unavailable result; do not upgrade tiers or use
-an unconfigured instance. Once upstream execution starts, this feature does not
+remains, return an actionable unavailable result; do not use an unconfigured
+offering or instance. Once upstream execution starts, this feature does not
 replay the request on another model or authorization after an error or partial stream.
 
 Local capacity shortage follows
@@ -572,7 +563,7 @@ freshness and reset semantics must be qualified by the provider integration.
 Unknown, stale, estimated, or manually entered quota must not establish automatic
 exhaustion, and a failed usage refresh must not disable access. A generic rate-limit
 or network error is not proof of depleted subscription quota. These checks change
-eligibility, never tier or effective priority, and do not authorize hidden replay.
+eligibility, never effective priority or membership, and do not authorize hidden replay.
 Exhausted included allowance alone is not proof that upstream requests are blocked:
 the provider may permit paid continuation. Exclusion requires scoped evidence of
 unavailable access, not a guess about billing policy. Do not query or model Extra
@@ -604,9 +595,9 @@ A verified new session allows a new selection; changing the clock or refreshing
 an input does not establish one.
 
 Activation must block affected bound sessions, without reassignment, when their
-retained candidate leaves the alias's explicit candidate set or selected
-tier, the alias is disabled, or that definition's effective continuity
-changes. A disabled destination, removed upstream authorization, incompatible
+retained candidate leaves the alias's explicit list, the alias is disabled, or
+that definition's effective continuity changes. A disabled destination, removed
+upstream authorization, incompatible
 region/protocol/base change, or another incompatible provider/alias edit
 likewise blocks continuation rather than silently moving the session. Changes to
 another candidate do not block an otherwise compatible retained destination.
@@ -655,11 +646,11 @@ session identity from prompt text or reconstruct conversation history.
 
 ## Agent model configuration and user experience
 
-Tier and priority metadata must remain visible when configuring native upstream
-entries. A user can select a concrete offering without creating a model alias
-or running the proxy. A no-inference tier preview may suggest one concrete
-offering under current rules, but is not dynamic routing, a mutation, or a
-reservation. An explicit operation selects that provider entry and model.
+Priority metadata must remain visible when configuring native upstream entries.
+A user can select a concrete offering without creating a model alias or running
+the proxy. A no-inference alias preview may suggest one concrete offering under
+current rules, but is not dynamic native routing, a mutation, or a reservation.
+An explicit operation selects that provider entry and model.
 The adapter maps them into native provider/model fields and credential scope;
 it must not assume native support for tmax's qualified-name syntax or send a
 model-alias ID upstream without resolving a concrete offering. Time boundaries, input facts, and priority evaluation never
@@ -680,7 +671,7 @@ not a new upstream provider and need not have the same spelling in every agent.
 Agent adapters must distinguish their display syntax from the transmitted model ID.
 
 The Models view must distinguish concrete offerings from model aliases.
-Summaries show their qualified identities, tier or candidate source, and
+Summaries show their qualified identities, explicit candidates, and
 availability. Explicit detail and explanation reads expose metadata provenance,
 effective capabilities, base/effective priority, calendar fallback, and the
 [rule explanation](#rule-evaluation-and-explanation). Concrete inspection covers
@@ -694,17 +685,23 @@ reasons, not target permissions. Calendar/gate previews show the
 saved zone and UTC offset, separately from input validity/horizon boundaries.
 An acquisition timer does not promise a future fact or priority change.
 
-CLI and Web must provide a no-inference selection preview for a supplied instant,
-concrete model or model alias, and any known client requirements. `model explain ID
---protocol P` works for a public proxy model without an Agent. Optional paired
-`--target TARGET --agent-provider NAME` supplies native entry context: the ID is
-upstream-local for an upstream source or public for a proxy source, and need not
-already be selected there. This is configuration/compatibility advice, not
-permission. Tier advice retains its declared-target or native-Agent/path scope.
-Capture configuration, metadata, input heads, and context coherently for the
-selected file or loaded state; disclose their revisions and the observation/read
-instant. Use the read instant as `T` unless `--at` supplies one explicitly.
-Every candidate and rule in that preview uses the same `T`.
+CLI and Web must provide a no-inference selection preview for an explicit model
+ID, native protocol, supplied instant, and any known client requirements. The
+[CLI explanation contract](../cli/models/spec.md#model-explanation) owns operands
+and result fields.
+
+| Context | Model identity and scope |
+| --- | --- |
+| No Agent | Public qualified concrete or alias ID; assess proxy requirements. |
+| Declared target without a native entry | Public ID; assess the target's native compatibility without requiring saved selections. |
+| Declared native entry | Upstream-local model ID for an upstream source; public ID for a proxy source. The model need not already be selected there. |
+| Undeclared Agent/path | Public ID and explicitly inspected native scope; do not register or import the target. |
+
+This is configuration/compatibility advice, not permission. Capture
+configuration, metadata, input heads, and context coherently for the selected
+file or loaded state; disclose their revisions and the observation/read instant.
+Use the read instant as `T` unless `--at` supplies one explicitly. Every candidate
+and rule in that preview uses the same `T`.
 
 `--at` evaluates only held facts that are applicable at that supplied instant.
 It must not retrieve old input heads, infer past declarations or identities,
@@ -732,11 +729,10 @@ verified.
 
 ## Pricing boundaries
 
-L0 expresses a user-configured cheapest-model role, not a claim of globally
-minimal bill for every request. Input, output, cache-hit, cache-storage, currency,
-context-length, and subscription charging rules can make cost incomparable.
-Priority schedules encode the user's choice without needing predicted token use.
-L3 likewise represents a user-curated flagship class, not a benchmark ranking.
+An alias name does not claim a globally minimal bill or a benchmark ranking.
+Input, output, cache-hit, cache-storage, currency, context-length, and subscription
+charging rules can make cost incomparable. Priority schedules encode the user's
+choice without needing predicted token use.
 
 A priority rule applies to a provider instance's model offering. A DeepSeek API
 promotion must not be copied to a reseller, another account's negotiated plan, or
@@ -750,19 +746,20 @@ This is a user-defined illustration, not a provider price comparison or an
 integration support claim. The configured instance IDs are deepseek and bigmodel;
 their registered upstream model IDs are deepseek-flash and glm-5.3-flash. Both
 instances are assumed authorized and qualified for the requested protocol. The
-alias L0 selects the L0 tier; the example schedule zone is Asia/Shanghai.
+alias `L0` explicitly lists both offerings; the example schedule zone is
+Asia/Shanghai. `L0` is an arbitrary public name, not a built-in role.
 
-| Qualified model name | Tier | Base priority | Daily override |
-| --- | --- | --- | --- |
-| deepseek/deepseek-flash | L0 | 60 | 00:00 inclusive to 08:00 exclusive: 100 |
-| bigmodel/glm-5.3-flash | L0 | 80 | None |
+| Qualified model name | Base priority | Daily override |
+| --- | --- | --- |
+| deepseek/deepseek-flash | 60 | 00:00 inclusive to 08:00 exclusive: 100 |
+| bigmodel/glm-5.3-flash | 80 | None |
 
 A new session at 07:59 selects deepseek/deepseek-flash; at 08:00 a new session
 selects bigmodel/glm-5.3-flash. The client-facing ID remains L0. Upstream requests
 use deepseek-flash and glm-5.3-flash respectively, without the tmax provider prefix.
 The first session retains its original selection. Adding a second DeepSeek account
 creates deepseek-2 with a distinct deepseek-2/deepseek-flash offering. That offering
-can have its own tier and schedule; it enters L0 only after explicit classification.
+can have its own priority and schedule; it enters `L0` only through an explicit candidate edit.
 
 Both DeepSeek instances can reference the models.dev deepseek entry. The current
 directory's deepseek-flash upstream ID and its DeepSeek V4.1 Flash display/canonical
@@ -866,8 +863,9 @@ error after execution starts does not replay on a sibling.
 
 ## Acceptance boundary
 
-1. Publish L0-L3 and a scenario-specific model alias, preserve public IDs across
-   scheduled selection changes, and forward each candidate's exact upstream model ID.
+1. Publish arbitrary model-alias IDs such as `L0` and `coding` with explicit
+   candidates, preserve those IDs across scheduled selection changes, and forward
+   each candidate's exact upstream model ID. No alias name supplies a preset.
 2. With no matching signal rule, prefer a lower-base-priority offering during
    its configured calendar override and return to the fallback order at the exact
    exclusive end. Exercise multiple daily windows, weekdays, weekends, date
@@ -875,11 +873,13 @@ error after execution starts does not replay on a sibling.
    both daylight-saving transitions.
 3. Reject overlapping same-precedence rules and invalid zones. Equal priorities
    must select the same offering regardless of catalog iteration order or local-ID rename.
-4. Keep tier membership stable when priorities change. An empty L3 alias must
-   fail rather than select an available L0 offering or another wire protocol.
+4. Keep candidate membership stable when priorities change. Reject a missing,
+   empty, duplicate, or unregistered alias candidate list as invalid configuration.
+   A valid alias with no eligible candidate must fail rather than select an
+   unconfigured offering or another wire protocol.
 5. Exercise fixed concrete access and one- or multi-candidate model aliases.
-   Unclassified new instances must not enter L0; explicitly enrolled instances may
-   rank independently without retargeting sessions or merging catalog identities.
+   New instances must not enter an existing alias automatically; explicitly added
+   instances may rank independently without retargeting sessions or merging identities.
 6. Keep streaming, subsequent tool turns, and concurrent first turns on one
    conversation destination across a time boundary. Separate unrelated tools'
    conversations through qualified identifiers/scope, never the shared key or
@@ -910,7 +910,7 @@ error after execution starts does not replay on a sibling.
     model IDs rather than display or canonical IDs. Keep custom models possible
     without a directory entry, and missing metadata unknown rather than free or supported.
 12. Refresh the catalog while preserving local IDs, credentials, endpoints,
-    overrides, model enablement, tiers, schedules, input declarations, and ordered
+    overrides, model enablement, explicit alias candidates, schedules, input declarations, and ordered
     priority rules. A failed refresh or missing entry must be visible without
     deleting configured access or retargeting inference.
 13. Use the same offering priorities, alias definition, and definition-owned
@@ -963,14 +963,13 @@ error after execution starts does not replay on a sibling.
     Defaults/roles remain `{ provider, id, protocol }` references to selected
     native entries. Require actual independent-context qualification for stateless
     use, and safe conversation identity for session-stable alias forwarding.
-24. Remove a retained candidate through an explicit candidate edit and through
-    exit from an alias's selected tier. On activation, block only the
-    affected bound sessions without reassigning them; unaffected retained
-    destinations continue. Disable an alias or change that definition's
+24. Remove a retained candidate through an explicit candidate edit. On activation,
+    block only affected bound sessions without reassigning them; unaffected
+    retained destinations continue. Disable an alias or change that definition's
     effective continuity and block its affected bound sessions. Preserve in-flight
     snapshots and historical selection evidence in each case. Re-add the candidate,
-    restore the tier, re-enable the alias, or restore continuity: none may
-    silently revive the blocked old bindings.
+    re-enable the alias, or restore continuity: none may silently revive the blocked
+    old bindings.
 25. Add candidates, edit priorities/schedules/rules, or update/clear/expire input
     facts without changing established destinations or blocking bindings merely
     because ranking changed. Only verified new sessions use the changed

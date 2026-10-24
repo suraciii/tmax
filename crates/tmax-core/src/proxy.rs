@@ -657,15 +657,9 @@ fn binding_blocker(
         if alias.continuity.as_deref().unwrap_or("session") != b.continuity {
             return Some("continuity_changed");
         }
-        if alias
-            .candidates
-            .as_ref()
-            .is_some_and(|v| !v.contains(&format!("{}/{}", b.provider, b.model)))
-            || alias
-                .tier
-                .as_ref()
-                .is_some_and(|v| m.tier.as_ref() != Some(v))
-        {
+        if !alias.candidates.iter().any(|candidate| {
+            candidate.split_once('/') == Some((b.provider.as_str(), b.model.as_str()))
+        }) {
             return Some("candidate_removed");
         }
     } else if b.public_id != format!("{}/{}", b.provider, b.model) {
@@ -1585,7 +1579,6 @@ mod tests {
                 crate::config::Model {
                     enabled: true,
                     priority,
-                    tier: Some("L0".into()),
                     ..Default::default()
                 },
             );
@@ -1612,8 +1605,7 @@ mod tests {
         config.model_aliases.push(crate::config::ModelAlias {
             id: "dynamic".into(),
             protocol: "chat-completions".into(),
-            tier: Some("L0".into()),
-            candidates: None,
+            candidates: vec!["p/m".into(), "q/m".into()],
             enabled: true,
             continuity: None,
         });
@@ -1641,6 +1633,111 @@ mod tests {
         runtime.activate_bindings(new, false).unwrap();
         *authority = Some(Arc::new(test_snapshot(new, revision)));
     }
+    #[test]
+    fn arbitrary_aliases_use_only_explicit_members_across_calendar_boundaries() {
+        let (_temporary, runtime, original) = fixture();
+        let mut config = original.clone();
+        let provider = config.providers.get_mut("p").unwrap();
+        let scheduled = provider.models.get_mut("m").unwrap();
+        scheduled.priority = 0;
+        scheduled.timezone = Some("Etc/UTC".into());
+        scheduled.schedule = vec![crate::config::Schedule {
+            priority: 20,
+            window: crate::config::TimeWindow {
+                weekdays: Some(vec!["sat".into()]),
+                start: Some("00:00".into()),
+                end: Some("08:00".into()),
+                ..Default::default()
+            },
+        }];
+        provider.models.insert(
+            "outside".into(),
+            crate::config::Model {
+                priority: 999,
+                ..Default::default()
+            },
+        );
+        for (id, members) in [
+            ("L0", vec!["p/m", "q/m"]),
+            ("L1", vec!["p/m"]),
+            ("my.custom-name", vec!["q/m"]),
+        ] {
+            config.model_aliases.push(crate::config::ModelAlias {
+                id: id.into(),
+                protocol: "chat-completions".into(),
+                candidates: members.into_iter().map(String::from).collect(),
+                enabled: true,
+                continuity: None,
+            });
+        }
+        crate::config::validate(&config).unwrap();
+        publish(&runtime, &original, &config, "explicit-calendar");
+        let before = crate::inputs::instant("2026-10-24T07:59:59Z").unwrap();
+        let boundary = crate::inputs::instant("2026-10-24T08:00:00Z").unwrap();
+        let select = |id, at| {
+            crate::routing::select(&runtime.store, &config, id, "chat-completions", at).unwrap()
+        };
+        let first = select("L0", before);
+        assert_eq!(first.provider, "p");
+        assert_eq!(first.priority, 20);
+        assert_eq!(
+            first.evidence["priority_evaluations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let next = select("L0", boundary);
+        assert_eq!(next.provider, "q");
+        assert_eq!(next.priority, 1);
+        assert_eq!(select("L1", boundary).provider, "p");
+        assert_eq!(select("my.custom-name", before).provider, "q");
+        assert_eq!(select("p/m", boundary).provider, "p");
+        assert_eq!(select("p/outside", boundary).model, "outside");
+        assert!(
+            crate::routing::select(&runtime.store, &config, "L3", "chat-completions", before)
+                .is_err()
+        );
+        assert!(
+            crate::routing::select(&runtime.store, &config, "L0", "responses", before).is_err()
+        );
+        let mut disabled = config.clone();
+        for provider in ["p", "q"] {
+            disabled
+                .providers
+                .get_mut(provider)
+                .unwrap()
+                .models
+                .get_mut("m")
+                .unwrap()
+                .enabled = false;
+        }
+        assert_eq!(
+            crate::routing::select(
+                &runtime.store,
+                &disabled,
+                "L0",
+                "chat-completions",
+                boundary
+            )
+            .unwrap_err()
+            .code,
+            "model_unavailable"
+        );
+        assert_eq!(
+            crate::routing::select(
+                &runtime.store,
+                &disabled,
+                "p/outside",
+                "chat-completions",
+                boundary
+            )
+            .unwrap()
+            .model,
+            "outside"
+        );
+    }
+
     #[tokio::test]
     async fn retained_session_explanation_survives_deleted_candidates_and_never_clears_blockers() {
         let (directory, runtime, config) = fixture();
@@ -1972,16 +2069,31 @@ mod tests {
             )
             .unwrap();
         let mut removed = config.clone();
-        removed
-            .providers
-            .get_mut("p")
-            .unwrap()
-            .models
-            .get_mut("m")
-            .unwrap()
-            .tier = None;
+        removed.model_aliases[0].candidates = vec!["q/m".into()];
         publish(&runtime, &config, &removed, "removed");
         publish(&runtime, &removed, &config, "restored");
+        let store = runtime.store.clone();
+        let bindings_before = std::fs::read(store.root.join("session-bindings.json")).unwrap();
+        let mut legacy = store.read_json::<Value>("routing-state.json").unwrap();
+        for view in ["saved", "loaded"] {
+            for provider in legacy[view]["config"]["providers"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                provider["models"]["m"]["tier"] = json!("L0");
+            }
+            legacy[view]["config"]["model_aliases"][0]["tier"] = json!("L0");
+            legacy[view]["config"]["model_aliases"][0]["candidates"] = Value::Null;
+        }
+        store.write_json("routing-state.json", &legacy).unwrap();
+        drop(runtime);
+        crate::routing::reconcile(&store, &config, &config, &[]).unwrap();
+        assert_eq!(
+            std::fs::read(store.root.join("session-bindings.json")).unwrap(),
+            bindings_before
+        );
+        let runtime = Runtime::new(store, "after-historical-cutover".into(), None).unwrap();
         let error = runtime
             .choose(
                 &test_snapshot(&config, "restored"),
@@ -2215,8 +2327,7 @@ mod tests {
         provider.integration = Some("opencode-go".into());
         provider.endpoints.clear();
         provider.models.get_mut("m").unwrap().overrides.tool_call = Some(false);
-        go.model_aliases[0].tier = None;
-        go.model_aliases[0].candidates = Some(vec!["p/m".into()]);
+        go.model_aliases[0].candidates = vec!["p/m".into()];
         go.model_aliases[0].continuity = Some("stateless".into());
         publish(&runtime, &config, &go, "go-rejections");
         runtime.open();

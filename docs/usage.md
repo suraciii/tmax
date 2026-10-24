@@ -38,6 +38,23 @@ string remain explicit values; `--clear FIELD` restores inheritance/defaults.
 For example, supported fields include `--set enabled false`,
 `--set priority 0`, and `--set overrides.name ""`.
 
+### Existing configuration with removed tier fields
+
+The current `~/.tmax/tmax.toml` authority strictly rejects the former per-model
+and model-alias `tier` fields; tmax does not automatically convert or rewrite
+that authority. If you choose to update it manually, remove each per-model `tier` field and replace each
+alias's `tier` field with a nonempty `candidates` list of exact, already registered
+`provider-id/model-id` names that you choose. Keep the alias ID and protocol.
+Names such as `L0`, `L1`, and `coding` have no built-in meaning or membership.
+Keep offering priorities, time schedules, and ordered rules unchanged. Distinct
+native/vendor service tiers, pricing/context tiers, and subscription-plan metadata
+are not removed fields.
+
+Do not edit or delete routing-state or session JSON for this conversion. tmax
+normalizes supported historical operational records internally without read-time
+writes; corrupt records fail closed. This does not convert the desired authority,
+clear retained sessions, or remove permanent continuation blockers.
+
 ## DeepSeek model discovery
 
 For an official DeepSeek provider whose key is already configured, explicitly
@@ -105,17 +122,25 @@ and keep a past date distinct from an unknown date.
 ## Explaining models and applying metadata
 
 Use `tmax model explain ID --protocol PROTOCOL` for an effect-free explanation of
-a public model. To assess a native entry, add both
-`--target TARGET --agent-provider ENTRY`. Resolve a tier in a declared target with
-`tmax model explain --tier L0 --protocol PROTOCOL --target TARGET`, or inspect an
-undeclared native path with `--agent AGENT --path PATH`. For example:
+a public qualified concrete or alias ID. Add `--target TARGET` to assess it for a
+declared native target, optionally with `--agent-provider ENTRY` for an existing
+entry. For an undeclared native scope, use `--agent AGENT --path PATH` instead;
+this does not register or import the scope. Do not mix the two context forms.
+With an upstream-source entry, use its exact unqualified upstream model ID;
+without an entry, concrete IDs must be qualified. No saved native model, default,
+or role selection is required. For example:
 
 ```sh
-tmax model explain --tier L0 --protocol chat-completions --target pi-main
-tmax model explain --tier L0 --protocol chat-completions \
+tmax model explain L0 --protocol chat-completions --target pi-main
+tmax model explain L0 --protocol chat-completions \
   --agent omp --path "$HOME/.omp/agent"
 tmax model explain PUBLIC_MODEL --protocol responses --state loaded
 ```
+
+These examples assume the alias `L0` and target `pi-main` already exist. The alias
+uses only its configured candidates; its name supplies no candidate selection.
+Explanation data identifies `proxy`, `agent_target`, `agent_provider`, or
+`native_scope` context and reports `requested` as exactly `{id, protocol}`.
 
 `--state loaded` explains the resident loaded view, not pending saved edits. Model
 explanation does not retrieve secrets, sign in, run inference, reserve a session,
@@ -131,12 +156,13 @@ tmax model explain PUBLIC_MODEL --protocol PROTOCOL --session HANDLE
 
 The command reports the retained destination or blocker without fresh ranking;
 it does not reserve a session, migrate a conversation, or unblock continuation.
-Session mode rejects an upstream-source entry and tier context.
+The handle must match the public model ID and protocol. Session mode rejects an
+upstream-source entry.
 
 Catalog adoption is also explicit. `catalog apply --revision REVISION` applies a
 validated downloaded snapshot; its preview/result compares accepted and candidate
 effective metadata after overrides and reports affected concrete selections,
-explicit/tier aliases, and native projections. Review `reapply_required`, blocked
+aliases, and native projections. Review `reapply_required`, blocked
 unrepresentable facts, and any proxy-route revalidation even when native files are
 unchanged. The result distinguishes accepted-before, candidate, and accepted-after
 revisions; a preview does not advance accepted metadata. Activation reports the
