@@ -100,21 +100,27 @@ effect-free cancellation or a replay of secret bytes.
 | --- | --- | --- |
 | `0` | Completed request or ready dry-run | Requested persistence and mandatory safety effects completed, or effect-free read/dry-run completed. Ordinary desired-state edits may report failed/unavailable background activation as a warning; success never implies loaded or native readiness. Reads may report unhealthy, stopped, stale, or unknown state. |
 | `2` | Invalid input | Arguments, schema fields/types/references, TOML syntax, unsupported version, or invalid option combination rejected before effects. Post-effect failure uses 4. |
-| `3` | Action required | Protected input/unlock, interaction, qualified scope, complete target selections, no active requests, current-input retry, resident compatibility/identity, free consistent endpoint, explicit restart, or native reload is needed. Use blocked before effects, incomplete when earlier boundaries completed. |
+| `3` | Action required | Explicit key/native input, interaction, qualified scope, complete target selections, no active requests, current-input retry, resident compatibility/identity, free consistent endpoint, explicit restart, or native reload is needed. Use blocked before effects, incomplete when earlier boundaries completed. |
 | `4` | Operation failure | Requested I/O/refresh/probe/explicit activation/lifecycle/autostart/native work or mandatory safety effects failed or have partial/uncertain effects, including native login before local failure. Retain any completed save rather than claiming an effect-free failure. |
 | `5` | Cancelled without effects | Cancellation known to precede every local/native effect. Partial/uncertain native or other effects use 4. |
 
 Common stable codes are `ok`, `dry_run_ready`, `dry_run_blocked`,
 `invalid_arguments`, `invalid_configuration`, `inputs_changed`,
-`login_source_required`, `interactive_required`, `credential_unavailable`, `unsupported_protected_input`,
+`login_source_required`, `interactive_required`, `credential_unavailable`,
+`storage_version_unsupported`, `storage_record_invalid`,
+`unsupported_protected_input`,
 `unsupported_protected_output`, `target_incomplete`, `resident_reused`, `resident_incompatible`,
 `resident_identity_unavailable`, `endpoint_occupied`, `endpoint_conflict`,
 `active_requests`, `restart_required`, `awaiting_native_reload`, `saved_not_active`,
 `partial_native_apply`, `recovery_required`, `observation_failed`, `probe_failed`,
 `operation_failed`, and `cancelled`. Scoped provider reasons are not extra exit
 categories; messages are not identifiers. Missing declarations/invalid references
-are schema errors. Valid incomplete targets, locked credentials, or unqualified
-external combinations remain availability blockers, not invented access.
+are schema errors. Valid incomplete targets, unavailable credentials, or
+unqualified external combinations remain availability blockers, not invented access.
+Unsupported storage versions return `storage_version_unsupported`; malformed or
+noncurrent record shapes return `storage_record_invalid`. Such files remain
+unchanged; re-enter keys through normal setup. Unsupported recovery contents are
+unavailable to current recovery operations.
 
 Ordinary desired-state edits complete successfully after validation, persistence,
 and required safety/identity effects. Attempt whole-file background activation

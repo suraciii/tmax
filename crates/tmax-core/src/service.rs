@@ -47,12 +47,13 @@ mod windows_startup;
 #[path = "service/windows_web.rs"]
 mod windows_web;
 
-const MANAGEMENT_PROTOCOL: &str = "tmax-control/1";
+const MANAGEMENT_PROTOCOL: &str = "tmax-control/2";
 const CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
 const CONTROL_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 const WEB_REQUEST_BYTES: usize = 1024 * 1024;
 const CONTROL_SECONDS: u64 = 30;
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Call {
     challenge: String,
     authority: PathBuf,
@@ -61,15 +62,7 @@ struct Call {
     request: Option<Request>,
     revision: Option<String>,
     candidate: Option<Config>,
-    unlock: Option<Vec<u8>>,
     expected_process: Option<String>,
-}
-impl Drop for Call {
-    fn drop(&mut self) {
-        if let Some(unlock) = &mut self.unlock {
-            unlock.zeroize();
-        }
-    }
 }
 #[derive(Serialize, Deserialize)]
 struct Reply {
@@ -281,20 +274,15 @@ impl Resident {
                         .is_some_and(|p| p.key_ref == proxy.key_ref)
                 })
                 .map(|s| s.key.clone());
-            let unlock = self.runtime.unlock.read().expect("unlock lock").clone();
             let key = if retained.is_some() {
                 retained
-            } else if unlock.is_some() {
-                crate::proxy::credential(self.store.clone(), proxy.key_ref.clone(), unlock.clone())
+            } else {
+                crate::proxy::credential(self.store.clone(), proxy.key_ref.clone())
                     .await
                     .ok()
-            } else {
-                None
             };
             self.key_state = if key.as_ref().is_some_and(|k| !k.is_empty()) {
                 "ready"
-            } else if unlock.is_none() {
-                "locked"
             } else {
                 "unavailable"
             }
@@ -333,15 +321,10 @@ impl Resident {
                 .is_some_and(|(config, _)| config.proxy.is_some())
             && self.key_state != "ready";
         Ok(
-            json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"resident":view["resident"],"proxy":view["proxy"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Explicitly restart with protected unlock input, or explicitly replace missing shared-key material")}else{Value::Null}}),
+            json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"resident":view["resident"],"proxy":view["proxy"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Inspect stored shared-key availability; explicitly replace missing or unsupported key material")}else{Value::Null}}),
         )
     }
-    async fn start_inference(
-        &mut self,
-        restart: bool,
-        force: bool,
-        provided_unlock: Option<Zeroizing<Vec<u8>>>,
-    ) -> Result<Value> {
+    async fn start_inference(&mut self, restart: bool, force: bool) -> Result<Value> {
         if let Some(listener) = self.inference.as_ref().filter(|_| !restart) {
             if listener.task.is_finished() {
                 return Err(failure(
@@ -360,11 +343,7 @@ impl Resident {
         })?;
         let requested = address(&proxy.listen, false)?;
         // Validate cold-start credentials before touching an existing listener.
-        let unlock =
-            provided_unlock.or_else(|| self.runtime.unlock.read().expect("unlock lock").clone());
-        let key =
-            crate::proxy::credential(self.store.clone(), proxy.key_ref.clone(), unlock.clone())
-                .await?;
+        let key = crate::proxy::credential(self.store.clone(), proxy.key_ref.clone()).await?;
         if key.is_empty() {
             return Err(failure(
                 "credential_unavailable",
@@ -425,7 +404,6 @@ impl Resident {
                 metadata,
             }));
         }
-        *self.runtime.unlock.write().expect("unlock lock") = unlock;
         self.loaded = Some((current.config, current.revision));
         self.key_state = "ready".into();
         self.runtime.open();
@@ -469,28 +447,17 @@ impl Resident {
     }
 }
 
-async fn rpc_with_unlock(
-    store: &Store,
-    action: &str,
-    request: Option<Request>,
-    revision: Option<String>,
-    unlock: Option<&[u8]>,
-) -> Result<Option<Value>> {
-    rpc_with_candidate(store, action, request, revision, unlock, None).await
-}
 async fn rpc_with_candidate(
     store: &Store,
     action: &str,
     request: Option<Request>,
     revision: Option<String>,
-    unlock: Option<&[u8]>,
     candidate: Option<Config>,
 ) -> Result<Option<Value>> {
     let expected = if action == "status" {
         None
     } else {
-        let Some(identity) = rpc_exchange(store, "status", None, None, None, None, None).await?
-        else {
+        let Some(identity) = rpc_exchange(store, "status", None, None, None, None).await? else {
             return Ok(None);
         };
         if identity["resident"]["reason_code"] == "resident_stopping" {
@@ -517,17 +484,13 @@ async fn rpc_with_candidate(
                 .to_owned(),
         )
     };
-    rpc_exchange(
-        store, action, request, revision, unlock, expected, candidate,
-    )
-    .await
+    rpc_exchange(store, action, request, revision, expected, candidate).await
 }
 async fn rpc_exchange(
     store: &Store,
     action: &str,
     request: Option<Request>,
     revision: Option<String>,
-    unlock: Option<&[u8]>,
     expected_process: Option<String>,
     candidate: Option<Config>,
 ) -> Result<Option<Value>> {
@@ -549,7 +512,6 @@ async fn rpc_exchange(
         request,
         revision,
         candidate,
-        unlock: unlock.map(<[u8]>::to_vec),
         expected_process: expected_process.clone(),
     };
     let bytes = Zeroizing::new(
@@ -641,7 +603,7 @@ async fn rpc(
     request: Option<Request>,
     revision: Option<String>,
 ) -> Result<Option<Value>> {
-    rpc_with_unlock(store, action, request, revision, None).await
+    rpc_with_candidate(store, action, request, revision, None).await
 }
 
 pub async fn status(store: &Store) -> Result<Value> {
@@ -752,7 +714,6 @@ pub async fn preview_activation(store: &Store, config: &Config) -> Result<Value>
         "preview_activation",
         None,
         None,
-        None,
         Some(config.clone()),
     )
     .await?;
@@ -781,19 +742,14 @@ fn retained_session_arguments(request: &Request) -> Result<(&str, &str, &str)> {
         .ok_or_else(|| failure("invalid_arguments", "Retained inspection requires a public model ID, protocol and existing proxy session handle"))
 }
 
-pub async fn control(
-    store: &Store,
-    config: &Config,
-    request: &Request,
-    unlock: Option<&[u8]>,
-) -> Result<Value> {
+pub async fn control(store: &Store, config: &Config, request: &Request) -> Result<Value> {
     let group = request.command.first().map(String::as_str).unwrap_or("");
     let action = request.command.get(1).map(String::as_str).unwrap_or("");
     if action == "status" {
         return status(store).await;
     }
     if group == "model" && action == "probe" {
-        return crate::proxy::probe(store, config, request, unlock).await;
+        return crate::proxy::probe(store, config, request).await;
     }
     if group == "proxy" && action == "autostart" {
         let enabled = match request
@@ -867,40 +823,11 @@ pub async fn control(
             }
         }
         return Ok(
-            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"resident":before["resident"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::proxy::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved; protected unlock may be required","reservation":false,"secret_reads":false}),
+            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"resident":before["resident"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::proxy::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
         );
     }
-    let starts_inference = group == "proxy" && matches!(action, "start" | "restart");
-    match rpc_with_unlock(store, "control", Some(request.clone()), None, unlock).await {
-        Ok(Some(value)) => return maybe_browser(value, request),
-        Ok(None) => {}
-        Err(error) => {
-            // A compatible resident may already hold its unlock. Ask in the
-            // initiating terminal only after credential validation actually
-            // blocks, before start_inference can touch a listener.
-            if starts_inference
-                && unlock.is_none()
-                && error.code == "credential_unavailable"
-                && let Some(provided) = prompt_proxy_unlock(store, request)?
-            {
-                return rpc_with_unlock(
-                    store,
-                    "control",
-                    Some(request.clone()),
-                    None,
-                    Some(&provided),
-                )
-                .await?
-                .ok_or_else(|| {
-                    failure(
-                        "resident_identity_unavailable",
-                        "Resident disappeared before protected startup continuation",
-                    )
-                })
-                .and_then(|value| maybe_browser(value, request));
-            }
-            return Err(error);
-        }
+    if let Some(value) = rpc(store, "control", Some(request.clone()), None).await? {
+        return maybe_browser(value, request);
     }
     if group == "model" && action == "explain" {
         let (id, protocol, session) = retained_session_arguments(request)?;
@@ -925,14 +852,8 @@ pub async fn control(
     }
     #[cfg(unix)]
     validate_control_path(&socket_path(store))?;
-    let prompted = if starts_inference && unlock.is_none() {
-        prompt_proxy_unlock(store, request)?
-    } else {
-        None
-    };
-    let unlock = unlock.or_else(|| prompted.as_deref().map(Vec::as_slice));
-    launch(store, unlock).await?;
-    rpc_with_unlock(store, "control", Some(request.clone()), None, unlock)
+    launch(store).await?;
+    rpc(store, "control", Some(request.clone()), None)
         .await?
         .ok_or_else(|| {
             failure(
@@ -943,19 +864,6 @@ pub async fn control(
         .and_then(|v| maybe_browser(v, request))
 }
 
-fn prompt_proxy_unlock(store: &Store, request: &Request) -> Result<Option<Zeroizing<Vec<u8>>>> {
-    let config = crate::config::load(store)?.config;
-    crate::config::validate(&config)?;
-    let proxy = config.proxy.as_ref().ok_or_else(|| {
-        failure(
-            "proxy_unconfigured",
-            "Configure the proxy explicitly before starting it",
-        )
-    })?;
-    // Missing or malformed encrypted material cannot be repaired by prompting.
-    crate::secrets::check_unlock_entry(store, &proxy.key_ref)?;
-    crate::secrets::unlock(request)
-}
 fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
     if request.command.first().is_some_and(|v| v == "web")
         && request.command.get(1).is_some_and(|v| v == "open")
@@ -978,11 +886,8 @@ fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
 }
 
 #[cfg(unix)]
-async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
-    use std::{
-        io::Write,
-        os::{fd::AsRawFd, unix::process::CommandExt},
-    };
+async fn launch(store: &Store) -> Result<()> {
+    use std::os::unix::process::CommandExt;
     validate_control_path(&socket_path(store))?;
     let _launch = store.lock("resident-launch")?;
     if rpc(store, "status", None, None).await?.is_some() {
@@ -994,48 +899,16 @@ async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
             "Cannot locate the current executable",
         )
     })?;
-    let (mut reader, mut writer) = if let Some(unlock) = unlock {
-        if unlock.len() > 4096 {
-            return Err(failure(
-                "invalid_argument",
-                "Unlock material exceeds the protected-input limit",
-            ));
-        }
-        // Standard-library pipes own both ends and set close-on-exec using the
-        // platform implementation; only the child hook below exposes FD 3.
-        let (reader, writer) = std::io::pipe().map_err(|_| {
-            failure(
-                "resident_launch_failed",
-                "Cannot allocate inherited anonymous unlock pipe",
-            )
-        })?;
-        (Some(reader), Some(writer))
-    } else {
-        (None, None)
-    };
-    let fd = reader.as_ref().map(AsRawFd::as_raw_fd);
     let mut command = Command::new(executable);
     command
         .arg("__resident")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // Only async-signal-safe libc calls between fork and exec. FD 3 is the sole
-    // inherited unlock channel and is never named in argv or the environment.
     unsafe {
         command.pre_exec(move || {
             if libc::setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
-            }
-            if let Some(fd) = fd {
-                if fd != 3 && libc::dup2(fd, 3) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::fcntl(3, libc::F_SETFD, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            } else {
-                libc::close(3);
             }
             Ok(())
         });
@@ -1046,15 +919,6 @@ async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
             "Cannot start the detached resident executable",
         )
     })?;
-    reader.take();
-    if let (Some(mut writer), Some(unlock)) = (writer.take(), unlock) {
-        writer.write_all(unlock).map_err(|_| {
-            failure(
-                "resident_launch_failed",
-                "Cannot deliver protected unlock material to resident",
-            )
-        })?;
-    }
     wait_for_owner(store, child).await
 }
 
@@ -1086,14 +950,8 @@ async fn wait_for_owner(store: &Store, mut child: std::process::Child) -> Result
     ))
 }
 #[cfg(windows)]
-async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
-    use std::{io::Write, os::windows::process::CommandExt};
-    if unlock.is_some_and(|value| value.len() > 4096) {
-        return Err(failure(
-            "invalid_argument",
-            "Unlock material exceeds the protected-input limit",
-        ));
-    }
+async fn launch(store: &Store) -> Result<()> {
+    use std::os::windows::process::CommandExt;
     let _launch = store.lock("resident-launch")?;
     if rpc(store, "status", None, None).await?.is_some() {
         return Ok(());
@@ -1108,35 +966,15 @@ async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
     command
         .arg("__resident")
         .creation_flags(0x00000008 | 0x00000200)
-        .stdin(if unlock.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut child = command.spawn().map_err(|_| {
+    let child = command.spawn().map_err(|_| {
         failure(
             "resident_launch_failed",
             "Cannot start the detached Windows resident executable",
         )
     })?;
-    if let Some(unlock) = unlock {
-        let mut writer = child.stdin.take().ok_or_else(|| {
-            failure(
-                "resident_launch_failed",
-                "Inherited anonymous unlock pipe is unavailable",
-            )
-        })?;
-        writer.write_all(unlock).map_err(|_| {
-            failure(
-                "resident_launch_failed",
-                "Cannot deliver protected unlock material to resident",
-            )
-        })?;
-        // Closing the sole parent writer terminates the bounded child handoff.
-        drop(writer);
-    }
     wait_for_owner(store, child).await
 }
 
@@ -1145,45 +983,16 @@ pub async fn run_resident() -> Result<()> {
 }
 #[cfg(unix)]
 async fn run_owner(autostart: bool) -> Result<()> {
-    use std::{io::Read, os::fd::FromRawFd};
     let store = Store::discover()?;
     validate_control_path(&socket_path(&store))?;
     let Some(ownership) = store.try_lock("resident-owner")? else {
         return Ok(());
     };
-    let unlock = {
-        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-        let valid = unsafe { libc::fstat(3, stat.as_mut_ptr()) } == 0
-            && unsafe { stat.assume_init() }.st_mode & libc::S_IFMT == libc::S_IFIFO;
-        if valid {
-            let mut file = unsafe { std::fs::File::from_raw_fd(3) };
-            let mut bytes = Zeroizing::new(Vec::new());
-            file.by_ref()
-                .take(4097)
-                .read_to_end(&mut bytes)
-                .map_err(|_| {
-                    failure(
-                        "credential_unavailable",
-                        "Cannot read inherited unlock channel",
-                    )
-                })?;
-            if bytes.len() > 4096 {
-                return Err(failure(
-                    "credential_unavailable",
-                    "Inherited unlock material exceeds its limit",
-                ));
-            }
-            Some(bytes)
-        } else {
-            None
-        }
-    };
-    run_owned(store, ownership, unlock, autostart).await
+    run_owned(store, ownership, autostart).await
 }
 
 #[cfg(windows)]
 async fn run_owner(autostart: bool) -> Result<()> {
-    use std::io::Read;
     let store = Store::discover()?;
     let Some(ownership) = store.try_lock("resident-owner")? else {
         return if autostart {
@@ -1195,39 +1004,16 @@ async fn run_owner(autostart: bool) -> Result<()> {
             Ok(())
         };
     };
-    let unlock = if !autostart && control_transport::stdin_is_pipe() {
-        let mut bytes = Zeroizing::new(Vec::new());
-        std::io::stdin()
-            .lock()
-            .take(4097)
-            .read_to_end(&mut bytes)
-            .map_err(|_| {
-                failure(
-                    "credential_unavailable",
-                    "Cannot read inherited unlock channel",
-                )
-            })?;
-        if bytes.len() > 4096 {
-            return Err(failure(
-                "credential_unavailable",
-                "Inherited unlock material exceeds its limit",
-            ));
-        }
-        Some(bytes)
-    } else {
-        None
-    };
-    run_owned(store, ownership, unlock, autostart).await
+    run_owned(store, ownership, autostart).await
 }
 async fn run_owned(
     store: Store,
     ownership: crate::storage::LockGuard,
-    unlock: Option<Zeroizing<Vec<u8>>>,
     autostart: bool,
 ) -> Result<()> {
     let mut listener = control_transport::Listener::bind(&store).await?;
     let process = Uuid::new_v4().to_string();
-    let runtime = Runtime::new(store.clone(), process.clone(), unlock)?;
+    let runtime = Runtime::new(store.clone(), process.clone())?;
     let shutdown = Arc::new(Shutdown::new());
     let state = Arc::new(Mutex::new(Resident {
         store: store.clone(),
@@ -1241,7 +1027,7 @@ async fn run_owned(
         shutdown: shutdown.clone(),
     }));
     if autostart {
-        let result = state.lock().await.start_inference(false, false, None).await;
+        let result = state.lock().await.start_inference(false, false).await;
         match result {
             Ok(value) if value["proxy"]["ready"] == true => {
                 #[cfg(windows)]
@@ -1261,7 +1047,7 @@ async fn run_owned(
                 let _ = listener.release();
                 return Err(failure(
                     "autostart_blocked",
-                    "Autostart did not establish a ready inference listener; inspect saved intent, protected unlock, and endpoint state",
+                    "Autostart did not establish a ready inference listener; inspect saved intent, stored key availability, and endpoint state",
                 ));
             }
             Err(error) => {
@@ -1347,16 +1133,6 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
             "Resident changed after discovery; no control action performed",
         ));
     }
-    if call
-        .unlock
-        .as_ref()
-        .is_some_and(|unlock| unlock.len() > 4096)
-    {
-        return Err(failure(
-            "invalid_argument",
-            "Protected unlock exceeds its limit",
-        ));
-    }
     let final_stop = call.action == "control" && call.request.as_ref().is_some_and(|request| matches!(request.command.as_slice(), [surface, action] if matches!(surface.as_str(), "proxy" | "web") && action == "stop"));
     let stopping = resident.shutdown.stopping.load(Ordering::Acquire);
     let result = if stopping && call.action != "status" && !final_stop {
@@ -1414,13 +1190,7 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
             })(),
             "control" => {
                 if let Some(request) = call.request.take() {
-                    resident_control(
-                        &state,
-                        &mut resident,
-                        request,
-                        call.unlock.take().map(Zeroizing::new),
-                    )
-                    .await
+                    resident_control(&state, &mut resident, request).await
                 } else {
                     Err(failure(
                         "invalid_argument",
@@ -1493,14 +1263,13 @@ async fn resident_control(
     state: &Shared,
     resident: &mut Resident,
     request: Request,
-    unlock: Option<Zeroizing<Vec<u8>>>,
 ) -> Result<Value> {
     let group = request.command.first().map(String::as_str).unwrap_or("");
     let action = request.command.get(1).map(String::as_str).unwrap_or("");
     let force = request.arguments.contains_key("cancel-active");
     match (group, action) {
-        ("proxy", "start") => resident.start_inference(false, force, unlock).await,
-        ("proxy", "restart") => resident.start_inference(true, force, unlock).await,
+        ("proxy", "start") => resident.start_inference(false, force).await,
+        ("proxy", "restart") => resident.start_inference(true, force).await,
         ("proxy", "stop") => {
             let interrupted = resident.runtime.stop(force)?;
             if let Some(surface) = resident.inference.take() {
@@ -1719,21 +1488,6 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
                         }
                     }
                 }
-                if let Some(unlock) = envelope.unlock.take() {
-                    let unlock = Zeroizing::new(unlock);
-                    match protected_form_input(&unlock) {
-                        Ok((file, fd)) => {
-                            request
-                                .arguments
-                                .insert("unlock-fd".into(), vec![fd.to_string()]);
-                            channels.push(file);
-                        }
-                        Err(error) => {
-                            return (StatusCode::BAD_REQUEST, axum::Json(json!({"error":error})))
-                                .into_response();
-                        }
-                    }
-                }
             }
             // Explicit reveal is a separate protected surface; ordinary operation JSON
             // cannot accidentally expose the shared key to inspection or caching.
@@ -1796,12 +1550,7 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
             let Some(proxy) = config.config.proxy else {
                 return (StatusCode::CONFLICT, "Proxy not configured").into_response();
             };
-            let unlock = resident.runtime.unlock.read().expect("unlock lock").clone();
-            match crate::secrets::get(
-                &resident.store,
-                &proxy.key_ref,
-                unlock.as_deref().map(Vec::as_slice),
-            ) {
+            match crate::secrets::get(&resident.store, &proxy.key_ref) {
                 Ok(key) => match std::str::from_utf8(&key) {
                     Ok(key) => axum::Json(json!({"key":key})).into_response(),
                     Err(_) => (StatusCode::CONFLICT, "Key unavailable").into_response(),
@@ -1832,14 +1581,10 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
 struct WebOperation {
     request: Request,
     key: Option<String>,
-    unlock: Option<String>,
 }
 impl Drop for WebOperation {
     fn drop(&mut self) {
         if let Some(value) = &mut self.key {
-            value.zeroize();
-        }
-        if let Some(value) = &mut self.unlock {
             value.zeroize();
         }
     }
@@ -1962,7 +1707,7 @@ fn autostart_status(store: &Store) -> Result<Value> {
     let unit_matches = actual.as_ref() == Some(&expected);
     let registered = owned && unit_matches && link_state == "owned";
     Ok(
-        json!({"saved_intent":desired,"acknowledged_intent":state.acknowledged,"registration":if actual.is_none()&&link_state=="absent"{"absent"}else if !owned||matches!(link_state,"conflict"|"unavailable"){"conflict"}else if registered{"present"}else{"drifted"},"unit_matches":unit_matches,"login_link":link_state,"login_enabled":if link_state=="unavailable"{Value::Null}else{json!(registered)},"last_outcome":state.last_outcome,"last_attempt":state.last_attempt,"unlock_requirement":"Encrypted credentials require explicit protected unlock; no plaintext unattended fallback","repair":"proxy autostart enable|disable","reconciliation":"not_requested"}),
+        json!({"saved_intent":desired,"acknowledged_intent":state.acknowledged,"registration":if actual.is_none()&&link_state=="absent"{"absent"}else if !owned||matches!(link_state,"conflict"|"unavailable"){"conflict"}else if registered{"present"}else{"drifted"},"unit_matches":unit_matches,"login_link":link_state,"login_enabled":if link_state=="unavailable"{Value::Null}else{json!(registered)},"last_outcome":state.last_outcome,"last_attempt":state.last_attempt,"repair":"proxy autostart enable|disable","reconciliation":"not_requested"}),
     )
 }
 #[cfg(not(windows))]
@@ -1974,9 +1719,7 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> 
         return autostart_status(store);
     }
     if dry_run {
-        return Ok(
-            json!({"dry_run":true,"enabled":enabled,"registration":"planned","unlock_requirement":"Protected credentials must be unlocked at startup"}),
-        );
+        return Ok(json!({"dry_run":true,"enabled":enabled,"registration":"planned"}));
     }
     let _lock = store.lock("autostart")?;
     state = store.read_json("autostart.json")?;
@@ -2126,7 +1869,7 @@ pub async fn run_autostart() -> Result<Value> {
                 let started = rpc(&store, "control", Some(request), None).await?
                     .ok_or_else(|| failure("resident_identity_unavailable", "Resident disappeared before autostart control"))?;
                 if started["proxy"]["ready"] != true {
-                    return Err(failure("autostart_blocked", "Autostart did not establish ready inference; unlock protected storage through normal CLI or Web controls"));
+                    return Err(failure("autostart_blocked", "Autostart did not establish ready inference; inspect stored key availability and endpoint state"));
                 }
                 windows_startup::record_launch(&store, None)?;
                 return Ok(json!({"autostart":"reused","started":true}));
@@ -2145,6 +1888,23 @@ pub async fn run_autostart() -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn removed_unlock_fields_are_rejected_at_web_and_private_protocol_boundaries() {
+        let request = json!({"command":["proxy","start"],"operands":[],"arguments":{},"dry_run":false,"if_revision":null});
+        assert!(
+            serde_json::from_value::<WebOperation>(json!({"request":request,"key":null})).is_ok()
+        );
+        assert!(
+            serde_json::from_value::<WebOperation>(
+                json!({"request":request,"key":null,"unlock":null})
+            )
+            .is_err()
+        );
+        let mut call = json!({"challenge":"opaque","authority":"/isolated","protocol":"tmax-control/1","action":"status","request":null,"revision":null,"candidate":null,"expected_process":null});
+        assert!(serde_json::from_value::<Call>(call.clone()).is_ok());
+        call["unlock"] = Value::Null;
+        assert!(serde_json::from_value::<Call>(call).is_err());
+    }
     #[test]
     fn protected_web_lines_reach_secret_consumer_without_relaxing_input_bounds() {
         for value in ["synthetic-web-key".to_owned(), "é".repeat(1024)] {
@@ -2194,7 +1954,7 @@ mod tests {
                     dry_run,
                     if_revision: None,
                 };
-                let error = control(&store, &Config::empty(), &request, None)
+                let error = control(&store, &Config::empty(), &request)
                     .await
                     .unwrap_err();
                 assert_eq!(error.code, "resident_control_path_invalid");
@@ -2223,7 +1983,7 @@ mod tests {
         store
             .write_json("catalog/accepted.json", &accepted)
             .unwrap();
-        let runtime = Runtime::new(store.clone(), "advice".into(), None).unwrap();
+        let runtime = Runtime::new(store.clone(), "advice".into()).unwrap();
         let mut resident = Resident {
             store: store.clone(),
             process: "advice".into(),
@@ -2268,55 +2028,6 @@ mod tests {
         assert!(address("0.0.0.0:1234", false).is_err());
         assert!(address("localhost:1234", false).is_err());
         assert!(address("127.0.0.1:0", false).is_err());
-    }
-    #[test]
-    fn cold_start_unlock_checks_prerequisites_and_never_prompts_noninteractive() {
-        let home = tempfile::tempdir().unwrap();
-        let store = Store::at(home.path().into());
-        let mut request = Request {
-            command: vec!["proxy".into(), "start".into()],
-            operands: Vec::new(),
-            arguments: std::collections::BTreeMap::from([(
-                "non-interactive".into(),
-                vec!["true".into()],
-            )]),
-            dry_run: false,
-            if_revision: None,
-        };
-        let mut config = Config::empty();
-        assert_eq!(
-            prompt_proxy_unlock(&store, &request).unwrap_err().code,
-            "proxy_unconfigured"
-        );
-        let reference = crate::secrets::put(
-            &store,
-            "proxy",
-            b"synthetic-shared-key",
-            Some(b"synthetic-unlock"),
-        )
-        .unwrap();
-        config.proxy = Some(crate::config::Proxy {
-            listen: "127.0.0.1:17840".into(),
-            key_ref: reference.clone(),
-            autostart: false,
-        });
-        store
-            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
-            .unwrap();
-        assert!(prompt_proxy_unlock(&store, &request).unwrap().is_none());
-        crate::secrets::remove(&store, &reference).unwrap();
-        request.arguments.clear();
-        // Even an interactive request must fail before opening a terminal when
-        // its encrypted key is absent; an unlock cannot repair missing bytes.
-        assert_eq!(
-            prompt_proxy_unlock(&store, &request).unwrap_err().code,
-            "credential_unavailable"
-        );
-        store.write_raw("tmax.toml", b"[broken").unwrap();
-        assert_eq!(
-            prompt_proxy_unlock(&store, &request).unwrap_err().code,
-            "invalid_configuration"
-        );
     }
     #[cfg(windows)]
     #[tokio::test]
@@ -2384,7 +2095,7 @@ mod tests {
     async fn web_origin_checks_reject_rebinding_and_forms() {
         let temporary = tempfile::tempdir().unwrap();
         let store = Store::at(temporary.path().into());
-        let runtime = Runtime::new(store.clone(), "test".into(), None).unwrap();
+        let runtime = Runtime::new(store.clone(), "test".into()).unwrap();
         let resident = Arc::new(Mutex::new(Resident {
             store,
             process: "test".into(),
@@ -2435,19 +2146,13 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn repeated_start_reuses_actual_listener_without_reading_pending_config_or_unlock() {
+    async fn repeated_start_reuses_actual_listener_without_reading_pending_config() {
         let temporary = tempfile::tempdir().unwrap();
         let store = Store::at(temporary.path().into());
         let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen = reserved.local_addr().unwrap().to_string();
         drop(reserved);
-        let reference = crate::secrets::put(
-            &store,
-            "proxy",
-            b"test-shared-proxy-key",
-            Some(b"test-unlock"),
-        )
-        .unwrap();
+        let reference = crate::secrets::put(&store, "proxy", b"test-shared-proxy-key").unwrap();
         let mut config = Config::empty();
         config.proxy = Some(crate::config::Proxy {
             listen,
@@ -2457,7 +2162,7 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
-        let runtime = Runtime::new(store.clone(), "reuse".into(), None).unwrap();
+        let runtime = Runtime::new(store.clone(), "reuse".into()).unwrap();
         let mut resident = Resident {
             store: store.clone(),
             process: "reuse".into(),
@@ -2469,33 +2174,16 @@ mod tests {
             key_state: "absent".into(),
             shutdown: Arc::new(Shutdown::new()),
         };
-        let first = resident
-            .start_inference(false, false, Some(Zeroizing::new(b"test-unlock".to_vec())))
-            .await
-            .unwrap();
+        let first = resident.start_inference(false, false).await.unwrap();
         assert_eq!(first["proxy"]["ready"], true);
         store
             .write_raw("tmax.toml", b"invalid pending configuration")
             .unwrap();
-        let repeated = resident
-            .start_inference(false, false, Some(Zeroizing::new(b"wrong-unlock".to_vec())))
-            .await
-            .unwrap();
+        let repeated = resident.start_inference(false, false).await.unwrap();
         assert_eq!(repeated["lifecycle"]["action"], "reused");
         assert_eq!(
             repeated["proxy"]["config_revision"],
             first["proxy"]["config_revision"]
-        );
-        assert_eq!(
-            resident
-                .runtime
-                .unlock
-                .read()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .as_slice(),
-            b"test-unlock"
         );
         resident.runtime.stop(false).unwrap();
         resident.inference.take().unwrap().stop().await;
@@ -2538,13 +2226,7 @@ mod tests {
         let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen = reserved.local_addr().unwrap();
         drop(reserved);
-        let reference = crate::secrets::put(
-            &store,
-            "proxy",
-            b"stop-barrier-test-key",
-            Some(b"stop-barrier-unlock"),
-        )
-        .unwrap();
+        let reference = crate::secrets::put(&store, "proxy", b"stop-barrier-test-key").unwrap();
         let mut config = Config::empty();
         config.proxy = Some(crate::config::Proxy {
             listen: listen.to_string(),
@@ -2556,18 +2238,12 @@ mod tests {
             .unwrap();
         let owner_store = store.clone();
         let ownership = store.try_lock("resident-owner").unwrap().unwrap();
-        let first_owner = tokio::spawn(run_owned(owner_store, ownership, None, false));
+        let first_owner = tokio::spawn(run_owned(owner_store, ownership, false));
         let first = ready(&store).await;
-        let started = rpc_with_unlock(
-            &store,
-            "control",
-            Some(request("start", false)),
-            None,
-            Some(b"stop-barrier-unlock"),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let started = rpc(&store, "control", Some(request("start", false)), None)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(started["proxy"]["ready"], true);
         let mut active = tokio::net::TcpStream::connect(listen).await.unwrap();
         active.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer stop-barrier-test-key\r\nContent-Type: application/json\r\nContent-Length: 1024\r\n\r\n{").await.unwrap();
@@ -2598,22 +2274,16 @@ mod tests {
             .try_lock("resident-owner")
             .unwrap()
             .expect("stop reply must release owner lock");
-        let second_owner = tokio::spawn(run_owned(store.clone(), ownership, None, false));
+        let second_owner = tokio::spawn(run_owned(store.clone(), ownership, false));
         let second = ready(&store).await;
         assert_ne!(
             first["resident"]["identity"]["process_instance"],
             second["resident"]["identity"]["process_instance"]
         );
-        let restarted = rpc_with_unlock(
-            &store,
-            "control",
-            Some(request("start", false)),
-            None,
-            Some(b"stop-barrier-unlock"),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let restarted = rpc(&store, "control", Some(request("start", false)), None)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(restarted["proxy"]["ready"], true);
         let stopped_again = rpc(&store, "control", Some(request("stop", false)), None)
             .await

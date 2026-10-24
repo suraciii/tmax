@@ -874,7 +874,7 @@ pub fn validate(r: &Request) -> Result<()> {
             && !c
                 .options
                 .split_whitespace()
-                .chain(["non-interactive", "unlock-stdin", "unlock-fd"])
+                .chain(["non-interactive"])
                 .any(|k| k == key)
         {
             return Err(Error::new(
@@ -905,7 +905,6 @@ pub fn validate(r: &Request) -> Result<()> {
         if matches!(
             key.as_str(),
             "non-interactive"
-                | "unlock-stdin"
                 | "key-stdin"
                 | "all-day"
                 | "last"
@@ -922,12 +921,6 @@ pub fn validate(r: &Request) -> Result<()> {
             .field(key));
         }
     }
-    if r.arguments.contains_key("unlock-stdin") && r.arguments.contains_key("unlock-fd") {
-        return Err(Error::new(
-            "invalid_arguments",
-            "Unlock input choices are mutually exclusive",
-        ));
-    }
     if path == "provider key set" {
         let key_stdin = r.arguments.contains_key("key-stdin");
         let key_fd = r
@@ -935,25 +928,16 @@ pub fn validate(r: &Request) -> Result<()> {
             .get("key-fd")
             .and_then(|v| v.first())
             .and_then(|s| crate::secrets::parse_descriptor(s));
-        let unlock_fd = if r.arguments.contains_key("unlock-stdin") {
-            Some(0)
-        } else {
-            r.arguments
-                .get("unlock-fd")
-                .and_then(|v| v.first())
-                .and_then(|s| crate::secrets::parse_descriptor(s))
-        };
         if (key_stdin && r.arguments.contains_key("key-fd"))
             || (r.arguments.contains_key("key-ref") && (key_stdin || key_fd.is_some()))
-            || ((if key_stdin { Some(0) } else { key_fd }).is_some_and(|fd| Some(fd) == unlock_fd))
         {
             return Err(Error::new(
                 "invalid_arguments",
-                "Key and unlock input must use distinct protected streams, and key-reference selection accepts no key input",
+                "Key input choices are mutually exclusive, and key-reference selection accepts no key input",
             ));
         }
     }
-    for key in ["unlock-fd", "key-fd", "output-fd"] {
+    for key in ["key-fd", "output-fd"] {
         if let Some(values) = r.arguments.get(key)
             && crate::secrets::parse_descriptor(&values[0])
                 .is_none_or(|fd| key == "output-fd" && fd < 3)

@@ -97,7 +97,8 @@ establishes the account owner's identity.
 ## OpenCode Go observations
 
 Configure each independently selected account under its own provider ID, supply
-its key through protected input, and explicitly refresh the desired scope:
+its key through explicit protected input (such as `--key-stdin`), and refresh
+the desired scope:
 
 ```sh
 tmax provider add go-a --integration opencode-go
@@ -231,16 +232,17 @@ tmax proxy start
 tmax proxy status
 ```
 
-Initial `proxy configure` provisions the sole shared local key in protected
-storage; `proxy start` is a separate explicit lifecycle action. Ordinary CLI
-operations prompt invisibly for protected values on an attached terminal,
-including the Windows console; Web forms provide separate key and unlock fields.
-Neither path requires a daemon installation or descriptor handling. Automation
-can use the documented qualified inherited-pipe options; their platform-qualified
-integer is never a secret or a file path. Provision
-the shared key to a client only through the protected `proxy key show` delivery
-flow. Ordinary inspection does not reveal it. All current-key holders share the
-same published model list; no client registration is required.
+Initial `proxy configure` provisions the sole shared local key in a current-user
+restricted file under `~/.tmax`; the ordinary configuration stores its reference.
+The key file is plaintext, not encrypted. `proxy start` is a separate explicit
+lifecycle action. Provider-key setup prompts invisibly on an attached terminal
+or accepts `--key-stdin`; the Web form contains a provider-key field. Use explicit
+key input for automation, never argv, environment, or
+ordinary configuration files. Neither the CLI nor Web requires a daemon
+installation. Provision the shared key to a client only through the qualified
+`proxy key show` delivery flow. Ordinary inspection does not reveal it. All
+current-key holders share the same published model list; no client registration
+is required.
 
 tmax resolves the OS account's home, not an override of the `HOME` environment
 variable. On Unix, a home that yields an unrepresentable control-socket pathname
@@ -255,10 +257,17 @@ same-user named-pipe control. `tmax web open` opens the system browser;
 `--no-browser` starts management without opening it. Closing the browser or
 launching terminal does not stop inference. `tmax proxy autostart enable` opts
 into current-user login startup, and `disable` removes only tmax's owned startup
-entry without stopping the proxy. Startup registration does not unlock encrypted
-credentials: a locked login attempt is reported in autostart status, and ordinary
-CLI start or Web protected unlock remains available. No reusable unlock secret
-is stored beside encrypted data.
+entry without stopping the proxy. Startup reads the same current-user-restricted
+secret files. Unsupported storage-format records return `storage_version_unsupported` or
+`storage_record_invalid` and remain unchanged. Re-enter the provider key with
+`provider key set` or replace the shared key with `proxy key replace`. Recovery
+contents in unsupported formats are unavailable to current recovery operations.
+
+If the current CLI reports `resident_incompatible`, the resident is too old for
+this executable's management protocol. Use the running resident's matching
+pre-cutover CLI (`tmax proxy stop`, then `tmax web stop`) or its existing Web
+controls to perform the explicit stops before starting the current executable;
+the new CLI will not take over or terminate an incompatible resident.
 
 The proxy accepts same-protocol requests and forwards to the configured provider;
 it does not translate protocols. Configure a real provider credential before
@@ -378,13 +387,13 @@ tmax agent apply "$TARGET"
 ```
 
 Application writes only the requested native scope; it does not start tmax
-inference or make a paid probe. `tmax agent apply` uses supported platform
-protection or permitted hidden terminal unlock. For Unix automation only, when
-the launcher has supplied a readable inherited pipe at FD 3, use
-`tmax --unlock-fd 3 agent apply "$TARGET"` instead. Other platform-qualified
-operands follow the [protected-input contract](../specs/cli/spec.md); never name
-an unopened channel or pass unlock bytes in argv, environment, or files. `awaiting_native_reload`
-means the native tool must reload/restart before the change is effective.
+inference or make a paid probe. `tmax agent apply` reads referenced provider keys
+from tmax's current-user-restricted files and uses the native adapter's declared
+credential handoff. Unsupported storage-format key records return `storage_version_unsupported` or
+`storage_record_invalid` and remain unchanged; re-enter the key with
+`provider key set` before applying. Unsupported recovery contents are unavailable
+to current recovery operations. The `awaiting_native_reload` state means the native
+tool must reload/restart before the change is effective.
 
 For qualified Pi and OMP concrete selections, known effective model context/output
 limits, reasoning capability, and supported text/image input metadata are written

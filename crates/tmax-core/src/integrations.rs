@@ -345,10 +345,9 @@ pub async fn refresh(
     config: &Config,
     provider_id: &str,
     scope: &str,
-    unlock: Option<&[u8]>,
     dry_run: bool,
 ) -> Result<Value> {
-    crate::observations::refresh(store, config, provider_id, scope, unlock, dry_run).await
+    crate::observations::refresh(store, config, provider_id, scope, dry_run).await
 }
 
 /// The integration owns non-inference destinations; never derive these from a model base.
@@ -403,7 +402,6 @@ pub(crate) async fn acquire_observation(
     config: &Config,
     provider: &Provider,
     destination: ObservationDestination<'_>,
-    unlock: Option<&[u8]>,
 ) -> Result<AcquiredObservation> {
     let observation = async {
         let Some(crate::config::Auth::ApiKey { key_ref }) = &provider.auth else {
@@ -412,7 +410,7 @@ pub(crate) async fn acquire_observation(
                 "Selected API key is unavailable",
             ));
         };
-        let key = crate::secrets::get(store, key_ref, unlock)?;
+        let key = crate::secrets::get(store, key_ref)?;
         let key = std::str::from_utf8(&key).map_err(|_| {
             Error::new(
                 "credential_unavailable",
@@ -803,13 +801,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::storage::Store::at(dir.path().into());
         let owner = crate::secrets::owner_tag(&store, "provider", "go-test").unwrap();
-        let key_ref = crate::secrets::put(
-            &store,
-            &owner,
-            b"synthetic-test-key",
-            Some(b"synthetic-unlock"),
-        )
-        .unwrap();
+        let key_ref = crate::secrets::put(&store, &owner, b"synthetic-test-key").unwrap();
         let provider = Provider {
             integration: Some("opencode-go".into()),
             auth: Some(crate::config::Auth::ApiKey { key_ref }),
@@ -863,14 +855,8 @@ mod tests {
                 url: &url,
                 ..GO_USAGE_DESTINATION
             };
-            let result = acquire_observation(
-                &store,
-                &Config::empty(),
-                &provider,
-                destination,
-                Some(b"synthetic-unlock"),
-            )
-            .await;
+            let result =
+                acquire_observation(&store, &Config::empty(), &provider, destination).await;
             tokio::time::timeout(Duration::from_secs(5), server)
                 .await
                 .unwrap()
@@ -946,13 +932,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::storage::Store::at(dir.path().into());
         let owner = crate::secrets::owner_tag(&store, "provider", "deepseek-test").unwrap();
-        let key_ref = crate::secrets::put(
-            &store,
-            &owner,
-            b"synthetic-deepseek-key",
-            Some(b"synthetic-unlock"),
-        )
-        .unwrap();
+        let key_ref = crate::secrets::put(&store, &owner, b"synthetic-deepseek-key").unwrap();
         let provider = Provider {
             integration: Some("deepseek".into()),
             auth: Some(crate::config::Auth::ApiKey { key_ref }),
@@ -1009,7 +989,6 @@ mod tests {
                     url: &url,
                     ..destination
                 },
-                Some(b"synthetic-unlock"),
             )
             .await;
             tokio::time::timeout(Duration::from_secs(5), server)

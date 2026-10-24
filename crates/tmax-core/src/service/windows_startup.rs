@@ -2,7 +2,7 @@
 //!
 //! The only registry mutation is the `tmax` value in HKCU's Run key. A command
 //! must match this executable or this authority's last successfully owned command
-//! before it can be replaced or removed. Registration never supplies an unlock.
+//! before it can be replaced or removed.
 use crate::{Error, Result, storage::Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,8 +17,6 @@ const MAX_VALUE_BYTES: usize = 64 * 1024;
 // terminating NUL. Count UTF-16 code units, including executable quotes and args.
 const MAX_COMMAND_UNITS: usize = 260;
 const REPAIR: &str = "proxy autostart enable|disable";
-const UNLOCK_REQUIREMENT: &str =
-    "Encrypted credentials require explicit protected unlock; no plaintext unattended fallback";
 
 type Hkey = *mut c_void;
 
@@ -342,7 +340,6 @@ pub(super) fn status(store: &Store) -> Result<Value> {
         "last_outcome": state.last_outcome,
         "last_attempt": state.last_attempt,
         "last_launch": state.last_launch,
-        "unlock_requirement": UNLOCK_REQUIREMENT,
         "repair": REPAIR,
         "reconciliation": "not_requested"
     }))
@@ -362,8 +359,7 @@ pub(super) async fn reconcile(
         return Ok(json!({
             "dry_run": true,
             "enabled": enabled,
-            "registration": "planned",
-            "unlock_requirement": "Protected credentials must be unlocked at startup"
+            "registration": "planned"
         }));
     }
     let _lock = store.lock("autostart")?;
@@ -430,20 +426,30 @@ pub(super) async fn reconcile(
 fn launch_outcome(error: Option<&Error>) -> Launch {
     let (outcome, reason, action) = match error.map(|error| error.code.as_str()) {
         None => ("ready", None, None),
-        Some("credential_unavailable" | "interactive_required" | "unsupported_protected_input") => {
-            (
-                "blocked",
-                Some("credential_unavailable"),
-                Some(
-                    "Explicitly start proxy with protected unlock input; repair protected storage if unavailable",
-                ),
-            )
-        }
+        Some("credential_unavailable") => (
+            "blocked",
+            Some("credential_unavailable"),
+            Some("Inspect stored key availability; re-enter or replace missing key material"),
+        ),
+        Some("storage_version_unsupported") => (
+            "blocked",
+            Some("storage_version_unsupported"),
+            Some(
+                "Preserve the unsupported stored record; replace the shared key through proxy key replace",
+            ),
+        ),
+        Some("storage_record_invalid") => (
+            "blocked",
+            Some("storage_record_invalid"),
+            Some(
+                "Preserve the corrupt or unsupported stored key file; explicitly replace the shared key",
+            ),
+        ),
         Some("autostart_blocked") => (
             "blocked",
             Some("autostart_blocked"),
             Some(
-                "Inspect saved intent and endpoint state, then explicitly start proxy with protected unlock input",
+                "Inspect saved intent, stored key availability, and endpoint state, then explicitly start proxy",
             ),
         ),
         Some("endpoint_occupied") => (
@@ -696,9 +702,9 @@ mod tests {
     }
 
     #[test]
-    fn launch_record_is_blocked_for_locked_credentials_and_never_keeps_error_details() {
-        let locked = Error::new("credential_unavailable", "sensitive supplied bytes");
-        let launch = launch_outcome(Some(&locked));
+    fn launch_record_is_blocked_for_unavailable_credentials_and_never_keeps_error_details() {
+        let unavailable = Error::new("credential_unavailable", "sensitive supplied bytes");
+        let launch = launch_outcome(Some(&unavailable));
         assert_eq!(launch.outcome, "blocked");
         assert_eq!(
             launch.reason_code.as_deref(),
@@ -709,7 +715,7 @@ mod tests {
                 .next_action
                 .as_deref()
                 .unwrap()
-                .contains("protected unlock")
+                .contains("stored key availability")
         );
         let arbitrary = Error::new("sensitive-code", "sensitive-message").field("sensitive-field");
         let serialized = serde_json::to_string(&launch_outcome(Some(&arbitrary))).unwrap();

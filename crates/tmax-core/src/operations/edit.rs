@@ -152,10 +152,7 @@ fn new_named(root: &mut Value, parent: &[&str], id: &str, value: Value) -> Resul
     Ok(())
 }
 fn require_change(r: &Request) -> Result<()> {
-    if r.arguments
-        .keys()
-        .all(|k| matches!(k.as_str(), "non-interactive" | "unlock-stdin" | "unlock-fd"))
-    {
+    if r.arguments.keys().all(|k| k == "non-interactive") {
         return Err(Error::new(
             "invalid_arguments",
             "At least one explicit edit is required",
@@ -1284,18 +1281,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     let needs_key = (path == "proxy configure" && data["provision_proxy_key"] == true)
         || path == "proxy key replace"
         || (path == "provider key set" && arg(r, "key-ref").is_none());
-    let unlock = if needs_key {
-        crate::secrets::unlock(r)?
-    } else {
-        None
-    };
     let mut created = None;
-    if needs_key && unlock.is_none() {
-        return Err(Error::new(
-            "credential_unavailable",
-            "Unlock protected storage through a separate protected input before supplying or provisioning a key",
-        ));
-    }
     if needs_key {
         let value: zeroize::Zeroizing<Vec<u8>> = if path == "provider key set" {
             zeroize::Zeroizing::new(crate::secrets::read_protected_input(r, "key")?)
@@ -1315,8 +1301,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         } else {
             "proxy".into()
         };
-        let reference =
-            crate::secrets::put(store, &owner, &value, unlock.as_deref().map(Vec::as_slice))?;
+        let reference = crate::secrets::put(store, &owner, &value)?;
         if path == "provider key set" {
             put(
                 &mut root,

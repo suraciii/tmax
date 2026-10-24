@@ -24,12 +24,13 @@ they do not relocate that agent's native configuration.
 All tmax-owned persistent configuration, operational data, caches, logs, secrets,
 and recovery information stay under `~/.tmax`. Native-agent files and supported
 native credential stores remain at their native locations; OS startup
-registration is the external integration exception. tmax-owned secret files use
-protected encrypted storage under `~/.tmax`, unlocked through protected input or
-platform protection without creating clear reusable secret files elsewhere.
-The [product secret-protection contract](../product/spec.md#local-access-and-secret-protection)
-owns credential handoff and unlock behavior. Request history remains in memory,
-not in the configuration or any persistent history store.
+registration is the external integration exception. New tmax secret and recovery
+payload records use storage version 2 and are plaintext files restricted to the
+current OS account; file permissions are not encryption. This storage change does
+not change the desired configuration schema version. The [product secret-protection
+contract](../product/spec.md#local-access-and-secret-protection) owns that access
+boundary and credential handoff. Request history remains in memory, not in the
+configuration or any persistent history store.
 
 The root requires `version = 1`; this revision does not introduce a new schema
 version. Other root fields are `providers`, `model_aliases`, `agents`, `proxy`,
@@ -129,25 +130,27 @@ The caller supplies no replacement document. Reset replaces the entire desired
 configuration with `version = 1` and empty desired collections; omission is
 destructive only because this operation explicitly requests that complete reset.
 
-Before replacement, preserve the exact original bytes in protected recovery
-storage under `~/.tmax/recovery` and return an opaque recovery handle, not the
-original contents. Malformed input may itself contain accidentally entered
-secrets and must receive credential-level protection. Failure to read and
-preserve the complete original safely blocks replacement. Detect intervening
+Before replacement, preserve the exact original bytes in a current-user-restricted
+plaintext recovery file under `~/.tmax/recovery` and return an opaque recovery
+handle, not the original contents. Malformed input may itself contain accidentally
+entered secrets and must receive the same file-access restriction. Failure to read
+and preserve the complete original safely blocks replacement. Detect intervening
 content changes before overwrite; do not reset newer content captured by a
 different revision. If capture succeeds but saving fails, report the retained
 recovery handle and the unsaved boundary without claiming a successful reset.
-`--dry-run` reports the destructive scope and planned protected preservation
+`--dry-run` reports the destructive scope and planned restricted preservation
 without writing, reserving a handle, reading secrets, or contacting upstreams.
 
 Keep captured recovery artifacts until explicit discard. CLI list and inspect
-operations expose only safe artifact metadata, protection/capture state, and
+operations expose only safe artifact metadata, file-access/capture state, and
 available actions, never arbitrary original bytes or secret values. Discard
-removes only the named protected artifact, not configuration, credentials, or
-native files. The [CLI contract](../cli/spec.md) owns this minimal recovery
-command grammar. Neither reset nor inspection automatically restores invalid
-content; this is protected recovery retention, not a configuration backup or
-snapshot-management system.
+removes only the named artifact, not configuration, credentials, or native files.
+Recovery inventory and actions include only supported storage-format files.
+Unsupported-format files are rejected and remain unchanged; they are unavailable
+to current recovery actions. Corrupt or unknown metadata blocks deletion. The
+[CLI contract](../cli/spec.md) owns this minimal recovery command grammar. Neither
+reset nor inspection automatically restores invalid content; this is recovery
+retention, not a configuration backup or snapshot-management system.
 
 With a running service, activate the empty valid snapshot under the normal
 save/activation boundaries. This removes managed model publication and shared
@@ -160,8 +163,9 @@ the normal changed-intent reconciliation rules below.
 
 Reset does not sign out, revoke upstream credentials, apply or restore native
 files, delete stored secrets, erase retained authorization comparison bases,
-or discard protected recovery records. Native consumers accessing upstreams
-directly can continue outside tmax and must be identified as unchanged.
+or discard current-user-restricted plaintext recovery records. Native consumers
+accessing upstreams directly can continue outside tmax and must be identified as
+unchanged.
 Recreate desired settings through ordinary explicit resource operations.
 If persistence succeeds but
 activation fails, report saved-but-not-active and retry activation through
@@ -243,7 +247,7 @@ Credential configuration collection.
 
 | `auth.method` | Fields | Meaning |
 | --- | --- | --- |
-| `api-key` | Required `key_ref` | Nonempty opaque reference to a key in protected local secret storage |
+| `api-key` | Required `key_ref` | Nonempty opaque reference to a key in a current-user-restricted tmax secret file |
 | `login` | Required `via`; optional `session_ref` | Sign-in session managed through the selected login source's supported flow |
 
 | Login field or boundary | Contract |
@@ -265,7 +269,9 @@ owns command operands and results.
 Keys and login tokens must never appear as ordinary TOML values. A `key_ref`
 resolves only during an operation that requires the secret; a dry run does not
 retrieve it. Catalog `env` names do not cause automatic secret selection or
-environment access. Missing or locked secrets block the affected use visibly.
+environment access. Missing secret files block the affected use. Unsupported
+storage-format records are rejected and left unchanged; re-enter the provider key
+through ordinary key input.
 
 A provider may name an already declared native target as its login source while
 that target has no model selections or default. Authentication setup does not
@@ -291,16 +297,18 @@ boundaries and supported login sources.
 
 ### Retained secret discovery
 
-The protected store maintains a read-only inventory independent of configuration
+The secret inventory maintains read-only ownership and cleanup metadata
 validity, including secrets left after provider, target, or proxy removal and
 after a provisioning crash before reference save or result delivery. Atomically
-commit each secret with safe inventory metadata: its opaque reference, creation
-instant, and owning provider, target, or sole proxy's stable local identity and
-last known display ID. The metadata must be readable without store unlock,
-decryption, or secret resolution; it contains no secret value, token, fingerprint,
-credential-derived identifier, raw source body, or reusable unlock material.
-An interrupted creation must expose either neither item or both secret and
-discoverable metadata. The shared proxy key is proxy-owned, not agent-owned.
+commit each storage version 2 secret with safe inventory metadata: its opaque
+reference, creation instant, and owning provider, target, or sole proxy's stable
+local identity and last known display ID. Inventory metadata must be readable
+without resolving or exposing secret values; it contains no secret value, token,
+fingerprint, credential-derived identifier, raw source body, or reusable key
+material. An interrupted creation must expose either neither item or both secret
+and discoverable metadata. Unsupported-format files remain unchanged; their
+inventory metadata is unavailable with a generic reason, and current cleanup
+actions cannot remove them. The shared proxy key is proxy-owned, not agent-owned.
 
 The [CLI `secret list` operation](../cli/providers/authentication/spec.md#provider-authentication-and-local-secrets)
 combines this inventory with safe desired, loaded, and known native-reference
@@ -379,7 +387,7 @@ condition, not a dangling-reference error.
 
 `refresh_interval_seconds` opts a qualified nonmanual channel into acquisition
 only while the existing local service runs. Setting it never starts a service,
-signs in, unlocks a secret, or creates another daemon. Without a running service,
+reads a secret, or creates another daemon. Without a running service,
 automatic acquisition is explicitly paused; explicit refresh and manual record
 operations remain available without one. Scheduling, safe credentials, publication,
 and late-result rejection belong to the input lifecycle, not configuration loading.
@@ -609,13 +617,13 @@ Agent native selections do not restrict this access. Catalog discovery never
 enrolls models automatically.
 
 Initial explicit `proxy configure --listen ADDRESS` generates the shared key
-once in protected storage and saves its reference with these settings. Validate
-the declaration and current inputs first. Report secret creation, file save,
-and service activation as separate boundaries; failed save after creation leaves
-a discoverable unreferenced secret for explicit cleanup. A dry run neither
-generates a key nor chooses or reserves a reference. Normal configure updates,
-reload, start, restart, and native application never provision a missing key.
-A missing referenced key or locked store blocks inference readiness.
+once in a current-user-restricted plaintext storage-version-2 file under `~/.tmax`
+and saves its reference. Validate the declaration and current inputs first. Report
+secret creation, file save, and service activation as separate boundaries; failed
+save after creation leaves a discoverable unreferenced secret for explicit cleanup.
+A dry run neither generates a key nor chooses or reserves a reference. Normal
+configure updates, reload, start, restart, and native application never provision
+A missing or unsupported-format key blocks readiness.
 
 `proxy key replace` creates and saves the replacement reference and activates
 the new shared key. Subsequent requests must reject the old key; in-flight
@@ -677,7 +685,7 @@ Native agents retain ownership of their own networking.
 
 Validation must distinguish syntax/type/reference errors from incomplete setup
 and external availability: a missing local reference is invalid; absent target
-selections/default, a locked key, stale catalog, or not-yet-qualified
+selections/default, missing or unsupported-format keys, stale catalog, or unqualified
 agent combination is reported with its actual scope and cannot be presented as
 verified access. Dry runs do not perform inference or upstream verification.
 
@@ -779,9 +787,10 @@ desired settings, accepted metadata, native inputs, and credential scope.
 It requires selected models and a provider-qualified default, usable credentials,
 and qualified compatibility for every applied native entry. It writes only
 owned changes, preserves unrelated native settings and precedence, reports partial
-failure and protected recovery state under `~/.tmax`, and distinguishes applied
-from awaiting native reload. Proxy-source entries additionally require the
-matching service snapshot, ready listener, and current shared key availability.
+failure and current-user-restricted plaintext recovery state under `~/.tmax`, and
+distinguishes applied from awaiting native reload. Proxy-source entries additionally
+require the matching service snapshot, ready listener, and current shared key
+availability.
 Upstream-source entries use their provider's endpoint/authentication without a
 tmax inference dependency. File edits and catalog application never rewrite
 agents in the background.

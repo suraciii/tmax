@@ -30,8 +30,8 @@ them; success in one row must not supply success in another.
 | Process and listener | Actual resident identity, authority, executable/management compatibility, and inference/Web listener states under the [resident contract](../product/spec.md#resident-service-identity). Distinguish absent, identified compatible, incompatible, unidentified occupied endpoint, and unavailable evidence. A PID or a running Web interface does not prove inference availability or usable upstream authorization. |
 | Startup registration | Saved autostart intent versus this authority's actual OS registration, ownership, and latest reconciliation outcome. Drift is not a failed unrelated edit; explicit repair follows the [configuration contract](../configuration/spec.md#save-reload-and-apply). |
 | Effective agent state | The latest qualified evidence of the running target's native provider entries, each source and endpoint/model selection, and native configuration precedence. Applied files, a requested reload, or a reachable listener alone must not verify that effective state. Unsupported runtime inspection must remain unknown. |
-| Provider authentication | Configured authentication method and login source `auth.via`, when applicable, and locally known credential availability versus a qualified upstream authentication result. A secret reference, an unlocked store, or a configured key must not become a verified upstream login. Unknown upstream account identity must remain unverified. |
-| Shared proxy access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled, protocol-qualified publication list. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a protected reference is not proof of a readable key. |
+| Provider authentication | Configured authentication method and login source `auth.via`, when applicable, and locally known credential availability versus a qualified upstream authentication result. A secret reference, readable local secret file, or configured key must not become a verified upstream login. Unknown upstream account identity must remain unverified. |
+| Shared proxy access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled, protocol-qualified publication list. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a saved reference is not proof of a readable key. |
 | Model reachability | The exact provider authorization, offering, native protocol, transport, and tested capability scope of a successful or failed request. Catalog presence, model discovery, authentication success, and quota-query success must not verify inference or untested capabilities. |
 | Quota freshness | The latest applicable provider observation, its freshness, and the latest refresh outcome. Unknown, stale, unavailable, and manual information must remain distinct from a fresh authoritative observation. Quota, balance, credential expiry, quota reset, and renewal must remain separate facts. |
 | Priority inputs | Each declared provider-local quota/reset channel's source, declaration and current-head revisions, scope/model coverage, normalized value or unavailable reason, applicability to saved versus loaded settings, and latest acquisition outcome. Manual quota, a public reset forecast, provider quota evidence, and an actual completed reset are different facts. Acquisition intent, a running/paused/blocked acquisition state, and head freshness must remain distinct. |
@@ -51,7 +51,7 @@ The [CLI contract](../cli/spec.md) owns summary and detail projections. Routine
 lists and successful edits need not repeat full evidence, diffs, metadata, or
 derivable inspection commands. Explicit detail reads expose the evidence below.
 Relevant current revisions, actual saved/loaded/native outcomes, blockers,
-protected recovery handles, and partial or unknown effects must remain explicit.
+current-user-restricted recovery handles, and partial or unknown effects must remain explicit.
 Dry runs retain the full impact under the
 [execution contract](../cli/spec.md#dry-run-and-execution), without effects,
 reservations, secret reads, login, or upstream calls. Execution uses current inputs.
@@ -129,8 +129,8 @@ account-wide billing evidence, and local request counters must not fabricate the
 Status, provider/model inspection, history reads, and selection previews must be
 side-effect-free. They may inspect the local inputs permitted by the owning
 contracts. They must not start or stop listeners, change native settings, execute
-command-backed secret resolution, unlock a store, sign in, refresh credentials,
-contact a provider for new observations, or perform inference. Rendering or
+command-backed secret resolution, sign in, refresh credentials,
+contact a provider for new observations, or perform inference.
 refreshing a Web view must not trigger those actions.
 
 Explicit `proxy key show` and its protected Web reveal equivalent are sensitive

@@ -93,22 +93,23 @@ tmax agent inspect pi-main
 ```
 
 This illustrates grammar, not verified integration. It assumes the catalog entry,
-protected store/stdin, qualified native path, and support for the complete mixed
-configuration. Missing prerequisites/native reload stay explicit. Inspect is not
-proof of paid inference. Help uses supported native roles, not invented ones.
+current-user-restricted tmax secret file or explicit protected key input, qualified
+native path, and support for the complete mixed configuration. Missing
+prerequisites/native reload stay explicit. Inspect is not proof of paid inference.
+Help uses supported native roles, not invented ones.
 
 ## Agent application and recovery
 
 | Command | Result or requested boundary |
 | --- | --- |
-| `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, default readiness, and desired/applied/effective condition. |
+| `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, `default_configured`, and desired/applied/effective condition. |
 | `agent discover [--agent AGENT]` | Supported installations/paths, versions, profiles, and compatibility without registration/import. |
 | `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, desired/applied/effective differences, blockers, and recovery. |
 | `agent inspect --agent AGENT --path PATH` | Inspect an explicit undeclared native path without registration/import. |
 | `agent apply TARGET` | Apply current complete desired configuration; identify owned files, credential handoff, native reload, affected paths, and recovery. |
 | `agent restore TARGET` | Restore owned changes using the declared target's retained recovery. |
 | `agent restore --recovery RECORD` | Restore exactly that record, including after removal, without recreating a target. |
-| `agent recovery list [--target TARGET]` | Protected recovery handles/paths, including removed targets, with restoration/conflict state and no credentials. |
+| `agent recovery list [--target TARGET]` | Recovery handles/paths under current-user-restricted `~/.tmax`, including removed targets, with restoration/conflict state and no credentials. |
 | `agent recovery inspect RECORD` | Ownership, target identity, affected files, and remaining safe actions. |
 | `agent recovery discard RECORD` | Delete that recovery information without native writes or credential deletion. |
 
@@ -123,8 +124,12 @@ key, requiring the matching ready listener and loaded snapshot. Start explicitly
 first. Applying both kinds preserves native precedence, supported credential
 handoff, and disclosure of any required plaintext in native files. Never copy
 upstream login tokens to create another refresh maintainer. Native writes preserve later user
-edits, check ownership/conflicts, and report partial write/reload state. Protected
-recovery stays under `~/.tmax`; no force overwrite or automatic application exists.
+edits, check ownership/conflicts, and report partial write/reload state. Recovery
+is stored as plaintext under current-user-restricted `~/.tmax`; file permissions
+are not encryption. No force overwrite or automatic application exists.
+
+Unsupported-format recovery records are preserved and reported as unavailable;
+current operations do not restore or discard their contents.
 
 Shared [proxy key replacement](../providers/authentication/spec.md#shared-proxy-key)
 reports known native dependencies without implicitly applying them; affected
@@ -141,7 +146,22 @@ restoring native settings never revokes the shared key. Stop management with
 | `AgentProviderView` | `name`, `source` (`{provider: string}` or `{proxy: true}`), and exact `{id, protocol}` selections. |
 | Provider detail | Qualified requirements, readiness, native precedence/evidence, and desired/applied/effective differences; no mode, target credential, permission list, or target continuity field. |
 | `agent inspect` | `data.providers` contains entries; `data.default` and `data.roles` use `NativeModelRef`, with null default when absent. |
-| Lists | Target/tool identities, counts, and readiness summaries instead of complete entries/evaluations. |
+| Lists | Target/tool identities, counts, and readiness summaries instead of complete entries/evaluations; `default_configured` reports whether the target has a configured default. |
+
+Native inspection reports `scope_state` separately from the saved target. When a
+declared path is absent or unusable, it retains the target and resolved `path`,
+sets `scope_state: unavailable`, and provides `scope_reason_code` (`absent`,
+`not_directory`, `unreadable`, or `unavailable`); actual apply remains blocked.
+`applied_state` describes current desired-versus-written state, while
+`last_application_state` reports the historical last application. When comparison
+is available, `pending_native_changes` identifies native field `set`/`release`
+changes or a credential-reference replacement; otherwise it is null. These are
+unwritten desired deltas. `awaiting_native_reload` is separate: it means written
+native changes await a tool reload/restart, not that those deltas remain pending.
+Installation version evidence distinguishes `not_installed`, `probe_failed`, `version_unknown`,
+and `detected`. Apply reports distinct blockers including
+`native_not_installed`, `native_version_probe_failed`, `native_version_unknown`,
+and `native_version_unqualified`; blocked qualification exits 3 without native writes.
 
 Routine mutation results identify `data.target`, `data.provider` when entry-scoped,
 requested changes, and actual saved/loaded or applied/reload outcome. Native

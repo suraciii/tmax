@@ -45,6 +45,10 @@ fn success_response(operation: &str, dry_run: bool, mut data: Value) -> Response
         | "noninteractive_unavailable"
         | "interactive_required"
         | "login_source_required"
+        | "native_not_installed"
+        | "native_version_probe_failed"
+        | "native_version_unknown"
+        | "native_version_unqualified"
         | "target_incomplete" => 3,
         "ok" | "dry_run_ready" | "resident_reused" => 0,
         _ => 4,
@@ -80,6 +84,7 @@ fn error_response(operation: &str, error: Error, dry_run: bool) -> Response {
         code,
         "inputs_changed"
             | "credential_unavailable"
+            | "storage_version_unsupported"
             | "login_source_required"
             | "interactive_required"
             | "unsupported_protected_input"
@@ -188,9 +193,6 @@ pub(crate) fn duration(s: &str) -> Result<i64> {
         )
     })
 }
-fn unlock_needed(r: &Request) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
-    crate::secrets::unlock(r)
-}
 async fn selected(store: &Store, r: &Request) -> Result<Option<config::LoadedFile>> {
     if arg(r, "state").unwrap_or("file") == "loaded" {
         if let Some(snapshot) = crate::service::loaded(store).await? {
@@ -263,18 +265,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         let config = config::load(store)
             .map(|f| f.config)
             .unwrap_or_else(|_| Config::empty());
-        let unlock = if !r.dry_run
-            && path == "proxy start"
-            && r.arguments
-                .keys()
-                .any(|k| k == "unlock-stdin" || k == "unlock-fd")
-        {
-            unlock_needed(r)?
-        } else {
-            None
-        };
-        return crate::service::control(store, &config, r, unlock.as_deref().map(Vec::as_slice))
-            .await;
+        return crate::service::control(store, &config, r).await;
     }
     if edit::is_edit(&path) {
         return edit::execute(store, r).await;
@@ -390,25 +381,11 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         } else {
             std::slice::from_ref(&scope)
         };
-        let mut needs_secret = false;
         for scope in scopes {
-            needs_secret |=
-                crate::integrations::observation_destination(provider, scope)?.is_some();
+            crate::integrations::observation_destination(provider, scope)?;
         }
-        let unlock = if r.dry_run || !needs_secret {
-            None
-        } else {
-            unlock_needed(r)?
-        };
-        let mut data = crate::integrations::refresh(
-            store,
-            config,
-            operand(r, 0)?,
-            scope,
-            unlock.as_deref().map(Vec::as_slice),
-            r.dry_run,
-        )
-        .await?;
+        let mut data =
+            crate::integrations::refresh(store, config, operand(r, 0)?, scope, r.dry_run).await?;
         if !r.dry_run
             && data["checks"].as_array().is_some_and(|a| {
                 a.iter()
@@ -473,7 +450,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     }
     if path == "agent list" {
         return Ok(
-            json!({"agents":config.agents.iter().map(|(id,t)|json!({"target":id,"agent":t.agent,"path":t.scope,"provider_count":t.providers.len(),"model_count":t.providers.values().map(|e|e.models.len()).sum::<usize>(),"default_ready":t.default.is_some(),"native_application":"not_verified"})).collect::<Vec<_>>()}),
+            json!({"agents":config.agents.iter().map(|(id,t)|json!({"target":id,"agent":t.agent,"path":t.scope,"provider_count":t.providers.len(),"model_count":t.providers.values().map(|e|e.models.len()).sum::<usize>(),"default_configured":t.default.is_some(),"native_application":"not_verified"})).collect::<Vec<_>>()}),
         );
     }
     if path == "agent inspect" {
@@ -494,21 +471,14 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         return key_show(store, config, r).await;
     }
     if path == "model probe" {
-        let unlock = if r.dry_run { None } else { unlock_needed(r)? };
-        return crate::proxy::probe(store, config, r, unlock.as_deref().map(Vec::as_slice)).await;
+        return crate::proxy::probe(store, config, r).await;
     }
     if path.starts_with("proxy ")
         || path.starts_with("web ")
         || path.starts_with("history ")
         || path == "usage"
     {
-        let unlock = if !r.dry_run && path == "proxy restart" {
-            unlock_needed(r)?
-        } else {
-            None
-        };
-        return crate::service::control(store, config, r, unlock.as_deref().map(Vec::as_slice))
-            .await;
+        return crate::service::control(store, config, r).await;
     }
     Err(Error::new(
         "invalid_arguments",
@@ -606,7 +576,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
                 "A retained proxy session cannot be inspected through an upstream-source entry",
             ));
         }
-        let mut data = crate::service::control(store, config, r, None).await?;
+        let mut data = crate::service::control(store, config, r).await?;
         data["context"] = context;
         data["requested"] = json!({"id":r.operands.first(),"protocol":protocol});
         data["native_assessment"] = json!({"state":"not_reassessed","reason":"retained_destination_inspection","authorization":"not_verified"});
@@ -877,9 +847,7 @@ async fn reset(store: &Store, r: &Request) -> Result<Value> {
         preview["stored_secrets"] = json!("retained");
         return Ok(preview);
     }
-    let unlock = unlock_needed(r)?;
-    let recovery =
-        crate::secrets::protect_recovery(store, &bytes, unlock.as_deref().map(Vec::as_slice))?;
+    let recovery = crate::secrets::protect_recovery(store, &bytes)?;
     let document = "version = 1\n".parse().expect("constant TOML");
     let revision = match config::save(store, &expected, &document) {
         Ok(revision) => revision,
@@ -982,8 +950,7 @@ async fn key_show(store: &Store, c: &Config, r: &Request) -> Result<Value> {
             json!({"reference":proxy.key_ref,"loaded_match":null,"delivery":{"channel":output.channel(),"descriptor":output.descriptor(),"delivered":false}}),
         );
     }
-    let unlock = unlock_needed(r)?;
-    let key = crate::secrets::get(store, &proxy.key_ref, unlock.as_deref().map(Vec::as_slice))?;
+    let key = crate::secrets::get(store, &proxy.key_ref)?;
     let delivery = output.deliver(&key);
     let loaded = crate::service::loaded(store).await.ok().flatten();
     Ok(
@@ -1446,7 +1413,7 @@ mod tests {
             .unwrap();
         std::fs::create_dir(directory.path().join("native")).unwrap();
         assert_eq!(
-            crate::native::apply(&store, &config, "target", true, None)
+            crate::native::apply(&store, &config, "target", true)
                 .await
                 .unwrap_err()
                 .code,

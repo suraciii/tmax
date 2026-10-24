@@ -105,10 +105,10 @@ is in [Model selection](../model-routing/spec.md).
 The local service owns the Web interface and the optional proxy listener. CLI-only
 configuration operations also work without a resident service. Both paths share
 the authoritative text configuration and serialize mutations of the same targets.
-Protected secret storage and runtime records are not competing configuration
-authorities. The [product contract](spec.md#configuration-authority) owns the
-manual-edit and read-only agent-inspection boundaries. Proxy startup and lifetime follow
-the [model-proxy contract](spec.md#model-proxy), independently of Web interactions.
+Current-user-restricted secret files and runtime records are not competing
+configuration authorities. The [product contract](spec.md#configuration-authority)
+owns the manual-edit and read-only agent-inspection boundaries. Proxy startup and
+lifetime follow the [model-proxy contract](spec.md#model-proxy), independently of Web interactions.
 
 The [configuration contract](../configuration/spec.md) owns TOML field syntax and
 activation semantics. The service evaluates an immutable validated snapshot with
@@ -243,11 +243,9 @@ providers, models, or credentials. Supported login flows may leave their session
 with the native agent; this is not credential migration. Command-backed secrets
 must not execute merely to render a configuration preview.
 
-tmax-owned secrets and credential-bearing recovery data stay encrypted under
-`~/.tmax`. Storage must fail explicitly when locked or unavailable. Unlock may
-use protected input or supported OS protection; no unprotected reusable unlock
-secret belongs beside the encrypted data. Native-owned stores remain native.
-Automatic startup must disclose when storage cannot be unlocked in that context.
+The [product secret-protection contract](spec.md#local-access-and-secret-protection)
+owns supported tmax secret and recovery storage formats and file-access restrictions.
+Native-owned stores remain native.
 
 The credential owner must hide refresh coordination from inference and observation
 callers. Its publication guard covers both authorization identity and credential
@@ -284,9 +282,10 @@ A change proceeds through these boundaries:
 3. During actual execution, recheck captured inputs before mutation and reject
    concurrent changes. Serialize writes to shared native files. An earlier
    dry run does not supply the execution snapshot.
-4. Retain protected recovery information, write owned changes with per-file
-   replacement, and validate the resulting target configuration. Native CLI or
-   credential-store actions need their own documented recovery semantics.
+4. Retain current-user-restricted plaintext recovery information, write owned
+   changes with per-file replacement, and validate the resulting target
+   configuration. Native CLI or credential-store actions need their own
+   documented recovery semantics.
 5. Record applied state separately from runtime verification. A restart-dependent
    agent remains awaiting reload until its effective state is confirmed.
 

@@ -65,10 +65,15 @@ configuration, deleting a local key artifact, native logout, upstream revocation
 and cancellation of a subscription are distinct operations. tmax does not import
 native credentials or copy OAuth tokens to another refresher.
 
-Protected input for apply/restore is lazy: deterministic validation and no-op
-checks precede unlock. An executed key handoff can create a private, mode-0600
+Apply/restore resolve a referenced tmax secret only when the requested operation
+requires the key. Current-user-restricted tmax secret files are plaintext, not
+encrypted. An executed native key handoff can create a private, mode-0600
 **plaintext native-owned** key artifact, referenced through the agent's own key
-mechanism. Encrypted tmax recovery captures original and written bytes before
-native writes. Dry-run/inspect must disclose this boundary without resolving a
-secret. Later unrelated edits are preserved; conflicting later owned edits or a
-changed credential artifact require explicit recovery rather than force overwrite.
+mechanism. New tmax recovery records also contain plaintext and are restricted
+to the current OS account.
+
+Native recovery operations accept only supported storage formats. Unsupported
+recovery records remain unchanged and are unavailable to current recovery
+actions. Dry-run and inspect disclose the native credential handoff without
+resolving a secret. Later unrelated edits are preserved; conflicting later owned
+edits or a changed credential artifact require explicit recovery rather than force overwrite.

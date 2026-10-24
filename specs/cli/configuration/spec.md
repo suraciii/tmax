@@ -57,12 +57,12 @@ or corrupt config, not a valid file or an absent file. Ordinary setup initialize
 an absent file; ordinary edits/removals change a valid one. No authored TOML is
 required.
 
-Before replacement, preserve the exact rejected bytes encrypted and protected
-under `~/.tmax/recovery`; malformed content may contain secrets. Return an opaque
+Before replacement, save the exact rejected bytes in a current-user-restricted
+plaintext storage-version-2 file under `~/.tmax/recovery`; malformed content may
+contain secrets. Desired configuration remains `version = 1`. Return an opaque
 recovery handle, never the contents. Unsafe preservation, unknown current file
-identity, or concurrent change blocks overwrite. Save `version = 1` with empty
-desired collections as one valid change. If preservation succeeds but save fails,
-return the retained handle and completed recovery/failed save boundaries.
+identity, or concurrent change blocks overwrite. If preservation succeeds but save
+fails, return the retained handle and completed recovery/failed save boundaries.
 
 With a service running, activate the empty desired configuration atomically,
 removing configured proxy access and shared publication. Retain old bindings
@@ -75,21 +75,23 @@ Omitted autostart means disabled intent and uses normal changed-intent
 reconciliation. Report recovery/save/activation/autostart separately.
 Later setup uses ordinary commands, including explicit proxy provisioning.
 
-Dry-run reports rejected-file identity, protected preservation/reset, and full
+Dry-run reports rejected-file identity, restricted preservation/reset, and full
 proxy-key/publication/session impact without creating an artifact. There is no
 snapshot catalog, invalid-byte replay, restore service, partial salvage, or automatic reset.
 
 | Command | Retained invalid-file artifact operation |
 | --- | --- |
-| `config recovery list` | Safe handles, capture times, and protection state; no rejected content. |
-| `config recovery inspect RECORD` | Config-file identity, original revision, byte count, capture time, rejection category, ownership/protection, and discard support. Never decrypt rejected content. |
+| `config recovery list` | Safe handles, capture times, and file-access state; no rejected content. |
+| `config recovery inspect RECORD` | Config-file identity, original revision, byte count, capture time, rejection category, ownership/file-access state, and discard support. Never returns rejected content. |
 | `config recovery discard RECORD [--dry-run]` | Delete only that exact owned artifact after current ownership/concurrency checks. Do not change settings, credentials, native recovery, or bindings. |
 
 These operations work with absent/invalid config and use safe retained metadata,
-not secret resolution. They concern only reset artifacts; `agent recovery` owns
-native-change recovery. Retain artifacts until explicit discard, without expiry
-or restoration. Every completed capture remains reachable even if later reset
-fails. Discard reports its recovery boundary, not another resource's deletion.
+not secret resolution. They concern supported current-format reset artifacts only;
+`agent recovery` owns native-change recovery. Retain supported artifacts until
+explicit discard, without expiry or restoration. Every completed capture remains
+reachable even if later reset fails. Discard reports its recovery boundary, not
+another resource's deletion. Unsupported-format records are rejected and left
+unchanged; current recovery operations cannot inspect, restore, or discard them.
 
 Examples: `tmax config reset --dry-run`, `tmax config reset`,
 `tmax config recovery list`, `tmax config recovery inspect RECORD`, and

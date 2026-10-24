@@ -60,8 +60,9 @@ async fn run_autostart(argv: &[OsString]) -> ExitCode {
 }
 
 async fn run_management(argv: Vec<OsString>) -> io::Result<u8> {
-    let output_format = grammar::OutputFormat::from_argv(&argv);
     let root_command = grammar::command();
+    let (output_format, duplicate_global) =
+        grammar::OutputFormat::scan_global_options(&argv, &root_command);
 
     if argv.len() == 1 {
         let mut command = root_command;
@@ -78,6 +79,15 @@ async fn run_management(argv: Vec<OsString>) -> io::Result<u8> {
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
             ) =>
         {
+            if let Some(option) = duplicate_global {
+                let response = duplicate_global_response(&root_command, &argv, option);
+                let format = if option == "--format" {
+                    grammar::OutputFormat::Json
+                } else {
+                    output_format
+                };
+                return write_response(&response, format);
+            }
             io::stdout().write_all(error.to_string().as_bytes())?;
             return Ok(0);
         }
@@ -87,6 +97,15 @@ async fn run_management(argv: Vec<OsString>) -> io::Result<u8> {
             return write_response(&response, output_format);
         }
     };
+    if let Some(option) = duplicate_global {
+        let response = duplicate_global_response(&root_command, &argv, option);
+        let format = if option == "--format" {
+            grammar::OutputFormat::Json
+        } else {
+            output_format
+        };
+        return write_response(&response, format);
+    }
 
     if let Some(("help", help_matches)) = matches.subcommand() {
         let path = grammar::help_path(help_matches);
@@ -106,17 +125,9 @@ async fn run_management(argv: Vec<OsString>) -> io::Result<u8> {
                 "message": "Unknown command in offline help path. Run `tmax --help` for supported commands.",
             }),
         };
-        let format = match matches.get_one::<String>("format").map(String::as_str) {
-            Some("text") => grammar::OutputFormat::Text,
-            _ => grammar::OutputFormat::Json,
-        };
-        return write_response(&response, format);
+        return write_response(&response, output_format);
     }
 
-    let output_format = match matches.get_one::<String>("format").map(String::as_str) {
-        Some("text") => grammar::OutputFormat::Text,
-        _ => grammar::OutputFormat::Json,
-    };
     let response = tmax_core::execute(grammar::request(&root_command, &matches)).await;
     write_response(&response, output_format)
 }
@@ -136,6 +147,20 @@ fn parse_error_response(
             "status": "error",
             "data": null,
             "message": message,
+        }),
+    }
+}
+
+fn duplicate_global_response(command: &clap::Command, argv: &[OsString], option: &str) -> Response {
+    Response {
+        exit_code: 2,
+        body: json!({
+            "schema_version": 1,
+            "operation": grammar::operation_hint(command, argv),
+            "code": "invalid_arguments",
+            "status": "error",
+            "data": null,
+            "message": format!("Global option {option} may be supplied only once."),
         }),
     }
 }

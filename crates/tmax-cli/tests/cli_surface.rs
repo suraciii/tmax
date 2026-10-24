@@ -37,6 +37,25 @@ fn unknown_secret_option_tokens_are_redacted() {
     }
 }
 #[test]
+fn removed_unlock_options_are_rejected_as_unknown_and_redacted() {
+    for args in [
+        vec!["status", "--unlock-stdin"],
+        vec![
+            "proxy",
+            "start",
+            "--unlock-fd",
+            "UNLOCK-SECRET-MUST-NOT-ECHO",
+        ],
+    ] {
+        let output = tmax(&args);
+        let response = json_error(&output);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(response["code"], "invalid_arguments");
+        assert!(!stdout.contains("UNLOCK-SECRET-MUST-NOT-ECHO"));
+    }
+}
+
+#[test]
 fn invalid_enum_names_its_option_without_echoing_value() {
     let output = tmax(&[
         "provider",
@@ -126,6 +145,62 @@ fn invalid_or_duplicate_format_falls_back_to_json() {
         let stdout = String::from_utf8(output.stdout).unwrap();
         assert!(!stdout.contains("PRIVATE-FORMAT-SECRET"));
     }
+}
+#[test]
+fn repeated_global_options_are_rejected_across_command_levels() {
+    for args in [
+        vec!["--format", "json", "provider", "list", "--format", "text"],
+        vec!["provider", "--format", "json", "list", "--format", "text"],
+        vec![
+            "--format", "json", "provider", "--format", "json", "list", "--format", "json",
+        ],
+    ] {
+        let output = tmax(&args);
+        let response = json_error(&output);
+        assert_eq!(response["operation"], "provider list");
+        assert!(response["message"].as_str().unwrap().contains("--format"));
+    }
+
+    let output = tmax(&[
+        "--non-interactive",
+        "provider",
+        "--non-interactive",
+        "list",
+        "--non-interactive",
+        "--format",
+        "text",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("--non-interactive"));
+}
+
+#[test]
+fn help_path_and_leaf_help_both_expose_inherited_global_options() {
+    for args in [
+        vec!["provider", "key", "set", "--help"],
+        vec!["help", "provider", "key", "set"],
+    ] {
+        let output = tmax(&args);
+        assert_eq!(output.status.code(), Some(0));
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(help.contains("--format"));
+        assert!(help.contains("--non-interactive"));
+    }
+}
+
+#[test]
+fn one_text_format_is_supported_before_or_after_the_command_path() {
+    let before = tmax(&["--format", "text", "status", "--unknown"]);
+    assert_eq!(before.status.code(), Some(2));
+    assert!(before.stdout.is_empty());
+    assert!(!before.stderr.is_empty());
+
+    let after = tmax(&["status", "--unknown", "--format", "text"]);
+    assert_eq!(after.status.code(), Some(2));
+    assert!(after.stdout.is_empty());
+    assert!(!after.stderr.is_empty());
 }
 
 #[test]

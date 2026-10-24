@@ -54,6 +54,11 @@ fn invalid() -> Error {
 fn clean_json(text: &str) -> Result<String> {
     let bytes = text.as_bytes();
     let mut clean = bytes.to_vec();
+    // Qualified JSON native readers accept an initial UTF-8 BOM. Keep all edit
+    // offsets relative to the original bytes instead of stripping its prefix.
+    if bytes.starts_with(b"\xef\xbb\xbf") {
+        clean[..3].fill(b' ');
+    }
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'"' {
@@ -585,6 +590,24 @@ mod tests {
             parse(&edited, Format::Json).unwrap()["providers"]["local"]["settings"]["baseURL"],
             "http://127.0.0.1:17840"
         );
+    }
+    #[test]
+    fn initial_json_bom_survives_apply_and_restore_with_unrelated_unicode_edits() {
+        let original = "\u{feff}{ // user note\n\"defaultModel\":\"old\",\"theme\":\"深色\"}\n";
+        let path = ["defaultModel".into()];
+        let applied = set(original, Format::Json, &path, Some(&Value::from("new"))).unwrap();
+        assert!(applied.starts_with('\u{feff}'));
+        assert!(applied.contains("// user note"));
+        assert_eq!(
+            parse(&applied, Format::Json).unwrap()["defaultModel"],
+            "new"
+        );
+        let later = applied.replace("深色", "浅色");
+        let restored = set(&later, Format::Json, &path, Some(&Value::from("old"))).unwrap();
+        assert_eq!(restored, original.replace("深色", "浅色"));
+        for malformed in [" \u{feff}{}", "{}\u{feff}", "\u{feff}{broken}"] {
+            assert!(parse(malformed, Format::Json).is_err());
+        }
     }
     #[test]
     fn yaml_preserves_unowned_comments() {
