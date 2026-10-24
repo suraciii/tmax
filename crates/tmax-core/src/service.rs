@@ -1472,20 +1472,20 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
                     .into_response();
             }
             let mut channels = Vec::new();
-            if !request.dry_run {
-                if let Some(key) = envelope.key.take() {
-                    let key = Zeroizing::new(key);
-                    match protected_form_input(&key) {
-                        Ok((file, fd)) => {
-                            request
-                                .arguments
-                                .insert("key-fd".into(), vec![fd.to_string()]);
-                            channels.push(file);
-                        }
-                        Err(error) => {
-                            return (StatusCode::BAD_REQUEST, axum::Json(json!({"error":error})))
-                                .into_response();
-                        }
+            if !request.dry_run
+                && let Some(key) = envelope.key.take()
+            {
+                let key = Zeroizing::new(key);
+                match protected_form_input(&key) {
+                    Ok((file, fd)) => {
+                        request
+                            .arguments
+                            .insert("key-fd".into(), vec![fd.to_string()]);
+                        channels.push(file);
+                    }
+                    Err(error) => {
+                        return (StatusCode::BAD_REQUEST, axum::Json(json!({"error":error})))
+                            .into_response();
                     }
                 }
             }
