@@ -138,7 +138,7 @@ credential handoff.
 | Codex CLI | User-scoped custom provider with `wire_api = "responses"`, the Go Responses base from the map above, and an explicit key source such as `OPENCODE_API_KEY`; Codex appends `/responses` | Only Responses-qualified models are eligible. Respect the supported user/profile scope and restrictions on project-level provider configuration. Go recognizes Codex native session identity, but some versions and gateway configurations omit it. |
 | Hermes Agent | Native `opencode-go` provider, `hermes model`, and `OPENCODE_GO_API_KEY` or the supported saved key; the guide distinguishes pay-as-you-go `opencode-zen` and `OPENCODE_ZEN_API_KEY` | Qualify the active `HERMES_HOME`/profile and its effective secret and model settings. The official guide requires v0.21.6 or later for automatic session coverage, including main and auxiliary OpenCode requests. This is an upstream requirement, not a tmax-tested version range. |
 | stock pi | Native `opencode-go/<model-id>` and `OPENCODE_API_KEY`, or native key entry through `/login`; the default saved-key store is `~/.pi/agent/auth.json` | Resolve the active agent directory and credential precedence. The same environment-variable name also serves its pay-as-you-go provider. Official Go guidance says current builds send session information and older installations need an update; it does not establish a numeric tmax support range. |
-| omp | The omp project lists `opencode-go` and `opencode-zen` using `OPENCODE_API_KEY`; model/provider configuration belongs to the active profile's `models.yml`/`models.yaml` | Qualify omp separately from stock pi, including API selection, credential precedence, active profile/auth store, and session/client headers on every Go-bound inference path. The consulted project evidence does not establish that full Go identity contract. |
+| omp | The omp project lists `opencode-go` and `opencode-zen` using `OPENCODE_API_KEY`; model/provider configuration belongs to the active profile's `models.yml`/`models.yaml` | Qualify omp separately from stock pi, including API selection, credential precedence, active profile/auth store, and session/client headers on every Go-bound inference path. The consulted omp **18.12.6** source establishes the session-header mechanism below; it does not establish successful Go inference, entitlement, or OpenCode endorsement. |
 
 The Hermes and pi guides describe native per-model API selection. That evidence
 does not make a URL-only custom provider equivalent to their native integration,
@@ -185,8 +185,25 @@ session identity. Every forwarding path must retain the truthful client identity
 handling the main visible request alone is insufficient. A gateway or client
 version that drops session identity must remain unavailable until an upgrade,
 supported configuration change, or qualified forwarding path fixes that loss.
-A working direct path must not be disabled merely because a gateway path loses the
-header.
+A working direct path must not be disabled merely because a gateway path loses
+the header.
+
+The source-qualified omp **18.12.6** mechanism is a per-request header projection
+in `packages/ai/src/providers/inference-headers.ts`. For providers `opencode-go`
+and `opencode-zen`, `applyInferenceHeaders` sets `x-opencode-session` to the
+agent's authoritative conversation session ID and overwrites any same-named
+header, while `User-Agent` uses a caller-wins rule. The ID is the live session
+identity, not a static provider, key, process, or conversation-set value. The
+companion `applySessionHeader` path supplies a model's configured
+`compat.sessionHeader` name with the same live ID for other hosts.
+
+This qualifies the header mechanism, its live per-conversation value, and its
+overwrite precedence. It does not establish that omp covers every auxiliary
+Go-bound path, that Go recognizes the header, that a tmax `models.yml` custom
+provider reaches the same code path, or successful Go inference. The
+`extraHeaders` configuration object is a separate static mechanism: writing a
+fixed `x-opencode-session` there is not a qualified per-conversation identity and
+must not be used to claim coverage.
 
 The source-qualified stock pi **1.2.0** mechanisms have distinct boundaries:
 
@@ -400,10 +417,22 @@ Go usage provenance, distinct from a published versioned API contract:
 Agent-project evidence, not additional OpenCode endorsement:
 
 - [omp providers](https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md):
-  Go provider/key names and credential/profile precedence. Full Go session and
-  client-identity behavior remains unqualified by the consulted evidence.
+  Go provider/key names and credential/profile precedence.
 - [omp endpoint constraints](https://github.com/can1357/oh-my-pi/blob/main/docs/provider-endpoint-constraints.md):
-  endpoint and transport distinctions; not proof of Go header coverage.
+  endpoint and transport distinctions.
+- [omp source inspected for the session-header mechanism](https://github.com/can1357/oh-my-pi/blob/7414b7c919b59dd14db354a8f6b9164426237dff/packages/ai/src/providers/inference-headers.ts):
+  `applyInferenceHeaders` projects the authoritative session ID as
+  `x-opencode-session` for `opencode-go`/`opencode-zen` with overwrite
+  precedence, and `applySessionHeader` supplies a configured
+  `compat.sessionHeader` name with the same live ID. Source inspection
+  qualifies the mechanism, not Go recognition, auxiliary-path coverage, or
+  successful Go inference.
+- [omp Go route resolution](https://github.com/can1357/oh-my-pi/blob/7414b7c919b59dd14db354a8f6b9164426237dff/packages/catalog/src/provider-models/openai-compat.ts):
+  `createOpenCodeApiResolution` defaults to `openai-completions` and applies
+  per-ID pins from the `api-routes` behavior rules. `deepseek-v4.1-flash` is not
+  pinned to Responses, which agrees with this contract's Chat Completions
+  scenario for that exact ID. Source inspection does not qualify the Go
+  endpoint itself.
 - [stock pi models](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md):
   key ownership and precedence, native API selection, and retained authentication
   when only a built-in provider's base URL changes.
