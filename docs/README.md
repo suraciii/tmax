@@ -9,6 +9,8 @@ Contracts live in [../specs/](../specs/AGENTS.md). Engineering practices live in
 ## Guides
 
 - [CLI usage](usage.md) — provider/model setup, manual input and rule previews, proxy-only use, and the explicit Pi apply/restore path.
+- [Local Web workspace](web.md) — task pages, explicit effects, protected inputs,
+  and browser verification.
 - [Building and verification](building.md) — dependencies, build commands, the
   verification gates, and the evidence format.
 - [Native agent configuration references](agents/README.md) — version-qualified

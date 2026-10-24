@@ -1,234 +1,40 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>tmax · local model access</title>
-<style>body{font:16px system-ui,sans-serif;margin:0;background:#101723;color:#ecf1fa}header,main{max-width:1100px;margin:auto;padding:24px}header{border-bottom:1px solid #344158}h1{margin:0}nav{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0}button,select,input,textarea{font:inherit;color:inherit;background:#192438;border:1px solid #536782;border-radius:6px;padding:9px}button{cursor:pointer}button:hover,button[aria-current=true]{background:#304668}section{background:#162133;padding:22px;border-radius:10px;margin:16px 0}label{display:block;margin:12px 0}input,textarea,select{box-sizing:border-box;width:100%;margin-top:5px}input[type=checkbox]{width:auto}textarea{min-height:68px}small,.muted{color:#b4c4d9}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:600px;overflow:auto;background:#0c1320;padding:16px;border-radius:8px}.actions{display:flex;gap:10px;flex-wrap:wrap}.columns{display:grid;grid-template-columns:1fr 1fr;gap:18px}.warning{color:#ffd48a}.error{color:#ffb1b1}.hidden{display:none}@media(max-width:700px){.columns{grid-template-columns:1fr}main,header{padding:15px}}</style></head>
-<body><header><h1>tmax</h1><p data-i18n="tagline">Your providers, models and coding agents. One local configuration authority.</p><small data-i18n="headerNotice">Loopback management · no account or browser session · direct access and proxy inference are independent.</small><div style="display:flex;align-items:center;justify-content:flex-end;gap:8px"><label id="language-label" for="language" data-i18n="languageLabel" style="margin:0">Language</label><select id="language" aria-label="Language" style="width:auto;margin:0"><option value="en">English</option><option value="zh-CN">简体中文</option></select></div></header>
-<main><nav id="navigation" aria-label="Task areas" data-i18n-aria="areasAria"></nav><section><h2 id="area-title">Overview</h2><p id="area-description"></p><div class="actions"><button id="refresh" type="button" data-i18n="refresh">Refresh local evidence</button></div><p id="summary-status" class="muted" aria-live="polite" data-i18n="loading">Loading local state…</p><pre id="summary" aria-live="polite"></pre></section>
-<section><h2 data-i18n="manageHeading">Manage this area</h2><p class="muted" data-i18n="manageNote">Choose an explicit task. Reads never start inference, refresh credentials, or contact providers. Mutations execute directly; preview is optional.</p><label><span data-i18n="taskLabel">Task</span><select id="operation" aria-label="Task" data-i18n-aria="taskLabel"></select></label><p id="effect"></p><form id="task"><div id="operands" class="columns"></div><div id="arguments" class="columns"></div><div class="columns"><label id="revision-label"><span data-i18n="revisionGuard">Configuration revision guard (optional)</span><input id="revision" autocomplete="off" placeholder="Current file revision, required for indexed edits" data-i18n-placeholder="revisionPlaceholder"></label><label><input id="preview" type="checkbox"> <span data-i18n="previewLabel">Preview this mutation without effects or secret reads</span></label></div><details><summary data-i18n="providerKeyInput">Provider key input</summary><p class="warning" data-i18n="providerKeyNotice">A key is sent only when provider API-key authentication is set; this page does not retain it and clears it on submit. Do not put keys into ordinary task fields.</p><label id="key-label"><span data-i18n="suppliedProviderKey">Supplied provider API key</span><input id="key" type="password" autocomplete="off"></label></details><p id="risk" class="warning"></p><div class="actions"><button id="run" type="submit" data-i18n="runTask">Run task</button></div></form></section>
-<section id="key-section" class="hidden"><h2 data-i18n="sharedProxyKey">Shared proxy key</h2><p data-i18n="proxyKeyNote">Explicit reveal for an independently configured client. Ordinary status and operation results do not include this key. Revealed text disappears when you hide it or leave this area.</p><div class="actions"><button id="reveal" type="button" data-i18n="revealKey">Reveal shared key</button><button id="hide" type="button" data-i18n="hideKey">Hide key</button></div><pre id="revealed" class="hidden"></pre></section>
-<section><h2 data-i18n="resultHeading">Operation result</h2><p id="result-status" class="muted" aria-live="polite" data-i18n="noOperation">No operation requested.</p><pre id="result" aria-live="polite"></pre></section></main>
-<script>
-'use strict';
-const $=id=>document.getElementById(id);
-const messages={
- en:{tagline:'Your providers, models and coding agents. One local configuration authority.',headerNotice:'Loopback management · no account or browser session · direct access and proxy inference are independent.',languageLabel:'Language',areasAria:'Task areas',taskLabel:'Task',refresh:'Refresh local evidence',loading:'Loading local state…',manageHeading:'Manage this area',manageNote:'Choose an explicit task. Reads never start inference, refresh credentials, or contact providers. Mutations execute directly; preview is optional.',revisionGuard:'Configuration revision guard (optional)',revisionPlaceholder:'Current file revision, required for indexed edits',previewLabel:'Preview this mutation without effects or secret reads',providerKeyInput:'Provider key input',providerKeyNotice:'A key is sent only when provider API-key authentication is set; this page does not retain it and clears it on submit. Do not put keys into ordinary task fields.',suppliedProviderKey:'Supplied provider API key',runTask:'Run task',sharedProxyKey:'Shared proxy key',proxyKeyNote:'Explicit reveal for an independently configured client. Ordinary status and operation results do not include this key. Revealed text disappears when you hide it or leave this area.',revealKey:'Reveal shared key',hideKey:'Hide key',resultHeading:'Operation result',noOperation:'No operation requested.',documentTitle:'tmax · local model access',
-  areaOverview:'Overview',areaProviders:'Providers',areaModels:'Models',areaAgents:'Agents',areaProxy:'Proxy',
-  descOverview:'Provider instances by service, quota freshness, known renewal dates, saved/applied agent state and proxy readiness. Reads do not refresh or verify upstream/native use.',descProviders:'Keep each access instance, authentication owner, subscription information and input freshness distinct.',descModels:'Exact qualified concrete offerings, priorities and user-defined aliases with explicit candidates. Previews use held local evidence; no automatic probes.',descAgents:'Codex, pi, omp, OpenCode and Hermes are separate adapters. Inspect, register, select, apply and restore without importing native credentials.',descProxy:'Explicit listener lifecycle, autostart, shared key, bounded local history and observed usage. Stopping does not rewrite native configurations.',
-  addArgument:'Add --{0}',removeRow:'Remove row',operandPrefix:'Operand {0}',notSupplied:'Not supplied',onePerLine:'One value per line',nativeProtocol:'Native protocol',field:'Field',value:'Value',exactProtocol:'Exact declared native protocol',
-  effectMutation:'This operation may change saved settings or perform its named explicit effect. Preview has no effects.',effectInspect:'Effect-free local inspection. Unknown or unverified evidence remains unknown.',executeTask:'Execute task',inspectTask:'Inspect',paidProbe:'Paid inference probe: this explicit request may consume quota or incur unknown charges. It does not verify account identity or remaining quota.',normalStop:'Normal stop refuses active inference. --cancel-active explicitly interrupts requests; no replay occurs.',
-  pairRequired:'--{0} requires both separate values',managementRejected:'Management rejected operation ({0})',operationSuccess:'{0} completed successfully.',operationIncomplete:'{0} is incomplete ({1}); inspect the raw result for completed effects and next action.',operationError:'{0} failed ({1}); inspect the raw result for details.',operationPartial:'{0} returned a partial result ({1}); inspect the raw result.',operationUnknown:'Operation result received; inspect the raw result.',operationRequestFailed:'Request failed: {0}',readSuccess:'Local read completed.',readPartial:'Local read is partial ({0}); details follow.',readError:'Local read failed ({0}); details follow.',readUnavailable:'Local read is unavailable.',overviewReady:'Overview reflects the most recent local reads. Refresh to request new evidence.',overviewUnavailable:'Overview reads unavailable ({0}).',catalogUnavailable:'Local task catalog unavailable: {0}',
-  operandIntegration:'Integration ID',operandProviderExisting:'Existing provider ID',operandProviderNew:'New provider ID',operandProvider:'Provider ID',operandInput:'Input name',operandOffering:'Qualified offering',operandUpstreamModel:'New exact upstream model ID',operandRule:'Rule ID',operandIndex:'Local index',operandMetadataField:'Metadata list field',operandAliasExisting:'Existing alias ID',operandAliasNew:'New alias ID',operandAlias:'Alias ID',operandPublicModel:'Public model ID',operandTargetExisting:'Existing target ID',operandTargetNew:'New target ID',operandTarget:'Target ID',operandRole:'Native role',operandNativeProvider:'Native provider entry',operandModel:'Model ID',operandRecovery:'Recovery handle',operandCatalogProvider:'Catalog provider ID',operandProxyUrl:'Outbound proxy URL',operandRequest:'Request handle',operandSecret:'Secret reference',
-  overviewTitle:'Local configuration and proxy',statusPartial:'Status data is partial ({0}).',savedConfig:'Saved configuration: {0}',loadedSnapshot:'Loaded configuration snapshot: {0}{1}',residentDiscovery:'Resident discovery: {0}',proxyReadiness:'Proxy readiness: {0}',inferenceListener:'Inference listener: {0}',statusUnavailable:'Status read: unavailable ({0})',providerHeading:'Provider instances by service',providerListPartial:'Provider list data is partial ({0}).',noProviders:'No provider instances are configured.',providerListUnavailable:'Provider list: unavailable ({0})',unknownProvider:'Unknown provider ID',integrationLabel:'Integration: {0}',metadataLabel:'Catalog metadata: {0}',unknownService:'Unknown service',enabled:'enabled',disabled:'disabled',enabledUnknown:'enabled state unknown',authenticationConfig:'authentication configuration: {0}',authNotConfigured:'not configured',authUnknown:'unknown',authConfigured:'{0} configured; upstream authentication unverified',providerDisabledIssue:'disabled in saved configuration',providerAuthIssue:'authentication is not configured',providerDetailUnavailable:'Provider detail: unavailable ({0})',providerDetailPartial:'Provider detail is partial ({0}).',providerDetailIssue:'provider detail unavailable',providerDetailPartialIssue:'provider detail is partial',quotaObservation:'Provider quota observation: {0}; source {1}; freshness {2}{3}',quotaUnknown:'unknown or unavailable in the current detail',retrieved:'retrieved',observed:'observed',quotaAttemptFailed:'latest provider quota observation attempt failed{0}',inputPartial:'Provider-local input data is partial ({0}).',inputPartialIssue:'provider-local input state is partial',noQuotaInputs:'Declared provider-local quota inputs: none.',quotaInput:'Quota input {0} — {1}; source {2}{3}{4}',expiredInput:'expired (stale under the declared freshness rule)',unavailableInput:'unavailable',expiredIssue:'quota input {0} is expired under its declared freshness rule',inputUnavailable:'Provider-local input read: unavailable ({0})',inputUnavailableIssue:'provider-local input state unavailable',knownIssues:'Known issues: {0}.',noExplicitIssue:'No explicit problem identified by these reads; unknown and unverified states remain as shown.',
-  agentHeading:'Agent configuration state',agentListPartial:'Agent list data is partial ({0}).',agentListUnavailable:'Agent list: unavailable ({0})',noAgents:'No managed Agent targets are configured.',unknownTarget:'Unknown target',agentInspectUnavailable:'{0} — inspection unavailable ({1}); saved configuration is not evidence of application or effective native use.',agentInspectPartial:'{0} inspection data is partial ({1}).',agentState:'{0} ({1}): saved={2}; applied={3}; effective={4}',inspectionBlockers:'Inspection blockers: {0}.',noDefault:'Saved target has no configured default.',renewalHeading:'Known renewal dates',upcomingHeading:'Upcoming (later than browser-local date {0}):',todayHeading:'Today:',earlierHeading:'Earlier configured dates (not a billing-status claim):',unknownHeading:'Unknown / unavailable:',noneKnown:'None known.',none:'None.',renewalUnknown:'{0}: provider detail unavailable ({1}).',noRenewal:'{0}: no known renewal date in saved provider information.',renewalEarlier:'{0} — configured date is earlier than the browser-local calendar date; billing outcome is not inferred.',renewalToday:'{0} — date is today in the browser-local calendar; billing outcome is not inferred.',providerListDatesUnavailable:'Provider list unavailable ({0}); renewal dates could not be read.',quotaCaveat:'Quota observations and provider-local inputs are shown per provider; no quota totals are combined. Retrieval time is not treated as a freshness interval.',serviceUnknown:'Unknown provider'
- },
- 'zh-CN':{tagline:'你的服务商、模型与编程代理，共用一份本地配置。',headerNotice:'仅限本机回环地址管理 · 无账户或浏览器会话 · 直连与代理推理相互独立。',languageLabel:'语言 / Language',areasAria:'任务区域',taskLabel:'任务',refresh:'刷新本地信息',loading:'正在读取本地状态…',manageHeading:'管理此区域',manageNote:'请选择明确任务。读取不会启动推理、刷新凭据或联系服务商。修改会直接执行；可选预览。',revisionGuard:'配置版本校验（可选）',revisionPlaceholder:'索引编辑所需的当前文件版本',previewLabel:'预览此修改，不产生副作用且不读取密钥',providerKeyInput:'服务商密钥输入',providerKeyNotice:'仅在设置服务商 API 密钥认证时才会发送密钥；本页面不会保留密钥，并会在提交时清除。请勿将密钥填入普通任务字段。',suppliedProviderKey:'输入服务商 API 密钥',runTask:'运行任务',sharedProxyKey:'共享代理密钥',proxyKeyNote:'仅在为独立客户端配置时显式显示。普通状态和操作结果不包含此密钥。隐藏密钥或离开此区域后，显示内容会消失。',revealKey:'显示共享密钥',hideKey:'隐藏密钥',resultHeading:'操作结果',noOperation:'尚未请求操作。',documentTitle:'tmax · 本地模型访问',
-  areaOverview:'概览',areaProviders:'服务商',areaModels:'模型',areaAgents:'编程代理',areaProxy:'模型代理',
-  descOverview:'按服务商展示实例、配额时效、已知续订日期、代理配置保存/应用状态和代理就绪情况。读取不会刷新数据，也不会验证上游或原生使用情况。',descProviders:'分别管理每个访问实例、认证所有者、订阅信息及输入数据时效。',descModels:'管理精确限定的具体模型、优先级和带显式候选项的自定义别名。预览使用已有本地证据；不会自动探测。',descAgents:'Codex、pi、omp、OpenCode 和 Hermes 使用独立适配器。可检查、注册、选择、应用和恢复，不导入原生凭据。',descProxy:'管理监听器生命周期、自启动、共享密钥、有限本地历史和已观察用量。停止代理不会改写原生配置。',
-  addArgument:'添加 --{0}',removeRow:'删除此行',operandPrefix:'参数 {0}',notSupplied:'未提供',onePerLine:'每行一个值',nativeProtocol:'原生协议',field:'字段',value:'值',exactProtocol:'精确声明的原生协议',
-  effectMutation:'此操作可能更改已保存设置或执行其明确命名的效果。预览不会产生效果。',effectInspect:'无副作用的本地检查。未知或未经验证的证据仍会保持未知。',executeTask:'执行任务',inspectTask:'检查',paidProbe:'付费推理探测：此显式请求可能消耗配额或产生未知费用。它不会验证账户身份或剩余配额。',normalStop:'普通停止会拒绝仍在运行的推理。--cancel-active 会明确中断请求；不会重放请求。',
-  pairRequired:'--{0} 需要同时提供两个独立值',managementRejected:'管理操作被拒绝（{0}）',operationSuccess:'{0}已成功完成。',operationIncomplete:'{0}未完整完成（{1}）；请查看原始结果中的已完成效果和后续操作。',operationError:'{0}失败（{1}）；请查看原始结果了解详情。',operationPartial:'{0}返回部分结果（{1}）；请查看原始结果。',operationUnknown:'已收到操作结果；请查看原始结果。',operationRequestFailed:'请求失败：{0}',readSuccess:'本地读取已完成。',readPartial:'本地读取不完整（{0}）；详情见下方。',readError:'本地读取失败（{0}）；详情见下方。',readUnavailable:'本地读取不可用。',overviewReady:'概览根据最近一次本地读取生成。刷新可请求最新信息。',overviewUnavailable:'概览读取不可用（{0}）。',catalogUnavailable:'本地任务目录不可用：{0}',
-  operandIntegration:'集成 ID',operandProviderExisting:'现有服务商 ID',operandProviderNew:'新服务商 ID',operandProvider:'服务商 ID',operandInput:'输入名称',operandOffering:'限定模型',operandUpstreamModel:'新的精确上游模型 ID',operandRule:'规则 ID',operandIndex:'本地索引',operandMetadataField:'元数据列表字段',operandAliasExisting:'现有别名 ID',operandAliasNew:'新别名 ID',operandAlias:'别名 ID',operandPublicModel:'公开模型 ID',operandTargetExisting:'现有目标 ID',operandTargetNew:'新目标 ID',operandTarget:'目标 ID',operandRole:'原生角色',operandNativeProvider:'原生服务商条目',operandModel:'模型 ID',operandRecovery:'恢复句柄',operandCatalogProvider:'目录服务商 ID',operandProxyUrl:'出站代理 URL',operandRequest:'请求句柄',operandSecret:'密钥引用',
-  overviewTitle:'本地配置与代理',statusPartial:'状态数据不完整（{0}）。',savedConfig:'已保存配置：{0}',loadedSnapshot:'已加载配置快照：{0}{1}',residentDiscovery:'常驻服务发现状态：{0}',proxyReadiness:'代理就绪状态：{0}',inferenceListener:'推理监听器：{0}',statusUnavailable:'状态读取不可用（{0}）',providerHeading:'按服务查看服务商实例',providerListPartial:'服务商列表数据不完整（{0}）。',noProviders:'尚未配置服务商实例。',providerListUnavailable:'服务商列表不可用（{0}）',unknownProvider:'未知服务商 ID',integrationLabel:'集成：{0}',metadataLabel:'目录元数据：{0}',unknownService:'未知服务',enabled:'已启用',disabled:'已停用',enabledUnknown:'启用状态未知',authenticationConfig:'认证配置：{0}',authNotConfigured:'未配置',authUnknown:'未知',authConfigured:'已配置 {0}；上游认证尚未验证',providerDisabledIssue:'已保存配置中已停用',providerAuthIssue:'尚未配置认证',providerDetailUnavailable:'服务商详情不可用（{0}）',providerDetailPartial:'服务商详情不完整（{0}）。',providerDetailIssue:'服务商详情不可用',providerDetailPartialIssue:'服务商详情不完整',quotaObservation:'服务商配额观察：{0}；来源 {1}；时效 {2}{3}',quotaUnknown:'当前详情中未知或不可用',retrieved:'检索时间',observed:'观察时间',quotaAttemptFailed:'最近一次服务商配额观察失败{0}',inputPartial:'服务商本地输入数据不完整（{0}）。',inputPartialIssue:'服务商本地输入状态不完整',noQuotaInputs:'未声明服务商本地配额输入。',quotaInput:'配额输入 {0} — {1}；来源 {2}{3}{4}',expiredInput:'已过期（按声明的时效规则判定）',unavailableInput:'不可用',expiredIssue:'配额输入 {0} 已按声明的时效规则过期',inputUnavailable:'服务商本地输入读取不可用（{0}）',inputUnavailableIssue:'服务商本地输入状态不可用',knownIssues:'已知问题：{0}。',noExplicitIssue:'这些读取未发现明确问题；未知和未经验证的状态仍按原样显示。',
-  agentHeading:'编程代理配置状态',agentListPartial:'编程代理列表数据不完整（{0}）。',agentListUnavailable:'编程代理列表不可用（{0}）',noAgents:'尚未配置受管理的编程代理目标。',unknownTarget:'未知目标',agentInspectUnavailable:'{0} — 检查不可用（{1}）；已保存配置不能证明原生配置已应用或实际生效。',agentInspectPartial:'{0} 检查数据不完整（{1}）。',agentState:'{0}（{1}）：已保存={2}；已应用={3}；实际生效={4}',inspectionBlockers:'检查阻碍项：{0}。',noDefault:'已保存目标尚未配置默认模型。',renewalHeading:'已知续订日期',upcomingHeading:'即将到期（晚于浏览器本地日期 {0}）：',todayHeading:'今天：',earlierHeading:'更早的已配置日期（不代表账单状态）：',unknownHeading:'未知 / 不可用：',noneKnown:'无已知日期。',none:'无。',renewalUnknown:'{0}：服务商详情不可用（{1}）。',noRenewal:'{0}：已保存的服务商信息中没有已知续订日期。',renewalEarlier:'{0} — 配置日期早于浏览器本地日历日期；不据此推断账单结果。',renewalToday:'{0} — 日期为浏览器本地日历中的今天；不据此推断账单结果。',providerListDatesUnavailable:'服务商列表不可用（{0}）；无法读取续订日期。',quotaCaveat:'按服务商分别显示配额观察和本地输入；不合并配额总量。检索时间不作为时效区间。',serviceUnknown:'未知服务商'
- }
-};
-Object.assign(messages.en,{unknownAgent:'unknown Agent',stateUnknown:'unknown',stateReady:'ready',stateNotReady:'not ready',stateConfigured:'configured',stateUnconfigured:'not configured',stateInvalid:'invalid',statePending:'pending',statePendingNative:'pending native changes',stateAwaitingReload:'awaiting native reload',stateApplied:'applied',stateNotApplied:'not applied',stateBlocked:'blocked',stateUnverified:'unverified',stateUnavailable:'unavailable',stateExpired:'expired',stateFresh:'fresh',stateStale:'stale',stateSuccess:'success',stateFailed:'failed',stateRunning:'running',stateStopped:'stopped',stateLoaded:'loaded',stateNotLoaded:'not loaded',stateValid:'valid',statePartial:'partial',scopeLabel:'scope',attemptLabel:'latest attempt',issueSeparator:'; '});
-Object.assign(messages.en,{operationRequestFailed:'Request failed; inspect the raw result for details.',operationBlocked:'{0} is blocked ({1}); inspect the raw result for the blocker.',operationDryRun:'{0} preview is ready; no changes were executed.',operationCancelled:'{0} was cancelled ({1}).'});
-Object.assign(messages['zh-CN'],{unknownAgent:'未知编码 Agent',stateUnknown:'未知',stateReady:'就绪',stateNotReady:'未就绪',stateConfigured:'已配置',stateUnconfigured:'未配置',stateInvalid:'无效',statePending:'待处理',statePendingNative:'待应用原生更改',stateAwaitingReload:'等待原生代理重新加载',stateApplied:'已应用',stateNotApplied:'未应用',stateBlocked:'受阻',stateUnverified:'未经验证',stateUnavailable:'不可用',stateExpired:'已过期',stateFresh:'新鲜',stateStale:'已陈旧',stateSuccess:'成功',stateFailed:'失败',stateRunning:'运行中',stateStopped:'已停止',stateLoaded:'已加载',stateNotLoaded:'未加载',stateValid:'有效',statePartial:'部分',scopeLabel:'范围',attemptLabel:'最近尝试',issueSeparator:'；',operationRequestFailed:'请求失败；请查看原始结果了解详情。',operationBlocked:'{0}已受阻（{1}）；请查看原始结果中的阻碍原因。',operationDryRun:'{0}预览已就绪；未执行任何更改。',operationCancelled:'{0}已取消（{1}）。',tagline:'你的服务商、模型与编码 Agent，共用一份本地配置。',areaAgents:'编码 Agent',descOverview:'按服务商展示实例、配额时效、已知续订日期、Agent 配置保存/应用状态和模型代理就绪情况。读取不会刷新数据，也不会验证上游或原生使用情况。',descAgents:'Codex、pi、omp、OpenCode 和 Hermes 等编码 Agent 使用独立适配器。可检查、注册、选择、应用和恢复，不导入原生凭据。',agentHeading:'Agent 配置状态',agentListPartial:'Agent 列表数据不完整（{0}）。',agentListUnavailable:'Agent 列表不可用（{0}）',noAgents:'尚未配置受管理的编码 Agent 目标。'});
-messages['zh-CN'].stateAwaitingReload='等待原生 Agent 重新加载';
-Object.assign(messages['zh-CN'],{headerNotice:'仅限本机回环地址管理 · 无账户或浏览器会话 · 直连与模型代理推理相互独立。',sharedProxyKey:'共享模型代理密钥',proxyKeyNote:'仅在为独立客户端配置模型代理时显式显示。普通状态和操作结果不包含此密钥。隐藏密钥或离开此区域后，显示内容会消失。',revealKey:'显示共享模型代理密钥',overviewTitle:'本地配置与模型代理',proxyReadiness:'模型代理就绪状态：{0}',descProxy:'管理模型代理监听器生命周期、自启动、共享密钥、有限本地历史和已观察用量。停止模型代理不会改写原生配置。'});
-function localizedState(value){const keys={unknown:'stateUnknown',ready:'stateReady','not ready':'stateNotReady',not_ready:'stateNotReady',enabled:'enabled',disabled:'disabled',not_configured:'authNotConfigured',configured:'stateConfigured',unconfigured:'stateUnconfigured',invalid:'stateInvalid',pending:'statePending',pending_native_changes:'statePendingNative',awaiting_native_reload:'stateAwaitingReload',applied:'stateApplied',not_applied:'stateNotApplied',blocked:'stateBlocked',unverified:'stateUnverified',unavailable:'stateUnavailable',expired:'stateExpired',fresh:'stateFresh',stale:'stateStale',success:'stateSuccess',failed:'stateFailed',running:'stateRunning',stopped:'stateStopped',loaded:'stateLoaded',not_loaded:'stateNotLoaded',valid:'stateValid',partial:'statePartial'};return keys[value]?t(keys[value]):value;}
-let locale=initialLocale();
-function initialLocale(){try{const saved=localStorage.getItem('tmax.web.language');if(saved==='en'||saved==='zh-CN')return saved;}catch(_){}const languages=Array.isArray(navigator.languages)?navigator.languages:[];for(const language of languages){if(typeof language!=='string')continue;if(/^zh(?:[-_]|$)/i.test(language))return 'zh-CN';if(/^en(?:[-_]|$)/i.test(language))return 'en';}const fallback=navigator.language;return typeof fallback==='string'&&/^zh(?:[-_]|$)/i.test(fallback)?'zh-CN':'en';}
-function t(key,...values){const template=messages[locale]?.[key]||messages.en[key]||key;return template.replace(/\{(\d+)\}/g,(_,index)=>String(values[Number(index)]??''));}
-function applyLocale(persist=false){locale=$('language').value==='zh-CN'?'zh-CN':'en';if(persist){try{localStorage.setItem('tmax.web.language',locale);}catch(_){}}document.documentElement.lang=locale;$('language').value=locale;$('language').setAttribute('aria-label',t('languageLabel'));document.title=t('documentTitle');$('area-title').textContent=t('area'+area);$('area-description').textContent=t('desc'+area);for(const node of document.querySelectorAll('[data-i18n]'))node.textContent=t(node.dataset.i18n,node.dataset.i18nArg||'');for(const node of document.querySelectorAll('[data-i18n-aria]'))node.setAttribute('aria-label',t(node.dataset.i18nAria));for(const node of document.querySelectorAll('[data-i18n-placeholder]'))node.placeholder=t(node.dataset.i18nPlaceholder);renderNavigation();renderTaskLabels();applyTaskMessages();renderSummaryStatus();renderResultStatus();if(area==='Overview'&&overviewSnapshot)renderOverview(overviewSnapshot,areaReadGeneration);}
-function renderNavigation(){for(const button of $('navigation').children){const key='area'+button.dataset.area;button.textContent=t(key);button.setAttribute('aria-current',String(button.dataset.area===area));}renderTaskOptions();}
-const taskWords={add:'添加',agent:'编码 Agent',alias:'别名',apply:'应用',auth:'认证',catalog:'目录',check:'检查',clear:'清除',config:'配置',delete:'删除',discard:'丢弃',explain:'说明',history:'历史',input:'输入',integration:'集成',key:'密钥',list:'列表',login:'登录',logout:'退出登录',metadata:'元数据',model:'模型',native:'原生',probe:'探测',proxy:'模型代理',provider:'服务商',refresh:'刷新',register:'注册',reload:'重新加载',remove:'移除',rename:'重命名',replace:'替换',restore:'恢复',revoke:'撤销',rule:'规则',schedule:'计划',select:'选择',set:'设置',show:'显示',start:'启动',status:'状态',stop:'停止',restart:'重启',target:'目标',usage:'用量',web:'Web'};
-function taskLabel(path){return locale==='zh-CN'?path.split(' ').map(word=>taskWords[word]||word).join(' / ')+' ('+path+')':path;}
-function renderTaskOptions(){for(const option of $('operation').options)option.textContent=taskLabel(option.value);}
-function renderTaskLabels(){for(const node of $('operands').querySelectorAll('[data-operand-label]'))node.textContent=operandLabel(node.dataset.operandLabel);}
-function operandLabel(label){const keys={'Integration ID':'operandIntegration','Existing provider ID':'operandProviderExisting','New provider ID':'operandProviderNew','Provider ID':'operandProvider','Input name':'operandInput','Qualified offering':'operandOffering','New exact upstream model ID':'operandUpstreamModel','Rule ID':'operandRule','Local index':'operandIndex','Metadata list field':'operandMetadataField','Existing alias ID':'operandAliasExisting','New alias ID':'operandAliasNew','Alias ID':'operandAlias','Public model ID':'operandPublicModel','Existing target ID':'operandTargetExisting','New target ID':'operandTargetNew','Target ID':'operandTarget','Native role':'operandRole','Native provider entry':'operandNativeProvider','Model ID':'operandModel','Recovery handle':'operandRecovery','Catalog provider ID':'operandCatalogProvider','Outbound proxy URL':'operandProxyUrl','Request handle':'operandRequest','Secret reference':'operandSecret'};const number=/^Operand (\d+)$/.exec(label);return number?t('operandPrefix',number[1]):keys[label]?t(keys[label]):label;}
-function localStatus(value){if(value&&typeof value.error==='string'){const pair=/^--([A-Za-z0-9-]+) requires both separate values$/.exec(value.error);return pair?t('pairRequired',pair[1]):t('operationRequestFailed');}const body=value?.body;if(!body||typeof body!=='object'||Array.isArray(body))return t('operationUnknown');const operation=typeof body.operation==='string'?body.operation:'Operation';const code=typeof body.code==='string'?body.code:'unknown';if(body.status==='success')return t('operationSuccess',operation);if(body.status==='dry_run')return t('operationDryRun',operation);if(body.status==='blocked')return t('operationBlocked',operation,code);if(body.status==='incomplete')return t('operationIncomplete',operation,code);if(body.status==='cancelled')return t('operationCancelled',operation,code);if(body.status==='error')return t('operationError',operation,code);if(body.status==='partial')return t('operationPartial',operation,code);return t('operationUnknown');}
-function renderSummaryStatus(){const node=$('summary-status');if(area==='Overview')node.textContent=lastReadError?t('overviewUnavailable',lastReadError):overviewSnapshot?t('overviewReady'):t('loading');else node.textContent=lastReadError?t('readError',lastReadError):lastAreaResult?readStatus(lastAreaResult):t('loading');}
-function readStatus(value){const body=value?.body;if(!body||typeof body!=='object'||Array.isArray(body))return t('readUnavailable');const code=typeof body.code==='string'?body.code:'read_unavailable';if(body.status==='success')return t('readSuccess');if(body.status==='partial')return t('readPartial',code);return t('readError',code);}
-function renderResultStatus(){const node=$('result-status');node.textContent=lastResult===null?t('noOperation'):localStatus(lastResult);}
-const areas={Overview:{groups:['status','config','network','integration','secret'],read:['status']},Providers:{groups:['provider','catalog','integration','secret'],read:['provider','list']},Models:{groups:['model','catalog'],read:['model','list']},Agents:{groups:['agent'],read:['agent','list']},Proxy:{groups:['proxy','web','history','usage'],read:['proxy','status']}};
-let catalog=[],area='Overview',areaReadGeneration=0,overviewSnapshot=null,lastAreaResult=null,lastReadError=null,lastResult=null;
-async function get(path){const response=await fetch(path,{cache:'no-store',credentials:'omit'});if(!response.ok)throw Error('Local request rejected ('+response.status+')');return response.json();}
-function show(value){lastResult=value;$('result').textContent=JSON.stringify(value,null,2);renderResultStatus();}
-function chosen(){return catalog.find(c=>c.operation===$('operation').value);}
-function clearReveal(){$('revealed').textContent='';$('revealed').classList.add('hidden');}
-async function readCommand(command,operands=[]){
- const response=await submit({command,operands,arguments:{},dry_run:false,if_revision:null});
- const body=response?.body;
- if(!response||!Number.isInteger(response.exit_code)||!body||typeof body!=='object'||Array.isArray(body)||body.schema_version!==1||body.operation!==command.join(' ')||typeof body.code!=='string'||typeof body.status!=='string'||!Object.prototype.hasOwnProperty.call(body,'data'))return {code:'invalid_response',status:'error',data:null};
- return body;
-}
-async function safeRead(command,operands=[]){try{return await readCommand(command,operands);}catch(_){return {code:'request_failed',status:'error',data:null};}}
-function readData(result){return result?.data&&typeof result.data==='object'&&!Array.isArray(result.data)?result.data:null;}
-function readCode(result){return result?.code||result?.blockers?.[0]?.code||'read_unavailable';}
-function localCalendarDate(){const now=new Date();return [now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');}
-function isDateOnly(value){return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value);}
-function knownRenewalDate(value){const date=value&&typeof value==='object'&&!Array.isArray(value)?value.$__toml_private_datetime:null;return isDateOnly(date)?date:null;}
-function providerService(provider){if(typeof provider?.integration==='string'&&provider.integration)return ['integration:'+provider.integration,t('integrationLabel',provider.integration)];if(typeof provider?.metadata==='string'&&provider.metadata)return ['metadata:'+provider.metadata,t('metadataLabel',provider.metadata)];return ['unknown',t('unknownService')];}
-async function readOverview(generation){
- const [statusResult,providerResult,agentResult]=await Promise.all([safeRead(['status']),safeRead(['provider','list']),safeRead(['agent','list'])]);
- const status=readData(statusResult),providerList=readData(providerResult),agentList=readData(agentResult);
- const providers=Array.isArray(providerList?.providers)?providerList.providers:null;
- const providerRows=providers?await Promise.all(providers.map(async item=>{
-  const id=typeof item?.id==='string'?item.id:'';
-  if(!id)return {item,detailResult:{code:'invalid_provider_identity'},inputResult:{code:'invalid_provider_identity'}};
-  const [detailResult,inputResult]=await Promise.all([safeRead(['provider','inspect'],[id]),safeRead(['provider','input','list'],[id])]);
-  return {item,id,detailResult,inputResult,detail:readData(detailResult),inputData:readData(inputResult)};
- })) : [];
- const targets=Array.isArray(agentList?.agents)?agentList.agents:null;
- const agentRows=targets?await Promise.all(targets.map(async item=>{
-  const id=typeof item?.target==='string'?item.target:'';
-  return {item,id,result:id?await safeRead(['agent','inspect'],[id]):{code:'invalid_target_identity'}};
- })) : [];
- if(generation===areaReadGeneration&&area==='Overview'){
-  overviewSnapshot={statusResult,providerResult,agentResult,status,providerList,agentList,providers,providerRows,targets,agentRows};
-  renderOverview(overviewSnapshot,generation);
- }
-}
-function renderOverview(snapshot,generation){
- const {statusResult,providerResult,agentResult,status,providerList,agentList,providers,providerRows,targets,agentRows}=snapshot;
- const lines=[t('overviewTitle')];
- if(status){
-  if(statusResult.status&&statusResult.status!=='success')lines.push(t('statusPartial',readCode(statusResult)));
-  lines.push(t('savedConfig',localizedState(status.configuration_state||'unknown')));
-  const runtime=status.resident||{};
-  const loaded=runtime.network?.loaded;
-  const revision=loaded?.configuration_revision?' ('+loaded.configuration_revision+')':'';
-  lines.push(t('loadedSnapshot',localizedState(loaded?.snapshot_state||'unknown'),revision));
-  lines.push(t('residentDiscovery',localizedState(runtime.resident?.discovery_state||'unknown')));
-  const ready=runtime.proxy?.ready;
-  lines.push(t('proxyReadiness',ready===true?t('stateReady'):ready===false?t('stateNotReady'):t('stateUnknown')));
-  const listener=runtime.resident?.inference?.state;
-  if(typeof listener==='string')lines.push(t('inferenceListener',localizedState(listener)));
- }else lines.push(t('statusUnavailable',readCode(statusResult)));
- if(providerList&&providerResult.status&&providerResult.status!=='success')lines.push(t('providerListPartial',readCode(providerResult)));
- lines.push('',t('providerHeading'));
- if(!providers)lines.push(t('providerListUnavailable',providerList?'invalid_response':readCode(providerResult)));
- else if(!providerRows.length)lines.push(t('noProviders'));
- const groups=new Map();
- for(const row of providerRows){
-  const [key,label]=providerService(row.detail?.provider);
-  if(!groups.has(key))groups.set(key,{label,rows:[]});
-  groups.get(key).rows.push(row);
- }
- for(const group of groups.values()){
-  lines.push(group.label+':');
-  for(const row of group.rows){
-   const id=row.id||t('unknownProvider');
-   const enabled=row.item.enabled===true?t('enabled'):row.item.enabled===false?t('disabled'):t('enabledUnknown');
-   const auth=typeof row.item.authentication==='string'?row.item.authentication:'unknown';
-   const label=typeof row.item.name==='string'&&row.item.name?' '+JSON.stringify(row.item.name):'';
-   const authText=auth==='not_configured'?t('authNotConfigured'):auth==='unknown'?t('authUnknown'):t('authConfigured',auth);
-   lines.push('  '+id+label+' — '+enabled+'; '+t('authenticationConfig',authText));
-   const issues=[];
-   if(row.item.enabled===false)issues.push(t('providerDisabledIssue'));
-   if(auth==='not_configured')issues.push(t('providerAuthIssue'));
-   if(!row.detail){lines.push('    '+t('providerDetailUnavailable',readCode(row.detailResult)));issues.push(t('providerDetailIssue'));}
-   if(row.detail&&row.detailResult.status&&row.detailResult.status!=='success'){lines.push('    '+t('providerDetailPartial',readCode(row.detailResult)));issues.push(t('providerDetailPartialIssue'));}
-   const quota=row.detail?.observations?.observations?.find(value=>value.scope==='quota');
-   if(quota){
-    const freshness=localizedState(quota.freshness?.state||'unknown');
-    const source=typeof quota.source==='string'?quota.source:'unknown';
-    const fact=quota.fact;
-    const basis=quota.observed_at_basis||'unknown';
-    const observed=fact?.observed_at?' ('+(basis==='retrieval_time'?t('retrieved'):t('observed'))+' '+fact.observed_at+')':'';
-    lines.push('    '+t('quotaObservation',localizedState(quota.state||'unknown'),source,freshness,observed));
-   }else if(row.detail)lines.push('    '+t('quotaUnknown'));
-   const observation=row.item.observations?.observations?.find(value=>value.scope==='quota');
-   if(observation?.last_attempt_outcome==='failed')issues.push(t('quotaAttemptFailed',observation.last_attempt_reason_code?' ('+observation.last_attempt_reason_code+')':''));
-   if(row.inputData&&row.inputResult.status&&row.inputResult.status!=='success'){lines.push('    '+t('inputPartial',readCode(row.inputResult)));issues.push(t('inputPartialIssue'));}
-   if(row.inputData&&Array.isArray(row.inputData.inputs)){
-    const quotas=row.inputData.inputs.filter(value=>value.kind==='quota');
-    if(!quotas.length)lines.push('    '+t('noQuotaInputs'));
-    for(const input of quotas){
-     const scope=row.detail?.provider?.inputs?.[input.input]?.scope;
-     const availability=input.availability||{};
-     let state=localizedState(availability.state||'unknown');
-     if(availability.state==='unavailable'&&availability.reason_code==='expired')state=t('expiredInput');
-     else if(availability.state==='unavailable'&&availability.reason_code)state+=` (${availability.reason_code})`;
-     const scopeText=scope?' ; '+t('scopeLabel')+' '+scope:'';
-     const attempt=input.last_attempt_outcome?'; '+t('attemptLabel')+' '+localizedState(input.last_attempt_outcome):'';
-     lines.push('    '+t('quotaInput',input.input,state,input.source||'unknown',scopeText,attempt));
-     if(availability.state==='unavailable'&&availability.reason_code==='expired')issues.push(t('expiredIssue',input.input));
-    }
-   }else{
-    lines.push('    '+t('inputUnavailable',readCode(row.inputResult)));
-    issues.push(t('inputUnavailableIssue'));
-   }
-   if(issues.length)lines.push('    '+t('knownIssues',issues.join(t('issueSeparator'))));
-   else lines.push('    '+t('noExplicitIssue'));
-  }
- }
- lines.push('',t('agentHeading'));
- if(agentList&&agentResult.status&&agentResult.status!=='success')lines.push(t('agentListPartial',readCode(agentResult)));
- if(!targets)lines.push(t('agentListUnavailable',agentList?'invalid_response':readCode(agentResult)));
- else if(!agentRows.length)lines.push(t('noAgents'));
- for(const row of agentRows){
-  const detail=readData(row.result);
-  if(!detail){lines.push('  '+t('agentInspectUnavailable',row.id||t('unknownTarget'),readCode(row.result)));continue;}
-  if(row.result.status&&row.result.status!=='success')lines.push('  '+t('agentInspectPartial',row.id,readCode(row.result)));
-  lines.push('  '+t('agentState',row.id,detail.agent||t('unknownAgent'),localizedState(detail.desired_state||'unknown'),localizedState(detail.applied_state||'unknown'),localizedState(detail.effective_state||'unknown')));
-  const blockers=Array.isArray(detail.blockers)?detail.blockers.map(value=>value.code).filter(value=>typeof value==='string'):[];
-  if(blockers.length)lines.push('    '+t('inspectionBlockers',blockers.join(', ')));
-  if(row.item.default_configured===false)lines.push('    '+t('noDefault'));
- }
- lines.push('',t('renewalHeading'));
- const today=localCalendarDate(),upcoming=[],todayRows=[],earlier=[],unknown=[];
- if(providers){
-  for(const row of providerRows){
-   const name=row.id||t('serviceUnknown');
-   const [,service]=providerService(row.detail?.provider);
-   const entry=name+' ('+service+')';
-   if(!row.detail){unknown.push(t('renewalUnknown',entry,readCode(row.detailResult)));continue;}
-   const date=knownRenewalDate(row.detail.renewal);
-   if(!date){unknown.push(t('noRenewal',entry));continue;}
-   const dated=entry+': '+date;
-   if(date<today)earlier.push({date,text:t('renewalEarlier',dated)});
-   else if(date===today)todayRows.push({date,text:t('renewalToday',dated)});
-   else upcoming.push({date,text:dated});
-  }
- }else unknown.push(t('providerListDatesUnavailable',readCode(providerResult)));
- lines.push(t('upcomingHeading',today));
- lines.push(...(upcoming.length?upcoming.sort((a,b)=>a.date.localeCompare(b.date)).map(value=>'  '+value.text):['  '+t('noneKnown')]));
- lines.push(t('todayHeading'));
- lines.push(...(todayRows.length?todayRows.map(value=>'  '+value.text):['  '+t('noneKnown')]));
- lines.push(t('earlierHeading'));
- lines.push(...(earlier.length?earlier.sort((a,b)=>b.date.localeCompare(a.date)).map(value=>'  '+value.text):['  '+t('noneKnown')]));
- lines.push(t('unknownHeading'));
- lines.push(...(unknown.length?unknown.map(value=>'  '+value):['  '+t('none')]));
- lines.push('',t('quotaCaveat'));
- if(generation===areaReadGeneration&&area==='Overview'){$('summary').textContent=lines.join('\n');renderSummaryStatus();}
-}
-async function readArea(){
- const generation=++areaReadGeneration;
- lastReadError=null;
- $('summary-status').textContent=t('loading');
- if(area==='Overview'){try{await readOverview(generation);}catch(_){if(generation===areaReadGeneration&&area==='Overview'){lastReadError='read_failed';renderSummaryStatus();}}return;}
- try{const request={command:areas[area].read,operands:[],arguments:{},dry_run:false,if_revision:null};const value=await submit(request);if(generation===areaReadGeneration&&area!=='Overview'){lastAreaResult=value;$('summary').textContent=JSON.stringify(value,null,2);renderSummaryStatus();}}
- catch(error){if(generation===areaReadGeneration&&area!=='Overview'){lastReadError='request_failed';$('summary').textContent=error.message;renderSummaryStatus();}}
-}
-function switchArea(name){area=name;lastAreaResult=null;lastReadError=null;clearReveal();$('area-title').textContent=t('area'+name);$('area-description').textContent=t('desc'+name);renderNavigation();const entries=catalog.filter(c=>areas[name].groups.includes(c.command[0])&&c.operation!=='proxy key show');$('operation').replaceChildren(...entries.map(c=>{const option=document.createElement('option');option.value=c.operation;option.textContent=taskLabel(c.operation);return option;}));$('key-section').classList.toggle('hidden',name!=='Proxy');renderTask();renderSummaryStatus();readArea();}
-function input(labelText,name,parent,multiple=false){const label=document.createElement('label');const title=document.createElement('span');title.dataset.operandLabel=labelText;title.textContent=operandLabel(labelText);label.append(title);const field=document.createElement(multiple?'textarea':'input');field.dataset.name=name;field.autocomplete='off';if(multiple){field.placeholder=t('onePerLine');field.dataset.i18nPlaceholder='onePerLine';}label.append(field);parent.append(label);return field;}
-function choiceField(choices){const field=document.createElement(choices.length?'select':'input');field.autocomplete='off';if(choices.length){const empty=document.createElement('option');empty.value='';empty.dataset.i18n='notSupplied';empty.textContent=t('notSupplied');field.append(empty);for(const value of choices){const option=document.createElement('option');option.value=value;option.textContent=value;field.append(option);}}return field;}
-function translatedLabel(key,argument=null){const label=document.createElement('span');label.dataset.i18n=key;if(argument!==null)label.dataset.i18nArg=argument;label.textContent=t(key,...(argument===null?[]:[argument]));return label;}
-function argumentControl(name,meta,parent){const group=document.createElement('div');group.dataset.argument=name;group.dataset.switch=String(!!meta.switch);const title=document.createElement('strong');title.textContent='--'+name;group.append(title);const rows=document.createElement('div');rows.dataset.rows='true';group.append(rows);
-function addRow(){const row=document.createElement('div');row.dataset.row='true';for(let part=0;part<(meta.arity||1);part++){const choices=part===0?(meta.fields?.length?meta.fields:meta.choices||[]):[];const label=document.createElement('label');label.append(translatedLabel(meta.arity===2?(part===0?(name==='endpoint'?'nativeProtocol':'field'):'value'):'value'));const field=choiceField(choices);field.dataset.part=String(part);if(meta.switch)field.type='checkbox';if(name==='endpoint'&&part===0&&!choices.length){field.placeholder=t('exactProtocol');field.dataset.i18nPlaceholder='exactProtocol';}label.append(field);row.append(label);}if(meta.repeatable){const remove=document.createElement('button');remove.type='button';remove.append(translatedLabel('removeRow'));remove.addEventListener('click',()=>row.remove());row.append(remove);}rows.append(row);}
-addRow();if(meta.repeatable){const add=document.createElement('button');add.type='button';add.dataset.i18n='addArgument';add.dataset.i18nArg=name;add.textContent=t('addArgument',name);add.addEventListener('click',addRow);group.append(add);}parent.append(group);}
-function renderTask(){const c=chosen();$('operands').replaceChildren();$('arguments').replaceChildren();$('key').value='';$('preview').checked=false;if(!c)return;const names=c.operands.labels||[];for(let index=0;index<c.operands.max;index++){const field=input(names[index]||'Operand '+(index+1),'operand-'+index,$('operands'));field.required=index<c.operands.min;}
-for(const arg of c.arguments){if(/-(fd|stdin)$/.test(arg)||arg==='non-interactive')continue;argumentControl(arg,c.argument_metadata?.[arg]||{arity:1},$('arguments'));}
-$('preview').disabled=!c.mutation;$('revision-label').classList.toggle('hidden',!c.mutation);$('revision').value='';$('key-label').classList.toggle('hidden',c.operation!=='provider key set');applyTaskMessages();}
-function applyTaskMessages(){const c=chosen();$('effect').textContent=c?(c.mutation?t('effectMutation'):t('effectInspect')):'';$('run').textContent=c?(c.mutation?t('executeTask'):t('inspectTask')):t('runTask');$('risk').textContent=c?.operation==='model probe'?t('paidProbe'):c?.operation==='proxy stop'||c?.operation==='proxy restart'?t('normalStop'):'';}
-async function submit(request,key=null){const response=await fetch('/api/execute',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',cache:'no-store',body:JSON.stringify({request,key})});const text=await response.text();try{return JSON.parse(text);}catch(_){throw Error(t('managementRejected',response.status)+': '+text);}}
-$('task').addEventListener('submit',async event=>{event.preventDefault();const c=chosen();if(!c)return;const operands=Array.from($('operands').querySelectorAll('input')).map(f=>f.value);while(operands.length&&!operands[operands.length-1])operands.pop();const args={};for(const group of $('arguments').querySelectorAll('[data-argument]')){const values=[];for(const row of group.querySelectorAll('[data-row]')){const fields=Array.from(row.querySelectorAll('[data-part]'));if(group.dataset.switch==='true'){if(fields[0].checked)values.push('true');continue;}if(fields.every(field=>!field.value))continue;if(fields.length===2&&fields.some(field=>!field.value)){show({error:'--'+group.dataset.argument+' requires both separate values'});return;}values.push(...fields.map(field=>field.value));}if(values.length)args[group.dataset.argument]=values;}
-const request={command:c.command,operands,arguments:args,dry_run:$('preview').checked,if_revision:$('revision').value||null};let key=$('key').value||null;$('key').value='';$('run').disabled=true;try{show(await submit(request,request.dry_run?null:key));await readArea();}catch(error){show({error:error.message});}finally{key=null;$('run').disabled=false;}});
-$('operation').addEventListener('change',renderTask);$('refresh').addEventListener('click',readArea);$('hide').addEventListener('click',clearReveal);
-$('reveal').addEventListener('click',async()=>{try{const response=await fetch('/api/proxy-key/reveal',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',cache:'no-store',body:'{}'});const value=await response.json();if(!response.ok||!value.key){show(value);return;}$('revealed').textContent=value.key;$('revealed').classList.remove('hidden');}catch(error){show({error:error.message});}});
-window.addEventListener('pagehide',()=>{clearReveal();$('key').value='';});
- $('language').value=locale;$('language').addEventListener('change',()=>applyLocale(true));applyLocale(false);
-(async()=>{try{catalog=await get('/api/catalog');for(const name of Object.keys(areas)){const button=document.createElement('button');button.type='button';button.dataset.area=name;button.textContent=t('area'+name);button.addEventListener('click',()=>switchArea(name));$('navigation').append(button);}switchArea('Overview');}catch(error){$('summary-status').textContent=t('catalogUnavailable',error.message);$('summary').textContent='';}})();
-</script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>tmax · 你的模型工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳转到内容</a>
+  <aside class="sidebar">
+    <a class="brand" href="#overview" aria-label="tmax 总览"><span class="brand-mark">t<span>↗</span></span><span>tmax<small>MODEL WORKSPACE</small></span></a>
+    <div class="workspace-label"><span class="dot"></span>个人工作空间<span class="local-tag">本地</span></div>
+    <p class="nav-caption">工作台</p>
+    <nav id="navigation" aria-label="主导航"></nav>
+    <div class="sidebar-bottom">
+      <button class="nav-item" id="advanced"><span id="advanced-icon"></span>高级操作<span class="nav-arrow">↗</span></button>
+      <div class="local-note"><span class="dot"></span><div>数据留在你的电脑<small>本地管理 · 无需账户</small></div></div>
+    </div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb">工作空间<span>/</span><strong id="breadcrumb">总览</strong></div><div class="topbar-actions"><span id="connection" class="connection"><span class="dot"></span>正在连接</span><button class="icon-button" id="refresh" aria-label="刷新本地状态" title="刷新本地状态"></button></div></header>
+    <main id="main" tabindex="-1">
+      <div class="page-heading"><div><p class="eyebrow" id="eyebrow">YOUR MODEL WORKSPACE</p><h1 id="page-title">总览</h1><p id="page-description">你的模型、服务商和编程工具，在这里连接。</p></div><div id="page-actions" class="actions"></div></div>
+      <div id="load-error" role="alert" hidden></div>
+      <div id="content" aria-busy="true"><div class="loading">正在读取本地配置…</div></div>
+      <footer class="page-footer"><span>tmax · 让模型各就其位</span><span id="updated">读取本地状态，不会自动请求上游服务</span></footer>
+    </main>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <div class="dialog-heading"><div><p class="eyebrow" id="dialog-eyebrow">WORKSPACE</p><h2 id="dialog-title"></h2></div><button id="dialog-close" class="icon-button" aria-label="关闭">×</button></div>
+    <div id="dialog-content"></div>
+  </dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <noscript><p>请启用 JavaScript 来使用本地工作台。也可以通过 tmax 命令行管理配置。</p></noscript>
+</body>
+</html>

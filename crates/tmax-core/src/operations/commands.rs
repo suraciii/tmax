@@ -8,6 +8,12 @@ struct Command {
     options: &'static str,
     mutation: bool,
 }
+impl Command {
+    fn supports_revision(&self) -> bool {
+        self.mutation && self.path != "skill install"
+    }
+}
+
 const COMMANDS: &[Command] = &[
     Command {
         path: "skill install",
@@ -795,7 +801,7 @@ const COMMANDS: &[Command] = &[
     },
 ];
 pub fn catalog() -> Value {
-    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="proxy configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"model"),"switch":matches!(name,"all-day"|"last"|"proxy"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation})}).collect::<Vec<_>>())
+    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="proxy configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"model"),"switch":matches!(name,"all-day"|"last"|"proxy"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation,"revision_guard":c.supports_revision()})}).collect::<Vec<_>>())
 }
 fn operand_labels(path: &str) -> &'static [&'static str] {
     match path {
@@ -869,7 +875,7 @@ pub fn validate(r: &Request) -> Result<()> {
             "Effect-free reads do not accept dry-run",
         ));
     }
-    if r.if_revision.is_some() && (!c.mutation || path == "skill install") {
+    if r.if_revision.is_some() && !c.supports_revision() {
         return Err(Error::new(
             "invalid_arguments",
             "This operation does not save configuration",
@@ -1014,6 +1020,20 @@ mod tests {
 
     #[test]
     fn skill_install_rejects_unsupported_agent_and_config_revision() {
+        let entries = catalog();
+        for (operation, supports_revision) in [
+            ("skill install", false),
+            ("status", false),
+            ("provider add", true),
+        ] {
+            let entry = entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["operation"] == operation)
+                .unwrap();
+            assert_eq!(entry["revision_guard"], supports_revision);
+        }
         let mut request = Request {
             command: vec!["skill".into(), "install".into()],
             operands: vec![],

@@ -1416,6 +1416,21 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
     }
     let mut response = match (parts.method.as_str(), parts.uri.path()) {
         ("GET", "/") => Html(include_str!("service/index.html")).into_response(),
+        ("GET", "/app.css") => (
+            [("content-type", "text/css; charset=utf-8")],
+            include_str!("service/app.css"),
+        )
+            .into_response(),
+        ("GET", "/app.js") => (
+            [("content-type", "text/javascript; charset=utf-8")],
+            include_str!("service/app.js"),
+        )
+            .into_response(),
+        ("GET", "/favicon.svg") => (
+            [("content-type", "image/svg+xml")],
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="11" fill="#183e32"/><path d="M17 9v18q0 5 7 3M11 16h17M24 10h7v7M25 16l6-6" fill="none" stroke="#e7f3ec" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>"##,
+        )
+            .into_response(),
         ("GET", "/api/catalog") => axum::Json(crate::operations::catalog()).into_response(),
         ("GET", "/api/status") => {
             let resident = web.resident.lock().await;
@@ -1572,7 +1587,7 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
         "referrer-policy",
         "no-referrer".parse().expect("constant header"),
     );
-    response.headers_mut().insert("content-security-policy","default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().expect("constant header"));
+    response.headers_mut().insert("content-security-policy","default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().expect("constant header"));
     response
 }
 
@@ -2122,6 +2137,49 @@ mod tests {
         assert!(same_origin(&headers, &web, true));
         headers.insert("host", "evil.test:1234".parse().unwrap());
         assert!(!same_origin(&headers, &web, false));
+        // The offline workspace assets use the same local-origin boundary as management.
+        for (path, content_type) in [
+            ("/", "text/html"),
+            ("/app.css", "text/css"),
+            ("/app.js", "text/javascript"),
+            ("/favicon.svg", "image/svg+xml"),
+        ] {
+            let request = axum::extract::Request::builder()
+                .uri(path)
+                .header("host", "127.0.0.1:1234")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = web_request(State(web.clone()), request).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(
+                response.headers()["content-type"]
+                    .to_str()
+                    .unwrap()
+                    .starts_with(content_type)
+            );
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let policy = response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap();
+            assert!(policy.contains("script-src 'self'"));
+            assert!(!policy.contains("unsafe-inline"));
+            assert!(
+                !to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let request = axum::extract::Request::builder()
+                .uri(path)
+                .header("host", "evil.test:1234")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            assert_eq!(
+                web_request(State(web.clone()), request).await.status(),
+                StatusCode::FORBIDDEN
+            );
+        }
     }
     #[tokio::test]
     async fn absent_status_and_disabled_unacknowledged_intent_create_nothing() {
