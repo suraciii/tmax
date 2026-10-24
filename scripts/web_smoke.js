@@ -86,11 +86,11 @@ async page => {
     assert('Preview leaves authentication unset', !(await configuration()).providers[id].auth);
     await close();
 
-    await navigate('proxy');
-    await page.locator('[data-action="proxy-configure"]').first().click();
-    assert('Proxy preview succeeds without an unlock password', (await submit('proxy configure', true)).exit_code === 0);
+    await navigate('gateway');
+    await page.locator('[data-action="gateway-configure"]').first().click();
+    assert('Gateway preview succeeds without an unlock password', (await submit('gateway configure', true)).exit_code === 0);
     await close();
-    assert('Proxy preview preserves saved configuration', JSON.stringify((await configuration()).proxy) === JSON.stringify(initial.proxy));
+    assert('Gateway preview preserves saved configuration', JSON.stringify((await configuration()).gateway) === JSON.stringify(initial.gateway));
 
     await page.locator('#advanced').click();
     await page.locator('#f-command').fill('skill install');
@@ -98,7 +98,7 @@ async page => {
     assert('New upstream skill command is available for preview', (await submit('skill install', true)).exit_code === 0);
     await close();
 
-    await navigate('proxy');
+    await navigate('gateway');
     await page.locator('[data-action="operation"][data-id="network show"]').click();
     assert('Advanced read omits the configuration revision', (await submit('network show')).exit_code === 0);
     await close();
@@ -142,7 +142,7 @@ async page => {
     assert('Concurrent change is retained', (await configuration()).providers[id].overrides.name === 'Concurrent change');
 
     await page.setViewportSize({width: 390, height: 844});
-    for (const area of ['overview', 'providers', 'models', 'agents', 'proxy']) {
+    for (const area of ['overview', 'providers', 'models', 'agents', 'gateway']) {
       await navigate(area);
       assert('No horizontal overflow: ' + area, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }

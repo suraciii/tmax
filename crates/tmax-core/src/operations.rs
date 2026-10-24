@@ -239,7 +239,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         )
         .await;
     }
-    if path == "proxy status" || path == "web status" {
+    if path == "gateway status" || path == "web status" {
         return crate::service::status(store).await;
     }
     if path == "status" {
@@ -263,7 +263,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     // Reuse/stop controls consult the identified resident even when the saved file is invalid.
     if matches!(
         path.as_str(),
-        "proxy start" | "proxy stop" | "web open" | "web stop"
+        "gateway start" | "gateway stop" | "web open" | "web stop"
     ) {
         let config = config::load(store)
             .map(|f| f.config)
@@ -470,13 +470,13 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             arg(r, "state").unwrap_or("file"),
         ));
     }
-    if path == "proxy key show" {
+    if path == "gateway key show" {
         return key_show(store, config, r).await;
     }
     if path == "model probe" {
-        return crate::proxy::probe(store, config, r).await;
+        return crate::gateway::probe(store, config, r).await;
     }
-    if path.starts_with("proxy ")
+    if path.starts_with("gateway ")
         || path.starts_with("web ")
         || path.starts_with("history ")
         || path == "usage"
@@ -566,7 +566,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         crate::native::discover(store, Some(agent), Some(path)).await?;
         json!({"kind":"native_scope","target":null,"agent_provider":null,"agent":agent,"path":path})
     } else {
-        json!({"kind":"proxy","target":null,"agent_provider":null,"agent":null,"path":null})
+        json!({"kind":"gateway","target":null,"agent_provider":null,"agent":null,"path":null})
     };
     let entry = context["target"]
         .as_str()
@@ -576,7 +576,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         if entry.is_some_and(|entry| entry.provider.is_some()) {
             return Err(Error::new(
                 "invalid_arguments",
-                "A retained proxy session cannot be inspected through an upstream-source entry",
+                "A retained gateway session cannot be inspected through an upstream-source entry",
             ));
         }
         let mut data = crate::service::control(store, config, r).await?;
@@ -592,7 +592,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
                 agent,
                 target: context["target"].as_str(),
                 provider: entry.and_then(|e| e.provider.as_deref()),
-                proxy: entry.is_some_and(|e| e.proxy == Some(true)),
+                gateway: entry.is_some_and(|e| e.gateway == Some(true)),
             });
     let advice = crate::routing::Advice {
         native: requirements,
@@ -719,7 +719,7 @@ fn project_saved_activation(data: &mut Value, mut activation: Value, loaded_revi
         }
         let activation_operation =
             if matches!(reason, "listener_restart_required" | "restart_required") {
-                "proxy restart"
+                "gateway restart"
             } else {
                 "config reload"
             };
@@ -903,8 +903,8 @@ fn reference_view(c: &Config, reference: &str) -> Value {
             refs.push(json!({"kind":"provider","id":id,"scope":null}));
         }
     }
-    if c.proxy.as_ref().is_some_and(|p| p.key_ref == reference) {
-        refs.push(json!({"kind":"proxy","id":null,"scope":null}));
+    if c.gateway.as_ref().is_some_and(|p| p.key_ref == reference) {
+        refs.push(json!({"kind":"gateway","id":null,"scope":null}));
     }
     json!({"state":if refs.is_empty(){"unreferenced"}else{"referenced"},"resources":refs,"reason_code":null})
 }
@@ -943,21 +943,21 @@ async fn cleanup(store: &Store, r: &Request) -> Result<Value> {
     Ok(json!({"reference":reference,"deleted":!r.dry_run,"cleanup":entry["cleanup"]}))
 }
 async fn key_show(store: &Store, c: &Config, r: &Request) -> Result<Value> {
-    let proxy = c
-        .proxy
+    let gateway = c
+        .gateway
         .as_ref()
-        .ok_or_else(|| Error::new("invalid_arguments", "Proxy is not configured"))?;
+        .ok_or_else(|| Error::new("invalid_arguments", "Gateway is not configured"))?;
     let mut output = crate::secrets::qualify_output(r)?;
     if r.dry_run {
         return Ok(
-            json!({"reference":proxy.key_ref,"loaded_match":null,"delivery":{"channel":output.channel(),"descriptor":output.descriptor(),"delivered":false}}),
+            json!({"reference":gateway.key_ref,"loaded_match":null,"delivery":{"channel":output.channel(),"descriptor":output.descriptor(),"delivered":false}}),
         );
     }
-    let key = crate::secrets::get(store, &proxy.key_ref)?;
+    let key = crate::secrets::get(store, &gateway.key_ref)?;
     let delivery = output.deliver(&key);
     let loaded = crate::service::loaded(store).await.ok().flatten();
     Ok(
-        json!({"_code":if delivery.is_err(){json!("secret_delivery_failed")}else{Value::Null},"reference":proxy.key_ref,"loaded_match":loaded.as_ref().map(|f|f.config.proxy.as_ref().is_some_and(|p|p.key_ref==proxy.key_ref)),"delivery":{"channel":output.channel(),"descriptor":output.descriptor(),"delivered":if delivery.is_ok(){json!(true)}else{Value::Null}},"boundaries":[{"name":"secret_delivery","state":if delivery.is_ok(){"completed"}else{"partial"},"affected":[],"message":"Protected delivery may be partial on failure; do not replay automatically"}]}),
+        json!({"_code":if delivery.is_err(){json!("secret_delivery_failed")}else{Value::Null},"reference":gateway.key_ref,"loaded_match":loaded.as_ref().map(|f|f.config.gateway.as_ref().is_some_and(|p|p.key_ref==gateway.key_ref)),"delivery":{"channel":output.channel(),"descriptor":output.descriptor(),"delivered":if delivery.is_ok(){json!(true)}else{Value::Null}},"boundaries":[{"name":"secret_delivery","state":if delivery.is_ok(){"completed"}else{"partial"},"affected":[],"message":"Protected delivery may be partial on failure; do not replay automatically"}]}),
     )
 }
 
@@ -972,7 +972,7 @@ mod tests {
                 "status":{"saved_intent":enabled,"login_enabled":false},
                 "error":{"code":"autostart_failed"}
             }});
-            let response = success_response("proxy autostart", false, data);
+            let response = success_response("gateway autostart", false, data);
             assert_eq!(response.exit_code, 4);
             assert_eq!(response.body["code"], "saved_not_active");
             assert_eq!(response.body["status"], "incomplete");
@@ -1031,7 +1031,7 @@ mod tests {
         assert!(data["loaded_revision_after"].is_null());
         assert_eq!(data["boundaries"][0]["state"], "failed");
         assert!(data["session_impact"]["sessions"].is_null());
-        assert_eq!(data["next_actions"][1]["operation"], "proxy restart");
+        assert_eq!(data["next_actions"][1]["operation"], "gateway restart");
         assert_eq!(
             success_response(
                 "config reload",
@@ -1043,7 +1043,7 @@ mod tests {
         );
         assert_eq!(
             success_response(
-                "proxy key replace",
+                "gateway key replace",
                 false,
                 json!({"save":"saved","activation":activation})
             )
@@ -1246,13 +1246,13 @@ mod tests {
         store
             .write_raw(
                 "tmax.toml",
-                b"version=1\n[proxy]\nlisten='127.0.0.1:12345'\nkey_ref='retained'\n",
+                b"version=1\n[gateway]\nlisten='127.0.0.1:12345'\nkey_ref='retained'\n",
             )
             .unwrap();
         store.write_raw("resident.sock", b"unidentified").unwrap();
         let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
         assert_eq!(
-            dispatch(&store, &request(&["proxy", "remove"], &[], &[]))
+            dispatch(&store, &request(&["gateway", "remove"], &[], &[]))
                 .await
                 .unwrap_err()
                 .code,
@@ -1339,7 +1339,7 @@ mod tests {
                     "entry".into(),
                     config::NativeProvider {
                         provider: Some("p".into()),
-                        proxy: None,
+                        gateway: None,
                         models: vec![],
                     },
                 )]

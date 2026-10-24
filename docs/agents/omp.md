@@ -91,9 +91,9 @@ also defaults to that shaping when `auth` is omitted. Explicit `auth: apiKey`
 keeps ordinary key shaping.
 
 `discovery.type` accepts `ollama`, `llama.cpp`, `lm-studio`,
-`openai-models-list`, `proxy`, `litellm`, `apple-foundation-models`.
+`openai-models-list`, `gateway`, `litellm`, `apple-foundation-models`.
 Optional `timeoutMs` is positive finite numeric. `injectV1: boolean` is valid only
-for `openai-models-list`. Discovery normally needs provider API, except `proxy`.
+for `openai-models-list`. Discovery normally needs provider API, except `gateway`.
 Provider transport `pi-native` uses an omp auth-gateway endpoint; it is not a
 synonym for any wire API or a mandatory tmax dependency.
 

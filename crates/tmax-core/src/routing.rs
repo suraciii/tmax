@@ -746,7 +746,7 @@ fn eligibility(
 #[derive(Clone, Copy)]
 pub struct RequestRequirements<'a> {
     pub body: &'a Value,
-    pub native: &'a crate::proxy::NativeRequirements,
+    pub native: &'a crate::gateway::NativeRequirements,
 }
 
 pub(crate) struct Advice<'a> {
@@ -793,7 +793,7 @@ fn decision(
     let authorization = context
         .and_then(|context| context.native.as_ref())
         .filter(|context| {
-            !context.proxy
+            !context.gateway
                 && config
                     .providers
                     .values()
@@ -813,7 +813,7 @@ fn decision(
                 .and_then(|context| context.native.as_ref())
                 .map(|context| -> Result<()> {
                     context.assess(config, &provider, &name, protocol, id)?;
-                    if !context.proxy
+                    if !context.gateway
                         && matches!(p.auth, Some(config::Auth::Login { .. }))
                         && let Some(authorization) = &authorization
                     {
@@ -840,10 +840,10 @@ fn decision(
             })
             .or_else(|| {
                 body.and_then(|body| {
-                    crate::proxy::capability_mismatch(p, &name, m, snapshot.metadata(), body)
+                    crate::gateway::capability_mismatch(p, &name, m, snapshot.metadata(), body)
                 })
             })
-            .or_else(|| native.and_then(|native| crate::proxy::native_mismatch(p, native)));
+            .or_else(|| native.and_then(|native| crate::gateway::native_mismatch(p, native)));
         let observed_unavailability = if reason.is_none()
             && let Some((incarnation, authorization, _)) = &identity
         {
@@ -972,7 +972,7 @@ pub fn select(
 }
 fn request_unavailable(evidence: &Value) -> Error {
     // A fixed offering, or candidates with the same blocker, has a precise
-    // rejection reason. Do not erase it before the proxy records history.
+    // rejection reason. Do not erase it before the gateway records history.
     // Different blockers cannot truthfully be reduced to one candidate's cause.
     let common_reason = evidence["excluded_candidates"]
         .as_array()
@@ -1153,7 +1153,7 @@ mod tests {
                 agent: "codex",
                 target: Some("old-target"),
                 provider: None,
-                proxy: false,
+                gateway: false,
             }),
         };
         let evidence = explain_loaded(
@@ -1185,7 +1185,7 @@ mod tests {
                 agent: "pi",
                 target: Some("new-target"),
                 provider: None,
-                proxy: false,
+                gateway: false,
             }),
         };
         let evidence = explain_native(

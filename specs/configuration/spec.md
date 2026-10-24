@@ -11,6 +11,17 @@ illustrates private persistence; it is never required setup input.
 
 ## Format and authority
 
+The canonical model-service table is `[gateway]`; an Agent provider selects it
+with `gateway = true`. Readers accept the historical `proxy` spelling only at
+these two schema locations. Supplying both names at one location is invalid.
+Reads and dry runs never rewrite the authority. An explicit successful save uses
+the canonical names, retains the shared-key reference and unrelated settings,
+and reports `configuration_migration = "gateway_names"` for a resource edit that
+converts historical names. User-chosen IDs and `network.proxy_url` are not renamed.
+Existing shared-key records with the historical sole-service owner remain valid;
+inspection presents the canonical owner without rewriting key bytes or references.
+
+
 The sole authority is `~/.tmax/tmax.toml`, one UTF-8 TOML 1.0 document. `~`
 means the operating-system user's home directory, including on Windows, not the
 working directory or a calling agent's directory. CLI and Web operate on this
@@ -33,7 +44,7 @@ boundary and credential handoff. Request history remains in memory, not in the
 configuration or any persistent history store.
 
 The root requires `version = 1`; this revision does not introduce a new schema
-version. Other root fields are `providers`, `model_aliases`, `agents`, `proxy`,
+version. Other root fields are `providers`, `model_aliases`, `agents`, `gateway`,
 and `network`; omitted collections are empty. Unknown fields, duplicate TOML keys,
 unsupported versions, wrong types, and non-finite numbers must be rejected with
 a field path and actionable error. A rejected file must not be partially applied.
@@ -56,7 +67,7 @@ or control characters. An Agent's native display prefix is not part of an alias 
 
 Every supported user-editable persisted setting must be manageable through
 explicit CLI resource arguments, with Web as an optional equivalent surface.
-System-managed fields such as `version` and the provisioned `proxy.key_ref`
+System-managed fields such as `version` and the provisioned `gateway.key_ref`
 are produced by their owning operations, not arbitrary caller assignments.
 Callers never need to author or submit TOML, JSON, or YAML documents. The
 persisted schema is not a management request language; there is no full-document
@@ -108,7 +119,7 @@ Secrets, native sessions, catalog snapshots, stable internal offering identities
 usage observations, input values, and active/applied-state records are not copied into this
 file. The accepted metadata snapshot is retained under `~/.tmax`; an inaccessible
 snapshot must not be replaced by newly downloaded defaults without explicit
-catalog application. Declaration validation must not launch sign-in, start a proxy,
+catalog application. Declaration validation must not launch sign-in, start a gateway,
 or apply native configuration.
 
 Historical operational snapshots are not desired authority. Supported legacy
@@ -154,7 +165,7 @@ retention, not a configuration backup or snapshot-management system.
 
 With a running service, activate the empty valid snapshot under the normal
 save/activation boundaries. This removes managed model publication and shared
-proxy access for subsequent requests; in-flight requests retain their admission
+gateway access for subsequent requests; in-flight requests retain their admission
 snapshots under the continuity contract. Retain existing conversation bindings
 but block their reuse rather than choosing another destination. Do not stop or
 hot-move an existing listener: it remains bound but unavailable until explicit
@@ -215,7 +226,7 @@ affected use, not incremental setup.
 `messages`; each present value is one complete base URL. A base must be absolute
 and contain no embedded credentials, query, or fragment. Authenticated traffic
 requires HTTPS except for explicitly local endpoints permitted by the
-[forwarding contract](../product/design.md#proxy-forwarding-contract).
+[forwarding contract](../product/design.md#gateway-forwarding-contract).
 Preserve an explicitly supplied base; do not add or remove `/v1`, infer another
 protocol's path, or interpret a base as permission for arbitrary API operations.
 
@@ -234,7 +245,7 @@ to a valid known-integration selection is invalid.
 
 The integration contract owns
 [endpoint resolution](../integrations/spec.md#endpoint-resolution), shared native
-upstream and proxy consumption, supported operations, and original-destination binding.
+upstream and gateway consumption, supported operations, and original-destination binding.
 These fields select bases; they do not add protocol support or regional failover.
 Endpoint edits follow the normal whole-snapshot save and activation boundaries.
 They affect future work without repointing in-flight requests or proving that an
@@ -298,17 +309,17 @@ boundaries and supported login sources.
 ### Retained secret discovery
 
 The secret inventory maintains read-only ownership and cleanup metadata
-validity, including secrets left after provider, target, or proxy removal and
+validity, including secrets left after provider, target, or gateway removal and
 after a provisioning crash before reference save or result delivery. Atomically
 commit each storage version 2 secret with safe inventory metadata: its opaque
-reference, creation instant, and owning provider, target, or sole proxy's stable
+reference, creation instant, and owning provider, target, or sole gateway's stable
 local identity and last known display ID. Inventory metadata must be readable
 without resolving or exposing secret values; it contains no secret value, token,
 fingerprint, credential-derived identifier, raw source body, or reusable key
 material. An interrupted creation must expose either neither item or both secret
 and discoverable metadata. Unsupported-format files remain unchanged; their
 inventory metadata is unavailable with a generic reason, and current cleanup
-actions cannot remove them. The shared proxy key is proxy-owned, not agent-owned.
+actions cannot remove them. The shared gateway key is gateway-owned, not agent-owned.
 
 The [CLI `secret list` operation](../cli/providers/authentication/spec.md#provider-authentication-and-local-secrets)
 combines this inventory with safe desired, loaded, and known native-reference
@@ -519,7 +530,7 @@ not implicitly added to an explicit candidate list.
 ## Agent targets
 
 `[agents.<id>]` selects an independently managed native scope, not an inference
-client registration or a proxy permission boundary:
+client registration or a gateway permission boundary:
 
 | Field | Type and meaning |
 | --- | --- |
@@ -541,7 +552,7 @@ Later native-provider, model-selection, and default operations complete the same
 target, not a draft, wizard, or separate setup resource. A target with no selected
 models or no default is valid but incomplete for native model application.
 It may still serve as a qualified native login source, and it does not determine independent
-proxy readiness. Credentials, scope resolution, native precedence, and compatibility
+gateway readiness. Credentials, scope resolution, native precedence, and compatibility
 must be ready for the entries being applied. Unsupported multi-provider
 configuration or native name conflicts block application; never drop an entry,
 merge unrelated sources, or silently choose one.
@@ -560,25 +571,25 @@ adapter's namespace constraints, not additional tmax upstream access instances.
 
 | Field | Type and meaning |
 | --- | --- |
-| `provider` | Exact configured tmax upstream provider ID; mutually exclusive with `proxy` |
-| `proxy` | Literal `true`, selecting the sole configured model proxy; `false` is invalid |
+| `provider` | Exact configured tmax upstream provider ID; mutually exclusive with `gateway` |
+| `gateway` | Literal `true`, selecting the sole configured model gateway; `false` is invalid |
 | `models` | Array of `{ id, protocol }` selections, default `[]`; repeated pairs are invalid |
 
 Exactly one source selector is required. It has no fallback. For a `provider`
 source, `id` is the exact registered upstream model ID under that provider,
-without its tmax provider prefix. For a `proxy` source, `id` is a public concrete
+without its tmax provider prefix. For a `gateway` source, `id` is a public concrete
 qualified ID or a configured alias ID, without a native display prefix.
 Each selection requires an explicit protocol from the model-alias protocol
 set above; it contains no continuity setting. Disabled or unavailable models
 remain resolvable references but do not establish usable native configuration.
 
-Upstream and proxy entries may coexist in one target. Native upstream entries
+Upstream and gateway entries may coexist in one target. Native upstream entries
 use their selected provider's resolved endpoints and qualified authentication.
-Proxy entries use the local proxy URL and current shared key; application
+Gateway entries use the local gateway URL and current shared key; application
 requires the matching ready listener and loaded model definitions. The configured
 native subset controls model pickers and native settings only. It never limits
-proxy discovery or inference, and no default or selected model is required on
-an Agent for an independently configured compatible client to use the proxy.
+gateway discovery or inference, and no default or selected model is required on
+an Agent for an independently configured compatible client to use the gateway.
 
 Source replacement validates every existing selected ID and protocol against
 the new source and reports affected defaults, roles, and native settings.
@@ -587,36 +598,36 @@ them implicitly. An already valid selection need not be emptied first.
 Removing an entry requires clearing its default/role references first.
 Removal of an entry or target leaves native files unchanged until explicit apply
 or restore. Native name/selection changes and target/entry removal never revoke
-the shared proxy key, stop the independent proxy, or reset its conversation
+the shared gateway key, stop the independent gateway, or reset its conversation
 bindings. Target removal must resolve provider login-source references; separate
 upstream login-source scope or authorization changes retain their continuity checks.
 Saving any of these settings neither writes native configuration nor starts
-the proxy. Native credential handoff, protected plaintext disclosure, partial
+the gateway. Native credential handoff, protected plaintext disclosure, partial
 writes, and restoration follow
 [Agent provider configuration](../product/spec.md#agent-provider-configuration).
 
-## Model proxy
+## Model gateway
 
-The optional `[proxy]` table configures the sole model proxy independently of
-Agents. It is required by any native provider entry selecting `proxy = true`,
+The optional `[gateway]` table configures the sole model gateway independently of
+Agents. It is required by any native provider entry selecting `gateway = true`,
 but is also valid with no Agent targets:
 
 | Field | Type and meaning |
 | --- | --- |
 | `listen` | Required numeric loopback IP and port in `host:port` form, with bracketed IPv6; port 1–65535 |
-| `key_ref` | Required provisioned opaque reference to the current protected local proxy access key, not an upstream credential |
+| `key_ref` | Required provisioned opaque reference to the current protected local gateway access key, not an upstream credential |
 | `autostart` | Optional boolean, default false |
 
 Non-loopback addresses are invalid. The public model list is derived directly
 from enabled provider/offerings and enabled alias definitions, within their
 declared supported protocols. Missing availability or compatibility evidence
 remains visible under the model-support and eligibility rules. There is no
-`proxy.models` table, separate publication resource, client registry, or private
+`gateway.models` table, separate publication resource, client registry, or private
 allowlist. Every holder of the current shared key uses the same published models;
 Agent native selections do not restrict this access. Catalog discovery never
 enrolls models automatically.
 
-Initial explicit `proxy configure --listen ADDRESS` generates the shared key
+Initial explicit `gateway configure --listen ADDRESS` generates the shared key
 once in a current-user-restricted plaintext storage-version-2 file under `~/.tmax`
 and saves its reference. Validate the declaration and current inputs first. Report
 secret creation, file save, and service activation as separate boundaries; failed
@@ -625,23 +636,23 @@ A dry run neither generates a key nor chooses or reserves a reference. Normal
 configure updates, reload, start, restart, and native application never provision
 A missing or unsupported-format key blocks readiness.
 
-`proxy key replace` creates and saves the replacement reference and activates
+`gateway key replace` creates and saves the replacement reference and activates
 the new shared key. Subsequent requests must reject the old key; in-flight
 requests retain their admission snapshot. Replacement never resets, releases,
 or re-scopes retained conversation bindings, their blocked state, or destinations.
 Report known managed native dependencies that must update, and explicitly state
 that unmanaged clients are not enumerable and must update too. Replacing or
 removing the reference does not delete its
-stored secret. `proxy remove` requires resolved configuration references and a
-stopped listener, then removes proxy settings and managed access, not retained
+stored secret. `gateway remove` requires resolved configuration references and a
+stopped listener, then removes gateway settings and managed access, not retained
 secrets or native files. Startup registration follows the existing
 changed-intent reconciliation rules.
 
-Saving proxy settings does not start a listener. Explicit sensitive key
+Saving gateway settings does not start a listener. Explicit sensitive key
 retrieval is separate from ordinary inspection under the
 [secret-protection contract](../product/spec.md#local-access-and-secret-protection).
 Listener startup, key handoff, and opt-in login startup follow the product's
-[model-proxy contract](../product/spec.md#model-proxy). The management Web
+[model-gateway contract](../product/spec.md#model-gateway). The management Web
 interface has no authentication; the shared key remains required for inference.
 
 ## Outbound network settings
@@ -726,8 +737,8 @@ not repeat the full impact or diff; the [CLI impact contract](../cli/configurati
 owns result detail. In-flight requests and established destinations follow the
 continuity contract. Saving target settings does not
 apply native changes. Without a running service, report saved but not loaded;
-do not start the proxy implicitly. An incomplete target remains explicitly
-unavailable for native application without invalidating independent proxy use.
+do not start the gateway implicitly. An incomplete target remains explicitly
+unavailable for native application without invalidating independent gateway use.
 
 Manual file edits remain pending until explicit reload OR a subsequent executed
 management edit validates and activates the complete current file. There is no
@@ -740,7 +751,7 @@ hidden earlier file revision. A retained catalog snapshot is not a fallback for
 invalid configuration. Reload is not a path selector or document-input operation.
 
 Autostart registration is reconciled only when a save or explicit reload changes
-the desired `proxy.autostart` intent, or when the caller explicitly invokes
+the desired `gateway.autostart` intent, or when the caller explicitly invokes
 autostart enable/disable. Missing or false is disabled intent. Keep the last
 acknowledged intent for tmax's sole authority as operational state under
 `~/.tmax`, independently of registration success and loaded service state, so
@@ -760,7 +771,7 @@ it nor reserves that state for a later call.
 
 The OS registration belongs to tmax's sole authority. Remove or replace only
 tmax's owned registration; never overwrite an unrelated startup entry.
-Reconciliation requires no resident service and never starts the proxy. A startup
+Reconciliation requires no resident service and never starts the gateway. A startup
 invocation must validate the current file and its enabled autostart setting before
 starting inference, so an obsolete registration cannot override a saved disable.
 
@@ -788,7 +799,7 @@ It requires selected models and a provider-qualified default, usable credentials
 and qualified compatibility for every applied native entry. It writes only
 owned changes, preserves unrelated native settings and precedence, reports partial
 failure and current-user-restricted plaintext recovery state under `~/.tmax`, and
-distinguishes applied from awaiting native reload. Proxy-source entries additionally
+distinguishes applied from awaiting native reload. Gateway-source entries additionally
 require the matching service snapshot, ready listener, and current shared key
 availability.
 Upstream-source entries use their provider's endpoint/authentication without a
@@ -822,11 +833,11 @@ one custom provider with two explicit protocol bases, a global outbound proxy
 policy, metadata overrides, optional subscription labels, six concrete models,
 arbitrarily named `L0`–`L3` aliases with explicit candidates, a three-source scenario alias with shared continuity,
 scheduled priority, provider-local manual quota/reset declarations and ordered
-signal rules, and one omp target containing both upstream and proxy native
+signal rules, and one omp target containing both upstream and gateway native
 provider entries. It also shows a provider using its published singleton default
-without authentication/models. The proxy/provider/alias settings are valid
+without authentication/models. The gateway/provider/alias settings are valid
 without the Agent target; target incompleteness is defined above rather than
-required by proxy setup. Manual observed values stay outside TOML and use
+required by gateway setup. Manual observed values stay outside TOML and use
 [explicit CLI record operations](../cli/providers/inputs/spec.md#provider-input-operations).
 Its scopes, candidate lists, and priorities are illustrative caller choices, not current
 quota, reset, price, or capability claims. Native scope paths and secret references

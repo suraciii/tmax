@@ -66,11 +66,11 @@ pub fn is_edit(path: &str) -> bool {
             | "agent role clear"
             | "network proxy"
             | "network direct"
-            | "proxy configure"
-            | "proxy key replace"
-            | "proxy remove"
-            | "proxy autostart enable"
-            | "proxy autostart disable"
+            | "gateway configure"
+            | "gateway key replace"
+            | "gateway remove"
+            | "gateway autostart enable"
+            | "gateway autostart disable"
     )
 }
 fn error() -> Error {
@@ -910,7 +910,7 @@ fn mutate(root: &mut Value, r: &Request, store: &Store) -> Result<(Json, Vec<(St
                     return Err(error());
                 }
             } else {
-                if arg(r, "provider").is_some() == arg(r, "proxy").is_some() {
+                if arg(r, "provider").is_some() == arg(r, "gateway").is_some() {
                     return Err(error());
                 }
                 let mut entry = if path.ends_with("add") {
@@ -919,11 +919,11 @@ fn mutate(root: &mut Value, r: &Request, store: &Store) -> Result<(Json, Vec<(St
                     get(root, &["agents", target, "providers", name])?.clone()
                 };
                 remove(&mut entry, &["provider"])?;
-                remove(&mut entry, &["proxy"])?;
+                remove(&mut entry, &["gateway"])?;
                 if let Some(provider) = arg(r, "provider") {
                     put(&mut entry, &["provider"], string(provider))?;
                 } else {
-                    put(&mut entry, &["proxy"], Value::Boolean(true))?;
+                    put(&mut entry, &["gateway"], Value::Boolean(true))?;
                 }
                 if path.ends_with("add") {
                     put(&mut entry, &["models"], Value::Array(Vec::new()))?;
@@ -1014,48 +1014,48 @@ fn mutate(root: &mut Value, r: &Request, store: &Store) -> Result<(Json, Vec<(St
                 ])),
             )?;
         }
-        "proxy configure" => {
+        "gateway configure" => {
             require_change(r)?;
-            let exists = root.get("proxy").is_some();
+            let exists = root.get("gateway").is_some();
             if !exists {
                 put(
                     root,
-                    &["proxy"],
+                    &["gateway"],
                     Value::Table(toml::map::Map::from_iter([
                         ("listen".into(), string(required(r, "listen")?)),
                         ("key_ref".into(), string("__credential_provision_pending__")),
                     ])),
                 )?;
             } else if let Some(listen) = arg(r, "listen") {
-                put(root, &["proxy", "listen"], string(listen))?;
+                put(root, &["gateway", "listen"], string(listen))?;
             }
             for clear in args(r, "clear") {
                 if clear != "autostart" {
                     return Err(error());
                 }
-                remove(root, &["proxy", "autostart"])?;
+                remove(root, &["gateway", "autostart"])?;
             }
-            info["provision_proxy_key"] = json!(!exists);
+            info["provision_gateway_key"] = json!(!exists);
         }
-        "proxy key replace" => {
-            get(root, &["proxy"])?;
+        "gateway key replace" => {
+            get(root, &["gateway"])?;
             put(
                 root,
-                &["proxy", "key_ref"],
+                &["gateway", "key_ref"],
                 string("__credential_provision_pending__"),
             )?;
         }
-        "proxy remove" => {
-            if remove(root, &["proxy"])?.is_none() {
+        "gateway remove" => {
+            if remove(root, &["gateway"])?.is_none() {
                 return Err(error());
             }
             info["stored_secrets"] = json!("retained");
         }
-        "proxy autostart enable" | "proxy autostart disable" => {
-            get(root, &["proxy"])?;
+        "gateway autostart enable" | "gateway autostart disable" => {
+            get(root, &["gateway"])?;
             put(
                 root,
-                &["proxy", "autostart"],
+                &["gateway", "autostart"],
                 Value::Boolean(path.ends_with("enable")),
             )?;
         }
@@ -1100,7 +1100,7 @@ fn rename_alias_refs(root: &mut Value, old: &str, new: &str, protocol: &str) -> 
             let mut names = Vec::new();
             if let Some(entries) = t.get_mut("providers").and_then(Value::as_table_mut) {
                 for (name, e) in entries {
-                    if e.get("proxy").and_then(Value::as_bool) == Some(true)
+                    if e.get("gateway").and_then(Value::as_bool) == Some(true)
                         && let Some(models) = e.get_mut("models").and_then(Value::as_array_mut)
                     {
                         for m in models {
@@ -1220,7 +1220,8 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
             "Configuration cannot be parsed; inspect recovery options",
         )
     })?;
-    let mut root: Value = toml::from_str(text).map_err(|_| {
+    let migrated_gateway_names = config::normalize_gateway_names(&mut document)?;
+    let mut root: Value = toml::from_str(&document.to_string()).map_err(|_| {
         Error::new(
             "invalid_configuration",
             "Configuration cannot be parsed; inspect recovery options",
@@ -1232,10 +1233,13 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         super::references::guard(old, r)?;
     }
     let (mut data, renames) = mutate(&mut root, r, store)?;
+    if migrated_gateway_names {
+        data["configuration_migration"] = json!("gateway_names");
+    }
     let path = r.command.join(" ");
     let candidate_text = toml::to_string(&root).map_err(|_| error())?;
     let mut candidate = config::parse(&candidate_text)?;
-    if path == "proxy remove" {
+    if path == "gateway remove" {
         let state = crate::service::status(store).await?;
         if !matches!(
             state["resident"]["discovery_state"].as_str(),
@@ -1243,13 +1247,13 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         ) {
             return Err(Error::new(
                 "resident_identity_unavailable",
-                "Establish resident identity before removing proxy settings; unknown runtime state is not a stopped listener",
+                "Establish resident identity before removing gateway settings; unknown runtime state is not a stopped listener",
             ));
         }
         if state["resident"]["inference"]["listen"].is_string() {
             return Err(Error::new(
                 "active_requests",
-                "Stop inference explicitly before removing proxy settings",
+                "Stop inference explicitly before removing gateway settings",
             ));
         }
     }
@@ -1278,8 +1282,8 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         return Ok(impact);
     }
     config::guard(store, &revision)?;
-    let needs_key = (path == "proxy configure" && data["provision_proxy_key"] == true)
-        || path == "proxy key replace"
+    let needs_key = (path == "gateway configure" && data["provision_gateway_key"] == true)
+        || path == "gateway key replace"
         || (path == "provider key set" && arg(r, "key-ref").is_none());
     let mut created = None;
     if needs_key {
@@ -1299,7 +1303,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         let owner = if path == "provider key set" {
             provider_owner(store, old.as_ref().unwrap_or(&candidate), operand(r, 0)?)?
         } else {
-            "proxy".into()
+            "gateway".into()
         };
         let reference = crate::secrets::put(store, &owner, &value)?;
         if path == "provider key set" {
@@ -1311,10 +1315,10 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         } else {
             let previous = old
                 .as_ref()
-                .and_then(|c| c.proxy.as_ref())
+                .and_then(|c| c.gateway.as_ref())
                 .map(|p| p.key_ref.clone());
-            put(&mut root, &["proxy", "key_ref"], string(&reference))?;
-            data["proxy_key"] = json!({"action":if path=="proxy key replace"{"replaced"}else{"provisioned"},"reference":reference,"previous_reference":previous});
+            put(&mut root, &["gateway", "key_ref"], string(&reference))?;
+            data["gateway_key"] = json!({"action":if path=="gateway key replace"{"replaced"}else{"provisioned"},"reference":reference,"previous_reference":previous});
             data["unmanaged_clients"] = json!("unknown");
         }
         created = Some(reference);
@@ -1467,11 +1471,15 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         return Ok(data);
     }
     data["file_revision"] = json!(saved);
-    data["save"] = json!(if root == before { "unchanged" } else { "saved" });
+    data["save"] = json!(if root == before && !migrated_gateway_names {
+        "unchanged"
+    } else {
+        "saved"
+    });
     data["native_application"] = json!("not_requested");
     if matches!(
         path.as_str(),
-        "provider login" | "provider logout" | "proxy key replace"
+        "provider login" | "provider logout" | "gateway key replace"
     ) {
         // These operations request native authorization effects or key revocation,
         // not only a desired-state edit. Their activation failure remains partial.
@@ -1495,7 +1503,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     } else {
         super::activate_saved(store, &candidate, &saved, &mut data).await;
     }
-    let autostart = if path.starts_with("proxy autostart ") {
+    let autostart = if path.starts_with("gateway autostart ") {
         crate::service::autostart(store, path.ends_with("enable"), false).await
     } else {
         crate::service::reconcile_autostart(store, &candidate, false).await
@@ -1516,6 +1524,44 @@ mod text_document {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn legacy_gateway_edit_previews_without_writes_and_retains_shared_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().into());
+        let text = "# personal settings\nversion=1\n[proxy]\nlisten='127.0.0.1:17840'\nkey_ref='retained-reference'\nautostart=false\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let mut request = Request {
+            command: vec!["gateway".into(), "configure".into()],
+            operands: vec![],
+            arguments: BTreeMap::from([("listen".into(), vec!["127.0.0.1:17842".into()])]),
+            dry_run: true,
+            if_revision: Some(config::revision(text.as_bytes())),
+        };
+        let preview = execute(&store, &request).await.unwrap();
+        assert_eq!(
+            preview["requested"]["configuration_migration"],
+            "gateway_names"
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            text.as_bytes()
+        );
+        request.dry_run = false;
+        let result = execute(&store, &request).await.unwrap();
+        assert_eq!(result["configuration_migration"], "gateway_names");
+        assert_eq!(result["save"], "saved");
+        let saved = config::load(&store).unwrap();
+        assert_eq!(
+            saved.config.gateway.as_ref().unwrap().listen,
+            "127.0.0.1:17842"
+        );
+        assert_eq!(
+            saved.config.gateway.as_ref().unwrap().key_ref,
+            "retained-reference"
+        );
+        assert!(!saved.document.to_string().contains("[proxy]"));
+    }
+
     #[test]
     fn no_arbitrary_fields_and_parent_rebuild() {
         let r = Request {

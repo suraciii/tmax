@@ -94,19 +94,19 @@ compare current authorization rather than an earlier preview. Same-identity
 refresh obeys [credential-refresh coordination](../../../product/spec.md#credential-refresh-coordination);
 replacement creates no second refresh maintainer or background sign-in path.
 
-## Shared proxy key
+## Shared gateway key
 
-The sole [model proxy](../../../product/spec.md#model-proxy) owns one protected
+The sole [model gateway](../../../product/spec.md#model-gateway) owns one protected
 local access key, distinct from upstream credentials. Explicit initial
-`proxy configure --listen ADDRESS` provisions it once; ordinary start/reload,
+`gateway configure --listen ADDRESS` provisions it once; ordinary start/reload,
 configuration edits, and native apply never generate a missing key implicitly.
 No Agent target, client registration, permission role, or private allowlist is
 required. Every current-key holder uses the same derived published model list.
 
 | Command | Requested boundary |
 | --- | --- |
-| `proxy key replace` | Generate/store a replacement, save its `key_ref`, and activate it when inference is running; never update native/unmanaged clients implicitly. |
-| `proxy key show [--output-fd FD]` | Explicit sensitive retrieval of the configured saved shared key through protected delivery, never ordinary inspection or upstream-secret export. |
+| `gateway key replace` | Generate/store a replacement, save its `key_ref`, and activate it when inference is running; never update native/unmanaged clients implicitly. |
+| `gateway key show [--output-fd FD]` | Explicit sensitive retrieval of the configured saved shared key through protected delivery, never ordinary inspection or upstream-secret export. |
 
 Replace supports dry-run and the optional file revision guard. Validate current
 configuration/ownership before provisioning. Report creation, save, and activation
@@ -117,7 +117,7 @@ required explicit apply/reload. Unmanaged clients are unknown/not enumerable and
 must be updated independently. Replacement preserves retained conversation
 bindings, destinations, and blocked state; the key is never a session namespace.
 Target/native-entry rename/removal or native model-picker changes cannot revoke
-proxy access or break those bindings. Separate upstream login-source/credential
+gateway access or break those bindings. Separate upstream login-source/credential
 dependencies still obey supplier safety.
 
 Show is the sole CLI plaintext-retrieval exception for this local access key.
@@ -135,7 +135,7 @@ prove readiness, activate saved changes, start inference, or register a client.
 It accepts dry-run, which never reads the key or writes secret bytes. Ordinary
 status/inspect never reveal it.
 
-Provision/replace return `data.proxy_key = {action, reference, previous_reference}`.
+Provision/replace return `data.gateway_key = {action, reference, previous_reference}`.
 Action is `provisioned`, `replaced`, or `planned`; references are nonsecret strings
 or null (new reference is null for dry-run, never reserved). Action identifies
 the credential operation, not proof of saved/active state; report those outcomes
@@ -153,9 +153,9 @@ or `storage_record_invalid` without exposing key data; missing required interact
 is `interactive_required`; unsupported output is `unsupported_protected_output`.
 No generated/revealed key is placed in examples, result JSON, or next-action argv.
 
-Examples: `tmax proxy key replace --dry-run`, `tmax proxy key replace`,
-`tmax proxy key show`, and
-`tmax proxy key show --output-fd 3 --non-interactive`. The last form requires an
+Examples: `tmax gateway key replace --dry-run`, `tmax gateway key replace`,
+`tmax gateway key show`, and
+`tmax gateway key show --output-fd 3 --non-interactive`. The last form requires an
 actual qualified inherited pipe; no file/argv fallback is implied.
 
 ## Secret inventory data
@@ -174,8 +174,8 @@ empty inventory may claim an unqualified empty list. Each entry contains:
 
 - `reference`, UTC-or-null `created_at`, `metadata_state` (`known`, `missing`, or
   `unavailable`), and `owner` (null or `{kind, identity, id}`). Owner kind is
-  `provider`, `agent`, or `proxy`; identity is a safe stable local identity, not
-  upstream identity. Proxy identifies the sole proxy, never an Agent/client;
+  `provider`, `agent`, or `gateway`; identity is a safe stable local identity, not
+  upstream identity. Gateway identifies the sole gateway, never an Agent/client;
   its `id` is null. Other IDs are strings or null when no current label is known.
 - `references = {desired, loaded, native}`. Each is `{state, resources, reason_code}`
   with state `referenced`, `unreferenced`, or `unknown`, a reference array, and

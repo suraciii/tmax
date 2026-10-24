@@ -5,18 +5,18 @@
 # No clear secrets belong here; these illustrative references are not usable keys.
 version = 1
 
-# Explicit illustrative proxy choice, not a claim that this local proxy is running.
+# Explicit illustrative outbound proxy choice, not a claim that it is running.
 # Direct policy canonically omits [network]; manual mode = "direct" remains valid.
 # This policy governs tmax-owned outbound work, not native-agent networking.
 [network]
 mode = "proxy"
 proxy_url = "http://127.0.0.1:8080"
 
-# One independent proxy and shared key; no Agent registration is needed to serve it.
-# Initial explicit proxy configure provisions this protected reference once.
-[proxy]
+# One independent gateway and shared key; no Agent registration is needed to serve it.
+# Initial explicit gateway configure provisions this protected reference once.
+[gateway]
 listen = "127.0.0.1:17840"
-key_ref = "local-proxy"
+key_ref = "local-gateway"
 autostart = false
 
 [providers.opencode-go]
@@ -174,10 +174,10 @@ candidates = [
   "deepseek/deepseek-flash",
 ]
 
-# The settings above also form a standalone proxy configuration without Agents.
+# The settings above also form a standalone gateway configuration without Agents.
 # Absolute paths illustrate native-owned scopes, not defaults or tmax-owned data.
 # Read-only native discovery must establish an actual qualified path before apply.
-# ONE target can contain both upstream and proxy native provider entries.
+# ONE target can contain both upstream and gateway native provider entries.
 [agents.omp]
 agent = "omp"
 scope = "/home/example/omp-profile"
@@ -193,10 +193,10 @@ models = [
 
 # Native display may be tmax/deepseek-v4.1-flash; wire IDs have no native prefix.
 # Alias continuity comes from the shared definition, never this selection.
-# This native subset configures the model picker; it is NOT a proxy access list.
-# Application needs the ready local listener and current shared proxy key.
+# This native subset configures the model picker; it is NOT a gateway access list.
+# Application needs the ready local listener and current shared gateway key.
 [agents.omp.providers.tmax]
-proxy = true
+gateway = true
 models = [
   { id = "deepseek-v4.1-flash", protocol = "chat-completions" },
   { id = "L0", protocol = "chat-completions" },

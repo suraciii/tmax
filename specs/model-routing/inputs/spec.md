@@ -235,7 +235,7 @@ publication. A running service is the coordinated owner, not a parallel cache
 that an independent CLI writer may bypass. If that owner cannot be coordinated,
 reject the mutation rather than create split-brain runtime state. Without the
 service, explicit operations use the same persistent record and guards directly.
-They neither start the service nor require proxy inference to be running.
+They neither start the service nor require gateway inference to be running.
 
 An acquisition captures the provider incarnation, authorization generation,
 declaration revision, and current head revision before reading its source. It

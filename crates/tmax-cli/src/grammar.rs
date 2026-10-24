@@ -147,8 +147,8 @@ fn is_negative_number(value: &str) -> bool {
 pub fn command() -> Command {
     Command::new("tmax")
         .version(env!("CARGO_PKG_VERSION"))
-        .about("Manage your model-provider access, coding-agent settings, and local model proxy.")
-        .long_about("tmax manages provider access, subscriptions, model choices, native coding-agent configuration, and a local model proxy. It is CLI-first: compose explicit operations from offline help; no assistant, wizard, or configuration document is required. The supplementary local Web interface uses the same operations. Ordinary desired-state saves succeed after persistence and required safety work; background activation failures remain explicit warnings, not failed saves. Explicit reload, lifecycle, revocation, native and requested startup failures remain nonzero.")
+        .about("Manage your model-provider access, coding-agent settings, and local model gateway.")
+        .long_about("tmax manages provider access, subscriptions, model choices, native coding-agent configuration, and a local model gateway. It is CLI-first: compose explicit operations from offline help; no assistant, wizard, or configuration document is required. The supplementary local Web interface uses the same operations. Ordinary desired-state saves succeed after persistence and required safety work; background activation failures remain explicit warnings, not failed saves. Explicit reload, lifecycle, revocation, native and requested startup failures remain nonzero.")
         .subcommand_required(true)
         .disable_help_subcommand(true)
         .arg(global_value("format", "FORMAT", "Output format: json (default) or text.").value_parser(["json", "text"]))
@@ -164,7 +164,7 @@ pub fn command() -> Command {
         .subcommand(agent_commands())
         .subcommand(skill_commands())
         .subcommand(network_commands())
-        .subcommand(proxy_commands())
+        .subcommand(gateway_commands())
         .subcommand(web_commands())
         .subcommand(history_commands())
 }
@@ -349,7 +349,7 @@ fn status_command() -> Command {
     leaf(
         "status",
         "Summarize configuration, resident service, readiness, recovery, and startup state.",
-        "Effect-free retained-state read. It does not resolve secrets, refresh remote state, sign in, or start a service. Use config show/validate, provider inspect, agent inspect, proxy status, or web status for detail.\n\nExit: 0 when the status request completed, including unhealthy or unknown state.\nExample: tmax status",
+        "Effect-free retained-state read. It does not resolve secrets, refresh remote state, sign in, or start a service. Use config show/validate, provider inspect, agent inspect, gateway status, or web status for detail.\n\nExit: 0 when the status request completed, including unhealthy or unknown state.\nExample: tmax status",
     )
 }
 
@@ -635,14 +635,14 @@ fn model_commands() -> Command {
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
     let rule = model_rule_commands();
     let alias = model_alias_commands();
-    let explain = leaf("explain", "Explain no-inference model selection or one retained session destination.", "Requires a model ID and explicit --protocol. Use a public qualified concrete or alias ID, except with an upstream-source native entry: its ID is the exact upstream model ID under that entry's provider, including any slashes. Optional --at uses retained facts valid then; it never fetches or predicts. Assess native compatibility with --target TARGET, optionally --agent-provider NAME for an existing entry, or --agent AGENT --path PATH for an undeclared scope. Every context assesses only the requested offering or explicit alias candidates. --session inspects an existing proxy session and cannot use an upstream-source entry.\n\nReturns candidates/exclusions, rules, priorities, selection provenance, compatibility and unknown evidence. Does not write settings/native files, resolve secrets, refresh login, start inference, reserve a session, or probe. Rejects --dry-run.\n\nExit: 0 when explanation completes, including blocked/unknown availability; 2 for invalid operand combinations.\nExample: tmax model explain L0 --protocol chat-completions")
+    let explain = leaf("explain", "Explain no-inference model selection or one retained session destination.", "Requires a model ID and explicit --protocol. Use a public qualified concrete or alias ID, except with an upstream-source native entry: its ID is the exact upstream model ID under that entry's provider, including any slashes. Optional --at uses retained facts valid then; it never fetches or predicts. Assess native compatibility with --target TARGET, optionally --agent-provider NAME for an existing entry, or --agent AGENT --path PATH for an undeclared scope. Every context assesses only the requested offering or explicit alias candidates. --session inspects an existing gateway session and cannot use an upstream-source entry.\n\nReturns candidates/exclusions, rules, priorities, selection provenance, compatibility and unknown evidence. Does not write settings/native files, resolve secrets, refresh login, start inference, reserve a session, or probe. Rejects --dry-run.\n\nExit: 0 when explanation completes, including blocked/unknown availability; 2 for invalid operand combinations.\nExample: tmax model explain L0 --protocol chat-completions")
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
         .arg(value("target", "TARGET", "Declared target for native assessment.").conflicts_with_all(["agent", "path"]))
         .arg(value("agent-provider", "NAME", "Existing target-local provider entry.").requires("target"))
         .arg(agent_value("agent", "Agent for undeclared native scope.").requires("path"))
         .arg(value("path", "PATH", "Native scope path for undeclared context.").requires("agent"))
         .arg(value("at", "INSTANT", "RFC 3339 explicit-offset evaluation instant."))
-        .arg(value("session", "SESSION", "Existing retained proxy session handle."))
+        .arg(value("session", "SESSION", "Existing retained gateway session handle."))
         .arg(value("state", "STATE", "file (default) or loaded.").value_parser(["file", "loaded"]))
         .arg(required_pos(1, "ID", "Public concrete/alias ID, or exact upstream ID with an upstream-source native entry."));
     let probe = mutation(leaf("probe", "Run one explicitly requested bounded potentially paid inference check.", "Requires a concrete QUALIFIED offering, protocol, and an integration-qualified transport. A probe may use paid quota/credit; inspect dry-run/capability help for known price and unknown charges. No alias fan-out, retries, or replay. This is not a non-inference health check.\n\nDry-run contacts no upstream and reads no credentials.\nExit: 0 when the requested probe completes; 3 when qualification/credential is required; 4 for request/transport/upstream failure.\nExample: tmax model probe deepseek/deepseek-flash --protocol chat-completions --transport http --dry-run")
@@ -659,7 +659,7 @@ fn model_commands() -> Command {
                 .arg(required_pos(2, "FIELD", "overrides.modalities.input or overrides.modalities.output.")), true, true)))
         ;
     family("model", "Inspect and manage concrete offerings, aliases, priorities, schedules, and explicit probes.", Command::new("model")
-        .subcommand(leaf("list", "List concrete models and aliases with protocol/publication/availability summaries.", "Optional filters are --provider ID, --protocol P, and --kind concrete|alias. Native selections do not publish proxy models. Publication is not proof of upstream success.\n\nExit: 0 when read completes.\nExample: tmax model list --kind concrete")
+        .subcommand(leaf("list", "List concrete models and aliases with protocol/publication/availability summaries.", "Optional filters are --provider ID, --protocol P, and --kind concrete|alias. Native selections do not publish gateway models. Publication is not proof of upstream success.\n\nExit: 0 when read completes.\nExample: tmax model list --kind concrete")
             .arg(value("provider", "ID", "Filter by local provider ID."))
             .arg(protocol_value("protocol", "Filter by native protocol."))
             .arg(value("kind", "KIND", "concrete or alias.").value_parser(["concrete", "alias"])))
@@ -931,11 +931,11 @@ fn agent_commands() -> Command {
         .group(ArgGroup::new("scope_fields").args(["agent", "path"]).required(true).multiple(true)), true, true);
     let model = Command::new("model")
         .about("Manage selections within one target-local provider entry.")
-        .subcommand(mutation(leaf("add", "Add one exact model selection to a native provider entry.", "Does not edit the default or role mappings; first selection never becomes default. ID semantics depend on whether the entry points to an upstream provider or the local proxy.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent model add pi-main upstream deepseek-flash --protocol chat-completions")
+        .subcommand(mutation(leaf("add", "Add one exact model selection to a native provider entry.", "Does not edit the default or role mappings; first selection never becomes default. ID semantics depend on whether the entry points to an upstream provider or the local gateway.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent model add pi-main upstream deepseek-flash --protocol chat-completions")
             .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local native provider-entry name."))
-            .arg(required_pos(3, "ID", "Exact upstream model ID or public proxy ID.")), true, true))
+            .arg(required_pos(3, "ID", "Exact upstream model ID or public gateway ID.")), true, true))
         .subcommand(mutation(leaf("remove", "Remove one selected model after default/role reference checks.", "Does not edit native files until explicit agent apply.\n\nExit: 0 when saved; 2 for unresolved default/role references; 4 for persistence or required safety/startup failure.\nExample: tmax agent model remove pi-main upstream deepseek-flash --protocol chat-completions")
             .arg(protocol_value("protocol", "Exact native model protocol.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
@@ -946,7 +946,7 @@ fn agent_commands() -> Command {
             .arg(required_pos(2, "NAME", "Target-local native provider-entry name.")), true, true));
     let default = Command::new("default")
         .about("Set or clear the native default for a target.")
-        .subcommand(mutation(leaf("set", "Set a target default to a model already selected in the named entry.", "Requires explicit --protocol. A default is configuration, not a proxy permission or inference request.\n\nExit: 0 when saved; 2 if selection/reference is invalid; 4 for persistence or required safety/startup failure.\nExample: tmax agent default set pi-main upstream deepseek-flash --protocol chat-completions")
+        .subcommand(mutation(leaf("set", "Set a target default to a model already selected in the named entry.", "Requires explicit --protocol. A default is configuration, not a gateway permission or inference request.\n\nExit: 0 when saved; 2 if selection/reference is invalid; 4 for persistence or required safety/startup failure.\nExample: tmax agent default set pi-main upstream deepseek-flash --protocol chat-completions")
             .arg(protocol_value("protocol", "Exact native protocol.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local entry name."))
@@ -967,20 +967,20 @@ fn agent_commands() -> Command {
         .subcommand(mutation(leaf("clear", "Remove all native role mappings, not model selections/default.", "\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax agent role clear omp-main")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, true));
     let provider = Command::new("provider")
-        .about("Manage target-local provider entries with explicit upstream or proxy source.")
-        .subcommand(mutation(leaf("add", "Add an empty-model native provider entry with exactly one source.", "Choose exactly one of --provider PROVIDER or --proxy. An upstream provider is a tmax provider ID; proxy uses the sole local proxy. Does not provision a key, start services, or write native files.\n\nExit: 0 when saved; 2 for invalid/duplicate entry; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider add pi-main local --proxy")
+        .about("Manage target-local provider entries with explicit upstream or gateway source.")
+        .subcommand(mutation(leaf("add", "Add an empty-model native provider entry with exactly one source.", "Choose exactly one of --provider PROVIDER or --gateway. An upstream provider is a tmax provider ID; gateway uses the sole local gateway. Does not provision a key, start services, or write native files.\n\nExit: 0 when saved; 2 for invalid/duplicate entry; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider add pi-main local --gateway")
             .arg(value("provider", "PROVIDER", "Existing tmax upstream provider ID."))
-            .arg(flag("proxy", "Use the sole tmax model proxy."))
+            .arg(flag("gateway", "Use the sole tmax model gateway."))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Unique target-local provider-entry name."))
-            .group(ArgGroup::new("source").args(["provider", "proxy"]).required(true)), true, true))
-        .subcommand(mutation(leaf("update", "Replace a target-local provider entry's source.", "Choose exactly one of --provider PROVIDER or --proxy. Validates existing selections/default/roles against the new source; never reinterprets, repairs, clears, or adds them. Does not write native files.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider update pi-main local --provider deepseek")
+            .group(ArgGroup::new("source").args(["provider", "gateway"]).required(true)), true, true))
+        .subcommand(mutation(leaf("update", "Replace a target-local provider entry's source.", "Choose exactly one of --provider PROVIDER or --gateway. Validates existing selections/default/roles against the new source; never reinterprets, repairs, clears, or adds them. Does not write native files.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider update pi-main local --provider deepseek")
             .arg(value("provider", "PROVIDER", "Existing tmax upstream provider ID."))
-            .arg(flag("proxy", "Use the sole tmax model proxy."))
+            .arg(flag("gateway", "Use the sole tmax model gateway."))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local provider-entry name."))
-            .group(ArgGroup::new("source").args(["provider", "proxy"]).required(true)), true, true))
-        .subcommand(mutation(leaf("remove", "Remove a provider entry after default/role/reference checks.", "Does not write native files or revoke shared proxy access. Explicit apply/restore is separate.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider remove pi-main local")
+            .group(ArgGroup::new("source").args(["provider", "gateway"]).required(true)), true, true))
+        .subcommand(mutation(leaf("remove", "Remove a provider entry after default/role/reference checks.", "Does not write native files or revoke shared gateway access. Explicit apply/restore is separate.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider remove pi-main local")
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local provider-entry name.")), true, true));
     let recovery = Command::new("recovery")
@@ -1001,7 +1001,7 @@ fn agent_commands() -> Command {
         .subcommand(leaf("discover", "Discover supported Agent installations, scopes, versions, and profiles.", "Read-only local discovery; does not register targets or import settings/credentials.\n\nExit: 0 when discovery completes; unsupported/unavailable installations remain explicit.\nExample: tmax agent discover --agent pi")
             .arg(agent_value("agent", "Optional filter: codex, pi, omp, opencode, or hermes.")))
         .subcommand(inspect)
-        .subcommand(mutation(leaf("add", "Declare a native target without provider entries, defaults, or roles.", "Requires --agent and --path. Does not provision a proxy key, start a service, or write native files. Relative paths resolve against ~/.tmax.\n\nExit: 0 when saved; 2 for invalid/duplicate target; 4 for persistence or required safety/startup failure.\nExample: tmax agent add pi-main --agent pi --path /home/user/.pi/agent")
+        .subcommand(mutation(leaf("add", "Declare a native target without provider entries, defaults, or roles.", "Requires --agent and --path. Does not provision a gateway key, start a service, or write native files. Relative paths resolve against ~/.tmax.\n\nExit: 0 when saved; 2 for invalid/duplicate target; 4 for persistence or required safety/startup failure.\nExample: tmax agent add pi-main --agent pi --path /home/user/.pi/agent")
             .arg(agent_value("agent", "codex, pi, omp, opencode, or hermes.").required(true))
             .arg(value("path", "PATH", "Native configuration scope.").required(true))
             .arg(required_pos(1, "TARGET", "New unique target ID.")), true, true))
@@ -1009,13 +1009,13 @@ fn agent_commands() -> Command {
         .subcommand(mutation(leaf("rename", "Rename a target and dependent login-source references.", "Retains ownership/recovery identity; no alias is left. Existing native paths/credentials are not moved.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax agent rename pi-main pi-work")
             .arg(required_pos(1, "OLD", "Current target ID."))
             .arg(required_pos(2, "NEW", "New unique target ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Stop managing a target after reference checks.", "Leaves native files, credentials, protected recovery, and shared proxy access untouched. Restore first if desired. No implicit sign-out or native write.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent remove pi-main")
+        .subcommand(mutation(leaf("remove", "Stop managing a target after reference checks.", "Leaves native files, credentials, protected recovery, and shared gateway access untouched. Restore first if desired. No implicit sign-out or native write.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent remove pi-main")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, true))
         .subcommand(provider)
         .subcommand(model)
         .subcommand(default)
         .subcommand(role)
-        .subcommand(mutation(leaf("apply", "Apply the target's complete current desired configuration to native files.", "Checks current native inputs/ownership and credential handoff. Proxy entries require the ready matching listener/shared key; upstream entries do not require tmax proxy. Reports changed/unchanged files and recovery. Written files are not proof of runtime reload. No force overwrite or automatic apply.\n\nDry-run performs no native writes, sign-in, key resolution, or launch.\nExit: 0 when applied; 3 when complete write awaits native reload; 4 for partial/uncertain writes; 5 only for cancellation before effects.\nExample: tmax agent apply pi-main --dry-run")
+        .subcommand(mutation(leaf("apply", "Apply the target's complete current desired configuration to native files.", "Checks current native inputs/ownership and credential handoff. Gateway entries require the ready matching listener/shared key; upstream entries do not require tmax gateway. Reports changed/unchanged files and recovery. Written files are not proof of runtime reload. No force overwrite or automatic apply.\n\nDry-run performs no native writes, sign-in, key resolution, or launch.\nExit: 0 when applied; 3 when complete write awaits native reload; 4 for partial/uncertain writes; 5 only for cancellation before effects.\nExample: tmax agent apply pi-main --dry-run")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, false))
         .subcommand(mutation(leaf("restore", "Restore owned native changes while preserving later user edits.", "Supply TARGET or --recovery RECORD, not both. Exact recovery handles remain usable after target removal. Ownership conflicts block rather than force overwrite. Does not recreate a target or delete credentials.\n\nDry-run writes nothing.\nExit: 0 when restored; 3 for conflict/action required; 4 for partial or failed native restoration.\nExample: tmax agent restore pi-main --dry-run")
             .arg(value("recovery", "RECORD", "Exact retained recovery handle; alternative to TARGET."))
@@ -1035,31 +1035,31 @@ fn network_commands() -> Command {
         .subcommand_required(true)
 }
 
-fn proxy_commands() -> Command {
+fn gateway_commands() -> Command {
     let autostart = Command::new("autostart")
         .about("Explicitly enable or disable this authority's per-user login-start registration.")
-        .subcommand(mutation(leaf("enable", "Save enabled startup intent and reconcile tmax's owned per-user registration.", "Always reconciles even if the saved value is already true. Does not start inference. Reports unavailable credential requirements. Unrelated startup entries are untouched.\n\nExit: 0 when save/reconciliation completes; 3 when action is required; 4 when requested registration fails.\nExample: tmax proxy autostart enable") , true, true))
-        .subcommand(mutation(leaf("disable", "Save disabled startup intent and reconcile removal of tmax's registration.", "Always reconciles even if the saved value is already false. Does not stop inference or alter unrelated entries.\n\nExit: 0 when save/reconciliation completes; 4 when requested registration removal fails.\nExample: tmax proxy autostart disable"), true, true));
+        .subcommand(mutation(leaf("enable", "Save enabled startup intent and reconcile tmax's owned per-user registration.", "Always reconciles even if the saved value is already true. Does not start inference. Reports unavailable credential requirements. Unrelated startup entries are untouched.\n\nExit: 0 when save/reconciliation completes; 3 when action is required; 4 when requested registration fails.\nExample: tmax gateway autostart enable") , true, true))
+        .subcommand(mutation(leaf("disable", "Save disabled startup intent and reconcile removal of tmax's registration.", "Always reconciles even if the saved value is already false. Does not stop inference or alter unrelated entries.\n\nExit: 0 when save/reconciliation completes; 4 when requested registration removal fails.\nExample: tmax gateway autostart disable"), true, true));
     let key = Command::new("key")
-        .about("Explicitly replace or securely reveal the sole shared local proxy key.")
-        .subcommand(mutation(leaf("replace", "Generate/store a new shared inference key and save its reference.", "Validates current config/ownership before provisioning. Saves and activates separately; a provisioned key remains discoverable for explicit cleanup after save failure. Does not update native or unmanaged clients. Replacing revokes old-key admission after activation; admitted requests retain their captured credential.\n\nDry-run does not generate/reserve a key or read protected input.\nExit: 0 when requested boundaries complete; 3 when action is required; 4 for credential/save/activation partial failure.\nExample: tmax proxy key replace --dry-run"), true, true))
-        .subcommand(mutation(leaf("show", "Deliver the configured shared proxy key through one explicitly qualified protected output.", "Without --output-fd, writes one UTF-8 line only to the attached controlling terminal. --output-fd FD requires a qualified inherited writable pipe >=3, not aliased to stdout/stderr. Noninteractive use requires the pipe; never fall back to stdout, stderr, argv, environment, or a file. The result never contains key bytes. Delivery does not prove readiness, activate saved changes, start inference, or register clients.\n\nDry-run reads/resolves no key and writes no secret bytes.\nExit: 0 on complete delivery; 3 when interaction is required; 4 on partial/uncertain delivery.\nExample: tmax proxy key show --output-fd 3 --non-interactive")
+        .about("Explicitly replace or securely reveal the sole shared local gateway key.")
+        .subcommand(mutation(leaf("replace", "Generate/store a new shared inference key and save its reference.", "Validates current config/ownership before provisioning. Saves and activates separately; a provisioned key remains discoverable for explicit cleanup after save failure. Does not update native or unmanaged clients. Replacing revokes old-key admission after activation; admitted requests retain their captured credential.\n\nDry-run does not generate/reserve a key or read protected input.\nExit: 0 when requested boundaries complete; 3 when action is required; 4 for credential/save/activation partial failure.\nExample: tmax gateway key replace --dry-run"), true, true))
+        .subcommand(mutation(leaf("show", "Deliver the configured shared gateway key through one explicitly qualified protected output.", "Without --output-fd, writes one UTF-8 line only to the attached controlling terminal. --output-fd FD requires a qualified inherited writable pipe >=3, not aliased to stdout/stderr. Noninteractive use requires the pipe; never fall back to stdout, stderr, argv, environment, or a file. The result never contains key bytes. Delivery does not prove readiness, activate saved changes, start inference, or register clients.\n\nDry-run reads/resolves no key and writes no secret bytes.\nExit: 0 on complete delivery; 3 when interaction is required; 4 on partial/uncertain delivery.\nExample: tmax gateway key show --output-fd 3 --non-interactive")
             .arg(value("output-fd", "FD", "Qualified inherited writable pipe at least 3: Unix descriptor or Windows native handle; never stdout/stderr.")), true, false));
-    Command::new("proxy")
+    Command::new("gateway")
         .about("Inspect and explicitly control the background inference listener.")
-        .subcommand(leaf("status", "Report actual resident/listener identity, key readiness, publication, and safe-session conditions.", "Read actual resident state and versions; saved/loaded network policy remains distinct. Does not read or reveal the shared key. Native target readiness is not an inference prerequisite.\n\nExit: 0 even when stopped, unavailable, or incompatible state is reported.\nExample: tmax proxy status"))
+        .subcommand(leaf("status", "Report actual resident/listener identity, key readiness, publication, and safe-session conditions.", "Read actual resident state and versions; saved/loaded network policy remains distinct. Does not read or reveal the shared key. Native target readiness is not an inference prerequisite.\n\nExit: 0 even when stopped, unavailable, or incompatible state is reported.\nExample: tmax gateway status"))
         .subcommand(mutation(
-            leaf("configure", "Create/edit the optional proxy settings; creation provisions the shared key explicitly.", "Initial creation requires --listen numeric loopback host:port and provisions one key. Existing edits retain the key. --clear autostart restores disabled intent but does not force reconciliation. No implicit start, native write, key repair, or key generation on an existing table. Report provision/save/activation separately.\n\nExit: 0 when save completes; 2 for invalid address/config; 3 for required action; 4 for provisioning, persistence, or required safety/startup failure.\nExample: tmax proxy configure --listen 127.0.0.1:17840")
+            leaf("configure", "Create/edit the optional gateway settings; creation provisions the shared key explicitly.", "Initial creation requires --listen numeric loopback host:port and provisions one key. Existing edits retain the key. --clear autostart restores disabled intent but does not force reconciliation. No implicit start, native write, key repair, or key generation on an existing table. Report provision/save/activation separately.\n\nExit: 0 when save completes; 2 for invalid address/config; 3 for required action; 4 for provisioning, persistence, or required safety/startup failure.\nExample: tmax gateway configure --listen 127.0.0.1:17840")
                 .arg(value("listen", "ADDRESS", "Numeric loopback host:port; IPv6 must be bracketed."))
                 .arg(value("clear", "FIELD", "Only autostart; restores disabled intent.").value_parser(["autostart"])),
             true,
             true,
         ))
-        .subcommand(mutation(leaf("remove", "Remove proxy configuration only after inference is stopped and proxy references resolve.", "Does not stop inference implicitly, delete stored key material, edit native files, or remove unknown external copies. Explicit restart is needed to activate a saved address change.\n\nExit: 0 when removed; 3 if listener/references require action; 4 for persistence or required safety/startup failure.\nExample: tmax proxy remove --dry-run"), true, true))
-        .subcommand(mutation(leaf("start", "Explicitly start inference in the sole identified compatible resident.", "Reuses a compatible running listener without reload or reapply. A management-only resident may start inference explicitly. Validates saved config and existing shared key; never generates a key or applies native settings. No target prerequisite. On Unix, an unrepresentable OS-home control socket path blocks before resident launch with resident_control_path_invalid; the store is not relocated.\n\nDry-run does not start, reserve address, or resolve secrets.\nExit: 0 when started/reused; 3 for incompatible owner, unsupported control path, unavailable key, or required action; 4 for startup failure.\nExample: tmax proxy start"), true, false))
-        .subcommand(mutation(leaf("stop", "Stop inference only; normal stop refuses while requests are active.", "Use --cancel-active to close admission, interrupt the actual active set as transports allow, and report effects. Does not stop Web, alter autostart, switch native clients to upstream, or discard retained sessions.\n\nDry-run reserves/freezes no active set.\nExit: 0 when stopped; 3 when active requests require explicit cancellation; 4 for failed/partial lifecycle.\nExample: tmax proxy stop --cancel-active")
+        .subcommand(mutation(leaf("remove", "Remove gateway configuration only after inference is stopped and gateway references resolve.", "Does not stop inference implicitly, delete stored key material, edit native files, or remove unknown external copies. Explicit restart is needed to activate a saved address change.\n\nExit: 0 when removed; 3 if listener/references require action; 4 for persistence or required safety/startup failure.\nExample: tmax gateway remove --dry-run"), true, true))
+        .subcommand(mutation(leaf("start", "Explicitly start inference in the sole identified compatible resident.", "Reuses a compatible running listener without reload or reapply. A management-only resident may start inference explicitly. Validates saved config and existing shared key; never generates a key or applies native settings. No target prerequisite. On Unix, an unrepresentable OS-home control socket path blocks before resident launch with resident_control_path_invalid; the store is not relocated.\n\nDry-run does not start, reserve address, or resolve secrets.\nExit: 0 when started/reused; 3 for incompatible owner, unsupported control path, unavailable key, or required action; 4 for startup failure.\nExample: tmax gateway start"), true, false))
+        .subcommand(mutation(leaf("stop", "Stop inference only; normal stop refuses while requests are active.", "Use --cancel-active to close admission, interrupt the actual active set as transports allow, and report effects. Does not stop Web, alter autostart, switch native clients to upstream, or discard retained sessions.\n\nDry-run reserves/freezes no active set.\nExit: 0 when stopped; 3 when active requests require explicit cancellation; 4 for failed/partial lifecycle.\nExample: tmax gateway stop --cancel-active")
             .arg(flag("cancel-active", "Explicitly interrupt currently active requests; no replay.")), true, false))
-        .subcommand(mutation(leaf("restart", "Explicitly stop and start inference using current valid saved settings.", "Includes saved listen-address changes. Does not stop Web or replace the resident. Same active-request rule as stop; --cancel-active requests interruption, not approval.\n\nExit: 0 when restarted; 3 when action is required; 4 for partial/failed stop/start.\nExample: tmax proxy restart" )
+        .subcommand(mutation(leaf("restart", "Explicitly stop and start inference using current valid saved settings.", "Includes saved listen-address changes. Does not stop Web or replace the resident. Same active-request rule as stop; --cancel-active requests interruption, not approval.\n\nExit: 0 when restarted; 3 when action is required; 4 for partial/failed stop/start.\nExample: tmax gateway restart" )
             .arg(flag("cancel-active", "Explicitly interrupt current requests before restart.")), true, false))
         .subcommand(autostart)
         .subcommand(key)
@@ -1096,7 +1096,7 @@ fn history_commands() -> Command {
         .arg(value("outcome", "OUTCOME", "Filter by retained outcome.").value_parser(outcomes))
         .arg(value("target", "TARGET", "Independently established target attribution only."));
     Command::new("history")
-        .about("Inspect or clear bounded in-memory model-proxy request history.")
+        .about("Inspect or clear bounded in-memory model-gateway request history.")
         .subcommand(list)
         .subcommand(leaf("inspect", "Inspect one retained request's safe detail and historical evidence.", "If evicted/no longer retained, reports that state explicitly. Historical attribution and evidence survive target/model changes without relabeling. No body/content archive or persistent history.\n\nExit: 0 when the retained/no-longer-retained result is reported.\nExample: tmax history inspect REQUEST")
             .arg(required_pos(1, "REQUEST", "Current retained request handle.")))

@@ -33,7 +33,7 @@ all retained records, not complete historical coverage. `--target` matches only
 independently established retained attribution and excludes unknown context; it
 does not require the target to remain registered. Never infer target/native
 provider from the shared key, selected public model, or unsupported caller claims.
-Native provider/model selections are not a proxy access filter.
+Native provider/model selections are not a gateway access filter.
 
 | Request-history data | Contract |
 | --- | --- |
@@ -43,7 +43,7 @@ Native provider/model selections are not a proxy access filter.
 | Inspect attribution | Qualified evidence or explicit unknown, never guessed caller identity. Historical names/evidence survive entry/target changes or removal without relabeling, access revocation, or session-binding deletion. |
 | Result coverage | Process/reset scope and material limits/gaps. |
 | Detailed history/status | Retain process start/clear time, actual limits/counts, eviction/capture evidence, and historical rule/input snapshots as specified by Diagnostics. Never use current config to relabel historical derived rule kind or reconstruct omitted candidates/rules. |
-| Upstream-source native traffic | Outside proxy coverage even if the same target also has proxy entries; missing records prove neither inactivity, bypass, nor successful access. |
+| Upstream-source native traffic | Outside gateway coverage even if the same target also has gateway entries; missing records prove neither inactivity, bypass, nor successful access. |
 
 Clear includes terminal rejected/failed/cancelled/interrupted/unknown records as
 qualified by Diagnostics. Dry-run reports current eligible count/coverage and

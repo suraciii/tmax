@@ -10,7 +10,7 @@ and automatic key creation or rotation are outside this integration.
 
 The [shared integration contract](../spec.md) owns qualification states and agent
 boundaries. The [product contract](../../product/spec.md) owns provider lifecycle,
-security, billing observations, native configuration, and proxy forwarding. The
+security, billing observations, native configuration, and gateway forwarding. The
 [configuration contract](../../configuration/spec.md) owns configuration fields.
 [Model selection](../../model-routing/spec.md) owns protocol eligibility, schedules,
 and conversation continuity. Shared terms come from [CONTEXT.md](../../../CONTEXT.md).
@@ -67,7 +67,7 @@ The known map and finite HTTP inference operations are:
 
 The [shared endpoint resolver](../spec.md#endpoint-resolution) owns selection of
 this published endpoint set. Native configuration uses the selected map entry
-for upstream access. The proxy may forward the same declared operation after
+for upstream access. The gateway may forward the same declared operation after
 its transport and continuation behavior are qualified. Neither path depends on
 conversion between Chat Completions, Responses, and Messages. A
 catalog `api` URL or generic OpenAI base must not replace the Messages map entry
@@ -113,7 +113,7 @@ no recognized-client User-Agent requirement or special conversation header.
 Those requirements must not be invented from another access product.
 Truthful native identity and genuine session semantics still follow the
 [shared client-identity contract](../spec.md#client-and-conversation-identity)
-for direct/proxy main, tool-result, continuation, and auxiliary requests.
+for direct/gateway main, tool-result, continuation, and auxiliary requests.
 
 The current first-call guide names `deepseek-flash` and `deepseek-v4-pro`.
 It notes that historical Flash IDs can resolve to a newer served model. A
@@ -128,7 +128,7 @@ Unsupported parameters can be silently ignored. The documented response object's
 `store` is false; a returned response ID is not evidence of retrievable history.
 
 A client that sends complete required input history can qualify for direct or
-same-protocol proxy use. This must include the prior tool calls and tool outputs
+same-protocol gateway use. This must include the prior tool calls and tool outputs
 needed for the next turn. A client that relies on server-stored history or
 background execution must be blocked for those semantics, even if its first
 request succeeds. tmax must not reconstruct missing history, strip unsupported
@@ -259,7 +259,7 @@ success.
 - The official Codex Responses scenario appears as documented and conditional on
   actual version and feature qualification, not categorically incompatible or
   tmax-verified. Its shared native scope is visible before application.
-- Direct and proxy selections expose the same resolved region/protocol map,
+- Direct and gateway selections expose the same resolved region/protocol map,
   exact upstream base, and finite declared method/path operations. Chat
   Completions, Responses, and Anthropic Messages qualify independently; no
   cross-protocol translation or undeclared resource-operation passthrough is offered.

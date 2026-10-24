@@ -551,14 +551,14 @@ const COMMANDS: &[Command] = &[
         path: "agent provider add",
         min: 2,
         max: 2,
-        options: "provider proxy",
+        options: "provider gateway",
         mutation: true,
     },
     Command {
         path: "agent provider update",
         min: 2,
         max: 2,
-        options: "provider proxy",
+        options: "provider gateway",
         mutation: true,
     },
     Command {
@@ -681,70 +681,70 @@ const COMMANDS: &[Command] = &[
         mutation: false,
     },
     Command {
-        path: "proxy configure",
+        path: "gateway configure",
         min: 0,
         max: 0,
         options: "listen clear",
         mutation: true,
     },
     Command {
-        path: "proxy remove",
+        path: "gateway remove",
         min: 0,
         max: 0,
         options: "",
         mutation: true,
     },
     Command {
-        path: "proxy key replace",
+        path: "gateway key replace",
         min: 0,
         max: 0,
         options: "",
         mutation: true,
     },
     Command {
-        path: "proxy key show",
+        path: "gateway key show",
         min: 0,
         max: 0,
         options: "output-fd",
         mutation: true,
     },
     Command {
-        path: "proxy status",
+        path: "gateway status",
         min: 0,
         max: 0,
         options: "",
         mutation: false,
     },
     Command {
-        path: "proxy start",
+        path: "gateway start",
         min: 0,
         max: 0,
         options: "",
         mutation: true,
     },
     Command {
-        path: "proxy stop",
+        path: "gateway stop",
         min: 0,
         max: 0,
         options: "cancel-active",
         mutation: true,
     },
     Command {
-        path: "proxy restart",
+        path: "gateway restart",
         min: 0,
         max: 0,
         options: "cancel-active",
         mutation: true,
     },
     Command {
-        path: "proxy autostart enable",
+        path: "gateway autostart enable",
         min: 0,
         max: 0,
         options: "",
         mutation: true,
     },
     Command {
-        path: "proxy autostart disable",
+        path: "gateway autostart disable",
         min: 0,
         max: 0,
         options: "",
@@ -801,7 +801,7 @@ const COMMANDS: &[Command] = &[
     },
 ];
 pub fn catalog() -> Value {
-    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="proxy configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"model"),"switch":matches!(name,"all-day"|"last"|"proxy"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation,"revision_guard":c.supports_revision()})}).collect::<Vec<_>>())
+    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="gateway configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"model"),"switch":matches!(name,"all-day"|"last"|"gateway"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation,"revision_guard":c.supports_revision()})}).collect::<Vec<_>>())
 }
 fn operand_labels(path: &str) -> &'static [&'static str] {
     match path {
@@ -921,7 +921,7 @@ pub fn validate(r: &Request) -> Result<()> {
                 | "key-stdin"
                 | "all-day"
                 | "last"
-                | "proxy"
+                | "gateway"
                 | "empty-values"
                 | "cancel-active"
                 | "no-browser"

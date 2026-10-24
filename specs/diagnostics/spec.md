@@ -1,8 +1,8 @@
 # Diagnostics and request history
 
 **Authority**: This document owns diagnostic evidence, effective-versus-applied
-reporting, and local proxy request history. The [product contract](../product/spec.md)
-owns provider lifecycle, Agent provider configuration, the model proxy, security, and billing scope. The
+reporting, and local gateway request history. The [product contract](../product/spec.md)
+owns provider lifecycle, Agent provider configuration, the model gateway, security, and billing scope. The
 [configuration contract](../configuration/spec.md#save-reload-and-apply) owns
 save, activation, and native application. [Model selection](../model-routing/spec.md#selection-and-continuity)
 owns eligibility, priority evaluation, and conversation continuity.
@@ -25,17 +25,17 @@ them; success in one row must not supply success in another.
 
 | Fact | Required distinction |
 | --- | --- |
-| Configuration | The sole authority `~/.tmax/tmax.toml`'s validation result and revision versus the loaded configuration and accepted metadata revisions. Saved, invalid, and saved-but-not-active settings must not appear active. A target with empty native providers/selections or no default is valid but incomplete for native application, not an invalid login source or a blocker for independent proxy inference. |
+| Configuration | The sole authority `~/.tmax/tmax.toml`'s validation result and revision versus the loaded configuration and accepted metadata revisions. Saved, invalid, and saved-but-not-active settings must not appear active. A target with empty native providers/selections or no default is valid but incomplete for native application, not an invalid login source or a blocker for independent gateway inference. |
 | Native application | Not applied, applied, awaiting native reload, conflicted, blocked, or partially applied/recovery-required, with the affected target and applied revision. Written native settings are not proof of running-agent use. |
 | Process and listener | Actual resident identity, authority, executable/management compatibility, and inference/Web listener states under the [resident contract](../product/spec.md#resident-service-identity). Distinguish absent, identified compatible, incompatible, unidentified occupied endpoint, and unavailable evidence. A PID or a running Web interface does not prove inference availability or usable upstream authorization. |
 | Startup registration | Saved autostart intent versus this authority's actual OS registration, ownership, and latest reconciliation outcome. Drift is not a failed unrelated edit; explicit repair follows the [configuration contract](../configuration/spec.md#save-reload-and-apply). |
 | Effective agent state | The latest qualified evidence of the running target's native provider entries, each source and endpoint/model selection, and native configuration precedence. Applied files, a requested reload, or a reachable listener alone must not verify that effective state. Unsupported runtime inspection must remain unknown. |
 | Provider authentication | Configured authentication method and login source `auth.via`, when applicable, and locally known credential availability versus a qualified upstream authentication result. A secret reference, readable local secret file, or configured key must not become a verified upstream login. Unknown upstream account identity must remain unverified. |
-| Shared proxy access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled, protocol-qualified publication list. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a saved reference is not proof of a readable key. |
+| Shared gateway access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled, protocol-qualified publication list. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a saved reference is not proof of a readable key. |
 | Model reachability | The exact provider authorization, offering, native protocol, transport, and tested capability scope of a successful or failed request. Catalog presence, model discovery, authentication success, and quota-query success must not verify inference or untested capabilities. |
 | Quota freshness | The latest applicable provider observation, its freshness, and the latest refresh outcome. Unknown, stale, unavailable, and manual information must remain distinct from a fresh authoritative observation. Quota, balance, credential expiry, quota reset, and renewal must remain separate facts. |
 | Priority inputs | Each declared provider-local quota/reset channel's source, declaration and current-head revisions, scope/model coverage, normalized value or unavailable reason, applicability to saved versus loaded settings, and latest acquisition outcome. Manual quota, a public reset forecast, provider quota evidence, and an actual completed reset are different facts. Acquisition intent, a running/paused/blocked acquisition state, and head freshness must remain distinct. |
-| Outbound network | Saved versus loaded global mode and nonsecret proxy destination, with the policy used by the operation. A configured proxy is not proof of network reachability. Native-agent networking is outside this evidence scope. |
+| Outbound network | Saved versus loaded global mode and nonsecret gateway destination, with the policy used by the operation. A configured gateway is not proof of network reachability. Native-agent networking is outside this evidence scope. |
 
 Views must identify the affected targets and the next supported action for an
 incomplete fact. A stopped listener must not turn applied native configuration
@@ -56,11 +56,11 @@ Dry runs retain the full impact under the
 [execution contract](../cli/spec.md#dry-run-and-execution), without effects,
 reservations, secret reads, login, or upstream calls. Execution uses current inputs.
 
-A request that passes through the proxy can provide evidence for that request's
+A request that passes through the gateway can provide evidence for that request's
 scope. It does not verify every model, protocol, target, or continuation path.
 Native upstream-source entries send inference directly to the provider, outside
-proxy observation, while proxy-source entries in the same target may send other
-traffic through tmax. No proxy history entry is expected for unobserved upstream
+gateway observation, while gateway-source entries in the same target may send other
+traffic through tmax. No gateway history entry is expected for unobserved upstream
 traffic. Missing records must not prove direct access, bypass, inactivity, or
 success; requests may be outside coverage, unobserved, cleared, or evicted.
 
@@ -70,7 +70,7 @@ Explicit diagnostic detail must make the following evidence available for each f
 
 - Its source and evidence kind: configured intent, local validation/inspection,
   explicitly supplied manual input, public reset announcement, qualified provider
-  observation, explicit inference probe, or observed proxy request.
+  observation, explicit inference probe, or observed gateway request.
   Documentation, catalog metadata, manual assertions, scheduled forecasts, and
   runtime verification must remain distinguishable.
 - The observation/check time and the latest attempt outcome. A read time must not
@@ -133,10 +133,10 @@ command-backed secret resolution, sign in, refresh credentials,
 contact a provider for new observations, or perform inference.
 refreshing a Web view must not trigger those actions.
 
-Explicit `proxy key show` and its protected Web reveal equivalent are sensitive
+Explicit `gateway key show` and its protected Web reveal equivalent are sensitive
 retrieval operations, not diagnostic inspection. Their normal results report
 only protected-delivery outcomes under the
-[key-disclosure contract](../cli/providers/authentication/spec.md#shared-proxy-key).
+[key-disclosure contract](../cli/providers/authentication/spec.md#shared-gateway-key).
 Status, source inspection, history, and ordinary management results never expose
 the key. Key replacement reports known managed dependencies separately from the
 unknown, nonenumerable unmanaged-client scope; it cannot claim all clients updated.
@@ -186,15 +186,15 @@ successful reply.
 Probes must remain separate from process/listener health and non-inference
 observation refresh. Opening a view, starting a listener, applying configuration,
 or an inference failure must not schedule background inference probes. These
-operations must not imply paid inference. A probe that passes through the proxy
+operations must not imply paid inference. A probe that passes through the gateway
 must be distinguishable from ordinary client traffic in its request record.
-A direct probe must not claim proxy observation of traffic tmax did not receive.
+A direct probe must not claim gateway observation of traffic tmax did not receive.
 
 ## Minimal request record
 
-The proxy must assign an opaque local correlation ID before authentication and
+The gateway must assign an opaque local correlation ID before authentication and
 selection so that a rejection can be diagnosed without a chosen destination.
-The ID must be scoped to the proxy-process instance. It must not encode or derive
+The ID must be scoped to the gateway-process instance. It must not encode or derive
 from credentials, request content, or native session identifiers. Possession of
 it must not authenticate a client, resume a conversation, or grant any capability.
 It must not be used as a substitute for the qualified session identity required
@@ -209,7 +209,7 @@ decision evidence and its gaps without rerunning selection or adding unretained 
 
 | Data | Required meaning |
 | --- | --- |
-| Correlation and origin | Local correlation ID, proxy-process instance, and ordinary client request versus explicit probe when known. |
+| Correlation and origin | Local correlation ID, gateway-process instance, and ordinary client request versus explicit probe when known. |
 | Optional native context | Safe local Agent target and native provider name only when independently established by a qualified mechanism. Both may be unknown, including after successful shared-key authentication. Neither the shared key nor unsupported caller claims establish native context. |
 | Requested model and protocol | Validated public model ID, concrete or alias kind, and native protocol when safely established. Unknown, unrecognized, and malformed values must be distinguishable without retaining their raw input. Serialized kind values follow the [CLI history contract](../cli/service/diagnostics/spec.md#paid-inference-probes-and-request-history). |
 | Selected destination | Selected qualified offering, local provider reference, and a safe local handle for the selected authorization generation, only after selection actually occurs. The handle must not reveal a secret, secret fingerprint, upstream account identifier, or native session token. |
@@ -242,7 +242,7 @@ If a request fails before selection, its destination and upstream authorization
 fields remain absent. Shared-key acceptance or rejection never invents an Agent,
 native provider, conversation, or upstream identity. Correlation remains possible
 using the locally assigned ID and the actual failure stage. Target or native
-entry removal does not erase retained history or revoke independent proxy access.
+entry removal does not erase retained history or revoke independent gateway access.
 
 Retain independently established native attribution and its safe names as
 captured, even after a target or native entry is renamed or removed. Native-context
@@ -283,7 +283,7 @@ truncating a raw error or malformed field is not sufficient redaction.
 Diagnostic classification must not swallow a native stream error or replace an
 interrupted response with fabricated success. Forwarding, cancellation, error
 meaning, and available usage follow the
-[product forwarding contract](../product/spec.md#model-proxy). A successful HTTP
+[product forwarding contract](../product/spec.md#model-gateway). A successful HTTP
 status or connection alone must not count as a completed inference when its
 stream fails or terminates without the required completion evidence.
 
@@ -306,7 +306,7 @@ under the [transport-deadline contract](../product/spec.md#transport-deadlines).
 ## Session-only bounded history
 
 Request history and its derived usage aggregates must exist only in bounded
-memory for the lifetime of the proxy process. tmax must not persist them to disk
+memory for the lifetime of the gateway process. tmax must not persist them to disk
 or reconstruct them from durable logs after restart. A new process must report
 that earlier request coverage is unavailable, not infer earlier successes,
 failures, or usage. Returning the retained safe metadata through CLI/Web reads
@@ -328,7 +328,7 @@ snapshot must also fit bounded memory. Capacity eviction or diagnostic
 incompleteness must not change request forwarding, request-lifecycle accounting,
 or conversation bindings.
 
-History results identify their proxy-process/reset scope, requested and retained
+History results identify their gateway-process/reset scope, requested and retained
 range or explicit empty state, and relevant coverage gaps once per result, not
 per row. Listings state whether they include in-progress or outcome-incomplete
 records. Explicit history detail/status reads also expose process start time,
@@ -377,7 +377,7 @@ identity/time. Its aggregates no longer include cleared records. No operation
 snapshot is persisted or reused by another call. A dry run promises neither
 future retention nor future-request suppression.
 
-Clearing or evicting history, stopping the proxy, and restarting it must not delete
+Clearing or evicting history, stopping the gateway, and restarting it must not delete
 session bindings or their original decision basis, protected native-restore/recovery
 information, authentication, current input heads/last acquisition attempts,
 provider quota/balance observations, or desired settings. Their lifecycles belong
@@ -411,7 +411,7 @@ that evaluation is not a diagnostic inference of user intent or eligibility.
 
 1. Saved, loaded, applied, effective native-provider, listener/shared-key,
    authentication, model-test, quota, input-head, and acquisition facts can differ
-   visibly. An incomplete Agent does not block an independent ready proxy.
+   visibly. An incomplete Agent does not block an independent ready gateway.
    Relevant revision changes supersede old success within their actual scope
    without falsifying retained evidence or invalidating known independent facts.
 2. Inspection and selection previews perform no inference, acquisition, provider
@@ -420,7 +420,7 @@ that evaluation is not a diagnostic inference of user intent or eligibility.
    exact-scope paid probes remain distinguishable. An opted-in interval must
    not turn opening a view or admitting a request into acquisition, and a probe
    needs no separate cost-acceptance flag or approval flow.
-3. Proxy requests and failures before selection correlate by safe local ID.
+3. Gateway requests and failures before selection correlate by safe local ID.
    The shared key never supplies a target/native-provider or conversation identity,
    even after authentication. Qualified independent native context may be retained;
    unmanaged traffic remains valid with unknown context. Later configuration,

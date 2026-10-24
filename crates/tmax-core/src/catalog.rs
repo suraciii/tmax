@@ -283,7 +283,7 @@ fn adoption_impact(
                                 change["resource"] =
                                     json!({"kind":"agent_target","id":target_id,"scope":entry_id});
                             }
-                            if entry.proxy == Some(true) || !projected.is_empty() {
+                            if entry.gateway == Some(true) || !projected.is_empty() {
                                 selections
                                     .push(json!({"id":selected.id,"protocol":selected.protocol}));
                                 native_changes.extend(projected);
@@ -294,14 +294,14 @@ fn adoption_impact(
                             blockers.push(json!({"model":selected.id,"protocol":selected.protocol,"code":error.code,"field":error.field}));
                         }
                     }
-                } else if entry.proxy == Some(true)
+                } else if entry.gateway == Some(true)
                     && aliases.contains_key(&(selected.id.clone(), selected.protocol.clone()))
                 {
                     selections.push(json!({"id":selected.id,"protocol":selected.protocol}));
                 }
             }
             if !selections.is_empty() {
-                targets.push(json!({"target":target_id,"agent":target.agent,"agent_provider":entry_id,"models":selections,"native_application":if !blockers.is_empty(){"blocked"}else if !native_changes.is_empty(){"reapply_required"}else{"unchanged"},"native_changes":native_changes,"blockers":blockers,"route_metadata":if entry.proxy==Some(true){"revalidation_required"}else{"not_applicable"}}));
+                targets.push(json!({"target":target_id,"agent":target.agent,"agent_provider":entry_id,"models":selections,"native_application":if !blockers.is_empty(){"blocked"}else if !native_changes.is_empty(){"reapply_required"}else{"unchanged"},"native_changes":native_changes,"blockers":blockers,"route_metadata":if entry.gateway==Some(true){"revalidation_required"}else{"not_applicable"}}));
             }
         }
     }
@@ -545,9 +545,9 @@ chat-completions = 'http://127.0.0.1:9999/v1'
 priority = 0
 [providers.account.models.b]
 priority = 100
-[proxy]
+[gateway]
 listen = '127.0.0.1:19876'
-key_ref = 'synthetic-proxy-reference'
+key_ref = 'synthetic-gateway-reference'
 [[model_aliases]]
 id = 'explicit'
 protocol = 'chat-completions'
@@ -566,7 +566,7 @@ models = [{id = 'a', protocol = 'chat-completions'}]
 agent = 'pi'
 scope = '/synthetic/catalog-aliases'
 [agents.aliases.providers.local]
-proxy = true
+gateway = true
 models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', protocol = 'chat-completions'}]
 "#,
         )

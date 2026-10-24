@@ -39,7 +39,7 @@ authorizes fallback to the standard `/v1` API, another account, or another model
 The [reasoning integration guide](https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api.md)
 establishes one domestic endpoint set. These source-qualified requirements are
 not an implemented known-integration region selector. Current custom setup must
-supply the exact base for each selected protocol. Direct and proxy routes must
+supply the exact base for each selected protocol. Direct and gateway routes must
 use the same product/protocol destination.
 
 | Protocol | Exact base | Operation beneath base | Authentication and transport |
@@ -84,11 +84,11 @@ rewriting them or changing model capability metadata to force compatibility.
 
 | Source or condition | Required boundary |
 | --- | --- |
-| [Official Pi setup](https://platform.stepfun.com/docs/zh/guides/developer/integrations/pi.md) | Documents pi **0.87.1**, a custom Messages provider, active agent-directory configuration, and effective native key precedence. That version evidence does not certify pi 1.2.0 or every proxy. |
+| [Official Pi setup](https://platform.stepfun.com/docs/zh/guides/developer/integrations/pi.md) | Documents pi **0.87.1**, a custom Messages provider, active agent-directory configuration, and effective native key precedence. That version evidence does not certify pi 1.2.0 or every gateway. |
 | [OpenCode setup](https://platform.stepfun.com/docs/zh/guides/developer/integrations/open-code.md) and [Hermes setup](https://platform.stepfun.com/docs/zh/guides/developer/integrations/hermes-agent.md) | Establish provider-documented client scenarios and plan routing, not verified tmax native adapters. Resolve the actual version, active profile/server scope, and authorization. |
 | User-Agent and native session headers | The consulted official plan/API/client sources specify no required recognized User-Agent literal or special conversation header. This is an evidence limit, not proof that runtime restrictions cannot exist. Preserve the real qualified native identity; do not impersonate a supported tool. |
 | Main, tool-result, continuation, and auxiliary requests | Retain the selected plan authorization and endpoint, truthful native client identity, and genuine native conversation/parent-subsession semantics. Do not substitute a static provider-wide ID. |
-| Direct versus local proxy | Qualify separately. A working native configuration does not certify a relay, and concrete full-history tool turns do not establish dynamic-alias session identity. |
+| Direct versus local gateway | Qualify separately. A working native configuration does not certify a relay, and concrete full-history tool turns do not establish dynamic-alias session identity. |
 
 Native field paths and authentication precedence follow the
 [versioned Agent references](../../../docs/agents/README.md#qualification-and-evidence).
@@ -135,7 +135,7 @@ account observations. No provider-source quota rule input is qualified under
 
 - Setup exposes the Token Plan product, exact domestic plan destination,
   `step-5-preview`, key source, and separate entitlement/identity unknowns.
-- Direct and proxy paths report their actual native version, protocol, scope,
+- Direct and gateway paths report their actual native version, protocol, scope,
   authorization ownership, and independent qualification status.
 - Messages creation retains the sole qualified selector when present and rejects
   undeclared selectors without dispatch. The accepted selector grants no new
@@ -153,7 +153,7 @@ rules, provider-documented native examples, versioned SDK source, and tmax
 runtime evidence remain distinct under the shared support contract.
 
 Runtime qualification must name the exact model, client version, native
-reasoning controls, operation selector, transport, and direct/proxy path. A
+reasoning controls, operation selector, transport, and direct/gateway path. A
 local pre-dispatch rejection is not a provider or key rejection. A bounded
 generation hook does not qualify stock native defaults or change model capacity.
 Neither native-schema readiness nor a single inference pass establishes a

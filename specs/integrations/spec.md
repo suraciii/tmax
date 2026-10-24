@@ -28,12 +28,12 @@ runtime evidence must remain distinct. None establishes an untested version rang
 
 ## Agent boundaries
 
-| Agent | Documented integration surface | Direct-configuration boundary | Same-protocol proxy boundary |
+| Agent | Documented integration surface | Direct-configuration boundary | Same-protocol gateway boundary |
 | --- | --- | --- | --- |
 | Codex CLI | Custom model providers, base URLs, model catalogs, API-key sources, native ChatGPT sign-in | Respect user/profile scope, managed restrictions and project trust; do not assume provider/auth settings can be changed in project config | Responses-native route; incremental streaming, tool-call round trips, continuation semantics, and native-login gateway authentication must be qualified |
 | stock pi | Agent-directory `models.json`, provider/model overrides, native authentication, model settings | Detect the active agent directory and precedence; changing a built-in base URL can retain its existing credentials | Select the declared native `api`; stock pi configuration is not omp configuration |
 | omp | Active-profile `models.yml`/`models.yaml`, provider/model overrides, model-role settings, native authentication | Respect profile/environment path overrides and credential precedence; `auth: oauth` does not itself create credentials or register a sign-in flow | Match the declared native API and transport; an existing omp auth gateway is evidence of an extension point, not a mandatory tmax dependency |
-| OpenCode | Provider packages, custom base URLs/models, multiple saved accounts per provider, local configuration and account storage | Detect the versioned schema and server-scoped active account. V1 and V2 provider shapes differ; credential stores and effective policy cannot be inferred from one config file | The provider package selects the protocol. Model picker filtering is not proxy authorization |
+| OpenCode | Provider packages, custom base URLs/models, multiple saved accounts per provider, local configuration and account storage | Detect the versioned schema and server-scoped active account. V1 and V2 provider shapes differ; credential stores and effective policy cannot be inferred from one config file | The provider package selects the protocol. Model picker filtering is not gateway authorization |
 | Hermes Agent | Profile-aware configuration, provider/model selection, native login and key sources, per-provider transport | Respect `HERMES_HOME`, native secret storage and managed configuration precedence | Match its selected Chat Completions, Messages, or Codex/Responses transport; a URL override alone does not validate that transport |
 
 Agent-owned credential stores must be managed through supported agent operations
@@ -132,7 +132,7 @@ Each provider contract must define:
 
 - Its service/access product, exclusions, credential source, owner, refresh or
   replacement behavior, and how upstream identity can remain unknown.
-- Concrete direct and proxy scenarios, the finite region/protocol endpoint map,
+- Concrete direct and gateway scenarios, the finite region/protocol endpoint map,
   native scope, and conditional or unavailable combinations.
 - Supported HTTP method/path operations and transports, model-selection inputs,
   required client/session identity, and original-resource binding requirements
@@ -184,7 +184,7 @@ identity, or permission to select another authorization.
 
 A known integration owns one finite map from its exact region IDs and native
 protocols to upstream base URLs. Its provider contract owns the source evidence
-and known limitations for that map. Direct agent configuration and proxy
+and known limitations for that map. Direct agent configuration and gateway
 forwarding must use the same resolved map entry. A region ID of `default` names
 one published endpoint set; it is not a claim about service geography.
 
@@ -213,7 +213,7 @@ not permission to repair the supplied base. The
 [configuration endpoint schema](../configuration/spec.md#provider-endpoints)
 owns persisted `region` and `endpoints` fields.
 
-Every endpoint consumer must use this resolution: direct configuration, proxy
+Every endpoint consumer must use this resolution: direct configuration, gateway
 dispatch, model compatibility checks, and provider discovery. Qualified
 provider-specific discovery, identity, quota, and balance operations must use
 their integration-declared destinations for the selected access product and
@@ -247,7 +247,7 @@ features, batch/counting/resource operations, or every compatible upstream.
 The version-qualified source is Anthropic TypeScript SDK **0.129.0**
 [Messages creation](https://github.com/anthropics/anthropic-sdk-typescript/blob/sdk-v0.129.0/src/resources/beta/messages/messages.ts).
 
-The proxy must reject an undeclared method/path or transport before forwarding.
+The gateway must reject an undeclared method/path or transport before forwarding.
 A supported protocol does not authorize generic passthrough, arbitrary upstream
 paths, or every operation in that protocol's API. Opaque native request fields
 remain subject to the
@@ -263,7 +263,7 @@ spelling, a caller-supplied account hint, current configuration defaults, or the
 current alias winner alone cannot establish the binding.
 
 If the original binding is missing, ambiguous, lost, or incompatible with the
-available authorization, the proxy must reject the operation without upstream
+available authorization, the gateway must reject the operation without upstream
 access. It must not search providers, ask another endpoint which owns the ID,
 rerank candidates, or try another credential. tmax must not build a cross-provider
 resource directory or rewrite or encode upstream IDs to create one. Existing
@@ -275,7 +275,7 @@ Provider contracts must distinguish documented operation evidence from actual
 runtime qualification. A documented creation path or returned resource ID does
 not establish retrieval, cancellation, deletion, file management, or background
 execution support. Unknown operation or identity requirements remain named
-limitations, not generic proxy capabilities.
+limitations, not generic gateway capabilities.
 
 ### Custom integration
 
@@ -342,7 +342,7 @@ names and local provider IDs do not create new IDs or provider products.
 [models.dev/api.json](https://models.dev/api.json) provides catalog entries keyed
 by service, with provider-local model IDs, display and optional canonical identity,
 capability metadata, limits, and reference costs where present. This is metadata
-evidence, not proof of account entitlement, permitted proxy use, or a working tmax
+evidence, not proof of account entitlement, permitted gateway use, or a working tmax
 adapter. Local provider IDs remain independent of those external keys.
 
 The [catalog contract](../model-routing/spec.md#model-catalog) owns field mapping,
@@ -391,7 +391,7 @@ A native login-source target may be declared with empty model selections and no
 default. Missing model application does not invalidate the source or prevent its
 qualified native sign-in. Until required model selections, default, credentials,
 and qualification are complete, the target remains explicitly unavailable for
-native model application and proxy inference. Every present model, default,
+native model application and gateway inference. Every present model, default,
 and role reference must still resolve under the configuration contract.
 
 ### Provider-specific compatibility
@@ -422,7 +422,7 @@ report partial outcomes under the
 An upstream native provider entry must issue a real provider request without
 the tmax server on the inference path.
 
-Each advertised proxy route must be exercised for its declared method/path and
+Each advertised gateway route must be exercised for its declared method/path and
 transport set, resolved region/protocol bases, streaming, a tool-call/result
 round trip, cancellation, auth expiry or revocation, upstream errors, correct
 account selection, configured-model boundaries, and supported continuation.

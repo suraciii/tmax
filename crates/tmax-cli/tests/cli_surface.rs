@@ -41,7 +41,7 @@ fn removed_unlock_options_are_rejected_as_unknown_and_redacted() {
     for args in [
         vec!["status", "--unlock-stdin"],
         vec![
-            "proxy",
+            "gateway",
             "start",
             "--unlock-fd",
             "UNLOCK-SECRET-MUST-NOT-ECHO",
@@ -78,11 +78,11 @@ fn invalid_enum_names_its_option_without_echoing_value() {
 
 #[test]
 fn unknown_commands_and_extra_positionals_are_not_echoed() {
-    let output = tmax(&["proxy", "UNRECOGNIZED-SUBCOMMAND-SECRET"]);
+    let output = tmax(&["gateway", "UNRECOGNIZED-SUBCOMMAND-SECRET"]);
     let response = json_error(&output);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!stdout.contains("UNRECOGNIZED-SUBCOMMAND-SECRET"));
-    assert_eq!(response["operation"], "proxy");
+    assert_eq!(response["operation"], "gateway");
 
     let output = tmax(&["status", "EXTRA-POSITIONAL-SECRET"]);
     let response = json_error(&output);
@@ -127,10 +127,10 @@ fn guarded_replacements_require_revision_before_dispatch() {
 }
 
 #[test]
-fn rejects_duplicate_proxy_lifecycle_path() {
-    let output = tmax(&["proxy", "proxy", "start"]);
+fn rejects_duplicate_gateway_lifecycle_path() {
+    let output = tmax(&["gateway", "gateway", "start"]);
     let response = json_error(&output);
-    assert_eq!(response["operation"], "proxy");
+    assert_eq!(response["operation"], "gateway");
 }
 
 #[test]
@@ -295,4 +295,40 @@ fn explicit_model_native_context_selectors_reject_ambiguous_scopes_before_dispat
         args.extend(selector);
         json_error(&tmax(&args));
     }
+}
+
+#[test]
+fn gateway_is_the_canonical_command_and_source_flag() {
+    let root = tmax(&["--help"]);
+    let help = String::from_utf8(root.stdout).unwrap();
+    assert!(root.status.success());
+    assert!(
+        help.lines()
+            .any(|line| line.trim_start().starts_with("gateway "))
+    );
+    assert!(
+        !help
+            .lines()
+            .any(|line| line.trim_start().starts_with("proxy "))
+    );
+    let gateway = tmax(&["gateway", "--help"]);
+    assert!(gateway.status.success());
+    assert!(
+        String::from_utf8(gateway.stdout)
+            .unwrap()
+            .contains(" gateway [OPTIONS]")
+    );
+    let source = tmax(&["agent", "provider", "add", "--help"]);
+    let help = String::from_utf8(source.stdout).unwrap();
+    assert!(source.status.success());
+    assert!(help.contains("--gateway"));
+    assert!(!help.contains("--proxy"));
+    json_error(&tmax(&["proxy", "status"]));
+    let network = tmax(&["network", "proxy", "--help"]);
+    assert!(network.status.success());
+    assert!(
+        String::from_utf8(network.stdout)
+            .unwrap()
+            .contains("outbound proxy")
+    );
 }

@@ -46,7 +46,7 @@ Kimi endorsement of omp or tmax.
 A managed `login` path must name a version-qualified omp target as its login
 source. That target performs sign-in and remains the sole refresh owner.
 A saved `auth.method = "login"` or native `auth: oauth` setting must not manufacture a
-session. Another agent or a tmax proxy must not consume that native session
+session. Another agent or a tmax gateway must not consume that native session
 without its own qualified owner/consumer forwarding contract. When that contract
 is missing, setup must report the login path as unavailable and explain the
 missing qualification. tmax must not offer a generic tmax-owned Kimi login or
@@ -96,7 +96,7 @@ base/path boundary:
 For example, the China Messages endpoint is
 `https://api.kimi.com/coding/v1/messages`. A target that expects a base URL must
 not receive a full request URL that causes it to append the path twice. Direct
-configuration and proxy forwarding must resolve the same map entry.
+configuration and gateway forwarding must resolve the same map entry.
 
 Kimi's regional alternatives require an explicit region or an unambiguous known
 base under the shared resolver. The adapter must show the actual Coding host
@@ -131,12 +131,12 @@ upstream ID `k3`. Catalog availability is not membership entitlement.
 
 The following are distinct documented scenarios, not tmax runtime verification:
 
-| Agent | Evidence and direct-configuration scenario | Scope and proxy boundary |
+| Agent | Evidence and direct-configuration scenario | Scope and gateway boundary |
 | --- | --- | --- |
-| Codex CLI | The [Kimi Codex guide](https://www.kimi.com/code/docs/en/third-party-tools/codex.html) documents a Console membership key, a custom provider at the regional `/coding/v1` base, and `wire_api = "responses"`. | Respect the qualified Codex user/profile and managed scope. Existing ChatGPT sign-in does not authenticate Kimi. The documented direct Responses route does not require a local relay. A Responses proxy requires separate qualification of the real Codex client and continuation behavior. |
+| Codex CLI | The [Kimi Codex guide](https://www.kimi.com/code/docs/en/third-party-tools/codex.html) documents a Console membership key, a custom provider at the regional `/coding/v1` base, and `wire_api = "responses"`. | Respect the qualified Codex user/profile and managed scope. Existing ChatGPT sign-in does not authenticate Kimi. The documented direct Responses route does not require a local relay. A Responses gateway requires separate qualification of the real Codex client and continuation behavior. |
 | Hermes Agent | The [Kimi Hermes guide](https://www.kimi.com/code/docs/en/third-party-tools/hermes.html) documents membership-key setup and an explicit Chat Completions configuration at `/coding/v1`. | Resolve the active `HERMES_HOME`/profile and effective key source. A native Coding Plan wizard choice is not OAuth. Qualify the selected Chat Completions route; do not infer Messages or Responses support from the brand menu. Telegram, Discord, batch, or service access is not qualified by the personal local interactive setup. |
 | OpenCode | The [Kimi OpenCode guide](https://www.kimi.com/code/docs/en/third-party-tools/opencode.html) documents selecting Kimi For Coding and supplying a membership API key through native authentication. | The versioned provider package determines the actual protocol and endpoint. The guide does not qualify every custom endpoint or package. Respect the server-scoped active credential/account selection described in the shared agent contract. A new native login can affect other consumers of that server. |
-| stock pi | The [pi provider documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md) lists Kimi For Coding key access through `KIMI_API_KEY`. This is agent-project evidence only. | Resolve the active agent directory and effective native API, key, and base URL. Do not treat the environment name or a base-URL override as proof of the selected credential. Both direct access and a matching native-protocol proxy require version-specific qualification. |
+| stock pi | The [pi provider documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md) lists Kimi For Coding key access through `KIMI_API_KEY`. This is agent-project evidence only. | Resolve the active agent directory and effective native API, key, and base URL. Do not treat the environment name or a base-URL override as proof of the selected credential. Both direct access and a matching native-protocol gateway require version-specific qualification. |
 | omp | The [omp provider documentation](https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md) lists native `kimi-code` OAuth. This is distinct from the membership-key scenarios and is agent-project evidence only. | Resolve the active profile and native credential precedence. Qualify the owner, selected authorization, endpoint, and protocol. Native OAuth availability does not grant tmax or another target access to the session. A custom key/base configuration must be qualified separately; it must not inherit an unrelated stored session. |
 
 A managed target must retain the selected provider authorization, not silently
@@ -146,10 +146,10 @@ required authorization independently, tmax must identify the affected native
 scope and block that combination. It must not promise per-project or concurrent
 per-session account isolation that the target cannot provide.
 
-Direct documented membership-key paths must remain independent of proxy
+Direct documented membership-key paths must remain independent of gateway
 qualification. A user must be able to choose a qualified concrete direct model
 without creating a model alias or running tmax on the inference path. A local
-same-protocol proxy can provide concrete-model or alias access only
+same-protocol gateway can provide concrete-model or alias access only
 for a separately qualified route. It must retain the actual client's identity
 and the [session binding](../../model-routing/spec.md#selection-and-continuity).
 Changing keys or providers must not transfer provider-owned continuation state.
@@ -160,7 +160,7 @@ The [community guidelines](https://www.kimi.com/code/docs/en/kimi-code/community
 restrict Coding Plan subscriptions to personal interactive use. They prohibit
 account or API-access resale, repackaging access as a service, client-identity
 spoofing, and non-interactive batch or data-pipeline use. They explicitly
-prohibit sharing an account with other people through a reverse proxy.
+prohibit sharing an account with other people through a reverse gateway.
 
 The integration must not offer shared or remote membership gateways. It must
 not impersonate Kimi CLI or another supported client by substituting a fabricated
@@ -240,7 +240,7 @@ inventing an error code or converting it into zero quota.
   result rather than a successful placeholder.
 - Provider inspection shows the selected region, resolved per-protocol Coding
   bases, declared operations, login source or key reference, and qualification status.
-  Direct and proxy use share the map. A missing or conflicting regional selector,
+  Direct and gateway use share the map. A missing or conflicting regional selector,
   undeclared method/path, or unsupported original-resource binding cannot trigger
   speculative key migration, path guessing, regional failover, or platform billing.
 - Without a supported non-inference identity check, a provider can retain an
@@ -253,7 +253,7 @@ inventing an error code or converting it into zero quota.
 - Each advertised direct agent path works in its qualified native scope without
   a tmax inference dependency. Conflicting native credential precedence or a
   server-wide account switch is visible; an unisolatable authorization is blocked.
-- A proxy route reports its own identity, use, protocol, and continuity
+- A gateway route reports its own identity, use, protocol, and continuity
   qualification. Documented direct key access does not imply relay approval.
   The route cannot require spoofing or account sharing to work.
 - Usage inspection preserves shared membership allowance and the selected

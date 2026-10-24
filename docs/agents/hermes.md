@@ -214,7 +214,7 @@ Retained installed acceptance observed rebuilt tmax apply, actual
 removal. A separate default-provider loopback run completed a terminal tool loop;
 three inference requests used the selected synthetic key. Four native Ollama
 metadata probes were unauthenticated and were not counted as inference-key
-successes. A separate applied local proxy target emitted
+successes. A separate applied local gateway target emitted
 `session_affinity_header: x-session-id`; native main/tool/auxiliary calls shared
 the header, resume retained it, and a fresh session changed it. This does not
 qualify authenticated alias continuity, native OAuth refresh, a hosted provider,

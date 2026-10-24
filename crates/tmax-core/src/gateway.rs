@@ -586,7 +586,7 @@ fn retained_explanation(
         .ok_or_else(|| {
             Error::new(
                 "original_binding_unavailable",
-                "No retained destination matches this proxy handle, public model ID and protocol",
+                "No retained destination matches this gateway handle, public model ID and protocol",
             )
         })?;
     let blocker = binding
@@ -796,7 +796,7 @@ fn safe_message(code: &str) -> &'static str {
     match code {
         "local_capacity" => "Local capacity unavailable; request was not dispatched",
         "request_too_large" => "Request exceeds the local body limit",
-        "authentication_failed" => "Current shared proxy key required",
+        "authentication_failed" => "Current shared gateway key required",
         "session_identity_unavailable" => {
             "A qualified native conversation identity is required for session-stable alias forwarding"
         }
@@ -1743,10 +1743,10 @@ mod tests {
                 agent: "codex".into(),
                 scope: directory.path().join("native"),
                 providers: [(
-                    "proxy".into(),
+                    "gateway".into(),
                     crate::config::NativeProvider {
                         provider: None,
-                        proxy: Some(true),
+                        gateway: Some(true),
                         models: vec![],
                     },
                 )]
@@ -1768,7 +1768,7 @@ mod tests {
                 ("protocol".into(), vec!["chat-completions".into()]),
                 ("session".into(), vec![handle.clone()]),
                 ("target".into(), vec!["changed-client".into()]),
-                ("agent-provider".into(), vec!["proxy".into()]),
+                ("agent-provider".into(), vec!["gateway".into()]),
             ]
             .into(),
             dry_run: false,

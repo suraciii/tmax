@@ -108,7 +108,7 @@ the authoritative text configuration and serialize mutations of the same targets
 Current-user-restricted secret files and runtime records are not competing
 configuration authorities. The [product contract](spec.md#configuration-authority)
 owns the manual-edit and read-only agent-inspection boundaries. Gateway startup and
-lifetime follow the [model-gateway contract](spec.md#model-proxy), independently of Web interactions.
+lifetime follow the [model-gateway contract](spec.md#model-gateway), independently of Web interactions.
 
 The [configuration contract](../configuration/spec.md) owns TOML field syntax and
 activation semantics. The service evaluates an immutable validated snapshot with
@@ -301,8 +301,6 @@ listener. Upstream entries check prerequisites without starting inference or
 issuing a paid probe. Saving either kind does not apply native files.
 None of these operations kills a conversation or revokes a native session as an
 incidental step.
-
-<a id="proxy-forwarding-contract"></a>
 
 ## Gateway forwarding contract
 

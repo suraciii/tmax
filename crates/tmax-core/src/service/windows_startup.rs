@@ -16,7 +16,7 @@ const MAX_VALUE_BYTES: usize = 64 * 1024;
 // Run's documented 260-character command limit excludes the registry string's
 // terminating NUL. Count UTF-16 code units, including executable quotes and args.
 const MAX_COMMAND_UNITS: usize = 260;
-const REPAIR: &str = "proxy autostart enable|disable";
+const REPAIR: &str = "gateway autostart enable|disable";
 
 type Hkey = *mut c_void;
 
@@ -329,7 +329,7 @@ pub(super) fn status(store: &Store) -> Result<Value> {
     let registration = registration_state(existing.as_ref(), &expected, &state, store);
     let desired = crate::config::load(store)
         .ok()
-        .and_then(|config| config.config.proxy.map(|proxy| proxy.autostart));
+        .and_then(|config| config.config.gateway.map(|gateway| gateway.autostart));
     Ok(json!({
         "saved_intent": desired,
         "acknowledged_intent": state.acknowledged,
@@ -435,7 +435,7 @@ fn launch_outcome(error: Option<&Error>) -> Launch {
             "blocked",
             Some("storage_version_unsupported"),
             Some(
-                "Preserve the unsupported stored record; replace the shared key through proxy key replace",
+                "Preserve the unsupported stored record; replace the shared key through gateway key replace",
             ),
         ),
         Some("storage_record_invalid") => (
@@ -449,18 +449,18 @@ fn launch_outcome(error: Option<&Error>) -> Launch {
             "blocked",
             Some("autostart_blocked"),
             Some(
-                "Inspect saved intent, stored key availability, and endpoint state, then explicitly start proxy",
+                "Inspect saved intent, stored key availability, and endpoint state, then explicitly start gateway",
             ),
         ),
         Some("endpoint_occupied") => (
             "blocked",
             Some("endpoint_occupied"),
-            Some("Resolve the configured endpoint conflict, then explicitly start proxy"),
+            Some("Resolve the configured endpoint conflict, then explicitly start gateway"),
         ),
         Some(_) => (
             "failed",
             Some("autostart_failed"),
-            Some("Inspect configuration and resident status, then explicitly start proxy"),
+            Some("Inspect configuration and resident status, then explicitly start gateway"),
         ),
     };
     // Only fixed safe categories are persisted, never error messages, fields,

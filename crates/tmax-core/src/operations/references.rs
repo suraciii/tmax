@@ -60,17 +60,17 @@ pub(super) fn guard(config: &Config, request: &Request) -> Result<()> {
                 let direct = entry.provider.as_deref();
                 let relevant = match path.as_str() {
                     "provider remove" => {
-                        entry.proxy == Some(true)
+                        entry.gateway == Some(true)
                             && qualified(&selected.id)
                                 .ok()
                                 .is_some_and(|(provider, _)| provider == id)
                     }
                     "model remove" => {
                         concrete.is_some_and(|(p, m)| direct == Some(p) && selected.id == m)
-                            || (entry.proxy == Some(true) && selected.id == id)
+                            || (entry.gateway == Some(true) && selected.id == id)
                     }
                     "model alias remove" => {
-                        entry.proxy == Some(true)
+                        entry.gateway == Some(true)
                             && selected.id == id
                             && arg(request, "protocol") == Some(selected.protocol.as_str())
                     }

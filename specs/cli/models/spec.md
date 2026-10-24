@@ -23,7 +23,7 @@ saved fields. Use [common CLI rules](../spec.md),
 | List `kind` | `concrete` or `alias`. |
 | List `published_protocols` | Derived only from enabled existing provider/offering/alias definitions and declared supported protocols, never native Agent selections. Publication is not proof of upstream success. |
 | Availability | Disabled/unavailable/unsupported conditions follow the model contract. |
-| Shared publication | Every shared-key holder sees the same list; no proxy-model CRUD, publishing/permission table, or automatic catalog enrollment. |
+| Shared publication | Every shared-key holder sees the same list; no gateway-model CRUD, publishing/permission table, or automatic catalog enrollment. |
 | Compact list | Do not repeat metadata, full evaluations, or inspect argv per row. |
 | Detailed concrete read | Expose [priority evaluations](rules/spec.md#priority-evaluation-data) once per offering, not per protocol. |
 
@@ -95,9 +95,9 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 
 | Explanation context | Operand and selection contract |
 | --- | --- |
-| Public ID without native context | `ID` is a public qualified concrete or alias ID; use proxy requirements. |
+| Public ID without native context | `ID` is a public qualified concrete or alias ID; use gateway requirements. |
 | Declared target without entry | `--target TARGET` assesses the public qualified concrete or alias ID against the target's native requirements. No saved model/default/role selection is required. |
-| Public/native ID with entry context | `--agent-provider ENTRY` requires `--target TARGET` and an existing entry. Upstream-source `ID` is the exact unqualified upstream model ID under its provider; proxy-source `ID` is the public qualified concrete or alias ID. The entry need not have selected the model. |
+| Public/native ID with entry context | `--agent-provider ENTRY` requires `--target TARGET` and an existing entry. Upstream-source `ID` is the exact unqualified upstream model ID under its provider; gateway-source `ID` is the public qualified concrete or alias ID. The entry need not have selected the model. |
 | Native entry assessment | Assess native support, supplier restrictions, and credential handoff, not permission or a private model list. Incomplete target selections/default do not block explanation. Never infer context from a shared key or similar entry name. |
 | Undeclared native scope | `--agent AGENT --path PATH` assesses the public qualified concrete or alias ID with the same qualified inspection as `agent inspect --agent AGENT --path PATH`; do not register or import the scope. |
 | Context selectors | Omit all selectors, choose `--target` with optional `--agent-provider`, or choose both `--agent` and `--path`. Reject mixed or incomplete selectors. |
@@ -110,7 +110,7 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 | Candidate evidence | Return selected/excluded offerings, reasons/ties, effective priority, ordered signal-rule explanations, calendar fallback, zone/UTC offset, next boundary, and provenance/freshness under the [priority result contract](rules/spec.md#priority-evaluation-data). |
 | Support/access | Distinguish documented, verified, incompatible, and unknown support; missing qualification/credentials remain blocked/unknown, not fabricated access. |
 | Alias continuity | Shared by every caller of the definition; native selections/defaults/roles do not override it. |
-| `--session SESSION` | Inspect an existing proxy handle matching this public ID/protocol, with or without native context. Return its retained destination or blocked continuation, not a new-session winner. Reject upstream-source entries. |
+| `--session SESSION` | Inspect an existing gateway handle matching this public ID/protocol, with or without native context. Return its retained destination or blocked continuation, not a new-session winner. Reject upstream-source entries. |
 | Conversation identity | Shared key/model alone is not identity. Session-stable forwarding requires supported native conversation identity and scope; never invent a session or reconstruct conversation history. |
 | Retained target attribution | Independent evidence when present, not a consequence of the shared key. |
 | Effects | No settings/native writes, secret retrieval, login refresh, inference start/quota use, session reservation, execution handle, or hidden apply step. Reject dry-run. |
@@ -121,7 +121,7 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 
 | `kind` | `target` | `agent_provider` | `agent` | `path` |
 | --- | --- | --- | --- | --- |
-| `proxy` | null | null | null | null |
+| `gateway` | null | null | null | null |
 | `agent_provider` | Declared `TARGET` | Target-local `ENTRY`, not an upstream instance ID | Target's tool identity | Target's resolved native path |
 | `agent_target` | Declared `TARGET` | null | Target's tool identity | Target's resolved native path |
 | `native_scope` | null | null | Explicit `AGENT` | Inspected resolved native path |
@@ -130,9 +130,9 @@ All context fields other than `kind` are strings or null.
 
 | Other model-explanation data | Contract |
 | --- | --- |
-| `data.source` | Present only for `kind = agent_provider`; exactly `{provider: string}` or `{proxy: true}`. |
+| `data.source` | Present only for `kind = agent_provider`; exactly `{provider: string}` or `{gateway: true}`. |
 | `data.requested` | Exactly `{id, protocol}`; both are required strings. |
-| `data.continuity` | `session` or `stateless` for alias proxy explanations; otherwise null. |
+| `data.continuity` | `session` or `stateless` for alias gateway explanations; otherwise null. |
 | Selection/session evidence | Follow the model contract and retain captured revisions; no authorization or target-permission result. |
 
 Examples: `tmax model explain L0 --protocol chat-completions`,

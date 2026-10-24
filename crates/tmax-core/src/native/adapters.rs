@@ -105,7 +105,7 @@ pub(super) struct Entry {
     pub key: Option<String>,
     pub login_provider: Option<String>,
     pub canonical: Option<String>,
-    pub proxy: bool,
+    pub gateway: bool,
     pub models: Vec<String>,
     pub model_routes: BTreeMap<String, (String, String)>,
     pub model_metadata: BTreeMap<String, Value>,
@@ -377,7 +377,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 }
                 // Pi 1.2.0's generic Chat Completions path emits its actual
                 // session as x-session-id for this option, including local URLs.
-                // The Go proxy qualifies and forwards that dynamic identity;
+                // The Go gateway qualifies and forwards that dynamic identity;
                 // do not replace it with a provider-wide static headers object.
                 let models: Vec<Value> = entry.models.iter().map(|id| {
                     let (protocol, base) = entry.model_routes.get(id)
@@ -387,7 +387,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     if let Some(metadata) = entry.model_metadata.get(id).and_then(Value::as_object) {
                         model.as_object_mut().expect("native model object").extend(metadata.clone());
                     }
-                    if target.agent == "pi" && entry.proxy && protocol == "chat-completions" {
+                    if target.agent == "pi" && entry.gateway && protocol == "chat-completions" {
                         model["compat"] = json!({"sendSessionAffinityHeaders":true,"sessionAffinityFormat":"openrouter"});
                     }
                     Ok(model)
@@ -496,7 +496,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     })
                     .collect();
                 providers.insert(entry.name.clone(),json!({"name":entry.name,"base_url":entry.base,"key_cmd":key_command(&credential_path(scope,entry))?,"transport":transport(&entry.protocol)?,"models":models}));
-                if entry.proxy {
+                if entry.gateway {
                     providers[&entry.name]["session_affinity_header"] = json!("x-session-id");
                 }
             }
@@ -583,7 +583,7 @@ mod tests {
             key: Some("not-read".into()),
             login_provider: None,
             canonical: None,
-            proxy: false,
+            gateway: false,
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
@@ -618,7 +618,7 @@ mod tests {
             key: Some("secret".into()),
             login_provider: None,
             canonical: None,
-            proxy: false,
+            gateway: false,
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
@@ -648,7 +648,7 @@ mod tests {
             key: Some("protected-reference".into()),
             login_provider: None,
             canonical: None,
-            proxy: false,
+            gateway: false,
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
@@ -662,7 +662,7 @@ mod tests {
         assert_eq!(error.code, "incompatible");
     }
     #[test]
-    fn pi_proxy_affinity_uses_native_session_option_only_on_qualified_api() {
+    fn pi_gateway_affinity_uses_native_session_option_only_on_qualified_api() {
         let target = target("pi");
         let entry = Entry {
             name: "local".into(),
@@ -671,7 +671,7 @@ mod tests {
             key: None,
             login_provider: None,
             canonical: None,
-            proxy: true,
+            gateway: true,
             models: vec!["m".into(), "r".into()],
             model_routes: BTreeMap::from([(
                 "r".into(),
@@ -697,7 +697,7 @@ mod tests {
             key: None,
             login_provider: None,
             canonical: None,
-            proxy: false,
+            gateway: false,
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
@@ -749,7 +749,7 @@ mod tests {
             key: None,
             login_provider: None,
             canonical: None,
-            proxy: true,
+            gateway: true,
             models: vec!["m".into(), "dynamic".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::from([("m".into(), pi_omp_model_metadata(&json!({
@@ -842,7 +842,7 @@ mod tests {
                 key: None,
                 login_provider: None,
                 canonical: None,
-                proxy: true,
+                gateway: true,
                 models: vec!["m".into(), "dynamic".into(), "unknown".into()],
                 model_routes: BTreeMap::new(),
                 model_metadata: BTreeMap::from([

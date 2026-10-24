@@ -702,7 +702,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"proxy":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -744,7 +744,7 @@ async fn entries(
             agent: &target.agent,
             target: Some(id),
             provider: binding.provider.as_deref(),
-            proxy: binding.proxy == Some(true),
+            gateway: binding.gateway == Some(true),
         };
         requirements.protocol(protocol)?;
         let mut canonical = None;
@@ -839,21 +839,21 @@ async fn entries(
                     ));
                 }
             }
-        } else if binding.proxy == Some(true) {
-            let proxy = config.proxy.as_ref().ok_or_else(|| {
-                Error::new("model_unavailable", "The sole proxy is not configured")
+        } else if binding.gateway == Some(true) {
+            let gateway = config.gateway.as_ref().ok_or_else(|| {
+                Error::new("model_unavailable", "The sole gateway is not configured")
             })?;
             let status = crate::service::status(store).await?;
             let desired_revision = config::load(store)?.revision;
-            let ready = &status["proxy"];
+            let ready = &status["gateway"];
             if ready["ready"] != true
-                || ready["listen"] != proxy.listen
-                || ready["key_ref"] != proxy.key_ref
+                || ready["listen"] != gateway.listen
+                || ready["key_ref"] != gateway.key_ref
                 || ready["config_revision"] != desired_revision
             {
                 return Err(Error::new(
-                    "proxy_not_ready",
-                    "Explicitly start the configured proxy and activate the matching complete snapshot and shared key before native application",
+                    "gateway_not_ready",
+                    "Explicitly start the configured gateway and activate the matching complete snapshot and shared key before native application",
                 ));
             }
             for m in &binding.models {
@@ -873,7 +873,7 @@ async fn entries(
                     {
                         return Err(Error::new(
                             "model_unavailable",
-                            "Selected public concrete proxy model is not published for this protocol",
+                            "Selected public concrete gateway model is not published for this protocol",
                         ));
                     }
                     if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
@@ -890,14 +890,14 @@ async fn entries(
                 }
             }
             (
-                format!("http://{}", proxy.listen),
-                Some(proxy.key_ref.clone()),
+                format!("http://{}", gateway.listen),
+                Some(gateway.key_ref.clone()),
                 None,
             )
         } else {
             return Err(Error::new(
                 "invalid_configuration",
-                "Native entry requires exactly one upstream or proxy source",
+                "Native entry requires exactly one upstream or gateway source",
             ));
         };
         if model_routes.is_empty() {
@@ -938,7 +938,7 @@ async fn entries(
             key,
             login_provider,
             canonical,
-            proxy: binding.proxy == Some(true),
+            gateway: binding.gateway == Some(true),
             models: binding.models.iter().map(|m| m.id.clone()).collect(),
             model_routes,
             model_metadata,
@@ -1812,7 +1812,7 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
         );
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":record.target,"agent":record.agent,"recovery":selected,"state":"restored_reload_pending","changed_files":changed,"unchanged_files":unchanged,"preserved":"unrelated settings and later unowned edits","credential_logout":false,"proxy_key_revoked":false,"native_reload":"required","recovery_retained":true}),
+        json!({"_code":"awaiting_native_reload","target":record.target,"agent":record.agent,"recovery":selected,"state":"restored_reload_pending","changed_files":changed,"unchanged_files":unchanged,"preserved":"unrelated settings and later unowned edits","credential_logout":false,"gateway_key_revoked":false,"native_reload":"required","recovery_retained":true}),
     )
 }
 
@@ -1890,7 +1890,7 @@ pub async fn recovery(store: &Store, request: &Request) -> Result<Value> {
             // restore does not prove a plaintext native key was removed.
             store.write_json(INDEX, &index)?;
             Ok(
-                json!({"recovery":id,"state":"discarded","native_writes":false,"credentials_deleted":false,"proxy_key_revoked":false}),
+                json!({"recovery":id,"state":"discarded","native_writes":false,"credentials_deleted":false,"gateway_key_revoked":false}),
             )
         }
         _ => Err(Error::new(
@@ -2584,14 +2584,14 @@ mod tests {
     async fn recovery_discard_rejects_mismatched_or_shared_payload_without_deleting_secrets() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
-        let proxy_ref = secrets::put(&store, "proxy", b"synthetic-proxy").unwrap();
+        let gateway_ref = secrets::put(&store, "gateway", b"synthetic-gateway").unwrap();
         let mut record = Record {
             id: "recovery-one".into(),
             owner: "stable".into(),
             target: "managed".into(),
             agent: "pi".into(),
             scope: directory.path().join("native"),
-            payload_ref: proxy_ref.clone(),
+            payload_ref: gateway_ref.clone(),
             secret_refs: vec![],
             state: "applied_reload_pending".into(),
             files: vec![],
@@ -2616,8 +2616,8 @@ mod tests {
             "recovery_invalid"
         );
         assert_eq!(
-            secrets::get(&store, &proxy_ref).unwrap().as_slice(),
-            b"synthetic-proxy"
+            secrets::get(&store, &gateway_ref).unwrap().as_slice(),
+            b"synthetic-gateway"
         );
         record.payload_ref =
             secrets::put(&store, "agent:stable:managed", b"synthetic-recovery").unwrap();
@@ -2649,7 +2649,7 @@ mod tests {
             "discarded"
         );
         assert!(secrets::get(&store, &record.payload_ref).is_err());
-        assert!(secrets::get(&store, &proxy_ref).is_ok());
+        assert!(secrets::get(&store, &gateway_ref).is_ok());
     }
     fn inspection_target(scope: PathBuf) -> AgentTarget {
         AgentTarget {
@@ -2659,7 +2659,7 @@ mod tests {
                 "local".into(),
                 config::NativeProvider {
                     provider: Some("p".into()),
-                    proxy: None,
+                    gateway: None,
                     models: vec![config::ModelSelection {
                         id: "first".into(),
                         protocol: "chat-completions".into(),
@@ -2941,7 +2941,7 @@ mod tests {
                 agent: "codex",
                 target: Some("owner"),
                 provider: Some("p"),
-                proxy: false,
+                gateway: false,
             }),
         };
         let before = crate::routing::explain_native(
@@ -3208,7 +3208,7 @@ mod tests {
                 "local".into(),
                 config::NativeProvider {
                     provider: Some("p".into()),
-                    proxy: None,
+                    gateway: None,
                     models: ["m", "unknown"]
                         .into_iter()
                         .map(|id| config::ModelSelection {

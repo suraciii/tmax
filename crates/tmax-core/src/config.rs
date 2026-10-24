@@ -15,7 +15,8 @@ pub struct Config {
     pub model_aliases: Vec<ModelAlias>,
     #[serde(default)]
     pub agents: BTreeMap<String, AgentTarget>,
-    pub proxy: Option<Proxy>,
+    #[serde(alias = "proxy")]
+    pub gateway: Option<Gateway>,
     pub network: Option<Network>,
 }
 impl Config {
@@ -247,7 +248,8 @@ pub struct AgentTarget {
 #[serde(deny_unknown_fields)]
 pub struct NativeProvider {
     pub provider: Option<String>,
-    pub proxy: Option<bool>,
+    #[serde(alias = "proxy")]
+    pub gateway: Option<bool>,
     #[serde(default)]
     pub models: Vec<ModelSelection>,
 }
@@ -266,7 +268,7 @@ pub struct ModelReference {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Proxy {
+pub struct Gateway {
     pub listen: String,
     pub key_ref: String,
     #[serde(default)]
@@ -342,6 +344,41 @@ pub fn parse(text: &str) -> Result<Config> {
     validate(&config)?;
     Ok(config)
 }
+/// Canonicalize only the two historical model-gateway field names in memory.
+/// Network proxies and user-selected map keys are separate namespaces.
+pub(crate) fn normalize_gateway_names(document: &mut toml_edit::DocumentMut) -> Result<bool> {
+    fn rename(table: &mut dyn toml_edit::TableLike) -> Result<bool> {
+        if !table.contains_key("proxy") {
+            return Ok(false);
+        }
+        if table.contains_key("gateway") {
+            return Err(invalid("gateway"));
+        }
+        let value = table.remove("proxy").expect("checked legacy field");
+        table.insert("gateway", value);
+        Ok(true)
+    }
+    let mut changed = rename(document.as_table_mut())?;
+    if let Some(agents) = document
+        .get_mut("agents")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        for (_, target) in agents.iter_mut() {
+            if let Some(providers) = target
+                .get_mut("providers")
+                .and_then(toml_edit::Item::as_table_like_mut)
+            {
+                for (_, provider) in providers.iter_mut() {
+                    if let Some(entry) = provider.as_table_like_mut() {
+                        changed |= rename(entry)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(changed)
+}
+
 pub fn load(store: &crate::storage::Store) -> Result<LoadedFile> {
     let path = store.root.join("tmax.toml");
     let bytes = match std::fs::read(path) {
@@ -365,12 +402,13 @@ pub fn load(store: &crate::storage::Store) -> Result<LoadedFile> {
     let text = std::str::from_utf8(&bytes)
         .map_err(|_| Error::new("invalid_configuration", "Configuration must be UTF-8"))?;
     let config = parse(text)?;
-    let document = text.parse().map_err(|_| {
+    let mut document = text.parse().map_err(|_| {
         Error::new(
             "invalid_configuration",
             "Configuration is not valid TOML 1.0",
         )
     })?;
+    normalize_gateway_names(&mut document)?;
     Ok(LoadedFile {
         config,
         revision,
@@ -403,6 +441,8 @@ pub fn save(
     expected: &str,
     document: &toml_edit::DocumentMut,
 ) -> Result<String> {
+    let mut document = document.clone();
+    normalize_gateway_names(&mut document)?;
     let text = document.to_string();
     parse(&text)?;
     let _lock = store.lock("configuration")?;
@@ -585,13 +625,13 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         }
         for (name, entry) in &t.providers {
             if !valid_id(name, true)
-                || (entry.provider.is_some() == entry.proxy.is_some())
-                || entry.proxy == Some(false)
+                || (entry.provider.is_some() == entry.gateway.is_some())
+                || entry.gateway == Some(false)
             {
                 return Err(invalid(&format!("{base}.providers")));
             }
-            if entry.proxy == Some(true) && config.proxy.is_none() {
-                return Err(invalid(&format!("{base}.providers.{name}.proxy")));
+            if entry.gateway == Some(true) && config.gateway.is_none() {
+                return Err(invalid(&format!("{base}.providers.{name}.gateway")));
             }
             let mut pairs = std::collections::BTreeSet::new();
             for selection in &entry.models {
@@ -634,11 +674,13 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
             }
         }
     }
-    if let Some(proxy) = &config.proxy {
-        let addr: std::net::SocketAddr =
-            proxy.listen.parse().map_err(|_| invalid("proxy.listen"))?;
-        if !addr.ip().is_loopback() || addr.port() == 0 || proxy.key_ref.is_empty() {
-            return Err(invalid("proxy"));
+    if let Some(gateway) = &config.gateway {
+        let addr: std::net::SocketAddr = gateway
+            .listen
+            .parse()
+            .map_err(|_| invalid("gateway.listen"))?;
+        if !addr.ip().is_loopback() || addr.port() == 0 || gateway.key_ref.is_empty() {
+            return Err(invalid("gateway"));
         }
     }
     if let Some(n) = &config.network {
@@ -671,6 +713,55 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_gateway_names_read_without_writes_and_save_canonically() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::at(dir.path().into());
+        let text = "# personal settings\nversion=1\n[proxy]\nlisten='127.0.0.1:17840'\nkey_ref='retained-proxy-reference' # keep key\n[network]\nmode='proxy'\nproxy_url='http://127.0.0.1:8080'\n[agents.local]\nagent='pi'\nscope='/native'\n[agents.local.providers.proxy]\nproxy=true # keep source\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let loaded = load(&store).unwrap();
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            text.as_bytes()
+        );
+        assert_eq!(
+            loaded.config.gateway.as_ref().unwrap().key_ref,
+            "retained-proxy-reference"
+        );
+        assert_eq!(
+            loaded.config.agents["local"].providers["proxy"].gateway,
+            Some(true)
+        );
+        let value = serde_json::to_value(&loaded.config).unwrap();
+        assert!(value.get("proxy").is_none());
+        assert_eq!(
+            value["agents"]["local"]["providers"]["proxy"]["gateway"],
+            true
+        );
+        save(&store, &loaded.revision, &loaded.document).unwrap();
+        let saved = std::fs::read_to_string(store.root.join("tmax.toml")).unwrap();
+        assert!(saved.contains("[gateway]"));
+        assert!(!saved.contains("[proxy]"));
+        assert!(saved.contains("# keep key"));
+        assert!(saved.contains("# keep source"));
+        assert!(saved.contains("# personal settings"));
+        assert!(saved.contains("[agents.local.providers.proxy]"));
+        assert_eq!(parse(&saved).unwrap().network.unwrap().mode, "proxy");
+        assert_eq!(serde_json::to_value(parse(&saved).unwrap()).unwrap(), value);
+    }
+
+    #[test]
+    fn conflicting_legacy_and_canonical_gateway_names_are_rejected() {
+        for text in [
+            "version=1\n[proxy]\nlisten='127.0.0.1:17840'\nkey_ref='a'\n[gateway]\nlisten='127.0.0.1:17841'\nkey_ref='b'\n",
+            "version=1\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='a'\n[agents.local]\nagent='pi'\nscope='/native'\n[agents.local.providers.local]\nproxy=true\ngateway=true\n",
+        ] {
+            assert!(parse(text).is_err());
+            let mut document = text.parse().unwrap();
+            assert!(normalize_gateway_names(&mut document).is_err());
+        }
+    }
+
     #[test]
     fn required_version_and_enabled_defaults() {
         assert!(parse("").is_err());

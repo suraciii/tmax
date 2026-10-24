@@ -10,7 +10,7 @@ The command surface is a target contract; see [Implementation status](#implement
 | --- | --- |
 | Configuration and recovery | [Configuration](configuration/spec.md) |
 | Integration discovery and provider settings | [Providers](providers/spec.md) |
-| Authentication, shared proxy key, and retained secrets | [Authentication](providers/authentication/spec.md) |
+| Authentication, shared gateway key, and retained secrets | [Authentication](providers/authentication/spec.md) |
 | Provider inputs and current data | [Inputs](providers/inputs/spec.md) |
 | Concrete models, metadata, and explanation | [Models](models/spec.md) |
 | Catalog snapshots | [Catalog](models/catalog/spec.md) |
@@ -18,7 +18,7 @@ The command surface is a target contract; see [Implementation status](#implement
 | Calendar and signal rules | [Rules](models/rules/spec.md) |
 | Agent targets, native provider bindings, application, and recovery | [Agents](agents/spec.md) |
 | Calling-agent entry skill | [Skill installation](skill/spec.md) |
-| Network, proxy, and Web | [Service](service/spec.md) |
+| Network, gateway, and Web | [Service](service/spec.md) |
 | Probes and request history | [Diagnostics commands](service/diagnostics/spec.md) |
 | Shared JSON and exits | [Results](results/spec.md) |
 
@@ -90,12 +90,12 @@ planner, workflow, approval layer, proposal document, recursive schema exchange,
 or Web prerequisite. No command infers add/remove/default/start/apply intent.
 For example, `tmax help`, `tmax provider add --help`,
 `tmax model schedule add --help`, `tmax help model alias add`,
-`tmax help agent provider add`, and `tmax help proxy key show` work offline.
+`tmax help agent provider add`, and `tmax help gateway key show` work offline.
 
 ## Inspection and observation
 
 Ordinary inspection uses retained facts; it does not resolve secrets or refresh
-remote state. Explicit `proxy key show` is the separate sensitive retrieval
+remote state. Explicit `gateway key show` is the separate sensitive retrieval
 operation with protected delivery, never an ordinary status/inspect response.
 Integration discovery and native inspection may read qualified local sources
 without importing settings or credentials. State-selecting reads report
@@ -161,7 +161,7 @@ range. Persist the existing `*_seconds` fields. This grammar applies to
 ## Dry-run and execution
 
 `--dry-run` is optional on the same mutation, refresh, lifecycle, paid probe, or
-explicit proxy-key retrieval with the same semantic operands. Ordinary effect-free
+explicit gateway-key retrieval with the same semantic operands. Ordinary effect-free
 reads/explanations reject it.
 It reports full redacted changes, affected scopes/sessions, boundaries, warnings,
 known blockers, and deferred checks. It must not write files/state/log/cache or

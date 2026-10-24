@@ -15,7 +15,7 @@ owns persistence, activation, and native-application boundaries. All commands us
 | `config reload [--if-revision REVISION] [--dry-run]` | Validate the entire saved file and activate it if the service runs, without rewriting it, applying native settings, signing in, or starting listeners. |
 
 Desired-state operations accept `--dry-run` and optional `--if-revision REVISION`.
-This includes credential-reference changes, catalog apply, shared proxy-key
+This includes credential-reference changes, catalog apply, shared gateway-key
 replacement, and autostart intent. No preceding preview/authored document is required.
 
 Edits validate the complete candidate, preserve unrelated comments/fields/order,
@@ -45,7 +45,7 @@ Upstream credential replacement and existing-session safety follow
 | --- | --- |
 | Candidate removal, alias disablement, or alias-definition continuity change | Report affected bound sessions and in-flight work; block affected old sessions without reassignment or revival after re-addition. |
 | Candidate addition or priority edit | Affect new sessions; admitted requests retain their captured snapshots. |
-| Native Agent model subset | A configuration choice, not a proxy-request restriction. |
+| Native Agent model subset | A configuration choice, not a gateway-request restriction. |
 
 Examples: `tmax status`, `tmax config show --state loaded`,
 `tmax config validate`, `tmax config reload --dry-run`, and `tmax config reload`.
@@ -65,18 +65,18 @@ identity, or concurrent change blocks overwrite. If preservation succeeds but sa
 fails, return the retained handle and completed recovery/failed save boundaries.
 
 With a service running, activate the empty desired configuration atomically,
-removing configured proxy access and shared publication. Retain old bindings
+removing configured gateway access and shared publication. Retain old bindings
 blocked, not reassigned; admitted requests follow normal continuity. Leave a
 running listener bound but unavailable rather than stopping/moving it.
-`proxy stop` is separate. Native files/upstream consumers, stored secrets,
+`gateway stop` is separate. Native files/upstream consumers, stored secrets,
 credential ownership, and recovery records remain untouched. Do not sign out,
 apply/restore native settings, start services, or delete retained credentials.
 Omitted autostart means disabled intent and uses normal changed-intent
 reconciliation. Report recovery/save/activation/autostart separately.
-Later setup uses ordinary commands, including explicit proxy provisioning.
+Later setup uses ordinary commands, including explicit gateway provisioning.
 
 Dry-run reports rejected-file identity, restricted preservation/reset, and full
-proxy-key/publication/session impact without creating an artifact. There is no
+gateway-key/publication/session impact without creating an artifact. There is no
 snapshot catalog, invalid-byte replay, restore service, partial salvage, or automatic reset.
 
 | Command | Retained invalid-file artifact operation |
@@ -145,7 +145,7 @@ redacted supported field values or null for absence/unavailability.
 
 `file_save` changes describe only the requested saved edit. `activation` changes
 describe the entire loaded-to-candidate difference, including pending manual
-changes and dependent upstream credentials, shared proxy-key/publication,
+changes and dependent upstream credentials, shared gateway-key/publication,
 endpoint/network, rule/input, listener, native-target, session, and startup effects.
 Reload has no save changes. Catalog apply
 includes its complete effective activation impact. Affected resources, blockers,

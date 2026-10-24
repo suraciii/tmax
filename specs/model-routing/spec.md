@@ -4,7 +4,7 @@ This specification owns model-catalog integration, concrete model references,
 model aliases, priority-rule evaluation, and selection continuity.
 [Input values and acquisition](inputs/spec.md#input-values-and-acquisition) owns
 the facts used by quota and reset rules. [Product](../product/spec.md) owns
-provider instances, Agent provider configuration, the model proxy, and security. Shared terms are in
+provider instances, Agent provider configuration, the model gateway, and security. Shared terms are in
 [CONTEXT.md](../../CONTEXT.md).
 This is the routing acceptance contract; runtime evidence remains scoped to the
 specific snapshot, native client, operation, and provider authorization exercised.
@@ -147,7 +147,7 @@ forward an undeclared method/path under the
 [operation contract](../integrations/spec.md#supported-operations-and-resource-identity).
 Protocol-correct model resolution and authorized authentication/header handling
 remain the permitted forwarding transformations under the
-[product contract](../product/spec.md#model-proxy).
+[product contract](../product/spec.md#model-gateway).
 
 ## Model settings
 
@@ -200,7 +200,7 @@ offerings; they must not collapse because their catalog source or model ID match
 
 Only the model-ID component is sent upstream as the model identifier; the
 provider prefix selects configuration locally. A qualified name is not an
-inference endpoint or a bypass for model enablement or shared proxy-key checks.
+inference endpoint or a bypass for model enablement or shared gateway-key checks.
 Stored references must resolve to the stable offering identity; display-label
 edits must not retarget them. Provider-ID renames follow the product's reference-update rule.
 
@@ -381,14 +381,14 @@ native model application. Qualified native authentication may still proceed
 through that target. The
 [agent target contract](../configuration/spec.md#agent-targets) owns incremental
 setup, provider-qualified defaults/roles, source replacement, and application
-prerequisites. One target may contain both upstream-source and proxy-source
+prerequisites. One target may contain both upstream-source and gateway-source
 native entries; neither is a target-wide operating mode.
 
-The independent model proxy derives concrete mappings from enabled
+The independent model gateway derives concrete mappings from enabled
 provider/model definitions and their declared supported protocols. The public
 ID is the offering's qualified `provider-id/model-id`; requesting it fixes that
 offering and its upstream authorization. Do not create a redundant route or
-`proxy.models` resource. Every holder of the current shared proxy key uses this
+`gateway.models` resource. Every holder of the current shared gateway key uses this
 same publication list, regardless of Agent registration, native selections, or
 defaults. A disabled, unavailable, incompatible, or unknown offering must fail
 rather than search another provider, enroll a catalog model, or create
@@ -399,7 +399,7 @@ configuration from a request.
 | Property | Contract |
 | --- | --- |
 | Public identity | Exact user-defined request model ID within a native protocol; it need not equal a catalog model ID or candidate's upstream model ID. |
-| Meaning | A proxy mapping to one or more concrete offerings, not a new trained model, proof of identical weights or release versions, or protocol conversion. |
+| Meaning | A gateway mapping to one or more concrete offerings, not a new trained model, proof of identical weights or release versions, or protocol conversion. |
 | Definition | One shared [model-alias declaration](../configuration/spec.md#model-aliases), managed by [`model alias` commands](../cli/models/aliases/spec.md#model-alias-commands); no separate mapping, route, publication, or account-pool resource. |
 
 Each alias must explicitly list one or more registered qualified concrete model
@@ -444,7 +444,7 @@ account selector. A shared catalog entry, model-family name, or similar upstream
 not automatically enroll other instances. Each candidate retains its own exact
 model ID, limits, prices, entitlement, and integration evidence.
 
-Proxy model discovery exposes the same enabled, protocol-qualified concrete and
+Gateway model discovery exposes the same enabled, protocol-qualified concrete and
 alias model list to every holder of the current shared key. Agent registration
 and native configured subsets do not filter it. Report unknown or unavailable
 access honestly; listing is not an inference check or automatic enrollment.
@@ -487,7 +487,7 @@ candidates. A newly published head cannot mutate a captured snapshot. The
 whether a saved declaration's head is applicable to the loaded declaration.
 Pending file settings must not supply facts under a different loaded definition.
 
-1. Authenticate with the current shared proxy key and resolve the requested
+1. Authenticate with the current shared gateway key and resolve the requested
    published public ID and protocol. No Agent, native provider entry, selected
    subset, or target default is an inference admission requirement.
 2. Resolve the single concrete offering or expand the alias's candidate
@@ -578,7 +578,7 @@ candidates.
 
 Session-stable alias selection requires a reliably established conversation
 identity using supported native conversation identifiers and their origin scope,
-selected public ID, and protocol. The shared proxy key authenticates access,
+selected public ID, and protocol. The shared gateway key authenticates access,
 not a caller or conversation; the key or model alone must never merge unrelated
 conversations. An Agent target/native provider may contribute scope only when
 independently established, not inferred from that key. This is request-correctness
@@ -608,7 +608,7 @@ restoring continuity must not revive a session blocked by that activation.
 Its retained destination, blocking reason, and original selection evidence remain
 available; no subsequent ranking may rewrite them. Native name/selection/default/
 role changes or target/native-entry removal do not change shared publication,
-revoke the proxy key, or invalidate independent proxy bindings. A separate
+revoke the gateway key, or invalidate independent gateway bindings. A separate
 upstream login-source scope or authorization change still has its normal blockers.
 Shared-key replacement changes access for subsequent requests, never a session's
 namespace, retained destination, original evidence, or blocked state.
@@ -620,7 +620,7 @@ admission, not reassignment or replay of an in-flight request. Upstream
 conversation, response, file, and cache IDs must not cross account or provider
 boundaries.
 
-Retain session bindings across normal proxy stop/start and process restart.
+Retain session bindings across normal gateway stop/start and process restart.
 Clearing or evicting request history must not clear those bindings or their blocked
 status. If a binding is lost through runtime-state loss or expiry, do not treat
 the next request as unbound. The adapter's qualified session mechanism must
@@ -641,23 +641,23 @@ run disclose that model and provider authorization may differ between calls,
 including within a human conversation. Without safe conversation identity,
 session-stable alias forwarding is unavailable; only explicitly supported
 stateless or fixed-concrete paths may remain usable. An unknown client is not
-qualified merely because `stateless` was requested. The proxy must not infer
+qualified merely because `stateless` was requested. The gateway must not infer
 session identity from prompt text or reconstruct conversation history.
 
 ## Agent model configuration and user experience
 
 Priority metadata must remain visible when configuring native upstream entries.
 A user can select a concrete offering without creating a model alias or running
-the proxy. A no-inference alias preview may suggest one concrete offering under
+the gateway. A no-inference alias preview may suggest one concrete offering under
 current rules, but is not dynamic native routing, a mutation, or a reservation.
 An explicit operation selects that provider entry and model.
 The adapter maps them into native provider/model fields and credential scope;
 it must not assume native support for tmax's qualified-name syntax or send a
 model-alias ID upstream without resolving a concrete offering. Time boundaries, input facts, and priority evaluation never
 rewrite native files or alter that concrete selection. Dynamic alias
-selection requires requests to pass through the independent model proxy.
+selection requires requests to pass through the independent model gateway.
 
-Native model selections and any required proxy readiness must exist before
+Native model selections and any required gateway readiness must exist before
 their effective use. Supported adapters provide discovery metadata or write the
 native static model list as needed, preserving all declared providers or blocking
 unsupported multi-provider configuration. Runtime native selection must not
@@ -679,7 +679,7 @@ all supported native protocols unless explicitly filtered; inference and agent
 selection still require an explicit protocol. Alias inspection must resolve one
 configured protocol-qualified identity; an ambiguous ID requires a protocol.
 Detailed Agent views distinguish each native provider's source, selected subset,
-scope, and applied/effective state. Proxy views expose the shared published
+scope, and applied/effective state. Gateway views expose the shared published
 list, alias-definition continuity, listener/key readiness, and blocked-session
 reasons, not target permissions. Calendar/gate previews show the
 saved zone and UTC offset, separately from input validity/horizon boundaries.
@@ -692,9 +692,9 @@ and result fields.
 
 | Context | Model identity and scope |
 | --- | --- |
-| No Agent | Public qualified concrete or alias ID; assess proxy requirements. |
+| No Agent | Public qualified concrete or alias ID; assess gateway requirements. |
 | Declared target without a native entry | Public ID; assess the target's native compatibility without requiring saved selections. |
-| Declared native entry | Upstream-local model ID for an upstream source; public ID for a proxy source. The model need not already be selected there. |
+| Declared native entry | Upstream-local model ID for an upstream source; public ID for a gateway source. The model need not already be selected there. |
 | Undeclared Agent/path | Public ID and explicitly inspected native scope; do not register or import the target. |
 
 This is configuration/compatibility advice, not permission. Capture
@@ -836,7 +836,7 @@ precedence. Existing sessions and explicitly fixed destinations remain fixed.
 
 ## Multi-source model alias example
 
-An agent displays tmax/deepseek-v4.1-flash when its local proxy provider key is
+An agent displays tmax/deepseek-v4.1-flash when its local gateway provider key is
 tmax and the configured model-alias ID is deepseek-v4.1-flash. Its explicit
 candidates can be:
 
@@ -854,7 +854,7 @@ three integrations or their model versions are equivalent or currently verified.
 
 For a new session, the configured offering priorities, calendar schedules, and
 ordered signal rules select among eligible candidates. The agent keeps requesting
-the same alias ID; the proxy
+the same alias ID; the gateway
 forwards the selected candidate's exact upstream ID and credentials. Adding another
 Go instance does not enroll it automatically. Candidate additions and ranking
 changes leave in-flight and established-session destinations stable. Removing a
@@ -889,16 +889,16 @@ error after execution starts does not replay on a sibling.
    an inference call, input acquisition, authorization reservation, secret
    resolution, or login refresh. Show the common instant and configuration,
    metadata, and input revisions, ordered outcomes, calendar fallback, shared
-   alias continuity, and retained-session blockers. Explain public proxy models
+   alias continuity, and retained-session blockers. Explain public gateway models
    without an Agent; optional native context is advice, not a model permission.
    Operations and their optional dry runs distinguish new-session effects,
    activation blockers, and in-flight requests retaining their snapshots.
-8. Configure one target with both upstream and proxy native providers. Upstream
-   entries select exact provider-local IDs, proxy entries select public IDs, and
+8. Configure one target with both upstream and gateway native providers. Upstream
+   entries select exact provider-local IDs, gateway entries select public IDs, and
    defaults/roles identify the native provider. Preserve source-specific endpoint
    and credential handling without dropping unsupported entries or adding a
    duplicate route. Time cannot rewrite concrete native selections, and upstream
-   entries do not require a running tmax proxy.
+   entries do not require a running tmax gateway.
 9. Resolve duplicate upstream model IDs under different providers independently.
    Preserve a model ID containing `/` by splitting its qualified name only once.
    Reject unknown qualified references without fuzzy lookup or passthrough.
@@ -931,7 +931,7 @@ error after execution starts does not replay on a sibling.
     override. Explicit endpoint changes and accepted capability changes report
     their provider, route, retained-session, and agent impacts, including optional
     dry-run impact; discovery must not become a higher-precedence metadata source.
-17. Derive shared proxy publication from enabled concrete/alias definitions and
+17. Derive shared gateway publication from enabled concrete/alias definitions and
     declared protocols without a separate publishing resource. Serve compatible
     clients with the current shared key and no registered Agent, selected subset,
     or default. Agent subset edits/removal neither filter requests nor revoke
@@ -983,7 +983,7 @@ error after execution starts does not replay on a sibling.
     restoration repairs it.
 27. Add a target before configuring native providers, selected models, or a default,
     then use it as a provider's native-login source. It remains valid but incomplete
-    for native model application, not an invalid source or a proxy prerequisite.
+    for native model application, not an invalid source or a gateway prerequisite.
     Replace a native entry's source by validating its existing IDs/protocols and
     dependent references as-is, without requiring an empty list or implicitly
     clearing/repairing selections. Reject unresolved references.
@@ -1031,7 +1031,7 @@ error after execution starts does not replay on a sibling.
     may expand membership, bypass authorization/capability filters, or cause
     request replay.
 35. Use one known integration region/protocol map for native upstream entries and
-    proxy dispatch. Resolve custom protocols only from explicit bases in the same
+    gateway dispatch. Resolve custom protocols only from explicit bases in the same
     provider; an omitted custom protocol is unavailable. Neither catalog `api`
     nor a request can guess a base or repair `/v1`. Reject undeclared operations
     and ID-only calls without a reliable original binding instead of selecting

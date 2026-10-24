@@ -325,7 +325,7 @@ impl History {
                 }
             }
         }
-        json!({"coverage":self.coverage(&state),"source":"observed_proxy_requests","official_bill":false,"remaining_quota":null,"unknown_usage_records":unknown,"partial_usage_records":partial,"providers":groups})
+        json!({"coverage":self.coverage(&state),"source":"observed_gateway_requests","official_bill":false,"remaining_quota":null,"unknown_usage_records":unknown,"partial_usage_records":partial,"providers":groups})
     }
 }
 fn encoded_size(value: &impl Serialize) -> usize {

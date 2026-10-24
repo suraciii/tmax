@@ -120,7 +120,7 @@ changes follow the
 Each declared inference operation requires the selected workspace authorization,
 an exact qualified model, and the truthful client and stable conversation
 identity defined [below](#conversation-and-client-identity). The same map and
-requirements apply to direct and proxy use. HTTP/SSE evidence does not qualify an
+requirements apply to direct and gateway use. HTTP/SSE evidence does not qualify an
 undeclared transport. No response retrieval, cancellation, deletion, file
 management, or other ID-only operation is established by these creation paths
 or the discovery URL. Unknown operations and missing original bindings follow
@@ -135,7 +135,7 @@ credential handoff.
 | Agent | Documented Go setup | Required qualification and native scope |
 | --- | --- | --- |
 | OpenCode | `/connect`, select **OpenCode Go**, supply the Console key, then select `opencode-go/<model-id>` | Qualify the versioned provider schema and the actual model's protocol. In V2, saved accounts and active selection belong to the server; the newest login becomes active. A second saved key does not establish concurrent per-session account selection. |
-| Codex CLI | User-scoped custom provider with `wire_api = "responses"`, the Go Responses base from the map above, and an explicit key source such as `OPENCODE_API_KEY`; Codex appends `/responses` | Only Responses-qualified models are eligible. Respect the supported user/profile scope and restrictions on project-level provider configuration. Go recognizes Codex native session identity, but some versions and proxy configurations omit it. |
+| Codex CLI | User-scoped custom provider with `wire_api = "responses"`, the Go Responses base from the map above, and an explicit key source such as `OPENCODE_API_KEY`; Codex appends `/responses` | Only Responses-qualified models are eligible. Respect the supported user/profile scope and restrictions on project-level provider configuration. Go recognizes Codex native session identity, but some versions and gateway configurations omit it. |
 | Hermes Agent | Native `opencode-go` provider, `hermes model`, and `OPENCODE_GO_API_KEY` or the supported saved key; the guide distinguishes pay-as-you-go `opencode-zen` and `OPENCODE_ZEN_API_KEY` | Qualify the active `HERMES_HOME`/profile and its effective secret and model settings. The official guide requires v0.21.6 or later for automatic session coverage, including main and auxiliary OpenCode requests. This is an upstream requirement, not a tmax-tested version range. |
 | stock pi | Native `opencode-go/<model-id>` and `OPENCODE_API_KEY`, or native key entry through `/login`; the default saved-key store is `~/.pi/agent/auth.json` | Resolve the active agent directory and credential precedence. The same environment-variable name also serves its pay-as-you-go provider. Official Go guidance says current builds send session information and older installations need an update; it does not establish a numeric tmax support range. |
 | omp | The omp project lists `opencode-go` and `opencode-zen` using `OPENCODE_API_KEY`; model/provider configuration belongs to the active profile's `models.yml`/`models.yaml` | Qualify omp separately from stock pi, including API selection, credential precedence, active profile/auth store, and session/client headers on every Go-bound inference path. The consulted project evidence does not establish that full Go identity contract. |
@@ -179,13 +179,13 @@ provider-wide session. It must not use a static ID for a key, provider, process,
 or all conversations, or infer an ID from prompt text.
 
 Native upstream configuration must establish this behavior in the agent itself
-because tmax is absent from that path. Proxy forwarding must preserve the qualified
+because tmax is absent from that path. Gateway forwarding must preserve the qualified
 native session headers or forward `x-opencode-session` from the actual qualified
 session identity. Every forwarding path must retain the truthful client identity;
-handling the main visible request alone is insufficient. A proxy or client
+handling the main visible request alone is insufficient. A gateway or client
 version that drops session identity must remain unavailable until an upgrade,
 supported configuration change, or qualified forwarding path fixes that loss.
-A working direct path must not be disabled merely because a proxy path loses the
+A working direct path must not be disabled merely because a gateway path loses the
 header.
 
 The source-qualified stock pi **1.2.0** mechanisms have distinct boundaries:
@@ -193,7 +193,7 @@ The source-qualified stock pi **1.2.0** mechanisms have distinct boundaries:
 | Native path | Required identity behavior |
 | --- | --- |
 | Direct built-in OpenCode provider | The native provider wrapper supplies `x-opencode-session` from the actual session. A generic custom provider is not that wrapper. |
-| tmax proxy, Chat Completions | Native session-affinity configuration supplies dynamic `x-session-id` even for the local proxy URL. Forward that exact qualified value as `x-opencode-session`, retaining the native header and unchanged truthful user agent. This does not assert that Go itself recognizes `x-session-id`. |
+| tmax gateway, Chat Completions | Native session-affinity configuration supplies dynamic `x-session-id` even for the local gateway URL. Forward that exact qualified value as `x-opencode-session`, retaining the native header and unchanged truthful user agent. This does not assert that Go itself recognizes `x-session-id`. |
 | Missing session, unknown client, conflicting session headers, or an unqualified native path | Reject before upstream dispatch. Never repair the request with a static/generated ID, replacement client identity, or a different destination. |
 
 Native tool turns, continuations, and resume preserve the same session; a native
@@ -202,7 +202,7 @@ semantics and any native auxiliary-session distinctions. This qualification does
 not extend pi's Chat Completions affinity mechanism to other APIs or versions.
 
 A Go session header is not account authentication, proof of workspace ownership,
-or authorization to select another provider. Proxy session selection must also
+or authorization to select another provider. Gateway session selection must also
 satisfy the
 [verified client-session boundary](../../model-routing/spec.md#selection-and-continuity).
 A missing reliable session identity cannot be repaired by inventing a supported
@@ -293,7 +293,7 @@ Go-specific error codes or undocumented management APIs.
    providers. Multiple keys and agents for one workspace do not multiply its
    allowance. A same-workspace key replacement preserves the provider and user
    subscription data while invalidating credential-derived observations.
-3. Each advertised direct or proxy scenario resolves the same selected provider
+3. Each advertised direct or gateway scenario resolves the same selected provider
    key, native scope, region/protocol map, exact model, and declared operation.
    Discovery uses its separate declared URL; it cannot be guessed beneath the
    inference base. Undeclared methods, paths, and transports remain unavailable.
@@ -302,7 +302,7 @@ Go-specific error codes or undocumented management APIs.
 4. `deepseek-v4.1-flash` retains its documented Chat Completions scenario.
    Ambiguous Responses claims remain unknown until qualified for that exact model.
    Codex cannot gain access by translating that Chat Completions endpoint.
-5. Every advertised direct or proxy path retains truthful client identification
+5. Every advertised direct or gateway path retains truthful client identification
    and stable conversation identity across main, auxiliary, streaming, tool, and
    continuation requests. Missing native session coverage blocks the affected
    path, including fixed or stateless routes that fail Go's requirement.
@@ -389,7 +389,7 @@ Go usage provenance, distinct from a published versioned API contract:
 - [Merged usage-route PR #16513](https://github.com/anomalyco/opencode/pull/16513)
   and its [historical handler](https://github.com/anomalyco/opencode/blob/2b8a5969e932c15083e599c82d34ce0268f81b9e/packages/console/app/src/routes/zen/go/v1/usage.ts):
   source-backed route/authentication provenance, but an older response schema.
-- [Thin inference-proxy migration PR #54563](https://github.com/anomalyco/opencode/pull/54563):
+- [Thin inference-gateway migration PR #54563](https://github.com/anomalyco/opencode/pull/54563):
   the exact `/zen/go/v1/usage` alias is forwarded after migration; it does not
   establish a replacement `/inference/.../usage` path.
 - [Production wire report #53701](https://github.com/anomalyco/opencode/issues/53701):

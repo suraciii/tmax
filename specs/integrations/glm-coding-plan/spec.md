@@ -47,7 +47,7 @@ publishes one domestic endpoint set. These are source-qualified product
 requirements, not a new registry region selector. A future known integration
 must use one finite domestic map; current custom setup requires each explicit
 protocol base under the [endpoint resolver](../spec.md#endpoint-resolution).
-Direct and proxy routes must select the same product/protocol destination.
+Direct and gateway routes must select the same product/protocol destination.
 
 | Protocol | Published domestic base | Finite operation and authentication evidence |
 | --- | --- | --- |
@@ -84,7 +84,7 @@ capabilities require qualification for the selected client and protocol.
 | Provider-supported client | Use a tool/environment on the [official list](https://docs.bigmodel.cn/cn/coding-plan/tool/others). It includes Pi Coding Agent, OpenCode, and Codex; Hermes is listed as a general agent with different scheduling priority. A generic HTTP SDK is not by itself plan permission. |
 | Pi native setup | The [Pi guide](https://docs.bigmodel.cn/cn/coding-plan/tool/pi) documents `zai-coding-cn` and a personal/team API key. A native command named `/login` does not make this OAuth. Resolve the effective agent directory and credential precedence. |
 | Exact User-Agent or session header | The consulted GLM plan sources establish no mandatory literal User-Agent or special conversation header. Do not import Go's header requirement or invent a recognized-client string. Preserve truthful native identity under the shared identity contract. |
-| Direct versus proxy | Qualify each actual client version, native scope, protocol, and transport separately. Official tool eligibility does not certify every custom provider or local relay. |
+| Direct versus gateway | Qualify each actual client version, native scope, protocol, and transport separately. Official tool eligibility does not certify every custom provider or local relay. |
 | Main, tool, continuation, and auxiliary calls | Keep the selected plan destination, authorization, real client identity, and genuine native conversation/parent-subsession semantics. A static provider-wide session cannot establish routing continuity. |
 
 A local relay must not conceal an unsupported client, bypass the supported-tools
@@ -130,7 +130,7 @@ follow the [time-rule contract](../../model-routing/spec.md#time-rules).
 
 - Setup distinguishes domestic plan access, standard billing, and legacy-key
   uncertainty without key-shape inference or a fabricated login flow.
-- Direct and proxy inspection expose the exact protocol base, model, effective
+- Direct and gateway inspection expose the exact protocol base, model, effective
   key source, client version/scope, and separate qualification result.
 - A qualified conversation retains destination and truthful native identity
   through streaming, a tool-result round trip, continuation, and applicable

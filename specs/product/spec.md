@@ -227,7 +227,7 @@ login source; missing authentication is valid setup but cannot serve inference.
 Upstream user/workspace identity is optional metadata, not a setup prerequisite.
 Authentication method and billing are independent. Automatic creation or rotation
 of upstream API-key secrets is excluded; the shared local gateway key follows
-the [model-gateway lifecycle](#model-proxy).
+the [model-gateway lifecycle](#model-gateway).
 
 Replacing a key for the same upstream identity preserves the provider. Adding
 independently selectable access creates another provider. Different authorizations
@@ -537,8 +537,6 @@ effect. Retain current-user-restricted plaintext restore information until
 restoration completes or the user explicitly discards it; this is recovery data,
 not desired configuration.
 
-<a id="model-proxy"></a>
-
 ## Model gateway
 
 The gateway serves compatible local clients independently of native agent
@@ -644,7 +642,7 @@ registration do not rotate it. A missing key is reported, not silently replaced.
 
 Explicit key retrieval supports independently configured clients. It delivers the
 key only to the requested protected output or explicit local reveal surface under
-the [shared-key command contract](../cli/providers/authentication/spec.md#shared-proxy-key);
+the [shared-key command contract](../cli/providers/authentication/spec.md#shared-gateway-key);
 ordinary inspection and result JSON never contain it. This is not a generic
 upstream-credential export facility.
 
@@ -756,8 +754,9 @@ tmax-controlled traffic.
 ## Local Web and CLI experience
 
 The product name is **Gateway** (Simplified Chinese: **网关**). Navigation,
-actions, and explanatory copy use this term. Literal CLI commands, configuration
-keys, API paths, and diagnostic codes retain their documented `proxy` spelling.
+actions, CLI groups and flags, configuration fields, API paths, and diagnostic
+codes use `gateway` consistently. Historical persisted names follow the
+[configuration compatibility rules](../configuration/spec.md#format-and-authority).
 Outbound HTTP/SOCKS proxies remain a separate networking concept.
 
 The CLI is the primary product entrypoint. `tmax --help` must explain what tmax

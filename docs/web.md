@@ -29,7 +29,7 @@ page makes no external font, image, or script requests.
 
 The redesigned workspace uses Simplified Chinese labels and retains stable IDs,
 protocol names, and command names. It uses the same backend operations and local
-configuration as the CLI. Gateway is labeled 网关; literal `proxy` command and
+configuration as the CLI. Gateway is labeled 网关; literal `gateway` command and
 configuration names remain visible in technical details. Advanced operations
 expose the complete backend operation catalog.
 Credentials are separate password fields; browser storage is not used. Submission,

@@ -34,7 +34,7 @@ conversation identity.
 | `model alias update --candidate` | Replace the complete list with the repeated operands; never append implicitly. |
 | Update omits `--candidate` | Preserve the existing list; never guess a membership change or add a provider. |
 | Alias ID | Arbitrary user-defined name; `L0`, `L1`, and `coding` have no built-in candidate membership or ranking. |
-| Publication | Derive the shared list from enabled definitions; no separate proxy-model enrollment or per-client list. |
+| Publication | Derive the shared list from enabled definitions; no separate gateway-model enrollment or per-client list. |
 | `--new-protocol P` | Change identity only after collision and old-reference checks. Remove old `(protocol, id)` references first; never convert protocols or silently change a target's protocol. |
 
 ```sh

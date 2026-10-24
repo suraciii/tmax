@@ -34,7 +34,7 @@ finite editable-field definitions also drive Web controls.
   login owners, conflict detection, and protected three-way restoration.
 - `storage.rs` and `secrets.rs` own OS-home resolution, current-user-restricted
   plaintext secret/recovery files, safe inventory, and protected channels.
-- `service/`, `proxy.rs`, and `diagnostics.rs` own resident identity/lifecycle,
+- `service/`, `gateway.rs`, and `diagnostics.rs` own resident identity/lifecycle,
   browser protections, same-protocol bounded forwarding, persistent continuity,
   and bounded in-memory request evidence.
 

@@ -53,7 +53,7 @@ async fn run_autostart(argv: &[OsString]) -> ExitCode {
     match service::run_autostart().await {
         Ok(_result) => ExitCode::SUCCESS,
         Err(_) => {
-            eprintln!("The configured proxy could not start from autostart.");
+            eprintln!("The configured gateway could not start from autostart.");
             ExitCode::from(4)
         }
     }

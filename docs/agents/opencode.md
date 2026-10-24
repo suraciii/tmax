@@ -103,7 +103,7 @@ and [`config/normalize.ts`](https://github.com/anomalyco/opencode/blob/026b106bc
 
 A provider's `models` map overlays entries, not an access-control model list.
 Native picker behavior, historical whitelist/disable observations, and direct
-`run --model` behavior do not establish proxy authorization. Historical local
+`run --model` behavior do not establish gateway authorization. Historical local
 observations of `whitelist`/`disabled_providers` differ from the pinned V2
 normalizer; their exact legacy/runtime path was not re-qualified here. No alias,
 default, or compatibility field is invented to hide that source discrepancy.
@@ -200,7 +200,7 @@ On 2026-10-24, isolated post-repair application was consumed by installed
 accepted inherited limits, local overrides, explicit zero limits, false tools,
 and empty input/output arrays; unaccepted latest metadata was not used. An
 oversized, inexact JavaScript integer blocked before native writes. Concrete
-proxy selections retained metadata while aliases received no winner snapshot.
+gateway selections retained metadata while aliases received no winner snapshot.
 Reapply and three-way restore preserved later native request budgets, effort,
 sampling, and unknown-model settings and removed the private key artifacts.
 This was offline metadata/configuration consumption, not inference, OAuth,

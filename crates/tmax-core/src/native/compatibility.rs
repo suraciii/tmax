@@ -9,7 +9,7 @@ pub(crate) struct Context<'a> {
     pub agent: &'a str,
     pub target: Option<&'a str>,
     pub provider: Option<&'a str>,
-    pub proxy: bool,
+    pub gateway: bool,
 }
 
 impl Context<'_> {
@@ -73,7 +73,7 @@ impl Context<'_> {
                 "Exact OpenCode Go DeepSeek Flash Responses support is unknown; documented Chat Completions remains available",
             ));
         }
-        if self.proxy {
+        if self.gateway {
             if config.model_aliases.iter().any(|alias| {
                 alias.id == public_id
                     && alias.protocol == protocol
@@ -85,21 +85,21 @@ impl Context<'_> {
                     "This native route lacks a qualified new/resumed session-origin boundary",
                 ));
             }
-            let native = crate::proxy::NativeRequirements {
+            let native = crate::gateway::NativeRequirements {
                 client: match self.agent {
-                    "pi" => crate::proxy::NativeClient::Pi,
-                    "hermes" => crate::proxy::NativeClient::Hermes,
-                    _ => crate::proxy::NativeClient::Unknown,
+                    "pi" => crate::gateway::NativeClient::Pi,
+                    "hermes" => crate::gateway::NativeClient::Hermes,
+                    _ => crate::gateway::NativeClient::Unknown,
                 },
                 // The adapter enables Pi's Chat Completions affinity; Hermes
                 // supplies its separately documented x-opencode-session header.
                 go_session: self.agent == "hermes"
                     || self.agent == "pi" && protocol == "chat-completions",
             };
-            if let Some(reason) = crate::proxy::native_mismatch(provider, &native) {
+            if let Some(reason) = crate::gateway::native_mismatch(provider, &native) {
                 return Err(Error::new(
                     reason,
-                    "The selected native client has no qualified proxy handoff for this provider",
+                    "The selected native client has no qualified gateway handoff for this provider",
                 ));
             }
         } else {
@@ -209,7 +209,7 @@ impl AuthorizationSnapshot {
         context: &Context<'_>,
         provider: &str,
     ) -> Result<()> {
-        if context.proxy {
+        if context.gateway {
             return Ok(());
         }
         let Some(Auth::Login { session_ref, .. }) = &config.providers[provider].auth else {

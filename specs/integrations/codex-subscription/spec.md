@@ -116,7 +116,7 @@ that scope and any conflicting selections must remain blocked.
 
 OpenAI documents
 [ChatGPT sign-in through a model gateway](https://learn.chatgpt.com/docs/enterprise/sign-in-with-chatgpt-through-a-gateway)
-using workspace-managed model-provider requirements. This is a conditional proxy
+using workspace-managed model-provider requirements. This is a conditional gateway
 scenario. It does not imply that any personal subscription can redirect traffic
 through local user configuration. Qualification must establish the supported Codex build, effective
 workspace policy, available management permission, and supported credential
@@ -159,15 +159,15 @@ The two credential paths must remain separate:
 
 - The client sends its native ChatGPT token in `Authorization`. The gateway must
   forward it and any `ChatGPT-Account-ID` unchanged to the qualified Codex backend.
-- The client sends the shared tmax proxy key in a separate supported
+- The client sends the shared tmax gateway key in a separate supported
   header. OpenAI's documented static credential path uses `env_http_headers` and
   `X-Gateway-Key`. The gateway must validate its own credential and remove that
   header before forwarding upstream.
 
 The local credential must not replace ChatGPT `Authorization`, grant upstream
-entitlement, or serve as proof of an upstream account. The proxy must not retain
+entitlement, or serve as proof of an upstream account. The gateway must not retain
 the forwarded native token. Local credential lifecycle follows the
-[product proxy contract](../../product/spec.md#model-proxy).
+[product gateway contract](../../product/spec.md#model-gateway).
 
 OpenAI also documents native gateway OAuth. That option requires the gateway's
 own OAuth authorization server. tmax does not require or add that server; this
@@ -185,8 +185,8 @@ by that contract. A model alias must not select a different login by rewriting
 the account header or substituting another agent's session.
 
 Without qualified forwarding identity, policy permission, or credential
-delivery, proxy access must be unavailable with the missing prerequisite shown.
-A supported native direct option must remain available. Proxy unavailability
+delivery, gateway access must be unavailable with the missing prerequisite shown.
+A supported native direct option must remain available. Gateway unavailability
 must not silently switch an applied target or change its authentication method.
 The gateway does not extend subscription access to arbitrary third-party callers.
 
@@ -208,7 +208,7 @@ Unknown query capability must not block an otherwise qualified inference path.
 
 Local and cloud Codex use can share allowance, and other eligible product use
 can consume the same billing scope. Multiple native sessions, devices, or local
-provider IDs must not multiply that allowance. tmax proxy traffic is only a
+provider IDs must not multiply that allowance. tmax gateway traffic is only a
 partial observation and cannot establish remaining account-wide quota. Plan
 prices, model rosters, reset windows, and eligibility must not be hard-coded as
 universal subscription facts.
@@ -247,10 +247,10 @@ available result does not establish.
 | Native rotation, borrowed-login recovery, or a shared scope can select another authorization. | Block the affected selection. Identify the conflicting native scope and require a supported pin, isolated scope, or independent native sign-in. |
 | Native sign-in changed the shared CLI/IDE authorization before identity rejection or local commit failure. | Apply the [product authentication failure boundary](../../product/spec.md#providers-and-authentication). Report the changed native scope and affected consumers; recover the intended identity through the qualified owner rather than treating the old session reference as a rollback. |
 | Native credentials conflict with enforced login-method, workspace, or storage requirements. | Show the managed restriction and affected target. Require a permitted sign-in or authorized policy correction; a local override must not be offered as a bypass. |
-| The gateway's local credential is missing, invalid, or replaced. | Identify a local proxy authentication failure separately from ChatGPT authentication. Require the correct local credential and native reapplication or relaunch as appropriate. Do not sign the user out of ChatGPT as the repair. |
+| The gateway's local credential is missing, invalid, or replaced. | Identify a local gateway authentication failure separately from ChatGPT authentication. Require the correct local credential and native reapplication or relaunch as appropriate. Do not sign the user out of ChatGPT as the repair. |
 | The upstream rejects ChatGPT authentication, workspace permission, entitlement, or usage. | Preserve the upstream distinction when available. Direct the user to native reauthentication, the workspace administrator, or the provider's usage controls according to the actual evidence. An unspecified rate limit is not proof of depleted subscription allowance. |
 | The native-session identity contract is unknown, or the selected provider does not match it. | Block forwarding. Explain the missing identity qualification or mismatch without trusting or rewriting `ChatGPT-Account-ID`. Retain the supported direct option. |
-| Managed gateway setup, model discovery, or required Responses semantics cannot be qualified. | Keep that proxy combination unavailable. Identify the missing permission, client capability, or protocol requirement instead of substituting a generic OpenAI route. |
+| Managed gateway setup, model discovery, or required Responses semantics cannot be qualified. | Keep that gateway combination unavailable. Identify the missing permission, client capability, or protocol requirement instead of substituting a generic OpenAI route. |
 | A quota or renewal query is unavailable or fails. | Keep the information unknown or stale with its source and dashboard action. Do not treat the query failure as failed inference authentication. |
 | A public reset-announcement read fails, becomes unsupported, or passes its announced boundary. | Apply the [input lifecycle and source contract](../../model-routing/inputs/spec.md#codex-reset-announcements). Explain the unavailable/expired forecast independently of quota and authentication; never infer recovered account allowance or block explicit manual registration. |
 
@@ -272,8 +272,8 @@ available result does not establish.
    A rejected reauthentication or failed local commit after a shared native
    change reports that effect and its recovery boundary; it does not claim the
    CLI/IDE retained the prior authorization.
-5. Proxy setup shows the managed-policy and permission prerequisite. A personal
-   account without a qualified setup sees proxy access unavailable, not a promise
+5. Gateway setup shows the managed-policy and permission prerequisite. A personal
+   account without a qualified setup sees gateway access unavailable, not a promise
    that a base-URL edit enables it.
 6. A qualified gateway serves its declared `GET /models` and `POST /responses`
    against the same resolved Codex backend as direct configuration. It rejects

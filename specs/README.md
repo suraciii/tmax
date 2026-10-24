@@ -4,7 +4,7 @@ This directory holds the product contracts for tmax: what the program must do
 and the invariants it protects.
 
 - [Product](product/spec.md) — CLI-first access from any calling agent, provider
-  instances, authentication, billing, independent configuration and proxy capabilities, and acceptance.
+  instances, authentication, billing, independent configuration and gateway capabilities, and acceptance.
 - [Product design](product/design.md) — ownership, native provider entries, configuration
   safety, operation boundaries, and native-protocol forwarding.
 - [Configuration](configuration/spec.md) — `~/.tmax` persistence schema, metadata
@@ -27,13 +27,13 @@ and the invariants it protects.
   - [Providers](cli/providers/spec.md) — instances and endpoints; nested authentication and rule-input commands.
   - [Models](cli/models/spec.md) — concrete models and explanations; nested catalog, model-alias, and priority-rule commands.
   - [Agents](cli/agents/spec.md) — targets, model choices, native application, and restoration.
-  - [Service](cli/service/spec.md) — outbound network, proxy, Web, and nested request diagnostics.
+  - [Service](cli/service/spec.md) — outbound network, gateway, Web, and nested request diagnostics.
   - [Results](cli/results/spec.md) — compact JSON and exit codes shared by all commands.
 - [Diagnostics](diagnostics/spec.md) — scoped status evidence, historical selection
   reasons, bounded in-memory request history, and cleanup.
 
 Shared vocabulary lives in [CONTEXT.md](../CONTEXT.md). The executable and shared
-runtime implement management, configuration, native adapters, Web, and proxy
+runtime implement management, configuration, native adapters, Web, and gateway
 operations. These specifications remain the acceptance authority, not evidence
 that every provider, native version, permission, or transport has been verified.
 

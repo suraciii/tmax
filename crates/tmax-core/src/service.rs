@@ -2,7 +2,7 @@
 use crate::{
     Error, Request, Result,
     config::Config,
-    proxy::{Runtime, Snapshot},
+    gateway::{Runtime, Snapshot},
     storage::Store,
 };
 use axum::{
@@ -47,7 +47,7 @@ mod windows_startup;
 #[path = "service/windows_web.rs"]
 mod windows_web;
 
-const MANAGEMENT_PROTOCOL: &str = "tmax-control/2";
+const MANAGEMENT_PROTOCOL: &str = "tmax-control/3";
 const CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
 const CONTROL_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 const WEB_REQUEST_BYTES: usize = 1024 * 1024;
@@ -219,7 +219,7 @@ fn validate_control_path(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 fn absent() -> Value {
-    json!({"resident":{"discovery_state":"absent","reason_code":null,"identity":null,"inference":null,"web":null},"proxy":{"ready":false,"listen":null,"key_ref":null,"config_revision":null},"shared_key":{"loaded_reference":null,"loaded_state":"absent"},"publication":{"snapshot_state":"absent","model_count":null},"limits":crate::proxy::limits(),"unmanaged_clients":"unknown"})
+    json!({"resident":{"discovery_state":"absent","reason_code":null,"identity":null,"inference":null,"web":null},"gateway":{"ready":false,"listen":null,"key_ref":null,"config_revision":null},"shared_key":{"loaded_reference":null,"loaded_state":"absent"},"publication":{"snapshot_state":"absent","model_count":null},"limits":crate::gateway::limits(),"unmanaged_clients":"unknown"})
 }
 impl Resident {
     fn view(&self) -> Value {
@@ -230,10 +230,10 @@ impl Resident {
         let key_ref = self
             .loaded
             .as_ref()
-            .and_then(|v| v.0.proxy.as_ref())
+            .and_then(|v| v.0.gateway.as_ref())
             .map(|p| &p.key_ref);
         let count = self.loaded.as_ref().map(|v| {
-            crate::proxy::publication(&v.0)["data"]
+            crate::gateway::publication(&v.0)["data"]
                 .as_array()
                 .map_or(0, Vec::len)
         });
@@ -242,9 +242,9 @@ impl Resident {
         if inference["state"] == "running" && self.key_state != "ready" {
             inference["state"] = json!("unavailable");
         }
-        let dependencies=self.loaded.as_ref().map(|(config,_)|config.agents.iter().filter(|(_,target)|target.providers.values().any(|entry|entry.proxy==Some(true))).map(|(id,_)|json!({"kind":"agent_target","id":id,"scope":"configured_proxy_entry","native_effective_state":"unknown"})).collect::<Vec<_>>()).unwrap_or_default();
+        let dependencies=self.loaded.as_ref().map(|(config,_)|config.agents.iter().filter(|(_,target)|target.providers.values().any(|entry|entry.gateway==Some(true))).map(|(id,_)|json!({"kind":"agent_target","id":id,"scope":"configured_gateway_entry","native_effective_state":"unknown"})).collect::<Vec<_>>()).unwrap_or_default();
         let stopping = self.shutdown.stopping.load(Ordering::Acquire);
-        json!({"resident":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("resident_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"proxy":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"limits":crate::proxy::limits(),"unmanaged_clients":"unknown"})
+        json!({"resident":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("resident_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"gateway":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"limits":crate::gateway::limits(),"unmanaged_clients":"unknown"})
     }
     async fn activate(&mut self, revision: Option<&str>) -> Result<Value> {
         let loaded = crate::config::load(&self.store)?;
@@ -254,30 +254,30 @@ impl Resident {
                 "Configuration changed before activation",
             ));
         }
-        if let (Some(listener), Some(proxy)) = (&self.inference, &loaded.config.proxy)
-            && address(&proxy.listen, false)? != listener.address
+        if let (Some(listener), Some(gateway)) = (&self.inference, &loaded.config.gateway)
+            && address(&gateway.listen, false)? != listener.address
         {
             return Err(failure(
                 "listener_restart_required",
-                "Saved listener address requires explicit proxy restart",
+                "Saved listener address requires explicit gateway restart",
             ));
         }
         let previous = self.runtime.snapshot.read().expect("snapshot lock").clone();
         let metadata = crate::catalog::read(&self.store, "accepted")?.map(Arc::new);
-        let snapshot = if let Some(proxy) = &loaded.config.proxy {
+        let snapshot = if let Some(gateway) = &loaded.config.gateway {
             let retained = previous
                 .as_ref()
                 .filter(|s| {
                     s.config
-                        .proxy
+                        .gateway
                         .as_ref()
-                        .is_some_and(|p| p.key_ref == proxy.key_ref)
+                        .is_some_and(|p| p.key_ref == gateway.key_ref)
                 })
                 .map(|s| s.key.clone());
             let key = if retained.is_some() {
                 retained
             } else {
-                crate::proxy::credential(self.store.clone(), proxy.key_ref.clone())
+                crate::gateway::credential(self.store.clone(), gateway.key_ref.clone())
                     .await
                     .ok()
             };
@@ -318,10 +318,10 @@ impl Resident {
             && self
                 .loaded
                 .as_ref()
-                .is_some_and(|(config, _)| config.proxy.is_some())
+                .is_some_and(|(config, _)| config.gateway.is_some())
             && self.key_state != "ready";
         Ok(
-            json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"resident":view["resident"],"proxy":view["proxy"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Inspect stored shared-key availability; explicitly replace missing or unsupported key material")}else{Value::Null}}),
+            json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"resident":view["resident"],"gateway":view["gateway"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Inspect stored shared-key availability; explicitly replace missing or unsupported key material")}else{Value::Null}}),
         )
     }
     async fn start_inference(&mut self, restart: bool, force: bool) -> Result<Value> {
@@ -335,15 +335,15 @@ impl Resident {
             return Ok(self.lifecycle("inference", "reused", None));
         }
         let current = crate::config::load(&self.store)?;
-        let proxy = current.config.proxy.as_ref().ok_or_else(|| {
+        let gateway = current.config.gateway.as_ref().ok_or_else(|| {
             failure(
-                "proxy_unconfigured",
-                "Configure the proxy explicitly before starting it",
+                "gateway_unconfigured",
+                "Configure the gateway explicitly before starting it",
             )
         })?;
-        let requested = address(&proxy.listen, false)?;
+        let requested = address(&gateway.listen, false)?;
         // Validate cold-start credentials before touching an existing listener.
-        let key = crate::proxy::credential(self.store.clone(), proxy.key_ref.clone()).await?;
+        let key = crate::gateway::credential(self.store.clone(), gateway.key_ref.clone()).await?;
         if key.is_empty() {
             return Err(failure(
                 "credential_unavailable",
@@ -410,7 +410,7 @@ impl Resident {
         let (shutdown, mut cancelled) = watch::channel(false);
         let runtime = self.runtime.clone();
         let task = tokio::spawn(async move {
-            let _ = axum::serve(listener, crate::proxy::router(runtime))
+            let _ = axum::serve(listener, crate::gateway::router(runtime))
                 .with_graceful_shutdown(async move {
                     let _ = cancelled.changed().await;
                 })
@@ -621,11 +621,11 @@ pub async fn status(store: &Store) -> Result<Value> {
             value
         }
     };
-    value["autostart"]=autostart_status(store).unwrap_or_else(|error|json!({"snapshot_state":"unavailable","reason_code":error.code,"reconciliation":"not_requested","repair":"proxy autostart enable|disable"}));
+    value["autostart"]=autostart_status(store).unwrap_or_else(|error|json!({"snapshot_state":"unavailable","reason_code":error.code,"reconciliation":"not_requested","repair":"gateway autostart enable|disable"}));
     match crate::config::load(store) {
         Ok(file) => {
             value["shared_key"]["file_reference"] =
-                json!(file.config.proxy.as_ref().map(|proxy| &proxy.key_ref));
+                json!(file.config.gateway.as_ref().map(|gateway| &gateway.key_ref));
             value["saved_revision"] = json!(file.revision);
             value["network"]["file"] =
                 crate::operations::network_view(&file.config, &file.revision, file.exists, "file")
@@ -739,7 +739,7 @@ fn retained_session_arguments(request: &Request) -> Result<(&str, &str, &str)> {
         .and_then(|v| v.first())
         .map(String::as_str);
     id.zip(protocol).zip(session).map(|((id, protocol), session)| (id, protocol, session))
-        .ok_or_else(|| failure("invalid_arguments", "Retained inspection requires a public model ID, protocol and existing proxy session handle"))
+        .ok_or_else(|| failure("invalid_arguments", "Retained inspection requires a public model ID, protocol and existing gateway session handle"))
 }
 
 pub async fn control(store: &Store, config: &Config, request: &Request) -> Result<Value> {
@@ -749,9 +749,9 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
         return status(store).await;
     }
     if group == "model" && action == "probe" {
-        return crate::proxy::probe(store, config, request).await;
+        return crate::gateway::probe(store, config, request).await;
     }
-    if group == "proxy" && action == "autostart" {
+    if group == "gateway" && action == "autostart" {
         let enabled = match request
             .command
             .get(2)
@@ -782,7 +782,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
         if discovery == "absent"
             && matches!(
                 (group, action),
-                ("proxy", "start" | "restart") | ("web", "open")
+                ("gateway", "start" | "restart") | ("web", "open")
             )
         {
             validate_control_path(&socket_path(store))?;
@@ -791,20 +791,20 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             blockers.push(json!({"code":"resident_identity_unavailable","state":discovery}));
         }
         let active = before["active_requests"].as_u64().unwrap_or(0);
-        if group == "proxy"
+        if group == "gateway"
             && matches!(action, "stop" | "restart")
             && active > 0
             && !request.arguments.contains_key("cancel-active")
         {
             blockers.push(json!({"code":"active_requests","active_count":active}));
         }
-        let reused = group == "proxy"
+        let reused = group == "gateway"
             && action == "start"
             && before["resident"]["inference"]["listen"].is_string();
-        if group == "proxy" && matches!(action, "start" | "restart") && !reused {
+        if group == "gateway" && matches!(action, "start" | "restart") && !reused {
             let file = crate::config::load(store)?;
-            if file.config.proxy.is_none() {
-                blockers.push(json!({"code":"proxy_unconfigured"}));
+            if file.config.gateway.is_none() {
+                blockers.push(json!({"code":"gateway_unconfigured"}));
             }
         }
         if group == "web"
@@ -823,7 +823,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             }
         }
         return Ok(
-            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"resident":before["resident"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::proxy::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
+            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"resident":before["resident"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::gateway::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
         );
     }
     if let Some(value) = rpc(store, "control", Some(request.clone()), None).await? {
@@ -838,12 +838,12 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             json!({"snapshot_state":"absent","coverage":{"prior_process_coverage":"unavailable"},"records":[],"reason_code":"no_resident_history"}),
         );
     }
-    if matches!((group, action), ("proxy", "stop") | ("web", "stop")) {
+    if matches!((group, action), ("gateway", "stop") | ("web", "stop")) {
         return Ok(absent());
     }
     if !matches!(
         (group, action),
-        ("proxy", "start" | "restart") | ("web", "open")
+        ("gateway", "start" | "restart") | ("web", "open")
     ) {
         return Err(failure(
             "unsupported_operation",
@@ -1029,7 +1029,7 @@ async fn run_owned(
     if autostart {
         let result = state.lock().await.start_inference(false, false).await;
         match result {
-            Ok(value) if value["proxy"]["ready"] == true => {
+            Ok(value) if value["gateway"]["ready"] == true => {
                 #[cfg(windows)]
                 if let Err(error) = windows_startup::record_launch(&store, None) {
                     let mut resident = state.lock().await;
@@ -1133,7 +1133,7 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
             "Resident changed after discovery; no control action performed",
         ));
     }
-    let final_stop = call.action == "control" && call.request.as_ref().is_some_and(|request| matches!(request.command.as_slice(), [surface, action] if matches!(surface.as_str(), "proxy" | "web") && action == "stop"));
+    let final_stop = call.action == "control" && call.request.as_ref().is_some_and(|request| matches!(request.command.as_slice(), [surface, action] if matches!(surface.as_str(), "gateway" | "web") && action == "stop"));
     let stopping = resident.shutdown.stopping.load(Ordering::Acquire);
     let result = if stopping && call.action != "status" && !final_stop {
         Err(failure(
@@ -1161,9 +1161,9 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
                 if let Some(candidate) = call.candidate.as_ref() {
                     crate::config::validate(candidate)?;
                     let sessions = resident.runtime.activate_bindings(candidate, true)?;
-                    let restart = match (&resident.inference, &candidate.proxy) {
-                        (Some(listener), Some(proxy)) => {
-                            address(&proxy.listen, false)? != listener.address
+                    let restart = match (&resident.inference, &candidate.gateway) {
+                        (Some(listener), Some(gateway)) => {
+                            address(&gateway.listen, false)? != listener.address
                         }
                         _ => false,
                     };
@@ -1174,7 +1174,7 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
                             target
                                 .providers
                                 .values()
-                                .any(|entry| entry.proxy == Some(true))
+                                .any(|entry| entry.gateway == Some(true))
                         })
                         .map(|(id, _)| id)
                         .collect::<Vec<_>>();
@@ -1222,7 +1222,7 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
         if let Ok(value) = &mut reply.result {
             value["resident_before"] = value["resident"].clone();
             let absent = absent();
-            for field in ["resident", "proxy", "shared_key", "publication"] {
+            for field in ["resident", "gateway", "shared_key", "publication"] {
                 value[field] = absent[field].clone();
             }
             value["network"]["loaded"] = json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"effective":null,"reason_code":"resident_stopped"});
@@ -1268,9 +1268,9 @@ async fn resident_control(
     let action = request.command.get(1).map(String::as_str).unwrap_or("");
     let force = request.arguments.contains_key("cancel-active");
     match (group, action) {
-        ("proxy", "start") => resident.start_inference(false, force).await,
-        ("proxy", "restart") => resident.start_inference(true, force).await,
-        ("proxy", "stop") => {
+        ("gateway", "start") => resident.start_inference(false, force).await,
+        ("gateway", "restart") => resident.start_inference(true, force).await,
+        ("gateway", "stop") => {
             let interrupted = resident.runtime.stop(force)?;
             if let Some(surface) = resident.inference.take() {
                 surface.stop().await;
@@ -1506,12 +1506,12 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
             }
             // Explicit reveal is a separate protected surface; ordinary operation JSON
             // cannot accidentally expose the shared key to inspection or caching.
-            if request.command == ["proxy", "key", "show"] {
+            if request.command == ["gateway", "key", "show"] {
                 return(StatusCode::BAD_REQUEST,axum::Json(json!({"error":{"code":"protected_reveal_required","message":"Use the explicit Reveal shared key action"}}))).into_response();
             }
             #[cfg(windows)]
             let final_stop =
-                if !request.dry_run && matches!(path.as_str(), "proxy stop" | "web stop") {
+                if !request.dry_run && matches!(path.as_str(), "gateway stop" | "web stop") {
                     Some(web.resident.lock().await.shutdown.clone())
                 } else {
                     None
@@ -1531,7 +1531,7 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
             }
             axum::Json(response).into_response()
         }
-        ("POST", "/api/proxy-key/reveal") => {
+        ("POST", "/api/gateway-key/reveal") => {
             if parts
                 .headers
                 .get("content-type")
@@ -1562,10 +1562,10 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
                 Ok(v) => v,
                 Err(e) => return axum::Json(json!({"error":e})).into_response(),
             };
-            let Some(proxy) = config.config.proxy else {
-                return (StatusCode::CONFLICT, "Proxy not configured").into_response();
+            let Some(gateway) = config.config.gateway else {
+                return (StatusCode::CONFLICT, "Gateway not configured").into_response();
             };
-            match crate::secrets::get(&resident.store, &proxy.key_ref) {
+            match crate::secrets::get(&resident.store, &gateway.key_ref) {
                 Ok(key) => match std::str::from_utf8(&key) {
                     Ok(key) => axum::Json(json!({"key":key})).into_response(),
                     Err(_) => (StatusCode::CONFLICT, "Key unavailable").into_response(),
@@ -1685,7 +1685,7 @@ fn registration(store: &Store) -> Result<Vec<u8>> {
             "Executable path cannot be safely registered with systemd",
         ));
     }
-    Ok(format!("# tmax-owned authority={}\n[Unit]\nDescription=tmax personal model proxy\n[Service]\nType=simple\nExecStart=\"{}\" __autostart\n[Install]\nWantedBy=default.target\n",store.root.display(),path).into_bytes())
+    Ok(format!("# tmax-owned authority={}\n[Unit]\nDescription=tmax personal model gateway\n[Service]\nType=simple\nExecStart=\"{}\" __autostart\n[Install]\nWantedBy=default.target\n",store.root.display(),path).into_bytes())
 }
 #[cfg(not(windows))]
 fn autostart_status(store: &Store) -> Result<Value> {
@@ -1718,11 +1718,11 @@ fn autostart_status(store: &Store) -> Result<Value> {
     };
     let desired = crate::config::load(store)
         .ok()
-        .and_then(|config| config.config.proxy.map(|proxy| proxy.autostart));
+        .and_then(|config| config.config.gateway.map(|gateway| gateway.autostart));
     let unit_matches = actual.as_ref() == Some(&expected);
     let registered = owned && unit_matches && link_state == "owned";
     Ok(
-        json!({"saved_intent":desired,"acknowledged_intent":state.acknowledged,"registration":if actual.is_none()&&link_state=="absent"{"absent"}else if !owned||matches!(link_state,"conflict"|"unavailable"){"conflict"}else if registered{"present"}else{"drifted"},"unit_matches":unit_matches,"login_link":link_state,"login_enabled":if link_state=="unavailable"{Value::Null}else{json!(registered)},"last_outcome":state.last_outcome,"last_attempt":state.last_attempt,"repair":"proxy autostart enable|disable","reconciliation":"not_requested"}),
+        json!({"saved_intent":desired,"acknowledged_intent":state.acknowledged,"registration":if actual.is_none()&&link_state=="absent"{"absent"}else if !owned||matches!(link_state,"conflict"|"unavailable"){"conflict"}else if registered{"present"}else{"drifted"},"unit_matches":unit_matches,"login_link":link_state,"login_enabled":if link_state=="unavailable"{Value::Null}else{json!(registered)},"last_outcome":state.last_outcome,"last_attempt":state.last_attempt,"repair":"gateway autostart enable|disable","reconciliation":"not_requested"}),
     )
 }
 #[cfg(not(windows))]
@@ -1776,7 +1776,7 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> 
     );
     let metadata = store.write_json("autostart.json", &state);
     Ok(
-        json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"completed_effects":effects,"error":result.err(),"outcome_recording_error":metadata.err(),"status":autostart_status(store).ok(),"repair":"proxy autostart enable|disable"}),
+        json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"completed_effects":effects,"error":result.err(),"outcome_recording_error":metadata.err(),"status":autostart_status(store).ok(),"repair":"gateway autostart enable|disable"}),
     )
 }
 #[cfg(not(windows))]
@@ -1816,7 +1816,10 @@ pub async fn reconcile_autostart(store: &Store, config: &Config, dry_run: bool) 
     if dry_run {
         return reconcile(
             store,
-            config.proxy.as_ref().is_some_and(|proxy| proxy.autostart),
+            config
+                .gateway
+                .as_ref()
+                .is_some_and(|gateway| gateway.autostart),
             true,
             false,
         )
@@ -1831,7 +1834,11 @@ pub async fn reconcile_autostart(store: &Store, config: &Config, dry_run: bool) 
     }
     reconcile(
         store,
-        persisted.config.proxy.as_ref().is_some_and(|p| p.autostart),
+        persisted
+            .config
+            .gateway
+            .as_ref()
+            .is_some_and(|p| p.autostart),
         false,
         false,
     )
@@ -1839,13 +1846,20 @@ pub async fn reconcile_autostart(store: &Store, config: &Config, dry_run: bool) 
 }
 pub async fn autostart(store: &Store, enabled: bool, dry_run: bool) -> Result<Value> {
     let loaded = crate::config::load(store)?;
-    if loaded.config.proxy.is_none() {
+    if loaded.config.gateway.is_none() {
         return Err(failure(
-            "proxy_unconfigured",
-            "Configure proxy before changing autostart",
+            "gateway_unconfigured",
+            "Configure gateway before changing autostart",
         ));
     }
-    if !dry_run && loaded.config.proxy.as_ref().map(|proxy| proxy.autostart) != Some(enabled) {
+    if !dry_run
+        && loaded
+            .config
+            .gateway
+            .as_ref()
+            .map(|gateway| gateway.autostart)
+            != Some(enabled)
+    {
         return Err(failure(
             "inputs_changed",
             "Explicit registration reconciliation requires the requested intent to be already validated and persisted",
@@ -1858,7 +1872,7 @@ pub async fn autostart(store: &Store, enabled: bool, dry_run: bool) -> Result<Va
 pub async fn run_autostart() -> Result<Value> {
     let store = Store::discover()?;
     let loaded = crate::config::load(&store)?;
-    if !loaded.config.proxy.as_ref().is_some_and(|p| p.autostart) {
+    if !loaded.config.gateway.as_ref().is_some_and(|p| p.autostart) {
         return Ok(json!({"autostart":"disabled","started":false}));
     }
     #[cfg(unix)]
@@ -1875,7 +1889,7 @@ pub async fn run_autostart() -> Result<Value> {
                     return Err(failure("resident_incompatible", "Autostart cannot control an incompatible resident; use its compatible CLI or Web controls"));
                 }
                 let request = Request {
-                    command: vec!["proxy".into(), "start".into()],
+                    command: vec!["gateway".into(), "start".into()],
                     operands: Vec::new(),
                     arguments: Default::default(),
                     dry_run: false,
@@ -1883,7 +1897,7 @@ pub async fn run_autostart() -> Result<Value> {
                 };
                 let started = rpc(&store, "control", Some(request), None).await?
                     .ok_or_else(|| failure("resident_identity_unavailable", "Resident disappeared before autostart control"))?;
-                if started["proxy"]["ready"] != true {
+                if started["gateway"]["ready"] != true {
                     return Err(failure("autostart_blocked", "Autostart did not establish ready inference; inspect stored key availability and endpoint state"));
                 }
                 windows_startup::record_launch(&store, None)?;
@@ -1905,7 +1919,7 @@ mod tests {
     use super::*;
     #[test]
     fn removed_unlock_fields_are_rejected_at_web_and_private_protocol_boundaries() {
-        let request = json!({"command":["proxy","start"],"operands":[],"arguments":{},"dry_run":false,"if_revision":null});
+        let request = json!({"command":["gateway","start"],"operands":[],"arguments":{},"dry_run":false,"if_revision":null});
         assert!(
             serde_json::from_value::<WebOperation>(json!({"request":request,"key":null})).is_ok()
         );
@@ -1960,7 +1974,11 @@ mod tests {
         // A valid filesystem component whose UTF-8 bytes exceed Unix socket
         // pathname capacity, without assuming one platform's sun_path size.
         let store = Store::at(temporary.path().join("é".repeat(100)));
-        for (group, action) in [("proxy", "start"), ("proxy", "restart"), ("web", "open")] {
+        for (group, action) in [
+            ("gateway", "start"),
+            ("gateway", "restart"),
+            ("web", "open"),
+        ] {
             for dry_run in [false, true] {
                 let request = Request {
                     command: vec![group.into(), action.into()],
@@ -2210,9 +2228,9 @@ mod tests {
         let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen = reserved.local_addr().unwrap().to_string();
         drop(reserved);
-        let reference = crate::secrets::put(&store, "proxy", b"test-shared-proxy-key").unwrap();
+        let reference = crate::secrets::put(&store, "gateway", b"test-shared-gateway-key").unwrap();
         let mut config = Config::empty();
-        config.proxy = Some(crate::config::Proxy {
+        config.gateway = Some(crate::config::Gateway {
             listen,
             key_ref: reference,
             autostart: false,
@@ -2233,15 +2251,15 @@ mod tests {
             shutdown: Arc::new(Shutdown::new()),
         };
         let first = resident.start_inference(false, false).await.unwrap();
-        assert_eq!(first["proxy"]["ready"], true);
+        assert_eq!(first["gateway"]["ready"], true);
         store
             .write_raw("tmax.toml", b"invalid pending configuration")
             .unwrap();
         let repeated = resident.start_inference(false, false).await.unwrap();
         assert_eq!(repeated["lifecycle"]["action"], "reused");
         assert_eq!(
-            repeated["proxy"]["config_revision"],
-            first["proxy"]["config_revision"]
+            repeated["gateway"]["config_revision"],
+            first["gateway"]["config_revision"]
         );
         resident.runtime.stop(false).unwrap();
         resident.inference.take().unwrap().stop().await;
@@ -2265,7 +2283,7 @@ mod tests {
         }
         fn request(action: &str, force: bool) -> Request {
             Request {
-                command: vec!["proxy".into(), action.into()],
+                command: vec!["gateway".into(), action.into()],
                 operands: Vec::new(),
                 arguments: if force {
                     std::collections::BTreeMap::from([(
@@ -2284,9 +2302,9 @@ mod tests {
         let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let listen = reserved.local_addr().unwrap();
         drop(reserved);
-        let reference = crate::secrets::put(&store, "proxy", b"stop-barrier-test-key").unwrap();
+        let reference = crate::secrets::put(&store, "gateway", b"stop-barrier-test-key").unwrap();
         let mut config = Config::empty();
-        config.proxy = Some(crate::config::Proxy {
+        config.gateway = Some(crate::config::Gateway {
             listen: listen.to_string(),
             key_ref: reference,
             autostart: false,
@@ -2302,7 +2320,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(started["proxy"]["ready"], true);
+        assert_eq!(started["gateway"]["ready"], true);
         let mut active = tokio::net::TcpStream::connect(listen).await.unwrap();
         active.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer stop-barrier-test-key\r\nContent-Type: application/json\r\nContent-Length: 1024\r\n\r\n{").await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -2342,7 +2360,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(restarted["proxy"]["ready"], true);
+        assert_eq!(restarted["gateway"]["ready"], true);
         let stopped_again = rpc(&store, "control", Some(request("stop", false)), None)
             .await
             .unwrap()

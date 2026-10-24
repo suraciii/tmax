@@ -12,7 +12,7 @@ including parse errors, blockers, dry-runs, partial effects, and failures. Never
 mix progress, child output, usage, prompts, or a second result into stdout.
 Optional redacted stderr is not needed to interpret JSON. Protected input/sign-in
 use terminal or explicit inherited descriptors without corrupting stdout.
-Explicit [proxy key show](../providers/authentication/spec.md#shared-proxy-key)
+Explicit [gateway key show](../providers/authentication/spec.md#shared-gateway-key)
 delivers only through its qualified separate terminal/pipe channel; stdout still
 contains exactly the redacted management result, never the secret line.
 `--format text` presents the same outcome/effects/blockers/actions; success goes
@@ -70,7 +70,7 @@ Key generation is described without generating/reserving a reference. Full
 pending file changes, not just the requested leaf edit.
 
 Boundary names are `credential`, `file_save`, `catalog_apply`, `activation`,
-`secret_delivery`, `proxy_lifecycle`, `autostart`, `native_write`, `native_reload`,
+`secret_delivery`, `gateway_lifecycle`, `autostart`, `native_write`, `native_reload`,
 `observation`, `history`, `recovery`, and `web_entry`. States are `not_requested`, `not_applicable`,
 `not_executed`, `completed`, `blocked`, `failed`, `partial`, or
 `awaiting_native_reload`. Detailed/dry-run/failure output covers requested
@@ -88,7 +88,7 @@ Name rejected command/option/field but redact arbitrary positional values and
 secret-looking input rather than echo argv. Config errors name paths, not rejected
 values. No result, stderr, example,
 log, or raw upstream error exposes secrets, protected/rejected content, or
-unredacted credentials. Shared proxy-key show is the sole explicit protected
+unredacted credentials. Shared gateway-key show is the sole explicit protected
 delivery exception, never a generic export of upstream secrets. Its ordinary
 result contains only reference/readiness and delivery outcome. Partial/uncertain
 delivery reports exit 4 with the actual `secret_delivery` boundary, not a false

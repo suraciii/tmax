@@ -67,17 +67,20 @@ appear in stdout, logs, or ordinary inspection.
 
 Unsupported storage-format records return `storage_version_unsupported` or
 `storage_record_invalid` and remain unchanged. Re-enter provider keys through
-`provider key set` or replace the shared key with `proxy key replace`. Recovery
+`provider key set` or replace the shared key with `gateway key replace`. Recovery
 contents in unsupported formats are unavailable to current recovery operations.
 
 If the current CLI reports `resident_incompatible`, use the running service's
-matching older CLI (`tmax proxy stop`, then `tmax web stop`) or its existing Web
+matching older CLI (`tmax proxy stop`, then `tmax web stop` for a pre-Gateway
+binary) or its existing Web
 controls to perform explicit stops before starting the new executable. The new
-CLI does not take over or terminate an incompatible resident.
+CLI does not take over or terminate an incompatible resident. The Gateway naming
+upgrade uses management protocol `tmax-control/3`; a protocol-2 resident must be
+stopped with its matching binary before starting the upgraded executable.
 
 Native credential-file handoff is version-qualified, restricted, and explicitly
 disclosed; it is not an export command or token-import feature. Provider-key
-entry uses hidden terminal input or explicit `--key-stdin`. Shared proxy-key
+entry uses hidden terminal input or explicit `--key-stdin`. Shared gateway-key
 delivery uses a qualified terminal or output pipe. Never place credential bytes
 in argv, environment variables, or ordinary output. Native provider sign-in
 retains its native owner's platform-specific input and credential-storage rules.

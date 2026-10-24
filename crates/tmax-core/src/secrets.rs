@@ -310,7 +310,8 @@ fn read_record<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|_| invalid_record())
 }
 fn load(store: &Store, directory: &str, reference: &str) -> Result<Envelope> {
-    let envelope: Envelope = read_record(store, directory, reference)?;
+    let mut envelope: Envelope = read_record(store, directory, reference)?;
+    normalize_gateway_owner(&mut envelope.metadata);
     validate_metadata(&envelope.metadata, directory, reference)?;
     Ok(envelope)
 }
@@ -319,15 +320,28 @@ fn load_metadata(
     directory: &str,
     reference: &str,
 ) -> Result<Envelope<DiscardBytes>> {
-    let envelope: Envelope<DiscardBytes> = read_record(store, directory, reference)?;
+    let mut envelope: Envelope<DiscardBytes> = read_record(store, directory, reference)?;
+    normalize_gateway_owner(&mut envelope.metadata);
     validate_metadata(&envelope.metadata, directory, reference)?;
     Ok(envelope)
 }
+// Existing key references and bytes remain valid; read-time normalization never
+// writes the envelope or permits mixed/invalid historical owner identities.
+fn normalize_gateway_owner(metadata: &mut Metadata) {
+    if metadata.owner.kind == "proxy"
+        && metadata.owner.identity == "proxy"
+        && metadata.owner.id.is_none()
+    {
+        metadata.owner.kind = "gateway".into();
+        metadata.owner.identity = "gateway".into();
+    }
+}
+
 fn validate_metadata(metadata: &Metadata, directory: &str, reference: &str) -> Result<()> {
     if metadata.version != VERSION {
         return Err(Error::new(
             "storage_version_unsupported",
-            "The stored record version is unsupported. Preserve its file; re-enter affected keys through provider key set or proxy key replace. This version cannot read its recovery contents",
+            "The stored record version is unsupported. Preserve its file; re-enter affected keys through provider key set or gateway key replace. This version cannot read its recovery contents",
         ));
     }
     if metadata.reference != reference
@@ -348,8 +362,8 @@ fn validate_metadata(metadata: &Metadata, directory: &str, reference: &str) -> R
             return Err(unavailable());
         }
     } else if metadata.kind != "secret"
-        || !matches!(owner.kind.as_str(), "provider" | "agent" | "proxy")
-        || (owner.kind == "proxy" && (owner.identity != "proxy" || owner.id.is_some()))
+        || !matches!(owner.kind.as_str(), "provider" | "agent" | "gateway")
+        || (owner.kind == "gateway" && (owner.identity != "gateway" || owner.id.is_some()))
         || metadata.recovery.is_some()
     {
         return Err(unavailable());
@@ -517,10 +531,10 @@ pub fn owner_tag(store: &Store, kind: &str, id: &str) -> Result<String> {
     Ok(format!("{kind}:{identity}:{id}"))
 }
 fn resolve_owner(store: &Store, text: &str) -> Result<Owner> {
-    if text == "proxy" {
+    if text == "gateway" {
         return Ok(Owner {
-            kind: "proxy".into(),
-            identity: "proxy".into(),
+            kind: "gateway".into(),
+            identity: "gateway".into(),
             id: None,
         });
     }
@@ -534,7 +548,7 @@ fn resolve_owner(store: &Store, text: &str) -> Result<Owner> {
     {
         return Err(Error::new(
             "invalid_arguments",
-            "Secret owner must identify a provider, agent target, or sole proxy",
+            "Secret owner must identify a provider, agent target, or sole gateway",
         ));
     }
     let mut owners = read_owners(store)?;
@@ -857,10 +871,41 @@ fn read_hidden(_file: &mut fs::File) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     #[test]
+    fn legacy_gateway_key_owner_remains_readable_without_rewriting_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().into());
+        let reference = put(&store, "gateway", b"synthetic-legacy-key").unwrap();
+        let name = entry_name("secrets", &reference).unwrap();
+        let mut envelope =
+            serde_json::to_value(load(&store, "secrets", &reference).unwrap()).unwrap();
+        envelope["metadata"]["owner"]["kind"] = json!("proxy");
+        envelope["metadata"]["owner"]["identity"] = json!("proxy");
+        store.write_json(&name, &envelope).unwrap();
+        let before = std::fs::read(store.root.join(&name)).unwrap();
+        assert_eq!(
+            get(&store, &reference).unwrap().as_slice(),
+            b"synthetic-legacy-key"
+        );
+        assert_eq!(
+            load_metadata(&store, "secrets", &reference)
+                .unwrap()
+                .metadata
+                .owner
+                .kind,
+            "gateway"
+        );
+        assert_eq!(std::fs::read(store.root.join(&name)).unwrap(), before);
+        envelope["metadata"]["owner"]["identity"] = json!("another-owner");
+        store.write_json(&name, &envelope).unwrap();
+        assert!(get(&store, &reference).is_err());
+        assert!(load_metadata(&store, "secrets", &reference).is_err());
+    }
+
+    #[test]
     fn metadata_and_full_readers_reject_null_and_unknown_format_fields_consistently() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::at(home.path().to_owned());
-        let reference = put(&store, "proxy", b"synthetic-key").unwrap();
+        let reference = put(&store, "gateway", b"synthetic-key").unwrap();
         let name = entry_name("secrets", &reference).unwrap();
         let plain = serde_json::to_value(load(&store, "secrets", &reference).unwrap()).unwrap();
         for (field, value) in [("bytes", Value::Null), ("unknown", json!(true))] {
@@ -1084,12 +1129,12 @@ mod tests {
         let mut output = qualify_output(&request).unwrap();
         assert_eq!(output.channel(), "pipe");
         assert_eq!(output.descriptor(), Some(writer.as_raw_fd()));
-        output.deliver(b"synthetic-proxy-key").unwrap();
+        output.deliver(b"synthetic-gateway-key").unwrap();
         drop(output);
         drop(writer);
         let mut received = Vec::new();
         reader.read_to_end(&mut received).unwrap();
-        assert_eq!(received, b"synthetic-proxy-key\n");
+        assert_eq!(received, b"synthetic-gateway-key\n");
         let file = tempfile::tempfile().unwrap();
         request
             .arguments

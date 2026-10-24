@@ -16,7 +16,7 @@ exit 0 means the desired change is committed. Background activation may still
 have a failed/unavailable warning. Check `save`, `file_revision`, `runtime`,
 `activation`, and loaded revision fields; do not repeat an already committed
 `provider add` or another create. Inspect `tmax status`, then use explicit
-`tmax config reload` after resolving its blocker, or `tmax proxy restart` for a
+`tmax config reload` after resolving its blocker, or `tmax gateway restart` for a
 saved listener-address change. Loaded state is not claimed to change until
 activation actually succeeds. Catalog acceptance follows the same distinction.
 
@@ -168,7 +168,7 @@ tmax model explain PUBLIC_MODEL --protocol responses --state loaded
 
 These examples assume the alias `L0` and target `pi-main` already exist. The alias
 uses only its configured candidates; its name supplies no candidate selection.
-Explanation data identifies `proxy`, `agent_target`, `agent_provider`, or
+Explanation data identifies `gateway`, `agent_target`, `agent_provider`, or
 `native_scope` context and reports `requested` as exactly `{id, protocol}`.
 
 `--state loaded` explains the resident loaded view, not pending saved edits. Model
@@ -211,6 +211,21 @@ not assume the old authorization or observations were restored and do not retry
 blindly. Inspect the same provider and native scope, then recover through that
 scope's qualified owner; never copy native tokens into tmax or another agent.
 
+## Gateway naming upgrade
+
+Use `tmax gateway ...`, `tmax agent provider add ... --gateway`, and the
+`[gateway]` configuration table. Structured operation names, result fields,
+reason codes, Web navigation (`#gateway`), and the explicit key endpoint
+(`/api/gateway-key/reveal`) use the same name. The old model-service command
+and flag spellings are no longer accepted; update scripts and API clients.
+
+Existing configuration and shared-key records remain readable. Reads and previews
+preserve the saved file; the next explicit configuration save canonicalizes the
+two historical field names while retaining key references and values. Supplying
+old and new names together is rejected. See the
+[configuration contract](../specs/configuration/spec.md#format-and-authority).
+The independent outbound-network command remains `tmax network proxy URL`.
+
 ## Gateway-only access
 
 The local gateway is independent of managed Pi/Codex targets. Direct clients do not
@@ -234,20 +249,20 @@ tmax model alias add "$PUBLIC_ID" --protocol chat-completions \
 Then configure and start the loopback listener explicitly:
 
 ```sh
-tmax proxy configure --listen 127.0.0.1:17840
-tmax proxy start
-tmax proxy status
+tmax gateway configure --listen 127.0.0.1:17840
+tmax gateway start
+tmax gateway status
 ```
 
-Initial `proxy configure` provisions the sole shared local key in a current-user
+Initial `gateway configure` provisions the sole shared local key in a current-user
 restricted file under `~/.tmax`; the ordinary configuration stores its reference.
-The key file is plaintext, not encrypted. `proxy start` is a separate explicit
+The key file is plaintext, not encrypted. `gateway start` is a separate explicit
 lifecycle action. Provider-key setup prompts invisibly on an attached terminal
 or accepts `--key-stdin`; the Web form contains a provider-key field. Use explicit
 key input for automation, never argv, environment, or
 ordinary configuration files. Neither the CLI nor Web requires a daemon
 installation. Provision the shared key to a client only through the qualified
-`proxy key show` delivery flow. Ordinary inspection does not reveal it. All
+`gateway key show` delivery flow. Ordinary inspection does not reveal it. All
 current-key holders share the same published model list; no client registration
 is required.
 
@@ -262,17 +277,17 @@ changed by this startup blocker.
 On Windows, the same commands launch a detached native resident with private
 same-user named-pipe control. `tmax web open` opens the system browser;
 `--no-browser` starts management without opening it. Closing the browser or
-launching terminal does not stop inference. `tmax proxy autostart enable` opts
+launching terminal does not stop inference. `tmax gateway autostart enable` opts
 into current-user login startup, and `disable` removes only tmax's owned startup
 entry without stopping the gateway. Startup reads the same current-user-restricted
 secret files. Unsupported storage-format records return `storage_version_unsupported` or
 `storage_record_invalid` and remain unchanged. Re-enter the provider key with
-`provider key set` or replace the shared key with `proxy key replace`. Recovery
+`provider key set` or replace the shared key with `gateway key replace`. Recovery
 contents in unsupported formats are unavailable to current recovery operations.
 
 If the current CLI reports `resident_incompatible`, the resident is too old for
 this executable's management protocol. Use the running resident's matching
-pre-cutover CLI (`tmax proxy stop`, then `tmax web stop`) or its existing Web
+pre-cutover CLI (`tmax gateway stop`, then `tmax web stop`) or its existing Web
 controls to perform the explicit stops before starting the current executable;
 the new CLI will not take over or terminate an incompatible resident.
 
@@ -429,7 +444,7 @@ For a Pi client that should use the gateway, add an explicit gateway entry, sele
 the public model ID, set it as default, then apply the target:
 
 ```sh
-tmax agent provider add "$TARGET" local --proxy
+tmax agent provider add "$TARGET" local --gateway
 tmax agent model add "$TARGET" local "$PUBLIC_ID" --protocol chat-completions
 tmax agent default set "$TARGET" local "$PUBLIC_ID" --protocol chat-completions
 tmax agent apply "$TARGET"

@@ -9,7 +9,7 @@ const icons = {
   providers:'<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5"/>',
   models:'<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5"/>',
   agents:'<rect x="3" y="4" width="18" height="13" rx="2"/><path d="m7 8 3 3-3 3M13 14h4M8 21h8M12 17v4"/>',
-  proxy:'<path d="M12 3v4m0 10v4M3 12h4m10 0h4"/><rect x="7" y="7" width="10" height="10" rx="3"/><path d="m10 12 1.5 1.5L14 11"/>',
+  gateway:'<path d="M12 3v4m0 10v4M3 12h4m10 0h4"/><rect x="7" y="7" width="10" height="10" rx="3"/><path d="m10 12 1.5 1.5L14 11"/>',
   settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>',
   plus:'<path d="M12 5v14M5 12h14"/>',
   arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',
@@ -27,7 +27,7 @@ const areas = {
   providers:['服务商','YOUR MODEL PROVIDERS','集中管理你的模型服务，每个账户独立配置。'],
   models:['模型','MODELS & ROUTING','整理可用模型，用明确的候选模型定义自己的路由。'],
   agents:['编程工具','CONNECTED TOOLS','为每个编程工具选择模型，按需应用到本地配置。'],
-  proxy:['网关','LOCAL MODEL GATEWAY','一个本地入口，连接已有的模型与应用。'],
+  gateway:['网关','LOCAL MODEL GATEWAY','一个本地入口，连接已有的模型与应用。'],
 };
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-coding-plan':'Kimi Coding Plan','custom':'自定义服务'};
@@ -57,7 +57,7 @@ async function http(path, payload) {
   const text = await response.text();
   let value;
   try { value = JSON.parse(text); }
-  catch (_) { throw new Error(text === 'Proxy not configured' ? '请先配置网关，再查看共享密钥。' : `本地请求未完成（${response.status}）。${text.slice(0,200)}`); }
+  catch (_) { throw new Error(text === 'Gateway not configured' ? '请先配置网关，再查看共享密钥。' : `本地请求未完成（${response.status}）。${text.slice(0,200)}`); }
   if (!response.ok) throw new Error(value.error?.message || `本地请求被拒绝（${response.status}）`);
   return value;
 }
@@ -103,10 +103,10 @@ function navigate(area) {
 }
 function render() {
   if (!state.loaded) return;
-  const actions={overview:button('添加服务商','provider-add','','primary','plus'),providers:button('添加服务商','provider-add','','primary','plus'),models:button(state.modelKind==='alias'?'新建别名':'添加模型',state.modelKind==='alias'?'alias-add':'model-add','','primary','plus'),agents:button('添加工具配置','agent-add','','primary','plus'),proxy:button('网关设置','proxy-configure','','','settings')};
+  const actions={overview:button('添加服务商','provider-add','','primary','plus'),providers:button('添加服务商','provider-add','','primary','plus'),models:button(state.modelKind==='alias'?'新建别名':'添加模型',state.modelKind==='alias'?'alias-add':'model-add','','primary','plus'),agents:button('添加工具配置','agent-add','','primary','plus'),gateway:button('网关设置','gateway-configure','','','settings')};
   $('page-actions').innerHTML=actions[state.area];
   if (!state.config) { $('content').innerHTML=empty('暂时无法读取配置','请检查本地配置或使用高级操作查看校验结果。',button('校验配置','operation','config validate'),'info'); return; }
-  ({overview:renderOverview,providers:renderProviders,models:renderModels,agents:renderAgents,proxy:renderProxy}[state.area])();
+  ({overview:renderOverview,providers:renderProviders,models:renderModels,agents:renderAgents,gateway:renderGateway}[state.area])();
 }
 function metric(label, value, sub, glyph, status=false) {
   return `<div class="metric"><div class="metric-top">${label}${icon(glyph)}</div><div class="metric-value ${status?'status-value':''}">${escapeHtml(value)}</div><div class="metric-bottom">${escapeHtml(sub)}</div></div>`;
@@ -119,7 +119,7 @@ function authBadge(provider) {
 function renderOverview() {
   const providers=state.providers, models=state.models, agents=state.agents;
   const running=state.runtime?.resident?.inference?.state==='running';
-  const ready=state.runtime?.proxy?.ready===true;
+  const ready=state.runtime?.gateway?.ready===true;
   const needsAuth=(providers || []).filter(p=>p.enabled && p.authentication==='not_configured');
   const configuredProviders=Object.entries(state.config.providers);
   const upcoming=configuredProviders.filter(([,p])=>dateValue(p.subscription?.renewal_date)).sort((a,b)=>dateValue(a[1].subscription.renewal_date).localeCompare(dateValue(b[1].subscription.renewal_date)));
@@ -128,7 +128,7 @@ function renderOverview() {
   const agentsBody=agentTypes.map(([id,name,mark,tone])=>{const targets=(agents || []).filter(t=>t.agent===id);return `<div class="agent-row"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length?`${targets.length} 个已保存配置 · 原生状态需检查`:'添加配置后选择模型'}</p></div>${button(targets.length?'管理':'设置',targets.length?'navigate':'agent-add',targets.length?'agents':id,'small')}</div>`;}).join('');
   const renewals=upcoming.length?upcoming.map(([id,p])=>{const date=dateValue(p.subscription.renewal_date);const today=new Date().toLocaleDateString('en-CA');return `<div class="list-row split"><div><h3>${escapeHtml(providerName(id))}</h3><small>${escapeHtml(p.subscription.plan || '手动记录的日期')} · 计费结果未知</small></div>${badge(date+(date<today?' · 日期已过':''),date<today?'amber':'')}</div>`;}).join(''):'<p class="muted">暂无已知续费日期。可在服务商详情中记录计划和日期。</p>';
   const issues=needsAuth.length?notice(`${needsAuth.length} 个服务商尚未配置授权。可以继续管理模型，使用前请完成授权。`,'warning'):'';
-  $('content').innerHTML=hero+`<div class="metrics">${metric('服务商',providers?.length ?? '—','独立管理每一份模型访问','providers')}${metric('模型',models?.filter(m=>m.kind==='concrete').length ?? '—',`${models?.filter(m=>m.kind==='alias').length ?? '—'} 个自定义别名`,'models')}${metric('工具配置',agents?.length ?? '—','保存与原生应用分别展示','agents')}${metric('网关',!state.runtime?'未知':running?(ready?'运行中':'运行中 · 待就绪'):'未启动',running?'仅转发已支持的原生协议':'需要时再启动本地网关','proxy',true)}</div>`+issues+`<div class="grid-two">${panel('我的服务商','同一服务的不同账户，各自独立',providerBody,button('查看全部','navigate','providers','text small','arrow'))}${panel('编程工具','为你熟悉的工具选择模型',agentsBody)}</div><div class="steps"><button class="step" data-action="provider-add"><span class="step-number">01</span><span><strong>接入模型服务</strong><small>选择服务，独立管理授权</small></span></button><button class="step" data-action="navigate" data-id="models"><span class="step-number">02</span><span><strong>整理模型与别名</strong><small>选择模型，明确路由候选</small></span></button><button class="step" data-action="navigate" data-id="agents"><span class="step-number">03</span><span><strong>连接你的编程工具</strong><small>选择模型，再按需应用</small></span></button></div><div class="section-label"><h2>订阅与续费</h2><p>来自已保存的信息</p></div>${panel('已知续费日期','不推断扣款、剩余额度或续费结果',renewals)}`;
+  $('content').innerHTML=hero+`<div class="metrics">${metric('服务商',providers?.length ?? '—','独立管理每一份模型访问','providers')}${metric('模型',models?.filter(m=>m.kind==='concrete').length ?? '—',`${models?.filter(m=>m.kind==='alias').length ?? '—'} 个自定义别名`,'models')}${metric('工具配置',agents?.length ?? '—','保存与原生应用分别展示','agents')}${metric('网关',!state.runtime?'未知':running?(ready?'运行中':'运行中 · 待就绪'):'未启动',running?'仅转发已支持的原生协议':'需要时再启动本地网关','gateway',true)}</div>`+issues+`<div class="grid-two">${panel('我的服务商','同一服务的不同账户，各自独立',providerBody,button('查看全部','navigate','providers','text small','arrow'))}${panel('编程工具','为你熟悉的工具选择模型',agentsBody)}</div><div class="steps"><button class="step" data-action="provider-add"><span class="step-number">01</span><span><strong>接入模型服务</strong><small>选择服务，独立管理授权</small></span></button><button class="step" data-action="navigate" data-id="models"><span class="step-number">02</span><span><strong>整理模型与别名</strong><small>选择模型，明确路由候选</small></span></button><button class="step" data-action="navigate" data-id="agents"><span class="step-number">03</span><span><strong>连接你的编程工具</strong><small>选择模型，再按需应用</small></span></button></div><div class="section-label"><h2>订阅与续费</h2><p>来自已保存的信息</p></div>${panel('已知续费日期','不推断扣款、剩余额度或续费结果',renewals)}`;
 }
 function searchBox(placeholder) { return `<div class="search">${icon('search')}<input id="search" type="search" aria-label="${placeholder}" placeholder="${placeholder}" value="${escapeHtml(state.query)}"></div>`; }
 function renderProviders() {
@@ -157,11 +157,11 @@ function renderAgents() {
   $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',state.config.agents[t.target]?.default?.id || '尚未选择')}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}${button('发现本地安装','agent-discover',id,'text small')}</div></section>`;}).join('')}</div>`;
 }
 function clearReveal() { revealGeneration++;const output=$('revealed'); if(output){output.textContent='';output.hidden=true;} }
-function renderProxy() {
-  const runtime=state.runtime; const proxy=state.config.proxy; const inference=runtime?.resident?.inference;
-  const running=inference?.state==='running'; const address=inference?.url || (proxy?.listen?'http://'+proxy.listen:null);
-  const configured=!!proxy;
-  $('content').innerHTML=`<div class="grid-two">${panel('网关','供支持相同协议的应用连接',`<div class="service-status"><div class="status-symbol">${icon('proxy')}</div><div><h3>${!runtime?'状态未知':running?'网关运行中':configured?'已配置 · 未启动':'尚未配置'}</h3><p>${running?(runtime.proxy?.ready?'服务报告已就绪':'服务尚未就绪，请检查配置与授权'):'需要通过网关使用模型时，再启动服务。'}</p></div></div>${address?`<div class="big-address"><code>${escapeHtml(address)}</code>${button('复制','copy',address,'small','copy')}</div>`:notice('先设置本地监听地址，保存后会生成共享密钥。')}${`<div class="actions">${button(configured?(running?'停止网关':'启动网关'):'配置网关',configured?'operation':'proxy-configure',configured?(running?'proxy stop':'proxy start'):'','primary',running?'proxy':'arrow')}${configured?button('修改设置','proxy-configure','','','settings'):''}</div>`}`)}${panel('连接与授权','共享密钥仅在主动查看时显示',`<div class="detail-facts">${fact('已发布模型',runtime?.publication?.model_count ?? '未知')}${fact('进行中的请求',runtime?.active_requests ?? '未知')}${fact('登录时启动',runtime?.autostart?.login_enabled?'已注册':'未注册')}${fact('共享密钥状态',stateLabel(runtime?.shared_key?.loaded_state))}</div>${configured?`<div class="actions">${button('查看共享密钥','reveal','','','key')}${button('隐藏','hide-key','','small')}</div><div id="revealed" class="key-output mono" hidden></div>`:notice('配置网关后，可以在这里查看用于连接的共享密钥。')}`)}</div><div class="section-label"><h2>请求记录</h2>${button('读取记录','history','','small','history')}</div><div id="history-panel" class="panel">${empty('按需查看本地请求','仅记录经过此网关的请求，不包含直接连接流量，也不代表账户全部用量。',button('读取请求记录','history','','soft'),'history',true)}</div><div class="section-label"><h2>其他设置</h2></div><div class="actions">${button('登录时启动设置','autostart','','','settings')}${button('查看出站网络','operation','network show','','settings')}${button('网关高级操作','advanced','proxy','','settings')}</div>`;
+function renderGateway() {
+  const runtime=state.runtime; const gateway=state.config.gateway; const inference=runtime?.resident?.inference;
+  const running=inference?.state==='running'; const address=inference?.url || (gateway?.listen?'http://'+gateway.listen:null);
+  const configured=!!gateway;
+  $('content').innerHTML=`<div class="grid-two">${panel('网关','供支持相同协议的应用连接',`<div class="service-status"><div class="status-symbol">${icon('gateway')}</div><div><h3>${!runtime?'状态未知':running?'网关运行中':configured?'已配置 · 未启动':'尚未配置'}</h3><p>${running?(runtime.gateway?.ready?'服务报告已就绪':'服务尚未就绪，请检查配置与授权'):'需要通过网关使用模型时，再启动服务。'}</p></div></div>${address?`<div class="big-address"><code>${escapeHtml(address)}</code>${button('复制','copy',address,'small','copy')}</div>`:notice('先设置本地监听地址，保存后会生成共享密钥。')}${`<div class="actions">${button(configured?(running?'停止网关':'启动网关'):'配置网关',configured?'operation':'gateway-configure',configured?(running?'gateway stop':'gateway start'):'','primary',running?'gateway':'arrow')}${configured?button('修改设置','gateway-configure','','','settings'):''}</div>`}`)}${panel('连接与授权','共享密钥仅在主动查看时显示',`<div class="detail-facts">${fact('已发布模型',runtime?.publication?.model_count ?? '未知')}${fact('进行中的请求',runtime?.active_requests ?? '未知')}${fact('登录时启动',runtime?.autostart?.login_enabled?'已注册':'未注册')}${fact('共享密钥状态',stateLabel(runtime?.shared_key?.loaded_state))}</div>${configured?`<div class="actions">${button('查看共享密钥','reveal','','','key')}${button('隐藏','hide-key','','small')}</div><div id="revealed" class="key-output mono" hidden></div>`:notice('配置网关后，可以在这里查看用于连接的共享密钥。')}`)}</div><div class="section-label"><h2>请求记录</h2>${button('读取记录','history','','small','history')}</div><div id="history-panel" class="panel">${empty('按需查看本地请求','仅记录经过此网关的请求，不包含直接连接流量，也不代表账户全部用量。',button('读取请求记录','history','','soft'),'history',true)}</div><div class="section-label"><h2>其他设置</h2></div><div class="actions">${button('登录时启动设置','autostart','','','settings')}${button('查看出站网络','operation','network show','','settings')}${button('网关高级操作','advanced','gateway','','settings')}</div>`;
 }
 
 function openDialog(title, body, eyebrow='WORKSPACE') {
@@ -321,15 +321,15 @@ async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
   try {const data=await read('agent inspect',[target]);if(generation!==state.dialogGeneration)return;
     const config=state.config.agents[target];
-    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('已保存状态',stateLabel(data.desired_state))}${fact('应用状态',stateLabel(data.applied_state))}${fact('实际生效状态',stateLabel(data.effective_state))}${fact('默认模型',config.default?.id || '未选择')}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button('选择默认模型','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.proxy?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
+    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('已保存状态',stateLabel(data.desired_state))}${fact('应用状态',stateLabel(data.applied_state))}${fact('实际生效状态',stateLabel(data.effective_state))}${fact('默认模型',config.default?.id || '未选择')}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button('选择默认模型','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
 function agentSource(target) {
-  formDialog('添加模型来源','为工具登记一个直接连接的服务商，或明确使用 tmax 网关。',field('name','工具内的来源名称','',{required:true,placeholder:'例如：deepseek'})+field('source','连接来源','',{required:true,options:[['','请选择'],...Object.keys(state.config.providers).map(p=>[p,providerName(p)]),['@proxy','tmax 本地网关']]}),()=>({operation:'agent provider add',operands:[target,value('name').trim()],args:value('source')==='@proxy'?{proxy:['true']}:{provider:[value('source')]}}));
+  formDialog('添加模型来源','为工具登记一个直接连接的服务商，或明确使用 tmax 网关。',field('name','工具内的来源名称','',{required:true,placeholder:'例如：deepseek'})+field('source','连接来源','',{required:true,options:[['','请选择'],...Object.keys(state.config.providers).map(p=>[p,providerName(p)]),['@gateway','tmax 本地网关']]}),()=>({operation:'agent provider add',operands:[target,value('name').trim()],args:value('source')==='@gateway'?{gateway:['true']}:{provider:[value('source')]}}));
 }
 function agentModel(encoded) {
   const [target,name]=JSON.parse(encoded);const source=state.config.agents[target].providers[name];
-  const candidates=(state.models || []).filter(m=>source.proxy || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/'))).flatMap(m=>(m.published_protocols || []).map(p=>[JSON.stringify([source.proxy?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p] || p}`]));
+  const candidates=(state.models || []).filter(m=>source.gateway || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/'))).flatMap(m=>(m.published_protocols || []).map(p=>[JSON.stringify([source.gateway?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p] || p}`]));
   formDialog('添加可选模型','只添加到此来源的模型列表；默认模型需要另行选择。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates]}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
 }
 function agentDefault(target) {
@@ -337,17 +337,17 @@ function agentDefault(target) {
   const choices=Object.entries(config.providers).flatMap(([name,p])=>p.models.map(m=>[JSON.stringify([name,m.id,m.protocol]),`${name} / ${m.id} · ${protocolNames[m.protocol] || m.protocol}`]));
   formDialog('选择默认模型','从已登记的模型中选择。保存后，主动应用到工具才会更改原生配置。',field('selection','默认模型','',{required:true,options:[['','请选择'],...choices]}),()=>{const [name,id,protocol]=JSON.parse(value('selection'));return {operation:'agent default set',operands:[target,name,id],args:{protocol:[protocol]}};});
 }
-function configureProxy() {
-  formDialog('网关设置','设置本地监听地址。首次配置会生成共享密钥；保存不会自动启动网关。',field('listen','监听地址',state.config.proxy?.listen || '127.0.0.1:8317',{required:true,help:'仅用于本机连接，例如 127.0.0.1:8317。'}),()=>({operation:'proxy configure',args:{listen:[value('listen').trim()]}}),{stayOpen:true});
+function configureGateway() {
+  formDialog('网关设置','设置本地监听地址。首次配置会生成共享密钥；保存不会自动启动网关。',field('listen','监听地址',state.config.gateway?.listen || '127.0.0.1:8317',{required:true,help:'仅用于本机连接，例如 127.0.0.1:8317。'}),()=>({operation:'gateway configure',args:{listen:[value('listen').trim()]}}),{stayOpen:true});
 }
 
 const operandLabels={'Provider ID':'服务商 ID','Qualified offering':'具体模型引用','Alias ID':'别名','Target ID':'工具配置名称','Native provider entry':'工具内来源名称','Model ID':'模型 ID','Catalog provider ID':'目录服务商 ID','Request handle':'请求记录标识','Recovery handle':'恢复记录标识','Native role':'原生模型角色'};
-const operationLabels={'proxy start':'启动网关','proxy stop':'停止网关','proxy restart':'重启网关','proxy autostart enable':'启用登录时启动','proxy autostart disable':'关闭登录时启动','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除服务商','model remove':'移除模型','model alias remove':'移除模型别名','provider refresh':'查询上游信息','provider login':'登录服务商','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
+const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','gateway autostart enable':'启用登录时启动','gateway autostart disable':'关闭登录时启动','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除服务商','model remove':'移除模型','model alias remove':'移除模型别名','provider refresh':'查询上游信息','provider login':'登录服务商','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
 const operationEffects={
   'skill install':'将 tmax 使用说明安装到本机技能目录，供编程工具读取。可先预览目标路径；不会修改模型配置。',
-  'proxy start':'启动本地网关。请确认监听地址与服务商授权已配置。',
-  'proxy stop':'停止网关会停止接受新请求。仍有进行中的请求时，正常停止会被拒绝。',
-  'proxy restart':'重新加载配置并重启网关监听。进行中的请求受服务端保护。',
+  'gateway start':'启动本地网关。请确认监听地址与服务商授权已配置。',
+  'gateway stop':'停止网关会停止接受新请求。仍有进行中的请求时，正常停止会被拒绝。',
+  'gateway restart':'重新加载配置并重启网关监听。进行中的请求受服务端保护。',
   'agent apply':'将已保存的模型选择应用到此工具的原生配置。可先预览涉及的文件与影响。',
   'agent restore':'恢复由 tmax 管理的原生更改，保留其他修改；存在冲突时会阻止覆盖。',
   'provider remove':'移除此服务商的已保存设置。若仍被引用，操作会被拒绝；不会注销上游账户。',
@@ -417,7 +417,7 @@ function openOperation(operation, operands=[], args={}) {
   }
 }
 function advanced(group='') {
-  const entries=state.catalog.filter(c=>c.operation!=='proxy key show'&&(!group||c.command[0]===group));
+  const entries=state.catalog.filter(c=>c.operation!=='gateway key show'&&(!group||c.command[0]===group));
   openDialog('高级操作',`<p class="form-intro">完整管理能力。选择操作后填写参数；常用配置也可以在对应页面直接完成。</p>${field('command','查找操作','',{placeholder:'搜索命令，例如 model rule'})}<div id="command-list"></div>`,'ALL OPERATIONS');
   const show=()=>{const matches=entries.filter(c=>c.operation.includes(value('command').toLowerCase()));$('command-list').innerHTML=matches.map(c=>`<div class="list-row split"><div><h3 class="mono">${escapeHtml(c.operation)}</h3><small>${c.mutation?'执行明确变更 · 支持预览':'本地只读'}</small></div>${button('打开','operation',c.operation,'small')}</div>`).join('') || '<p class="muted">没有匹配的操作。</p>';};
   $('f-command').addEventListener('input',show);show();
@@ -425,14 +425,14 @@ function advanced(group='') {
 async function history() {
   const generation=state.generation;const container=$('history-panel');if(!container)return;
   container.innerHTML='<div class="loading">正在读取本地请求记录…</div>';
-  try {const data=await read('history list');if(state.area!=='proxy'||generation!==state.generation||container!==$('history-panel'))return;
+  try {const data=await read('history list');if(state.area!=='gateway'||generation!==state.generation||container!==$('history-panel'))return;
     container.innerHTML=data.records?.length?`<div class="panel-body"><h3 class="subheading">${data.records.length} 条保留记录</h3>${notice('仅包含当前进程保留的网关请求，不代表上游账单或全部账户用量。')}${data.records.map(record=>detail(record,'查看请求 '+(record.handle || record.id || record.started_at || '详情'))).join('')}${detail(data.coverage,'查看记录覆盖范围与保留限制')}</div>`:empty('还没有网关请求','当前进程没有保留的请求记录。直接连接流量不会出现在这里。','','history',true);
   }catch(error){if(container===$('history-panel'))container.innerHTML=notice(escapeHtml(error.message),'error');}
 }
 async function revealKey() {
   clearReveal();
   const generation=revealGeneration;
-  try {const response=await http('/api/proxy-key/reveal',{});if(state.area!=='proxy'||generation!==revealGeneration)return;
+  try {const response=await http('/api/gateway-key/reveal',{});if(state.area!=='gateway'||generation!==revealGeneration)return;
     if(!response.key)throw Error(response.error?.message || '共享密钥暂不可用，请检查网关配置与密钥状态。');
     $('revealed').textContent=response.key;$('revealed').hidden=false;
   }catch(error){if(generation===revealGeneration)toast(error.message);}
@@ -470,8 +470,8 @@ async function dispatch(action,id) {
     case 'agent-apply': openOperation('agent apply',[id]);break;
     case 'agent-restore': openOperation('agent restore',[id]);break;
     case 'agent-advanced': openOperation('agent inspect',[id]);break;
-    case 'proxy-configure': configureProxy();break;
-    case 'autostart': formDialog('登录时启动','这会更改本机的登录启动注册。启用后，下次登录会按已保存配置启动网关。',field('enabled','登录时启动',String(state.runtime?.autostart?.login_enabled || false),{options:[['false','关闭'],['true','启用']]}),()=>({operation:'proxy autostart '+(value('enabled')==='true'?'enable':'disable')}),{stayOpen:true});break;
+    case 'gateway-configure': configureGateway();break;
+    case 'autostart': formDialog('登录时启动','这会更改本机的登录启动注册。启用后，下次登录会按已保存配置启动网关。',field('enabled','登录时启动',String(state.runtime?.autostart?.login_enabled || false),{options:[['false','关闭'],['true','启用']]}),()=>({operation:'gateway autostart '+(value('enabled')==='true'?'enable':'disable')}),{stayOpen:true});break;
     case 'reveal': await revealKey();break;
     case 'hide-key': clearReveal();break;
     case 'history': await history();break;
