@@ -648,7 +648,7 @@ fn record_view(store: &Store, record: &Record) -> Value {
     let drift = field_drift(record, false);
     let protection = secrets::check_recovery(store, &record.payload_ref, &record.owner)
         .map(|_| "current_user_files");
-    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":protection.as_ref().ok(),"restore_available":protection.is_ok(),"storage_reason_code":protection.as_ref().err().map(|error|error.code.as_str()),"files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":["agent restore --recovery","agent recovery discard"]})
+    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":protection.as_ref().ok(),"restore_available":protection.is_ok(),"storage_reason_code":protection.as_ref().err().map(|error|error.code.as_str()),"files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":if protection.is_ok(){json!(["agent restore --recovery","agent recovery discard"])}else{json!([])}})
 }
 
 pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> {
@@ -2549,6 +2549,37 @@ async fn native_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsupported_recovery_payload_exposes_no_available_actions_and_stays_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let reference =
+            secrets::put(&store, "agent:stable:managed", b"private fixture payload").unwrap();
+        let name = format!(
+            "secrets/{}.json",
+            reference.strip_prefix("secret:").unwrap()
+        );
+        let mut envelope: Value = store.read_json(&name).unwrap();
+        envelope["metadata"]["version"] = json!(99);
+        store.write_json(&name, &envelope).unwrap();
+        let before = fs::read(store.path(&name).unwrap()).unwrap();
+        let record = Record {
+            id: "recovery".into(),
+            owner: "stable".into(),
+            target: "managed".into(),
+            agent: "pi".into(),
+            scope: directory.path().join("native"),
+            payload_ref: reference,
+            secret_refs: vec![],
+            state: "applied_reload_pending".into(),
+            files: vec![],
+        };
+        let view = record_view(&store, &record);
+        assert_eq!(view["available_actions"], json!([]));
+        assert_eq!(view["restore_available"], false);
+        assert_eq!(view["storage_reason_code"], "storage_version_unsupported");
+        assert_eq!(fs::read(store.path(&name).unwrap()).unwrap(), before);
+    }
     #[tokio::test]
     async fn recovery_discard_rejects_mismatched_or_shared_payload_without_deleting_secrets() {
         let directory = tempfile::tempdir().unwrap();
