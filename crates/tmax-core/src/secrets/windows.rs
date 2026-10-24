@@ -22,13 +22,6 @@ struct IoStatus {
     information: usize,
 }
 
-#[repr(C)]
-struct PipeName {
-    length: u32,
-    // Win32 pipe names are limited to 256 characters. Reject larger/unknown names.
-    name: [u16; 1024],
-}
-
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetStdHandle(kind: u32) -> Handle;
@@ -44,13 +37,6 @@ unsafe extern "system" {
         options: u32,
     ) -> i32;
     fn CompareObjectHandles(first: Handle, second: Handle) -> i32;
-    fn CompareStringOrdinal(
-        first: *const u16,
-        first_length: i32,
-        second: *const u16,
-        second_length: i32,
-        ignore_case: i32,
-    ) -> i32;
     fn GetConsoleMode(handle: Handle, mode: *mut u32) -> i32;
     fn SetConsoleMode(handle: Handle, mode: u32) -> i32;
     fn ReadConsoleW(
@@ -140,7 +126,7 @@ fn query<T>(handle: Handle, information: &mut T, class: u32) -> Result<usize> {
         status: 0,
         information: 0,
     };
-    // FileAccessInformation=8 and FileNameInformation=9 work for pipe file objects;
+    // FileAccessInformation=8 and FileInternalInformation=6 work for pipe file objects;
     // GetFileInformationByHandleEx explicitly excludes pipes. Require synchronous
     // STATUS_SUCCESS, not STATUS_PENDING or a partial/unsupported metadata result.
     // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntqueryinformationfile
@@ -178,21 +164,20 @@ pub(super) fn qualify_pipe(descriptor: Descriptor, reading: bool) -> Result<()> 
         return Err(input_error());
     }
     // Also establish a usable identity before accepting a protected channel.
-    pipe_name(raw)?;
+    pipe_id(raw)?;
     Ok(())
 }
 
-fn pipe_name(raw: Handle) -> Result<PipeName> {
-    let mut name = PipeName {
-        length: 0,
-        name: [0; 1024],
-    };
-    let returned = query(raw, &mut name, 9)?;
-    let length = name.length as usize;
-    if length == 0 || length % 2 != 0 || length > name.name.len() * 2 || returned < 4 + length {
+// Compare only live handles on the named-pipe device. Do not persist these IDs:
+// the file system may reuse them after handles close. FileNameInformation can
+// return an empty name for valid anonymous pipes on Windows.
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_internal_information
+fn pipe_id(raw: Handle) -> Result<u64> {
+    let mut id = 0u64;
+    if query(raw, &mut id, 6)? != std::mem::size_of::<u64>() || id == 0 {
         return Err(input_error());
     }
-    Ok(name)
+    Ok(id)
 }
 
 pub(super) fn descriptors_alias(first: Descriptor, second: Descriptor) -> Result<bool> {
@@ -210,25 +195,10 @@ pub(super) fn descriptors_alias(first: Descriptor, second: Descriptor) -> Result
     if !is_pipe(first)? || !is_pipe(second)? {
         return Ok(false);
     }
-    // CompareObjectHandles alone misses opposite pipe ends. Anonymous pipes use
-    // a unique named pipe internally; a pipe name identifies both ends, including
-    // duplicated handles. Conservatively reject all instances of a shared name.
-    // https://learn.microsoft.com/en-us/windows/win32/ipc/anonymous-pipe-operations
-    let first = pipe_name(first)?;
-    let second = pipe_name(second)?;
-    match unsafe {
-        CompareStringOrdinal(
-            first.name.as_ptr(),
-            (first.length / 2) as i32,
-            second.name.as_ptr(),
-            (second.length / 2) as i32,
-            1,
-        )
-    } {
-        0 => Err(input_error()),
-        2 => Ok(true),
-        _ => Ok(false),
-    }
+    // Opposite ends are distinct file objects but share the pipe's internal ID.
+    // This also covers unnamed anonymous pipes and duplicated handles without
+    // consuming bytes or conflating unrelated pipes with empty names.
+    Ok(pipe_id(first)? == pipe_id(second)?)
 }
 
 pub(super) fn duplicate_fd(descriptor: Descriptor) -> Result<fs::File> {
@@ -483,6 +453,16 @@ mod tests {
     unsafe extern "system" {
         fn GetHandleInformation(handle: Handle, flags: *mut u32) -> i32;
         fn SetStdHandle(kind: u32, handle: Handle) -> i32;
+        fn CreateNamedPipeW(
+            name: *const u16,
+            open_mode: u32,
+            pipe_mode: u32,
+            max_instances: u32,
+            out_buffer: u32,
+            in_buffer: u32,
+            timeout: u32,
+            security: *mut c_void,
+        ) -> Handle;
     }
 
     fn descriptor(value: &impl AsRawHandle) -> Descriptor {
@@ -544,6 +524,28 @@ mod tests {
         let mut received = Vec::new();
         reader.read_to_end(&mut received).unwrap();
         assert_eq!(received, "密钥-🔑\n".as_bytes());
+    }
+
+    #[test]
+    fn named_pipe_ends_share_identity_without_aliasing_anonymous_pipes() {
+        let name = format!(r"\\.\pipe\tmax-secret-test-{}", uuid::Uuid::new_v4());
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        // Outbound, synchronous byte pipe. Opening the read end connects it.
+        let raw =
+            unsafe { CreateNamedPipeW(wide.as_ptr(), 2, 0, 1, 1024, 1024, 0, ptr::null_mut()) };
+        assert_ne!(raw as usize, usize::MAX);
+        let mut writer = unsafe { fs::File::from_raw_handle(raw) };
+        let reader = fs::File::open(&name).unwrap();
+        qualify_pipe(descriptor(&reader), true).unwrap();
+        qualify_pipe(descriptor(&writer), false).unwrap();
+        assert!(descriptors_alias(descriptor(&reader), descriptor(&writer)).unwrap());
+        let (other, _) = std::io::pipe().unwrap();
+        assert!(!descriptors_alias(descriptor(&reader), descriptor(&other)).unwrap());
+        writer.write_all(b"synthetic-named-key\n").unwrap();
+        assert_eq!(
+            read_descriptor(descriptor(&reader), false).unwrap(),
+            b"synthetic-named-key"
+        );
     }
 
     #[test]
