@@ -468,6 +468,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "protocol"
                 | "selection"
                 | "qualified_model"
+                | "candidate_reasoning_effort"
                 | "priority_evaluations"
                 | "excluded_candidates"
                 | "priority_used_for_ranking"

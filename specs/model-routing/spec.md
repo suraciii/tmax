@@ -125,29 +125,50 @@ packages, or execute code merely because they appear in the directory.
 
 ## Request parameters
 
-Inference parameter values belong to the native agent configuration and its
-request, not tmax metadata, providers, or model aliases. There is no tmax
-request-default or request-override layer. Applying native provider entries must
-preserve existing native sampling, reasoning, and output-budget settings unless
-an explicit change to those settings occurs outside this product capability.
+Native agent configuration and requests own inference parameter values, except
+for an explicitly configured [alias candidate](../../CONTEXT.md)'s fixed reasoning
+effort below. Applying native provider entries preserves native sampling,
+reasoning, and output-budget preferences. There is no provider-, concrete-model-,
+or agent-level request-default or arbitrary request-override facility.
 
 Catalog `temperature = true` declares parameter support, not a numeric temperature.
 `reasoning_options` describes available controls, not a selected effort or mode.
-`limit.output` describes an upper bound, not the request's output budget. Neither
-catalog defaults nor local metadata overrides may inject, cap, replace, or remove
-request parameters. Omitted values remain omitted so upstream defaults retain
-their native meaning; explicit zero and false values must remain explicit.
+`limit.output` describes capacity, not a request output budget. Neither catalog
+metadata nor local metadata overrides choose, inject, cap, replace, or remove
+request values.
 
-Known incompatibilities with requested parameters, limits, or required capabilities
-must exclude candidates before a new alias selection or reject a fixed/retained
-destination before inference. Do not silently repair the request or move an
-established conversation. Unknown native extension fields remain opaque and
-preserved; their presence is not evidence of compatibility or permission to
-forward an undeclared method/path under the
-[operation contract](../integrations/spec.md#supported-operations-and-resource-identity).
-Protocol-correct model resolution and authorized authentication/header handling
-remain the permitted forwarding transformations under the
-[product contract](../product/spec.md#model-gateway).
+### Fixed candidate reasoning effort
+
+The [alias configuration](../configuration/spec.md#model-aliases) may assign one
+fixed effort to an exact concrete candidate. The same offering may use different
+efforts under different aliases. There is no alias-wide fallback, implicit
+candidate enrollment, universal effort vocabulary, or level remapping.
+
+| Condition | Observable behavior |
+| --- | --- |
+| No configured effort for this candidate | Preserve explicit and omitted request parameters, including explicit zero and false. Upstream defaults retain their native meaning. |
+| Configured candidate effort | Replace that request's native effort with the configured value before capability filtering, including retained-session checks. Serialize only the selected candidate's value at dispatch. |
+| Capability declaration | Require an effective `reasoning_options` entry with `type = "effort"` and explicit `values` containing the exact configured value; effective `reasoning = false` rejects it. `reasoning = true`, absent values, and toggle-only controls are not effort declarations. |
+| Save, dry-run, reload/start, or catalog adoption | Validate against the corresponding accepted or proposed effective metadata, honoring explicit model metadata overrides. Reject an unsupported choice before credential provisioning or native sign-in/out effects, without saving it or adopting incompatible catalog metadata. No live inference qualification is required or inferred. |
+| Other controls | Do not inject thinking toggles, reasoning budgets, sampling, output limits, or arbitrary fields. Preserve unknown native extensions. |
+| Conflicting thinking toggle | Reject positive effort with `thinking.type = "disabled"`, or effort `none` with enabled/adaptive thinking. Do not silently enable thinking or discard the toggle. |
+| Retained session | Use its unchanged destination and the current admission snapshot's configured effort. Effort edits do not rerank, replay, or rewrite its original selection evidence. A request incompatibility rejects that request without moving it. |
+
+| Native protocol | Effort field and preservation boundary |
+| --- | --- |
+| Chat Completions | `reasoning_effort`; preserve all unrelated fields. |
+| Responses | `reasoning.effort`; preserve other members of `reasoning`. A nonobject, nonnull `reasoning` value is incompatible with a configured effort and must not be discarded. |
+| Messages | Configured candidate effort is unsupported and rejected explicitly; do not translate a thinking budget/toggle or assume a provider's effort encoding. Unconfigured requests retain existing forwarding behavior. |
+
+Known incompatibilities with effective request parameters, limits, or required
+capabilities exclude candidates before a new alias selection or reject a
+fixed/retained destination before inference. Do not silently repair the request
+or move an established conversation. Unknown native extension fields remain
+opaque and preserved; their presence does not authorize an undeclared method/path
+under the [operation contract](../integrations/spec.md#supported-operations-and-resource-identity).
+Protocol-correct model resolution, explicit candidate effort, and authorized
+authentication/header handling remain the permitted forwarding transformations
+under the [product contract](../product/spec.md#model-gateway).
 
 ## Model settings
 
@@ -406,6 +427,10 @@ Each alias must explicitly list one or more registered qualified concrete model
 names. The list must be nonempty and unique. Candidates must not be bare provider
 IDs or other model aliases. A one-candidate alias is allowed for a chosen public
 name, but an alias is never required to use a concrete model.
+Each candidate may separately select a fixed reasoning effort under
+[Request parameters](#request-parameters); this is not a change to the concrete
+offering's shared capabilities or priority.
+
 
 Names match exactly: `L0` is distinct from `l0`. Names such as `L0`, `L1`, and
 `coding` have no built-in classification, rank, preset, or membership behavior.
@@ -515,10 +540,10 @@ Pending file settings must not supply facts under a different loaded definition.
    [diagnostics contract](../diagnostics/spec.md#minimal-request-record) before
    forwarding the exact upstream model ID. Record the actual decision snapshot,
    ordered rule outcomes and applicable normalized input basis, calendar/base
-   fallback, effective priority, and selection or tie-break reason within its
-   bounded allowlist. An established-session request records its retained
-   destination and original decision evidence when available, not a current
-   ranking presented as the reason for that request.
+   fallback, effective priority, configured candidate effort, and selection or
+   tie-break reason within its bounded allowlist. An established-session request
+   records its retained destination, current configured effort, and original
+   decision evidence separately, not a current ranking presented as its cause.
 
 Selection consumes already published local evidence. It must not fetch an input,
 resolve a secret, perform a recovery probe, or wait for an in-flight refresh to
@@ -593,6 +618,10 @@ themselves block an existing binding. A separate qualified authorization or
 compatibility change can still block continuation under the rules below.
 A verified new session allows a new selection; changing the clock or refreshing
 an input does not establish one.
+Changing a candidate's configured effort preserves that destination binding;
+subsequent admissions use the new effort under [Request parameters](#request-parameters).
+In-flight requests keep their admission-time effort and configuration snapshot.
+
 
 Activation must block affected bound sessions, without reassignment, when their
 retained candidate leaves the alias's explicit list, the alias is disabled, or
@@ -689,6 +718,11 @@ effective capabilities, base/effective priority, calendar fallback, and the
 all supported native protocols unless explicitly filtered; inference and agent
 selection still require an explicit protocol. Alias inspection must resolve one
 configured protocol-qualified identity; an ambiguous ID requires a protocol.
+Alias inspection exposes its configured candidate-effort map. Explanations expose
+`candidate_reasoning_effort` for each evaluated candidate and the selected
+destination; null means no configured override, not a selected upstream default.
+Retained-session explanation distinguishes the current configured effort from
+the original decision.
 Detailed Agent views distinguish each native provider's source, selected subset,
 scope, and applied/effective state. Gateway views expose the shared published
 list, alias-definition continuity, listener/key readiness, and blocked-session
@@ -955,9 +989,12 @@ error after execution starts does not replay on a sibling.
     native agent's tmax prefix from the request ID, and populate model availability
     before native selection without relying on a runtime selection callback.
 20. Preserve explicit and omitted native request parameters through concrete and
-    alias forwarding. Metadata temperature support, reasoning options, and
-    output limits must not become request values. Reject or filter known
-    incompatibilities without silently clamping values or moving retained sessions.
+    alias forwarding except the explicitly configured candidate effort in
+    [Request parameters](#request-parameters). Verify precedence before selection,
+    selected-candidate-only native encoding, passthrough without an override,
+    metadata/protocol rejection, and retained-destination behavior. Metadata
+    temperature support, reasoning options, and output limits never choose values.
+    Do not clamp values or move retained sessions to repair incompatibility.
 21. Keep transient request failures as observations without automatically cooling
     down an offering or changing its priority. A later new selection may choose
     it again; provider-qualified authorization, capability, or quota exclusions

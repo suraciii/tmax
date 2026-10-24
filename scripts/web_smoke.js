@@ -113,6 +113,10 @@ async page => {
     assert('Explicit empty string survives', savedModel.overrides.name === '');
     assert('Zero priority survives', savedModel.priority === 0);
 
+    assert('Temporary positive reasoning metadata saves', (await api('model reasoning add', [model], {type: ['effort'], value: ['high', 'max']})).exit_code === 0);
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+
     await page.locator(`[data-action="model-edit"][data-id="${model}"]`).click();
     await page.locator('#f-enabled').selectOption('false');
     assert('Model disables', (await submit('model update')).exit_code === 0);
@@ -126,9 +130,57 @@ async page => {
     await page.locator('#page-actions [data-action="alias-add"]').click();
     await page.locator('#f-id').fill(alias);
     await page.locator(`[name="candidate"][value="${model}"]`).check();
+    const candidateEffort = page.locator(`[name="candidate-effort"][data-candidate="${model}"]`);
+    assert('Selected candidate exposes a blank passthrough effort input', await candidateEffort.inputValue() === '' && await candidateEffort.getAttribute('placeholder') === '留空表示不覆盖');
+    const createAliasRequest = page.waitForRequest(r => r.url().endsWith('/api/execute') && r.postDataJSON()?.request.command.join(' ') === 'model alias add');
     assert('Explicit candidate alias saves', (await submit('model alias add')).exit_code === 0);
+    const createAliasPayload = (await createAliasRequest).postDataJSON();
+    assert('Blank effort is omitted from the Web request', !Object.hasOwn(createAliasPayload.request.arguments, 'candidate-reasoning-effort'));
     await close();
-    assert('Alias retains exact candidate', (await configuration()).model_aliases.find(a => a.id === alias)?.candidates[0] === model);
+    let savedAlias = (await configuration()).model_aliases.find(a => a.id === alias);
+    assert('Alias retains exact candidate without an effort override', savedAlias?.candidates[0] === model && savedAlias.candidate_reasoning_effort?.[model] === undefined);
+
+    await page.locator('[data-action="alias-edit"]').click();
+    await page.locator(`[name="candidate-effort"][data-candidate="${model}"]`).fill('high');
+    const effortInput = page.locator(`[name="candidate-effort"][data-candidate="${model}"]`);
+    await page.locator('#f-protocol').selectOption('messages');
+    let messageMutationRequests = 0;
+    const countMessageMutation = request => {
+      if (request.url().endsWith('/api/execute') && request.postDataJSON()?.request.command.join(' ') === 'model alias update') messageMutationRequests++;
+    };
+    page.on('request', countMessageMutation);
+    await page.locator('#action-form button[value="save"]').click();
+    await page.waitForFunction(() => !!document.querySelector('#form-result .notice.error'));
+    page.off('request', countMessageMutation);
+    assert('Messages effort is rejected in the editor', await page.locator('#form-result .notice.error').isVisible());
+    assert('Messages rejection sends no alias mutation', messageMutationRequests === 0);
+    await page.locator('#f-protocol').selectOption('chat-completions');
+    await effortInput.fill('xhigh');
+    const invalidEffort = await submit('model alias update');
+    assert('Unsupported metadata effort returns an error', invalidEffort.exit_code === 2 && invalidEffort.body.code === 'reasoning_effort_incompatible');
+    assert('Unsupported effort error is shown in the editor', await page.locator('#form-result .result-box.error').isVisible());
+    savedAlias = (await configuration()).model_aliases.find(a => a.id === alias);
+    assert('Rejected effort does not change saved alias configuration', savedAlias?.candidate_reasoning_effort?.[model] === undefined);
+    await effortInput.fill('high');
+    const setEffortRequest = page.waitForRequest(r => r.url().endsWith('/api/execute') && r.postDataJSON()?.request.command.join(' ') === 'model alias update');
+    assert('Web saves per-candidate reasoning effort', (await submit('model alias update')).exit_code === 0);
+    const setEffortPayload = (await setEffortRequest).postDataJSON();
+    assert('Web sends the exact candidate effort pair', setEffortPayload.request.arguments['candidate-reasoning-effort']?.[0] === `${model}=high`);
+    await close();
+    savedAlias = (await configuration()).model_aliases.find(a => a.id === alias);
+    assert('Candidate effort is saved in alias configuration', savedAlias?.candidate_reasoning_effort?.[model] === 'high');
+
+    await page.locator('[data-action="alias-edit"]').click();
+    const savedEffort = page.locator(`[name="candidate-effort"][data-candidate="${model}"]`);
+    assert('Saved candidate effort is editable', await savedEffort.inputValue() === 'high');
+    await savedEffort.fill('');
+    const clearEffortRequest = page.waitForRequest(r => r.url().endsWith('/api/execute') && r.postDataJSON()?.request.command.join(' ') === 'model alias update');
+    assert('Clearing the effort input saves', (await submit('model alias update')).exit_code === 0);
+    const clearEffortPayload = (await clearEffortRequest).postDataJSON();
+    assert('Blanking an existing effort sends an explicit clear', clearEffortPayload.request.arguments['clear-candidate-reasoning-effort']?.[0] === model);
+    await close();
+    savedAlias = (await configuration()).model_aliases.find(a => a.id === alias);
+    assert('Cleared effort no longer overrides the client', savedAlias?.candidate_reasoning_effort?.[model] === undefined);
 
     await navigate('providers');
     await page.locator('#search').fill(id);

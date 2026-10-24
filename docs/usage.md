@@ -246,6 +246,27 @@ tmax model alias add "$PUBLIC_ID" --protocol chat-completions \
   --candidate "$PROVIDER_ID/$MODEL_ID"
 ```
 
+To pin an effort for a particular candidate, update that candidate's alias
+entry. The options are repeatable for distinct candidates; each effort must be
+listed in that concrete model's effective positive `reasoning_options` metadata
+(`type = "effort"` with explicit `values`). `reasoning = true` alone is not
+enough. A configured value takes precedence over the caller's effort when that
+candidate is selected; without an override the caller's native value, including
+an omitted value, is preserved. Chat Completions and Responses support this;
+Messages does not.
+
+```sh
+CANDIDATE="$PROVIDER_ID/$MODEL_ID"
+tmax model alias update "$PUBLIC_ID" --protocol chat-completions \
+  --candidate-reasoning-effort "$CANDIDATE=$SUPPORTED_EFFORT"
+tmax model alias update "$PUBLIC_ID" --protocol chat-completions \
+  --clear-candidate-reasoning-effort "$CANDIDATE"
+```
+
+Set `SUPPORTED_EFFORT` to a nonempty value exposed for that concrete model.
+These alias-specific options do not define a global default or arbitrary
+request parameters.
+
 Then configure and start the loopback listener explicitly:
 
 ```sh

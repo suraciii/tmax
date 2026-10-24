@@ -1,4 +1,4 @@
-//! Finite known request/capability checks. Never infer token counts or rewrite parameters.
+//! Finite known request/capability checks, including explicit candidate effort.
 use crate::{
     catalog,
     config::{Model, Provider},
@@ -12,6 +12,7 @@ pub fn mismatch(
     model: &Model,
     metadata: Option<&catalog::Snapshot>,
     body: &Value,
+    candidate_effort: Option<(&str, &str)>,
 ) -> Option<&'static str> {
     let projection =
         match catalog::effective_from_snapshot(metadata, provider, Some((model_id, model))) {
@@ -19,6 +20,12 @@ pub fn mismatch(
             Err(_) => return Some("metadata_unavailable"),
         };
     let effective = &projection["effective"];
+    if let Some((protocol, effort)) = candidate_effort
+        && let Some(reason) = crate::reasoning::supported(effective, effort)
+            .or_else(|| crate::reasoning::request_mismatch(protocol, body, effort))
+    {
+        return Some(reason);
+    }
     let messages = body.get("messages").and_then(Value::as_array);
     let input = body.get("input").and_then(Value::as_array);
     let tool_use = body
@@ -55,20 +62,27 @@ pub fn mismatch(
     if tool_use && effective.get("tool_call").and_then(Value::as_bool) == Some(false) {
         return Some("tools_incompatible");
     }
-    let reasoning = body
-        .get("reasoning_effort")
+    let effort = candidate_effort.map(|(_, effort)| effort).or_else(|| {
+        body.get("reasoning_effort")
+            .or_else(|| body.pointer("/reasoning/effort"))
+            .and_then(Value::as_str)
+    });
+    let reasoning = candidate_effort.map_or_else(
+        || {
+            body.get("reasoning_effort")
+                .and_then(Value::as_str)
+                .is_some_and(|v| v != "none")
+                || body
+                    .pointer("/reasoning/effort")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| v != "none")
+        },
+        |(_, effort)| effort != "none",
+    ) || body
+        .get("thinking")
+        .and_then(|v| v.get("type"))
         .and_then(Value::as_str)
-        .is_some_and(|v| v != "none")
-        || body
-            .get("reasoning")
-            .and_then(|v| v.get("effort"))
-            .and_then(Value::as_str)
-            .is_some_and(|v| v != "none")
-        || body
-            .get("thinking")
-            .and_then(|v| v.get("type"))
-            .and_then(Value::as_str)
-            .is_some_and(|v| matches!(v, "enabled" | "adaptive"));
+        .is_some_and(|v| matches!(v, "enabled" | "adaptive"));
     if reasoning && effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
         return Some("reasoning_incompatible");
     }
@@ -92,18 +106,16 @@ pub fn mismatch(
             }
         }
     }
-    let effort = body
-        .get("reasoning_effort")
-        .or_else(|| body.pointer("/reasoning/effort"))
-        .and_then(Value::as_str);
-    if let (Some(effort), Some(options)) = (
-        effort,
-        effective.get("reasoning_options").and_then(Value::as_array),
-    ) && options
-        .iter()
-        .filter(|option| option.get("type").and_then(Value::as_str) == Some("effort"))
-        .filter_map(|option| option.get("values").and_then(Value::as_array))
-        .any(|values| !values.iter().any(|value| value.as_str() == Some(effort)))
+    if candidate_effort.is_none()
+        && let (Some(effort), Some(options)) = (
+            effort,
+            effective.get("reasoning_options").and_then(Value::as_array),
+        )
+        && options
+            .iter()
+            .filter(|option| option.get("type").and_then(Value::as_str) == Some("effort"))
+            .filter_map(|option| option.get("values").and_then(Value::as_array))
+            .any(|values| !values.iter().any(|value| value.as_str() == Some(effort)))
     {
         return Some("reasoning_effort_incompatible");
     }
@@ -240,7 +252,8 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"tools":[{"type":"function"}]})
+                &json!({"tools":[{"type":"function"}]}),
+                None
             ),
             Some("tools_incompatible")
         );
@@ -250,11 +263,11 @@ mod tests {
             output: Some(0),
         });
         assert_eq!(
-            mismatch(&p, "m", &model, None, &json!({"max_tokens":1})),
+            mismatch(&p, "m", &model, None, &json!({"max_tokens":1}), None),
             Some("output_budget_incompatible")
         );
         assert_eq!(
-            mismatch(&p, "m", &model, None, &json!({"max_tokens":0})),
+            mismatch(&p, "m", &model, None, &json!({"max_tokens":0}), None),
             None
         );
     }
@@ -272,7 +285,8 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"messages":[{"role":"user","content":"x"}],"extension":{"type":"image"}})
+                &json!({"messages":[{"role":"user","content":"x"}],"extension":{"type":"image"}}),
+                None
             ),
             None
         );
@@ -282,7 +296,8 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"not retained"}}]}]})
+                &json!({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"not retained"}}]}]}),
+                None
             ),
             Some("input_modality_incompatible")
         );

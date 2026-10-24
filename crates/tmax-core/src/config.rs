@@ -27,6 +27,23 @@ impl Config {
         }
     }
 }
+impl Config {
+    pub(crate) fn candidate_effort(
+        &self,
+        id: &str,
+        protocol: &str,
+        provider: &str,
+        model: &str,
+    ) -> Option<&str> {
+        self.model_aliases
+            .iter()
+            .find(|alias| alias.id == id && alias.protocol == protocol)?
+            .candidate_reasoning_effort
+            .iter()
+            .find(|(name, _)| name.split_once('/') == Some((provider, model)))
+            .map(|(_, effort)| effort.as_str())
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
@@ -229,6 +246,8 @@ pub struct ModelAlias {
     pub id: String,
     pub protocol: String,
     pub candidates: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub candidate_reasoning_effort: BTreeMap<String, String>,
     #[serde(default = "yes")]
     pub enabled: bool,
     pub continuity: Option<String>,
@@ -444,7 +463,8 @@ pub fn save(
     let mut document = document.clone();
     normalize_gateway_names(&mut document)?;
     let text = document.to_string();
-    parse(&text)?;
+    let config = parse(&text)?;
+    crate::reasoning::validate_saved(store, &config)?;
     let _lock = store.lock("configuration")?;
     guard(store, expected)?;
     crate::storage::atomic_write(&store.root.join("tmax.toml"), text.as_bytes())?;
@@ -598,6 +618,29 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         }
         for name in &a.candidates {
             model(config, name)?;
+        }
+        for (candidate, effort) in &a.candidate_reasoning_effort {
+            if !a.candidates.contains(candidate)
+                || effort.is_empty()
+                || effort.chars().any(|c| c.is_control() || c.is_whitespace())
+            {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    &format!(
+                        "Alias '{}' candidate '{}' effort {:?} protocol '{}': candidate must be an exact member of candidates and effort must be nonempty without whitespace or control characters",
+                        a.id, candidate, effort, a.protocol
+                    ),
+                ).field(format!("model_aliases.{}.candidate_reasoning_effort.{candidate}", a.id)));
+            }
+            if !matches!(a.protocol.as_str(), "chat-completions" | "responses") {
+                return Err(Error::new(
+                    "candidate_reasoning_protocol_unsupported",
+                    &format!(
+                        "Alias '{}' candidate '{}' effort {:?} protocol '{}': candidate reasoning effort is supported only for Chat Completions and Responses",
+                        a.id, candidate, effort, a.protocol
+                    ),
+                ).field(format!("model_aliases.{}.candidate_reasoning_effort.{candidate}", a.id)));
+            }
         }
         if let Ok((p, _)) = model(config, &a.id)
             && crate::integrations::protocols(p, qualified(&a.id)?.1)?.contains(&a.protocol)

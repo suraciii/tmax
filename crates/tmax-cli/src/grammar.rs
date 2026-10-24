@@ -877,16 +877,18 @@ fn model_rule_commands() -> Command {
 }
 
 fn model_alias_commands() -> Command {
-    let alias_edit = "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session). One or more explicit candidates are required, in user order, and accept registered qualified concrete offerings only. Candidate lists do not accept aliases, recursive aliases, bare providers, or duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.";
+    let alias_edit = "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session), and per-candidate reasoning effort. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set an existing candidate's effort; repeat --clear-candidate-reasoning-effort QUALIFIED to remove an override. A candidate may be changed or cleared once per request, never both. Values must be nonempty and listed in that concrete candidate's effective positive reasoning_options metadata; reasoning=true alone is not enough. Only Chat Completions and Responses support overrides; Messages does not. No arbitrary request parameters, reasoning toggles, or budgets are accepted. Candidate lists contain only registered qualified concrete offerings, not aliases or bare providers; preserve order and reject duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.";
     let add = mutation(
         leaf_with_fields(
             "add",
             "Create one protocol-qualified model alias backed by explicit candidates.",
-            "Requires one-or-more --candidate QUALIFIED. Candidates form the complete ordered list.\n\nExit: 0 when saved; 2 for invalid ID/candidates; 4 for persistence or required safety/startup failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate deepseek/deepseek-flash",
+            "Requires one-or-more --candidate QUALIFIED. Candidates form the complete ordered list. Set per-candidate effort with --candidate-reasoning-effort QUALIFIED=EFFORT; no effort override is inferred.\n\nExit: 0 when saved; 2 for invalid ID/candidates/effort; 4 for persistence or required safety/startup failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate provider/model --candidate-reasoning-effort provider/model=effort",
             alias_edit,
         )
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
         .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete offering; repeat in order.").required(true))
+        .arg(repeated("candidate-reasoning-effort", "QUALIFIED=EFFORT", "Set an existing candidate's supported reasoning effort; repeat for distinct candidates.").long_help(alias_edit))
+        .arg(repeated("clear-candidate-reasoning-effort", "QUALIFIED", "Clear one candidate's effort override; repeat for distinct candidates.").long_help(alias_edit))
         .arg(pair("set", "FIELD", "VALUE", "Set enabled or continuity.").long_help(alias_edit))
         .arg(repeated("clear", "FIELD", "Clear enabled or continuity.").long_help(alias_edit))
         .arg(required_pos(1, "ID", "Public alias ID.")),
@@ -897,12 +899,14 @@ fn model_alias_commands() -> Command {
         leaf_with_fields(
             "update",
             "Edit alias fields and optionally replace its complete candidate list.",
-            "At least one change is required. Repeated --candidate replaces the full list, never appends. Omit --candidate to preserve the current list. --new-protocol changes identity only after collision/reference checks.\n\nExit: 0 when saved; 2 for invalid identity/candidates; 4 for persistence or required safety/startup failure.\nExample: tmax model alias update L0 --protocol chat-completions --set enabled false",
+            "At least one change is required. Repeated --candidate replaces the full list, never appends; omit it to preserve the current list. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set candidate-specific effort or --clear-candidate-reasoning-effort QUALIFIED to clear it. Removed candidates lose their effort overrides. --new-protocol changes identity only after collision/reference checks.\n\nExit: 0 when saved; 2 for invalid identity/candidates/effort; 4 for persistence or required safety/startup failure.\nExample: tmax model alias update L0 --protocol chat-completions --candidate-reasoning-effort provider/model=effort",
             alias_edit,
         )
         .arg(protocol_value("protocol", "Current protocol identity.").required(true))
         .arg(protocol_value("new-protocol", "Optional new protocol identity."))
         .arg(repeated("candidate", "QUALIFIED", "Replace entire ordered candidate list."))
+        .arg(repeated("candidate-reasoning-effort", "QUALIFIED=EFFORT", "Set an existing candidate's supported reasoning effort; repeat for distinct candidates.").long_help(alias_edit))
+        .arg(repeated("clear-candidate-reasoning-effort", "QUALIFIED", "Clear one candidate's effort override; repeat for distinct candidates.").long_help(alias_edit))
         .arg(pair("set", "FIELD", "VALUE", "Set enabled or continuity.").long_help(alias_edit))
         .arg(repeated("clear", "FIELD", "Clear enabled or continuity.").long_help(alias_edit))
         .arg(required_pos(1, "ID", "Public alias ID.")),
@@ -920,7 +924,7 @@ fn model_alias_commands() -> Command {
             .arg(repeated("candidate", "QUALIFIED", "Exact existing candidate to remove; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true));
     Command::new("alias")
-        .about("Manage public model aliases and their explicit candidates/continuity.")
+        .about("Manage public model aliases, explicit candidates, continuity, and per-candidate reasoning effort.")
         .subcommand(add)
         .subcommand(update)
         .subcommand(candidates)

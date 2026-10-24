@@ -143,7 +143,7 @@ function renderProviderList() {
   $('provider-list').innerHTML=[...groups].map(([name,providers])=>`<div class="section-label"><h2>${escapeHtml(name)}</h2><p>${providers.length} 个独立实例</p></div><div class="cards">${providers.map(p=>{const config=state.config.providers[p.id];const observation=p.observations?.observations?.find(o=>o.scope==='quota');return `<article class="provider-card"><div class="card-top"><div class="avatar blue">${escapeHtml(name.slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p class="mono">${escapeHtml(p.id)}</p></div>${authBadge(p)}</div><div class="card-facts">${fact('模型',Object.keys(config.models || {}).length+' 个')}${fact('订阅计划',config.subscription?.plan || '未记录')}${fact('额度信息',observation?.last_attempt_outcome==='failed'?'最近读取失败':stateLabel(observation?.freshness?.state))}${fact('使用此服务的工具',p.affected_targets+' 个配置')}</div><div class="card-actions">${button('管理服务商','provider-detail',p.id,'small')}${button(p.authentication==='not_configured'?'配置授权':'更新授权','provider-auth',p.id,'soft small','key')}</div></article>`;}).join('')}</div>`).join('');
 }
 function renderModels() {
-  $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">模型别名</button></div>${searchBox('搜索模型或服务商')}</div>${state.modelKind==='alias'?notice('模型别名将选定的候选模型关联到同一个名称。别名仅用于网关，不自动改变工具的直接连接。'):''}<div id="model-list"></div>`;
+  $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">模型别名</button></div>${searchBox('搜索模型或服务商')}</div>${state.modelKind==='alias'?notice('模型别名将选定的候选模型关联到同一个名称。可为每个候选设置推理强度覆盖；未设置时不改写客户端请求。别名仅用于网关，不自动改变工具的直接连接。'):''}<div id="model-list"></div>`;
   renderModelList(); $('search').addEventListener('input',e=>{state.query=e.target.value;renderModelList();});
 }
 function renderModelList() {
@@ -389,14 +389,31 @@ function modelForm(id='', provider='') {
 }
 function aliasForm(encoded='') {
   const [id,protocol]=encoded?JSON.parse(encoded):[];const current=id?state.config.model_aliases.find(a=>a.id===id&&a.protocol===protocol):null;
+  const currentEfforts=current?.candidate_reasoning_effort || {};
   const models=(state.models || []).filter(m=>m.kind==='concrete');
-  formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称，并选择使用同一原生协议的候选模型。不会自动加入其他模型。',
+  formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称和同一原生协议下的候选模型；每个候选可单独覆盖推理强度。留空表示不覆盖客户端请求，只能使用具体模型有效推理能力元数据列出的值。Messages 不支持此覆盖。',
     '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || 'chat-completions',{required:true,options:Object.entries(protocolNames)})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+(id?`<div class="actions">${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
       const candidates=[...document.querySelectorAll('[name=candidate]:checked')].map(i=>i.value);if(!candidates.length)throw Error('请至少选择一个候选模型。');
       const args={protocol:[protocol || value('protocol')],candidate:candidates};if(id&&protocol!==value('protocol'))args['new-protocol']=[value('protocol')];
+      const efforts=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value.trim()]));
+      const set=candidates.flatMap(candidate=>efforts.get(candidate)?[`${candidate}=${efforts.get(candidate)}`]:[]);
+      const clear=candidates.filter(candidate=>Object.hasOwn(currentEfforts,candidate)&&!efforts.get(candidate));
+      if(value('protocol')==='messages'&&set.length)throw Error('Messages 不支持候选推理强度覆盖；请清除该候选的覆盖后重试。');
+      if(set.length)args['candidate-reasoning-effort']=set;
+      if(clear.length)args['clear-candidate-reasoning-effort']=clear;
       return {operation:id?'model alias update':'model alias add',operands:[value('id').trim()],args};
     });
-  const update=()=>{$('candidates').innerHTML=models.length?models.map(m=>{const supported=m.published_protocols?.includes(value('protocol'));return `<label><input type="checkbox" name="candidate" value="${escapeHtml(m.id)}" ${current?.candidates.includes(m.id)?'checked':''} ${!supported&&!current?.candidates.includes(m.id)?'disabled':''}><span>${escapeHtml(m.id)}${!supported?'<small class="label-note">此模型未发布所选协议，保存时仍需通过完整校验</small>':''}</span></label>`;}).join(''):notice('还没有具体模型，请先添加模型。','warning');};
+  const update=()=>{
+    const prior=[...document.querySelectorAll('[name=candidate]')];const selectedCandidates=new Set(prior.length?prior.filter(input=>input.checked).map(input=>input.value):current?.candidates || []);
+    const entered=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value]));
+    $('candidates').innerHTML=models.length?models.map(m=>{
+      const supported=m.published_protocols?.includes(value('protocol'));const selected=selectedCandidates.has(m.id);
+      const effort=entered.has(m.id)?entered.get(m.id):currentEfforts[m.id] || '';
+      const showEffort=value('protocol')!=='messages'||Object.hasOwn(currentEfforts,m.id)||Boolean(effort);
+      return `<div class="candidate-setting"><label><input type="checkbox" name="candidate" value="${escapeHtml(m.id)}" ${selected?'checked':''} ${!supported&&!selected?'disabled':''}><span>${escapeHtml(m.id)}${!supported?'<small class="label-note">此模型未发布所选协议，保存时仍需通过完整校验</small>':''}</span></label>${showEffort?`<label class="field candidate-effort"><span>推理强度覆盖</span><input type="text" name="candidate-effort" data-candidate="${escapeHtml(m.id)}" value="${escapeHtml(effort)}" placeholder="留空表示不覆盖" ${selected?'':'disabled'} autocomplete="off"><small>使用该具体模型有效能力元数据支持的值。</small></label>`:''}</div>`;
+    }).join(''):notice('还没有具体模型，请先添加模型。','warning');
+    $('candidates').querySelectorAll('[name=candidate]').forEach(checkbox=>checkbox.addEventListener('change',()=>{const input=checkbox.closest('.candidate-setting')?.querySelector('[name=candidate-effort]');if(input)input.disabled=!checkbox.checked;}));
+  };
   $('f-protocol').addEventListener('change',update);update();
 }
 function nativePathKey(path) {

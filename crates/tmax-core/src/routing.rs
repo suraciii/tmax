@@ -806,6 +806,8 @@ fn decision(
     for (provider, name) in candidates {
         let p = &config.providers[&provider];
         let m = &p.models[&name];
+        let effort = config.candidate_effort(id, protocol, &provider, &name);
+        let no_request = Value::Null;
         let evaluation = evaluate(config, &snapshot, &provider, &name, at, exact_at)?;
         let identity = snapshot.destination_identity(&provider, &name);
         let native_assessment =
@@ -839,9 +841,17 @@ fn decision(
                 )
             })
             .or_else(|| {
-                body.and_then(|body| {
-                    crate::gateway::capability_mismatch(p, &name, m, snapshot.metadata(), body)
-                })
+                body.or_else(|| effort.map(|_| &no_request))
+                    .and_then(|body| {
+                        crate::gateway::capability_mismatch(
+                            p,
+                            &name,
+                            m,
+                            snapshot.metadata(),
+                            body,
+                            effort.map(|effort| (protocol, effort)),
+                        )
+                    })
             })
             .or_else(|| native.and_then(|native| crate::gateway::native_mismatch(p, native)));
         let observed_unavailability = if reason.is_none()
@@ -879,10 +889,10 @@ fn decision(
             excluded
                 .push(json!({"qualified_model":qualified,"reason_code":"identity_unavailable"}));
         }
-        evaluations.push(json!({"qualified_model":qualified,"priority_used_for_ranking":alias,"priority_evaluation":evaluation}));
+        evaluations.push(json!({"qualified_model":qualified,"candidate_reasoning_effort":effort,"priority_used_for_ranking":alias,"priority_evaluation":evaluation}));
     }
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    let selected=ranked.first().map(|(priority,identity,p,m,provider_identity,authorization_generation)|json!({"provider":p,"model":m,"qualified_model":format!("{p}/{m}"),"provider_identity":provider_identity,"authorization_generation":authorization_generation,"offering_identity":identity,"priority":priority}));
+    let selected=ranked.first().map(|(priority,identity,p,m,provider_identity,authorization_generation)|json!({"provider":p,"model":m,"qualified_model":format!("{p}/{m}"),"provider_identity":provider_identity,"authorization_generation":authorization_generation,"offering_identity":identity,"priority":priority,"candidate_reasoning_effort":config.candidate_effort(id, protocol, p, m)}));
     let reason = if !alias {
         "fixed_concrete"
     } else if ranked
@@ -1104,6 +1114,7 @@ mod tests {
             },
         );
         loaded.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
             id: "L0".into(),
             protocol: "chat-completions".into(),
             candidates: vec!["old/m".into()],

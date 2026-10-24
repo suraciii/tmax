@@ -17,8 +17,15 @@ page makes no external font, image, or script requests.
   observations, inherited metadata, overrides, and explicit upstream refresh.
 - **Models** separates concrete offerings from aliases. Concrete forms edit names,
   enabled state, and base priority. Alias forms select exact concrete candidates
-  and a native protocol. Restore name inheritance with the separate clear action;
-  an explicit empty string remains different from an absent override.
+  and a native protocol, with an optional reasoning-effort input for each
+  candidate. Leave it blank when creating an alias to preserve caller effort;
+  blanking a saved value while editing clears that override. Values must occur
+  in the candidate's effective `reasoning_options` metadata with `type = "effort"`
+  and explicit `values`; `reasoning = true` alone is not enough. Configured
+  effort overrides the caller only for that selected candidate; an unset value
+  preserves caller input. Chat Completions and Responses support overrides;
+  Messages does not. Restore name inheritance with the separate clear action; an
+  explicit empty string remains different from an absent override.
 - **Coding tools** keeps Codex, pi, omp, OpenCode, and Hermes separate. Adding a
   configuration checks local directories and tool versions for the selected tool.
   Select a found directory or enter a path manually; registered directories link

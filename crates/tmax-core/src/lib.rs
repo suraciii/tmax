@@ -10,6 +10,7 @@ pub mod integrations;
 pub mod native;
 pub mod observations;
 pub mod operations;
+mod reasoning;
 pub mod routing;
 pub mod secrets;
 pub mod service;

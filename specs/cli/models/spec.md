@@ -108,6 +108,7 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 | No `--at` | Use one coherent observation/admission instant with config, accepted metadata, and input revisions captured together. |
 | `--at INSTANT` | Use retained facts valid then; do not fetch, predict, or rebuild missing history. |
 | Candidate evidence | Return selected/excluded offerings, reasons/ties, effective priority, ordered signal-rule explanations, calendar fallback, zone/UTC offset, next boundary, and provenance/freshness under the [priority result contract](rules/spec.md#priority-evaluation-data). |
+| Candidate effort | Show the alias-local configured choice under [Request parameters](../../model-routing/spec.md#request-parameters), independently of capability declarations. Do not present an omitted override as an upstream default. |
 | Support/access | Distinguish documented, verified, incompatible, and unknown support; missing qualification/credentials remain blocked/unknown, not fabricated access. |
 | Alias continuity | Shared by every caller of the definition; native selections/defaults/roles do not override it. |
 | `--session SESSION` | Inspect an existing gateway handle matching this public ID/protocol, with or without native context. Return its retained destination or blocked continuation, not a new-session winner. Reject upstream-source entries. |
@@ -133,6 +134,8 @@ All context fields other than `kind` are strings or null.
 | `data.source` | Present only for `kind = agent_provider`; exactly `{provider: string}` or `{gateway: true}`. |
 | `data.requested` | Exactly `{id, protocol}`; both are required strings. |
 | `data.continuity` | `session` or `stateless` for alias gateway explanations; otherwise null. |
+| `data.priority_evaluations[].candidate_reasoning_effort` | Exact configured string for that evaluated candidate, or null for no configured override. |
+| `data.selection.candidate_reasoning_effort` | Exact configured string for the selected destination, or null. A retained-session read uses the current configuration view and preserves its separate original decision. |
 | Selection/session evidence | Follow the model contract and retain captured revisions; no authorization or target-permission result. |
 
 Examples: `tmax model explain L0 --protocol chat-completions`,

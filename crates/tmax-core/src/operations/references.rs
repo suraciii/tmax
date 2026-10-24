@@ -173,6 +173,7 @@ mod tests {
         };
         guard(&config, &request).unwrap();
         config.model_aliases.push(crate::config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
             id: "alias".into(),
             protocol: "chat-completions".into(),
             candidates: vec!["p/model".into()],

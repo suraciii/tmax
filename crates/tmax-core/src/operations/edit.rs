@@ -373,6 +373,27 @@ fn rename_refs(root: &mut Value, old: &str, new: &str, provider_rename: bool) ->
                     }
                 }
             }
+            if let Some(efforts) = a
+                .get_mut("candidate_reasoning_effort")
+                .and_then(Value::as_table_mut)
+            {
+                let renamed: Vec<_> = efforts
+                    .keys()
+                    .filter_map(|name| {
+                        if name == old {
+                            Some((name.clone(), new.to_string()))
+                        } else if provider_rename && name.starts_with(&format!("{old}/")) {
+                            Some((name.clone(), format!("{new}/{}", &name[old.len() + 1..])))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for (old, new) in renamed {
+                    let effort = efforts.remove(&old).expect("existing effort");
+                    efforts.insert(new, effort);
+                }
+            }
         }
     }
     if let Some(agents) = root.get_mut("agents").and_then(Value::as_table_mut) {
@@ -828,6 +849,7 @@ fn mutate(root: &mut Value, r: &Request, store: &Store) -> Result<(Json, Vec<(St
                         candidates.remove(pos.ok_or_else(error)?);
                     }
                 }
+                trim_candidate_efforts(alias)?;
             } else if action == "add" {
                 let mut alias = table();
                 put(&mut alias, &["id"], string(id))?;
@@ -1092,6 +1114,57 @@ fn alias_source(a: &mut Value, r: &Request, required_source: bool) -> Result<()>
     if !candidates.is_empty() {
         put(a, &["candidates"], strings(candidates))?;
     }
+    trim_candidate_efforts(a)?;
+    let mut seen = std::collections::BTreeSet::new();
+    for assignment in args(r, "candidate-reasoning-effort") {
+        let (candidate, effort) = assignment.rsplit_once('=').ok_or_else(|| {
+            Error::new(
+                "invalid_arguments",
+                "Use --candidate-reasoning-effort provider/model=effort",
+            )
+        })?;
+        if !seen.insert(candidate) || effort.is_empty() {
+            return Err(Error::new(
+                "invalid_arguments",
+                "Duplicate or empty candidate reasoning effort",
+            )
+            .field(candidate));
+        }
+        put(
+            a,
+            &["candidate_reasoning_effort", candidate],
+            string(effort),
+        )?;
+    }
+    for candidate in args(r, "clear-candidate-reasoning-effort") {
+        if !seen.insert(candidate)
+            || remove(a, &["candidate_reasoning_effort", candidate])?.is_none()
+        {
+            return Err(Error::new(
+                "invalid_arguments",
+                "Duplicate, conflicting, or absent candidate reasoning effort",
+            )
+            .field(candidate));
+        }
+    }
+    Ok(())
+}
+fn trim_candidate_efforts(alias: &mut Value) -> Result<()> {
+    let Some(mut efforts) = remove(alias, &["candidate_reasoning_effort"])? else {
+        return Ok(());
+    };
+    let candidates = get(alias, &["candidates"])?.as_array().ok_or_else(error)?;
+    efforts
+        .as_table_mut()
+        .ok_or_else(error)?
+        .retain(|candidate, _| {
+            candidates
+                .iter()
+                .any(|value| value.as_str() == Some(candidate))
+        });
+    if efforts.as_table().is_some_and(|values| !values.is_empty()) {
+        put(alias, &["candidate_reasoning_effort"], efforts)?;
+    }
     Ok(())
 }
 fn rename_alias_refs(root: &mut Value, old: &str, new: &str, protocol: &str) -> Result<()> {
@@ -1239,6 +1312,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     let path = r.command.join(" ");
     let candidate_text = toml::to_string(&root).map_err(|_| error())?;
     let mut candidate = config::parse(&candidate_text)?;
+    crate::reasoning::validate_saved(store, &candidate)?;
     if path == "gateway remove" {
         let state = crate::service::status(store).await?;
         if !matches!(
@@ -1674,6 +1748,190 @@ mod regressions {
                     .contains("# signed fixture")
             );
         }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn candidate_effort_rejection_precedes_protected_input_and_credential_lineage_changes() {
+        use std::os::fd::AsRawFd;
+        for existing_auth in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = Store::at(directory.path().to_owned());
+            let mut configured = config::parse("version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n[[model_aliases]]\nid='fixed'\nprotocol='chat-completions'\ncandidates=['p/m']\ncandidate_reasoning_effort={'p/m'='high'}\n").unwrap();
+            store
+                .write_raw(
+                    "tmax.toml",
+                    toml::to_string(&configured).unwrap().as_bytes(),
+                )
+                .unwrap();
+            crate::routing::reconcile(&store, &Config::empty(), &configured, &[]).unwrap();
+            let original_reference = if existing_auth {
+                let owner = provider_owner(&store, &configured, "p").unwrap();
+                let reference =
+                    crate::secrets::put(&store, &owner, b"original-provider-key").unwrap();
+                let previous = configured.clone();
+                configured.providers.get_mut("p").unwrap().auth = Some(config::Auth::ApiKey {
+                    key_ref: reference.clone(),
+                });
+                store
+                    .write_raw(
+                        "tmax.toml",
+                        toml::to_string(&configured).unwrap().as_bytes(),
+                    )
+                    .unwrap();
+                crate::routing::reconcile(&store, &previous, &configured, &[]).unwrap();
+                Some(reference)
+            } else {
+                None
+            };
+            configured
+                .providers
+                .get_mut("p")
+                .unwrap()
+                .models
+                .get_mut("m")
+                .unwrap()
+                .overrides
+                .reasoning_options = Some(vec![config::ReasoningOption {
+                r#type: "effort".into(),
+                values: Some(vec!["low".into()]),
+            }]);
+            let invalid_authority = toml::to_string(&configured).unwrap();
+            store
+                .write_raw("tmax.toml", invalid_authority.as_bytes())
+                .unwrap();
+            let inventory_before = crate::secrets::inventory(&store).unwrap();
+            let lineage_before = std::fs::read(store.root.join("routing-state.json")).unwrap();
+            let destination_before =
+                crate::routing::destination_identity(&store, &configured, "p/m").unwrap();
+            let (mut reader, mut writer) = std::io::pipe().unwrap();
+            std::io::Write::write_all(&mut writer, b"replacement-provider-key\n").unwrap();
+            drop(writer);
+            let request = Request {
+                command: vec!["provider".into(), "key".into(), "set".into()],
+                operands: vec!["p".into()],
+                arguments: BTreeMap::from([
+                    ("key-fd".into(), vec![reader.as_raw_fd().to_string()]),
+                    ("non-interactive".into(), vec!["true".into()]),
+                ]),
+                dry_run: false,
+                if_revision: None,
+            };
+            assert_eq!(
+                execute(&store, &request).await.unwrap_err().code,
+                "reasoning_effort_incompatible"
+            );
+            let mut unread = Vec::new();
+            std::io::Read::read_to_end(&mut reader, &mut unread).unwrap();
+            assert_eq!(unread, b"replacement-provider-key\n");
+            assert_eq!(crate::secrets::inventory(&store).unwrap(), inventory_before);
+            assert_eq!(
+                std::fs::read(store.root.join("routing-state.json")).unwrap(),
+                lineage_before
+            );
+            assert_eq!(
+                crate::routing::destination_identity(&store, &configured, "p/m").unwrap(),
+                destination_before
+            );
+            assert_eq!(
+                std::fs::read(store.root.join("tmax.toml")).unwrap(),
+                invalid_authority.as_bytes()
+            );
+            if let Some(reference) = original_reference {
+                assert_eq!(
+                    crate::secrets::get(&store, &reference).unwrap().as_slice(),
+                    b"original-provider-key"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_effort_edits_validate_capabilities_and_track_membership_and_renames() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().into());
+        store.write_raw("tmax.toml", b"version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\nresponses='http://127.0.0.1:9999/v1'\n[providers.p.models.a.overrides]\nreasoning_options=[{type='effort',values=['high','max']}]\n[providers.p.models.b.overrides]\nreasoning=true\nreasoning_options=[{type='toggle'}]\n").unwrap();
+        let mut request = Request {
+            command: vec!["model".into(), "alias".into(), "add".into()],
+            operands: vec!["route".into()],
+            arguments: BTreeMap::from([
+                ("protocol".into(), vec!["chat-completions".into()]),
+                ("candidate".into(), vec!["p/a".into(), "p/b".into()]),
+                ("candidate-reasoning-effort".into(), vec!["p/a=high".into()]),
+            ]),
+            dry_run: false,
+            if_revision: None,
+        };
+        execute(&store, &request).await.unwrap();
+        request.command[2] = "update".into();
+        request.arguments.remove("candidate");
+        let saved = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        for (assignment, code) in [
+            ("p/a=xhigh", "reasoning_effort_incompatible"),
+            ("p/b=max", "reasoning_effort_unavailable"),
+            ("p/missing=high", "invalid_configuration"),
+        ] {
+            request
+                .arguments
+                .insert("candidate-reasoning-effort".into(), vec![assignment.into()]);
+            assert_eq!(execute(&store, &request).await.unwrap_err().code, code);
+            assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), saved);
+        }
+        request.arguments.insert(
+            "candidate-reasoning-effort".into(),
+            vec!["p/a=high".into(), "p/a=max".into()],
+        );
+        assert_eq!(
+            execute(&store, &request).await.unwrap_err().code,
+            "invalid_arguments"
+        );
+        let rename = Request {
+            command: vec!["provider".into(), "rename".into()],
+            operands: vec!["p".into(), "renamed".into()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        execute(&store, &rename).await.unwrap();
+        let rename = Request {
+            command: vec!["model".into(), "rename".into()],
+            operands: vec!["renamed/a".into(), "new/model".into()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        execute(&store, &rename).await.unwrap();
+        let alias = config::load(&store).unwrap().config.model_aliases.remove(0);
+        assert_eq!(
+            alias.candidate_reasoning_effort,
+            BTreeMap::from([("renamed/new/model".into(), "high".into())])
+        );
+        request.arguments.remove("candidate-reasoning-effort");
+        request.arguments.insert(
+            "clear-candidate-reasoning-effort".into(),
+            vec!["renamed/new/model".into()],
+        );
+        execute(&store, &request).await.unwrap();
+        assert!(
+            config::load(&store).unwrap().config.model_aliases[0]
+                .candidate_reasoning_effort
+                .is_empty()
+        );
+        request.arguments.remove("clear-candidate-reasoning-effort");
+        request.arguments.insert(
+            "candidate-reasoning-effort".into(),
+            vec!["renamed/new/model=max".into()],
+        );
+        execute(&store, &request).await.unwrap();
+        request.arguments.remove("candidate-reasoning-effort");
+        request
+            .arguments
+            .insert("candidate".into(), vec!["renamed/b".into()]);
+        execute(&store, &request).await.unwrap();
+        assert!(
+            config::load(&store).unwrap().config.model_aliases[0]
+                .candidate_reasoning_effort
+                .is_empty()
+        );
     }
     #[tokio::test]
     async fn alias_edits_replace_members_preserve_references_and_reject_partial_invalid_saves() {
