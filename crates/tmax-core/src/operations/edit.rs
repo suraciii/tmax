@@ -1575,6 +1575,60 @@ mod regressions {
             if_revision: None,
         }
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn protected_web_key_descriptor_saves_existing_provider_with_signed_rules() {
+        use std::os::fd::AsRawFd;
+        let base = "# signed fixture\nversion=1\n[providers.synthetic]\nintegration='custom'\n[providers.synthetic.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.synthetic.models.signed-priority]\npriority=-10\ntimezone='UTC'\nschedule=[{all_day=true,priority=-10,weekdays=['mon']}]\npriority_rules=[{id='synthetic-negative',input='weekly',priority=-10,remaining_at_least_percent='1',reset_within_seconds=86400}]\n[providers.synthetic.inputs.weekly]\nkind='quota'\nmax_age_seconds=3600\nmodels=['signed-priority']\nscope='synthetic-scope'\nsource='manual'\n";
+        for existing_auth in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = Store::at(directory.path().to_owned());
+            let text = if existing_auth {
+                format!(
+                    "{base}\n[providers.synthetic.auth]\nmethod='api-key'\nkey_ref='opaque-existing-reference'\n"
+                )
+            } else {
+                base.into()
+            };
+            store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+            let config = config::parse(&text).unwrap();
+            crate::routing::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+            let (reader, mut writer) = std::io::pipe().unwrap();
+            std::io::Write::write_all(&mut writer, b"synthetic-web-form-key\n").unwrap();
+            drop(writer);
+            let request = Request {
+                command: vec!["provider".into(), "key".into(), "set".into()],
+                operands: vec!["synthetic".into()],
+                arguments: BTreeMap::from([
+                    ("key-fd".into(), vec![reader.as_raw_fd().to_string()]),
+                    ("non-interactive".into(), vec!["true".into()]),
+                ]),
+                dry_run: false,
+                if_revision: None,
+            };
+            crate::operations::commands::validate(&request).unwrap();
+            let result = execute(&store, &request).await.unwrap();
+            assert_eq!(result["save"], "saved");
+            let saved = config::load(&store).unwrap();
+            let Some(config::Auth::ApiKey { key_ref }) = &saved.config.providers["synthetic"].auth
+            else {
+                panic!("API key authentication must be saved")
+            };
+            assert_eq!(
+                crate::secrets::get(&store, key_ref).unwrap().as_slice(),
+                b"synthetic-web-form-key"
+            );
+            assert_eq!(
+                saved.config.providers["synthetic"].models["signed-priority"].priority,
+                -10
+            );
+            assert!(
+                std::fs::read_to_string(store.path("tmax.toml").unwrap())
+                    .unwrap()
+                    .contains("# signed fixture")
+            );
+        }
+    }
     #[tokio::test]
     async fn alias_edits_replace_members_preserve_references_and_reject_partial_invalid_saves() {
         let temp = tempfile::tempdir().unwrap();

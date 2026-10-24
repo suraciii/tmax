@@ -54,14 +54,14 @@ impl OutputFormat {
                     duplicate_global = Some("--format");
                 }
                 format_seen = true;
-                if let Some(value) = argv.get(index + 1).and_then(|arg| arg.to_str()) {
-                    if !value.starts_with('-') || value == "-" {
-                        if !format_repeated && selected.is_none() {
-                            selected = Some(value);
-                        }
-                        index += 2;
-                        continue;
+                if let Some(value) = argv.get(index + 1).and_then(|arg| arg.to_str())
+                    && (!value.starts_with('-') || value == "-")
+                {
+                    if !format_repeated && selected.is_none() {
+                        selected = Some(value);
                     }
+                    index += 2;
+                    continue;
                 }
                 index += 1;
                 continue;
