@@ -1,6 +1,6 @@
 # Authentication and local-secret commands
 
-This child owns authentication/protected-input grammar and secret inventory
+This child owns explicit key-input and sensitive-output grammar and secret inventory
 results. [Product authentication](../../../product/spec.md#providers-and-authentication)
 owns identity, native effects, and refresh coordination;
 [Configuration](../../../configuration/spec.md#retained-secret-discovery) owns
@@ -18,12 +18,12 @@ protected storage and discoverability. Use [common CLI rules](../../spec.md),
 
 | Command | Requested boundary |
 | --- | --- |
-| `provider key set ID [--key-stdin \| --key-ref REF]` | Select supported API-key authentication. Read/store a new protected key, or save an existing qualified provider-owned reference without resolving its secret. Replace the auth table and remove old-method fields. |
+| `provider key set ID [--key-stdin \| --key-ref REF]` | Select supported API-key authentication. Read/store a new current-user-restricted plaintext key file, or save an existing qualified provider-owned reference without resolving its secret. Replace the auth table and remove old-method fields. |
 | `provider auth set ID --method login --via SOURCE [--session-ref REF]` | Declaratively replace the full auth table with explicit `via` and optional source-scoped session reference; no sign-in or credential import. |
 | `provider login ID [--via SOURCE]` | Select the source through [login source selection](#login-source-selection), execute qualified interactive sign-in, then attempt reference save/activation. |
 | `provider logout ID` | Sign out through the configured supported `via` and report affected native/shared scopes. Preserve provider/subscription declarations and identity comparison basis. |
 | `provider auth clear ID` | Remove active auth configuration, not stored keys, native sessions, or upstream access. |
-| `secret list` | Discover safe reference/ownership/cleanup metadata, including orphans, without unlock/decryption or a valid config prerequisite. |
+| `secret list` | Discover safe reference/ownership/cleanup metadata, including orphans, without resolving or exposing credential values and without requiring valid config. |
 | `secret cleanup REF` | Delete that exact retained tmax-owned local secret only after current safety checks. |
 
 All mutations support dry-run. Reference-changing operations accept the common
@@ -39,17 +39,16 @@ optional file revision guard. Effect-free `secret list` rejects dry-run.
 
 Without either key option, use hidden terminal key input. `--key-stdin` explicitly
 supplies one nonempty UTF-8 line, excluding its terminator, without echo/logging.
-`--key-ref` instead saves the existing reference without consuming a key or
-unlocking the store merely to edit config. The two options are mutually exclusive.
-Noninteractive key entry requires `--key-stdin`; never silently consume a pipe.
+`--key-ref` instead saves the existing reference without reading its secret merely
+to edit config. The options are mutually exclusive. Noninteractive key entry
+requires `--key-stdin`; never silently consume a pipe.
 
-Stdin is descriptor 0. Key stdin cannot combine with `--unlock-stdin`. Use platform
-protection, permitted hidden terminal unlock, or a qualified separate inherited
-protected pipe through `--unlock-fd FD`. The same descriptor cannot serve both
-inputs. Unsupported pipe input returns `unsupported_protected_input`, not a
-clear-file/argv fallback. Never persist clear supplied input, create a clear-secret
-file, or copy reusable unlock material outside `~/.tmax`. Dry-run reads no stream,
-prompts, unlocks, or resolves references; it cannot verify key/upstream success.
+Stdin is descriptor 0. Never accept key bytes through argv, environment, an
+ordinary configuration file, or an implicit pipe. Unsupported requested native
+input returns `unsupported_protected_input`, not a clear-file/argv fallback. Never
+persist clear supplied input outside the current-user-restricted secret file or
+log it. Dry-run reads no stream, prompts, or secret bytes and cannot verify
+key/upstream success.
 
 ### Login source selection
 
@@ -74,9 +73,9 @@ is the sole source-resolution flow for `provider login`.
 Examples: `tmax provider key set deepseek --key-stdin`,
 `tmax provider key set deepseek --key-ref REF`, `tmax provider auth clear deepseek`,
 `tmax secret list`, and `tmax secret cleanup REF --dry-run`. Use a returned qualified
-reference. `tmax provider key set deepseek --key-stdin --unlock-fd 3 --non-interactive`
-requires actual platform-qualified inherited pipe 3; help describes supported
-alternatives without secret argv or helper files.
+reference. `tmax provider key set deepseek --key-stdin --non-interactive` requires
+the explicit stdin operand; help describes supported alternatives without secret
+argv or helper files.
 
 ## Authorization replacement
 
@@ -126,15 +125,15 @@ Without `--output-fd`, write one UTF-8 secret line only to an attached controlli
 terminal through its separate terminal handle. With `--output-fd`, use only a
 platform-qualified inherited writable pipe descriptor at least 3. Never use
 stdout/stderr, a file path, regular file, environment value, log, or raw error.
-The descriptor must differ from any unlock-input descriptor, and its pipe must
-not alias stdout/stderr. A number at least 3 alone does not qualify the channel.
-Qualify output before unlocking/resolving the key. Noninteractive use requires
-the pipe; absent/unsupported delivery blocks with no fallback or secret retrieval.
-Unlock follows the common protected-input rules with no cached unlock session.
-Show reports whether the saved reference matches the actual loaded key; delivery
-does not prove readiness, activate saved changes, start inference, or register a
-client. It accepts dry-run, which never reads/resolves the key, consumes protected
-input, or writes any secret bytes. Ordinary status/inspect never reveal it.
+The output descriptor must not alias stdout/stderr. Qualify output before reading
+the key. Noninteractive use requires the pipe; absent/unsupported delivery blocks
+with no fallback or secret read. Unsupported storage records return
+`storage_version_unsupported` or `storage_record_invalid` and remain unchanged;
+re-enter keys through normal key setup. Show reports
+whether the saved reference matches the actual loaded key; delivery does not
+prove readiness, activate saved changes, start inference, or register a client.
+It accepts dry-run, which never reads the key or writes secret bytes. Ordinary
+status/inspect never reveal it.
 
 Provision/replace return `data.proxy_key = {action, reference, previous_reference}`.
 Action is `provisioned`, `replaced`, or `planned`; references are nonsecret strings
@@ -148,23 +147,26 @@ comparison is available), and `data.delivery = {channel, descriptor, delivered}`
 Channel is `terminal`/`pipe` or null if unqualified; descriptor is the pipe integer
 or null. Delivered is true only after complete delivery, false before delivery or
 for dry-run, null for partial/uncertain delivery. The result/stderr never contains
-the key; partial effects retain the `secret_delivery` boundary. Missing/locked
-key is `credential_unavailable`; missing required interaction is
-`interactive_required`; unsupported output is `unsupported_protected_output`.
+the key; partial effects retain the `secret_delivery` boundary. A missing key is
+`credential_unavailable`; unsupported storage returns `storage_version_unsupported`
+or `storage_record_invalid` without exposing key data; missing required interaction
+is `interactive_required`; unsupported output is `unsupported_protected_output`.
 No generated/revealed key is placed in examples, result JSON, or next-action argv.
 
 Examples: `tmax proxy key replace --dry-run`, `tmax proxy key replace`,
 `tmax proxy key show`, and
-`tmax proxy key show --output-fd 3 --unlock-fd 4 --non-interactive`.
-The last form requires actual qualified separate inherited pipes; no file/argv
-fallback is implied.
+`tmax proxy key show --output-fd 3 --non-interactive`. The last form requires an
+actual qualified inherited pipe; no file/argv fallback is implied.
 
 ## Secret inventory data
 
-`secret list` works with absent/invalid config and discovers secrets created before
-failed save, interrupted provisioning, or a lost result. Safe inventory metadata
-is atomically co-persisted with each secret. No unlock, content decryption, token
-export, fingerprint, or desired credential registry is added.
+`secret list` works with absent/invalid config and discovers current-format secrets
+created before failed save, interrupted provisioning, or a lost result. Current
+storage-version-2 secrets are atomically co-persisted with safe inventory metadata.
+Listing reads metadata only, never secret contents, token bytes, fingerprints, or
+reusable key material; it adds no desired credential registry. Unsupported-format
+records may have metadata unavailable with a generic reason and are not eligible
+for cleanup; their files remain unchanged.
 
 It returns `data.coverage` (`complete`, `partial`, or `unavailable`),
 `unavailable_scopes` (resource references), and `entries`. Only complete enumerated

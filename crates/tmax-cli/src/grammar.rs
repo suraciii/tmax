@@ -34,35 +34,114 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    pub fn from_argv(argv: &[OsString]) -> Self {
-        let mut seen = false;
-        let mut selected = None;
-        let mut args = argv.iter().skip(1);
-        while let Some(arg) = args.next() {
-            let Some(arg) = arg.to_str() else { continue };
-            if arg == "--" {
+    pub fn scan_global_options(
+        argv: &[OsString],
+        command: &Command,
+    ) -> (Self, Option<&'static str>) {
+        let mut format_seen = false;
+        let mut format_repeated = false;
+        let mut non_interactive_seen = false;
+        let mut duplicate_global = None;
+        let mut selected: Option<&str> = None;
+        let mut index = 1;
+        while let Some(token) = argv.get(index).and_then(|arg| arg.to_str()) {
+            if token == "--" {
                 break;
             }
-            if arg == "--format" {
-                if seen {
-                    return Self::Json;
+            if token == "--format" {
+                if format_seen {
+                    format_repeated = true;
+                    duplicate_global = Some("--format");
                 }
-                seen = true;
-                selected = args.next().and_then(|v| v.to_str().map(str::to_owned));
-            } else if let Some(value) = arg.strip_prefix("--format=") {
-                if seen {
-                    return Self::Json;
+                format_seen = true;
+                if let Some(value) = argv.get(index + 1).and_then(|arg| arg.to_str())
+                    && (!value.starts_with('-') || value == "-")
+                {
+                    if !format_repeated && selected.is_none() {
+                        selected = Some(value);
+                    }
+                    index += 2;
+                    continue;
                 }
-                seen = true;
-                selected = Some(value.to_owned());
+                index += 1;
+                continue;
+            }
+            if let Some(value) = token.strip_prefix("--format=") {
+                if format_seen {
+                    format_repeated = true;
+                    duplicate_global = Some("--format");
+                } else {
+                    selected = Some(value);
+                }
+                format_seen = true;
+                index += 1;
+                continue;
+            }
+            if token == "--non-interactive" {
+                if non_interactive_seen && duplicate_global.is_none() {
+                    duplicate_global = Some("--non-interactive");
+                }
+                non_interactive_seen = true;
+                index += 1;
+                continue;
+            }
+            let Some(option) = token.strip_prefix("--") else {
+                index += 1;
+                continue;
+            };
+            let (name, attached_value) = option
+                .split_once('=')
+                .map_or((option, false), |(name, _)| (name, true));
+            let value_count = find_long_argument(command, name)
+                .map(|argument| {
+                    argument
+                        .get_num_args()
+                        .map(|range| range.min_values())
+                        .unwrap_or_else(|| match argument.get_action() {
+                            ArgAction::Set | ArgAction::Append => 1,
+                            _ => 0,
+                        })
+                })
+                .unwrap_or(usize::from(attached_value));
+            let mut consumed = usize::from(attached_value);
+            index += 1;
+            while consumed < value_count {
+                let Some(value) = argv.get(index).and_then(|arg| arg.to_str()) else {
+                    break;
+                };
+                if value.starts_with('-') && value != "-" && !is_negative_number(value) {
+                    break;
+                }
+                consumed += 1;
+                index += 1;
             }
         }
-        if selected.as_deref() == Some("text") {
+        let format = if format_repeated {
+            Self::Json
+        } else if selected == Some("text") {
             Self::Text
         } else {
             Self::Json
-        }
+        };
+        (format, duplicate_global)
     }
+}
+
+fn find_long_argument<'a>(command: &'a Command, name: &str) -> Option<&'a Arg> {
+    command
+        .get_arguments()
+        .find(|argument| argument.get_long() == Some(name))
+        .or_else(|| {
+            command
+                .get_subcommands()
+                .find_map(|child| find_long_argument(child, name))
+        })
+}
+
+fn is_negative_number(value: &str) -> bool {
+    value
+        .strip_prefix('-')
+        .is_some_and(|digits| digits.as_bytes().first().is_some_and(u8::is_ascii_digit))
 }
 
 pub fn command() -> Command {
@@ -72,10 +151,8 @@ pub fn command() -> Command {
         .long_about("tmax manages provider access, subscriptions, model choices, native coding-agent configuration, and a local model proxy. It is CLI-first: compose explicit operations from offline help; no assistant, wizard, or configuration document is required. The supplementary local Web interface uses the same operations. Ordinary desired-state saves succeed after persistence and required safety work; background activation failures remain explicit warnings, not failed saves. Explicit reload, lifecycle, revocation, native and requested startup failures remain nonzero.")
         .subcommand_required(true)
         .disable_help_subcommand(true)
-        .arg(global_value("format", "FORMAT", "Output format: json (default) or text.").value_parser(["json", "text"]).default_value("json"))
-        .arg(global_flag("non-interactive", "Never prompt, open sign-in, or wait for terminal input."))
-        .arg(global_flag("unlock-stdin", "Read a protected-store unlock value from stdin only if execution requires it.").conflicts_with("unlock-fd"))
-        .arg(global_value("unlock-fd", "FD", "Read protected unlock from an inherited readable pipe: Unix descriptor or Windows native handle; zero selects stdin. Ordinary interactive use prompts invisibly.").conflicts_with("unlock-stdin"))
+        .arg(global_value("format", "FORMAT", "Output format: json (default) or text.").value_parser(["json", "text"]))
+        .arg(global_flag("non-interactive", "Never prompt or launch interactive sign-in. Explicit protected key input remains permitted."))
         .subcommand(help_command())
         .subcommand(status_command())
         .subcommand(config_commands())
@@ -104,6 +181,7 @@ fn help_command() -> Command {
 
 pub fn help_target(command: &Command, path: &[String]) -> Option<Command> {
     let mut current = command.clone();
+    current.build();
     for name in path {
         let child = current
             .get_subcommands()
@@ -154,7 +232,7 @@ fn global_value(id: &'static str, value: &'static str, help: &'static str) -> Ar
         .long(id)
         .value_name(value)
         .help(help)
-        .action(ArgAction::Set)
+        .action(ArgAction::Append)
         .value_parser(ValueParser::string())
         .global(true)
 }
@@ -163,7 +241,7 @@ fn global_flag(id: &'static str, help: &'static str) -> Arg {
     Arg::new(id)
         .long(id)
         .help(help)
-        .action(ArgAction::SetTrue)
+        .action(ArgAction::Count)
         .global(true)
 }
 
@@ -174,6 +252,9 @@ fn value(id: &'static str, value_name: &'static str, help: &'static str) -> Arg 
         .help(help)
         .action(ArgAction::Set)
         .value_parser(ValueParser::string())
+}
+fn signed_value(id: &'static str, value_name: &'static str, help: &'static str) -> Arg {
+    value(id, value_name, help).allow_negative_numbers(true)
 }
 
 fn repeated(id: &'static str, value_name: &'static str, help: &'static str) -> Arg {
@@ -193,6 +274,14 @@ fn pair(id: &'static str, first: &'static str, second: &'static str, help: &'sta
         .action(ArgAction::Append)
         .num_args(2)
         .value_parser(ValueParser::string())
+}
+fn signed_pair(
+    id: &'static str,
+    first: &'static str,
+    second: &'static str,
+    help: &'static str,
+) -> Arg {
+    pair(id, first, second, help).allow_negative_numbers(true)
 }
 
 fn flag(id: &'static str, help: &'static str) -> Arg {
@@ -232,15 +321,12 @@ fn mutation(command: Command, dry_run: bool, file_guard: bool) -> Command {
 
 fn edit_args(command: Command, fields: &'static str) -> Command {
     command
-        .arg(
-            pair(
-                "set",
-                "FIELD",
-                "VALUE",
-                "Set an exact supported scalar field; repeat for distinct fields.",
-            )
-            .long_help(fields),
-        )
+        .arg(signed_pair(
+            "set",
+            "FIELD",
+            "VALUE",
+            "Set an exact supported scalar field; repeat for distinct fields.",
+        ))
         .arg(
             repeated(
                 "clear",
@@ -280,14 +366,14 @@ fn config_commands() -> Command {
         leaf(
             "reset",
             "Preserve and replace an existing invalid configuration with empty valid settings.",
-            "Only an existing invalid file can be reset. The exact rejected bytes are encrypted under ~/.tmax/recovery before replacement; output returns an opaque record handle, never content. Does not delete secrets, sign out, touch native files, discard earlier recovery records, or replay rejected content.\n\nOptions: --if-revision REVISION guards the current file; --dry-run reports the full impact without creating a recovery artifact.\nExit: 0 on completed recovery/reset; 3 when safe preservation or current identity is unavailable; 4 for partial recovery/save/activation effects.\nExample: tmax config reset --dry-run",
+            "Only an existing invalid file can be reset. Save the exact rejected bytes in current-user-restricted ~/.tmax/recovery before replacement; output returns an opaque record handle, never content. The artifact is plaintext, not encrypted. Does not delete secrets, sign out, touch native files, discard earlier recovery records, or replay rejected content.\n\nOptions: --if-revision REVISION guards the current file; --dry-run reports the full impact without creating a recovery artifact.\nExit: 0 on completed recovery/reset; 3 when safe preservation or current identity is unavailable; 4 for partial recovery/save/activation effects.\nExample: tmax config reset --dry-run",
         ),
         true,
         true,
     );
     let recovery = family("recovery", "Inspect or discard retained invalid-file recovery records.", Command::new("recovery")
-        .subcommand(leaf("list", "List safe metadata for retained invalid-file recovery records.", "Works with absent or invalid configuration. Never decrypts or displays rejected bytes.\n\nExit: 0 when the inventory read completes.\nExample: tmax config recovery list"))
-        .subcommand(leaf("inspect", "Inspect safe metadata for one recovery record.", "Shows file identity, original revision, byte count, capture time, rejection category, ownership/protection, and discard support. Never decrypts rejected content.\n\nExit: 0 when metadata is available; unavailable evidence remains explicit.\nExample: tmax config recovery inspect RECORD")
+        .subcommand(leaf("list", "List safe metadata for retained invalid-file recovery records.", "Works with absent or invalid configuration. Never displays rejected bytes.\n\nExit: 0 when the inventory read completes.\nExample: tmax config recovery list"))
+        .subcommand(leaf("inspect", "Inspect safe metadata for one recovery record.", "Shows file identity, original revision, byte count, capture time, rejection category, ownership/file permissions, and discard support. Never displays rejected content.\n\nExit: 0 when metadata is available; unavailable evidence remains explicit.\nExample: tmax config recovery inspect RECORD")
             .arg(required_pos(1, "RECORD", "Returned recovery handle.")))
         .subcommand(mutation(leaf("discard", "Discard one exact owned invalid-file recovery record.", "Deletes only the selected recovery artifact after current ownership/concurrency checks. Does not change settings, credentials, native recovery, or bindings. Records have no expiry and no restore/replay operation.\n\nExit: 0 when discarded; 3 when current safety checks block; 4 for I/O or uncertain deletion.\nExample: tmax config recovery discard RECORD --dry-run"), true, false)
             .arg(required_pos(1, "RECORD", "Returned recovery handle."))));
@@ -365,8 +451,8 @@ fn provider_commands() -> Command {
         .subcommand(mutation(leaf("clear", "Remove active provider authentication configuration.", "Does not delete stored keys, sign out native sessions, revoke upstream access, or remove subscription declarations.\n\nExit: 0 when saved; 3 for reference blockers; 4 for persistence or required safety/startup failure.\nExample: tmax provider auth clear deepseek")
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true));
     let key = Command::new("key")
-        .about("Configure provider API-key authentication through protected input or a qualified reference.")
-        .subcommand(mutation(leaf("set", "Set or replace provider API-key authentication.", "Supply either --key-stdin, --key-ref REF, or hidden terminal input. --key-stdin reads one nonempty UTF-8 line without echo. Noninteractive entry requires explicit --key-stdin; never consume a pipe implicitly. Key input cannot share stdin with --unlock-stdin. Secrets are never accepted in argv/environment/files and are never printed.\n\nDry-run reads no stream, prompts, unlocks, or references. A key replacement removes prior auth fields but retains old stored secrets.\nExit: 0 when credential and requested save complete; 3 when protected input/unlock is required; 4 for credential, persistence, or required safety/startup failure.\nExample: tmax provider key set deepseek --key-stdin --non-interactive")
+        .about("Configure provider API-key authentication through key input or a qualified reference.")
+        .subcommand(mutation(leaf("set", "Set or replace provider API-key authentication.", "Supply either --key-stdin, --key-ref REF, or hidden terminal input. --key-stdin reads one nonempty UTF-8 line without echo. Noninteractive entry requires explicit --key-stdin; never consume a pipe implicitly. Do not supply keys in argv, environment variables, or ordinary configuration files; never print or log them.\n\nDry-run reads no stream, prompts, or references. A key replacement removes prior auth fields but retains old stored secrets.\nExit: 0 when credential and requested save complete; 3 when required key input or interaction is unavailable; 4 for credential, persistence, or required safety/startup failure.\nExample: tmax provider key set deepseek --key-stdin --non-interactive")
             .arg(flag("key-stdin", "Read one key line explicitly from stdin.").conflicts_with("key-ref"))
             .arg(value("key-ref", "REF", "Select a qualified provider-owned secret reference without resolving it.").conflicts_with("key-stdin"))
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true));
@@ -456,8 +542,8 @@ fn provider_input_commands() -> Command {
 
 fn secret_commands() -> Command {
     Command::new("secret")
-        .about("Inspect retained protected-secret references and explicitly clean up an eligible tmax-owned secret.")
-        .subcommand(leaf("list", "List safe local secret ownership, reference, and cleanup metadata.", "Works with absent/invalid config and does not unlock, decrypt, export, fingerprint, or expose secret contents. Incomplete inventory coverage is not an empty inventory. Unknown reference safety blocks cleanup.\n\nExit: 0 when safe inventory discovery completes, including partial/unavailable coverage.\nExample: tmax secret list"))
+        .about("Inspect retained secret references and explicitly clean up an eligible tmax-owned secret.")
+        .subcommand(leaf("list", "List safe local secret ownership, reference, and cleanup metadata.", "Works with absent/invalid config and does not read or expose secret contents. Incomplete inventory coverage is not an empty inventory. Unknown reference safety blocks cleanup.\n\nExit: 0 when safe inventory discovery completes, including partial/unavailable coverage.\nExample: tmax secret list"))
         .subcommand(mutation(leaf("cleanup", "Delete one exact retained tmax-owned local secret after safety checks.", "Rechecks ownership and desired/loaded/known-native references. Unknown safety blocks deletion. Does not delete native-owned sessions or revoke upstream access/copies.\n\nExit: 0 when deleted; 3 when blocked; 4 for failed or uncertain deletion.\nExample: tmax secret cleanup REF --dry-run")
             .arg(required_pos(1, "REF", "Exact qualified secret reference.")), true, false))
         .subcommand_required(true)
@@ -602,7 +688,7 @@ fn schedule_rule(name: &'static str, indexed: bool) -> Command {
     };
     let detail = "Requires --priority INTEGER, one unique selector form (--weekday DAY repeated or --date DATE repeated), and one complete window (--all-day or both --start HH:MM --end HH:MM). DAYS: mon,tue,wed,thu,fri,sat,sun. Weekdays and dates cannot mix. Optional --effective-from DATE and --effective-until DATE use local dates with an exclusive upper bound. Set the model timezone first. Times and DST follow the model time-rule contract.\n\nExit: 0 when saved; 2 for invalid rule; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule add deepseek/deepseek-flash --priority 100 --weekday mon --start 00:00 --end 08:00";
     let mut command = mutation(leaf(name, about, detail)
-        .arg(value("priority", "INTEGER", "Signed replacement priority.").required(true))
+        .arg(signed_value("priority", "INTEGER", "Signed replacement priority.").required(true))
         .arg(weekdays("weekday", "Weekday selector; repeat unique values.").conflicts_with("date"))
         .arg(repeated("date", "DATE", "YYYY-MM-DD local date selector; repeat unique values.").conflicts_with("weekday"))
         .arg(flag("all-day", "Use the whole selected local day; alternatively provide both --start and --end.").conflicts_with_all(["start", "end"]))
@@ -652,7 +738,10 @@ fn model_rule_commands() -> Command {
                     )
                     .required(true),
                 )
-                .arg(value("priority", "INTEGER", "Signed replacement priority.").required(true))
+                .arg(
+                    signed_value("priority", "INTEGER", "Signed replacement priority.")
+                        .required(true),
+                )
                 .arg(
                     value(
                         "reset-within",
@@ -930,16 +1019,16 @@ fn network_commands() -> Command {
 fn proxy_commands() -> Command {
     let autostart = Command::new("autostart")
         .about("Explicitly enable or disable this authority's per-user login-start registration.")
-        .subcommand(mutation(leaf("enable", "Save enabled startup intent and reconcile tmax's owned per-user registration.", "Always reconciles even if the saved value is already true. Does not start inference. Reports unlock requirements. Unrelated startup entries are untouched.\n\nExit: 0 when save/reconciliation completes; 3 when unlock/action is required; 4 when requested registration fails.\nExample: tmax proxy autostart enable") , true, true))
+        .subcommand(mutation(leaf("enable", "Save enabled startup intent and reconcile tmax's owned per-user registration.", "Always reconciles even if the saved value is already true. Does not start inference. Reports unavailable credential requirements. Unrelated startup entries are untouched.\n\nExit: 0 when save/reconciliation completes; 3 when action is required; 4 when requested registration fails.\nExample: tmax proxy autostart enable") , true, true))
         .subcommand(mutation(leaf("disable", "Save disabled startup intent and reconcile removal of tmax's registration.", "Always reconciles even if the saved value is already false. Does not stop inference or alter unrelated entries.\n\nExit: 0 when save/reconciliation completes; 4 when requested registration removal fails.\nExample: tmax proxy autostart disable"), true, true));
     let key = Command::new("key")
         .about("Explicitly replace or securely reveal the sole shared local proxy key.")
-        .subcommand(mutation(leaf("replace", "Generate/store a new shared inference key and save its reference.", "Validates current config/ownership before provisioning. Saves and activates separately; a provisioned key remains discoverable for explicit cleanup after save failure. Does not update native or unmanaged clients. Replacing revokes old-key admission after activation; admitted requests retain their captured credential.\n\nDry-run does not generate/reserve a key or read protected input.\nExit: 0 when requested boundaries complete; 3 when action/unlock required; 4 for credential/save/activation partial failure.\nExample: tmax proxy key replace --dry-run"), true, true))
-        .subcommand(mutation(leaf("show", "Deliver the configured shared proxy key through one explicitly qualified protected output.", "Without --output-fd, writes one UTF-8 line only to the attached controlling terminal. --output-fd FD requires a qualified inherited writable pipe >=3, distinct from unlock input and not aliased to stdout/stderr. Noninteractive use requires the pipe. Qualify output before unlock/retrieval; never fall back to stdout, stderr, argv, environment, or a file. The result never contains key bytes. Delivery does not prove readiness, activate saved changes, start inference, or register clients.\n\nDry-run reads/resolves no key, consumes no unlock, and writes no secret bytes.\nExit: 0 on complete delivery; 3 when interaction/unlock is required; 4 on partial/uncertain delivery.\nExample: tmax proxy key show --output-fd 3 --unlock-fd 4 --non-interactive")
+        .subcommand(mutation(leaf("replace", "Generate/store a new shared inference key and save its reference.", "Validates current config/ownership before provisioning. Saves and activates separately; a provisioned key remains discoverable for explicit cleanup after save failure. Does not update native or unmanaged clients. Replacing revokes old-key admission after activation; admitted requests retain their captured credential.\n\nDry-run does not generate/reserve a key or read protected input.\nExit: 0 when requested boundaries complete; 3 when action is required; 4 for credential/save/activation partial failure.\nExample: tmax proxy key replace --dry-run"), true, true))
+        .subcommand(mutation(leaf("show", "Deliver the configured shared proxy key through one explicitly qualified protected output.", "Without --output-fd, writes one UTF-8 line only to the attached controlling terminal. --output-fd FD requires a qualified inherited writable pipe >=3, not aliased to stdout/stderr. Noninteractive use requires the pipe; never fall back to stdout, stderr, argv, environment, or a file. The result never contains key bytes. Delivery does not prove readiness, activate saved changes, start inference, or register clients.\n\nDry-run reads/resolves no key and writes no secret bytes.\nExit: 0 on complete delivery; 3 when interaction is required; 4 on partial/uncertain delivery.\nExample: tmax proxy key show --output-fd 3 --non-interactive")
             .arg(value("output-fd", "FD", "Qualified inherited writable pipe at least 3: Unix descriptor or Windows native handle; never stdout/stderr.")), true, false));
     Command::new("proxy")
         .about("Inspect and explicitly control the background inference listener.")
-        .subcommand(leaf("status", "Report actual resident/listener identity, key readiness, publication, and safe-session conditions.", "Read actual resident state and versions; saved/loaded network policy remains distinct. Does not unlock or reveal shared key. Native target readiness is not an inference prerequisite.\n\nExit: 0 even when stopped, unavailable, or incompatible state is reported.\nExample: tmax proxy status"))
+        .subcommand(leaf("status", "Report actual resident/listener identity, key readiness, publication, and safe-session conditions.", "Read actual resident state and versions; saved/loaded network policy remains distinct. Does not read or reveal the shared key. Native target readiness is not an inference prerequisite.\n\nExit: 0 even when stopped, unavailable, or incompatible state is reported.\nExample: tmax proxy status"))
         .subcommand(mutation(
             leaf("configure", "Create/edit the optional proxy settings; creation provisions the shared key explicitly.", "Initial creation requires --listen numeric loopback host:port and provisions one key. Existing edits retain the key. --clear autostart restores disabled intent but does not force reconciliation. No implicit start, native write, key repair, or key generation on an existing table. Report provision/save/activation separately.\n\nExit: 0 when save completes; 2 for invalid address/config; 3 for required action; 4 for provisioning, persistence, or required safety/startup failure.\nExample: tmax proxy configure --listen 127.0.0.1:17840")
                 .arg(value("listen", "ADDRESS", "Numeric loopback host:port; IPv6 must be bracketed."))
@@ -948,7 +1037,7 @@ fn proxy_commands() -> Command {
             true,
         ))
         .subcommand(mutation(leaf("remove", "Remove proxy configuration only after inference is stopped and proxy references resolve.", "Does not stop inference implicitly, delete stored key material, edit native files, or remove unknown external copies. Explicit restart is needed to activate a saved address change.\n\nExit: 0 when removed; 3 if listener/references require action; 4 for persistence or required safety/startup failure.\nExample: tmax proxy remove --dry-run"), true, true))
-        .subcommand(mutation(leaf("start", "Explicitly start inference in the sole identified compatible resident.", "Reuses a compatible running listener without reload or reapply. A management-only resident may start inference explicitly. Validates saved config and existing shared key; never generates a key or applies native settings. No target prerequisite. On Unix, an unrepresentable OS-home control socket path blocks before resident launch with resident_control_path_invalid; the store is not relocated.\n\nDry-run does not start, reserve address, unlock, or resolve secrets.\nExit: 0 when started/reused; 3 for incompatible owner, unsupported control path, locked key, or required action; 4 for startup failure.\nExample: tmax proxy start"), true, false))
+        .subcommand(mutation(leaf("start", "Explicitly start inference in the sole identified compatible resident.", "Reuses a compatible running listener without reload or reapply. A management-only resident may start inference explicitly. Validates saved config and existing shared key; never generates a key or applies native settings. No target prerequisite. On Unix, an unrepresentable OS-home control socket path blocks before resident launch with resident_control_path_invalid; the store is not relocated.\n\nDry-run does not start, reserve address, or resolve secrets.\nExit: 0 when started/reused; 3 for incompatible owner, unsupported control path, unavailable key, or required action; 4 for startup failure.\nExample: tmax proxy start"), true, false))
         .subcommand(mutation(leaf("stop", "Stop inference only; normal stop refuses while requests are active.", "Use --cancel-active to close admission, interrupt the actual active set as transports allow, and report effects. Does not stop Web, alter autostart, switch native clients to upstream, or discard retained sessions.\n\nDry-run reserves/freezes no active set.\nExit: 0 when stopped; 3 when active requests require explicit cancellation; 4 for failed/partial lifecycle.\nExample: tmax proxy stop --cancel-active")
             .arg(flag("cancel-active", "Explicitly interrupt currently active requests; no replay.")), true, false))
         .subcommand(mutation(leaf("restart", "Explicitly stop and start inference using current valid saved settings.", "Includes saved listen-address changes. Does not stop Web or replace the resident. Same active-request rule as stop; --cancel-active requests interruption, not approval.\n\nExit: 0 when restarted; 3 when action is required; 4 for partial/failed stop/start.\nExample: tmax proxy restart" )
@@ -1001,7 +1090,7 @@ pub fn operation_hint(command: &Command, argv: &[OsString]) -> Option<String> {
     let mut current = command;
     let mut path = Vec::new();
     while let Some(token) = argv.get(index).and_then(|value| value.to_str()) {
-        if token == "--format" || token == "--unlock-fd" {
+        if token == "--format" {
             index += 2;
             continue;
         }
@@ -1009,7 +1098,7 @@ pub fn operation_hint(command: &Command, argv: &[OsString]) -> Option<String> {
             index += 1;
             continue;
         }
-        if matches!(token, "--non-interactive" | "--unlock-stdin") {
+        if token == "--non-interactive" {
             index += 1;
             continue;
         }
@@ -1095,17 +1184,26 @@ fn collect_arguments(
         else {
             continue;
         };
-        if matches!(argument.get_action(), ArgAction::SetTrue) {
-            if matches
-                .try_get_one::<bool>(key)
-                .ok()
-                .flatten()
-                .copied()
-                .unwrap_or(false)
-            {
-                arguments.insert(key.to_owned(), vec!["true".to_owned()]);
+        match argument.get_action() {
+            ArgAction::SetTrue => {
+                if matches
+                    .try_get_one::<bool>(key)
+                    .ok()
+                    .flatten()
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    arguments.insert(key.to_owned(), vec!["true".to_owned()]);
+                }
+                continue;
             }
-            continue;
+            ArgAction::Count => {
+                if matches.get_count(key) > 0 {
+                    arguments.insert(key.to_owned(), vec!["true".to_owned()]);
+                }
+                continue;
+            }
+            _ => {}
         }
         if let Ok(Some(values)) = matches.try_get_raw(key) {
             let values: Vec<String> = values
@@ -1134,5 +1232,156 @@ fn find_leaf<'a>(matches: &'a ArgMatches, path: &mut Vec<String>) -> &'a ArgMatc
         find_leaf(nested, path)
     } else {
         matches
+    }
+}
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::{OutputFormat, command};
+
+    fn os_args(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn signed_priority_operands_parse_without_accepting_missing_values_or_flags() {
+        for args in [
+            vec![
+                "tmax",
+                "model",
+                "update",
+                "provider/model",
+                "--set",
+                "priority",
+                "-10",
+                "--dry-run",
+            ],
+            vec![
+                "tmax",
+                "model",
+                "schedule",
+                "add",
+                "provider/model",
+                "--priority",
+                "-10",
+                "--weekday",
+                "mon",
+                "--all-day",
+            ],
+            vec![
+                "tmax",
+                "model",
+                "rule",
+                "add",
+                "provider/model",
+                "rule-id",
+                "--input",
+                "reset",
+                "--priority",
+                "-10",
+                "--reset-within",
+                "1d",
+            ],
+        ] {
+            assert!(command().try_get_matches_from(args).is_ok());
+        }
+
+        for args in [
+            vec![
+                "tmax",
+                "model",
+                "update",
+                "provider/model",
+                "--set",
+                "priority",
+                "--dry-run",
+            ],
+            vec![
+                "tmax",
+                "model",
+                "update",
+                "provider/model",
+                "--set",
+                "priority",
+                "--unknown",
+                "-10",
+            ],
+            vec![
+                "tmax",
+                "model",
+                "schedule",
+                "add",
+                "provider/model",
+                "--priority",
+                "--weekday",
+                "mon",
+                "--all-day",
+            ],
+        ] {
+            assert!(command().try_get_matches_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn global_option_scanning_obeys_values_terminators_and_duplicates() {
+        let root = command();
+        let (format, duplicate) = OutputFormat::scan_global_options(
+            &os_args(&[
+                "tmax",
+                "--format",
+                "text",
+                "model",
+                "update",
+                "provider/model",
+                "--set",
+                "priority",
+                "-10",
+            ]),
+            &root,
+        );
+        assert_eq!(format, OutputFormat::Text);
+        assert_eq!(duplicate, None);
+
+        let (format, duplicate) = OutputFormat::scan_global_options(
+            &os_args(&[
+                "tmax",
+                "model",
+                "update",
+                "provider/model",
+                "--set",
+                "priority",
+                "--",
+                "--format",
+                "text",
+            ]),
+            &root,
+        );
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(duplicate, None);
+
+        let (format, duplicate) = OutputFormat::scan_global_options(
+            &os_args(&[
+                "tmax", "--format", "json", "provider", "--format", "json", "list", "--format",
+                "json",
+            ]),
+            &root,
+        );
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(duplicate, Some("--format"));
+
+        let (format, duplicate) = OutputFormat::scan_global_options(
+            &os_args(&[
+                "tmax",
+                "--non-interactive",
+                "provider",
+                "--non-interactive",
+                "list",
+                "--non-interactive",
+            ]),
+            &root,
+        );
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(duplicate, Some("--non-interactive"));
     }
 }

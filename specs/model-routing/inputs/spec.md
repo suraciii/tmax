@@ -329,7 +329,7 @@ clear, and read-only inspection. They work without a resident service and do not
 mutate authentication, desired configuration, native application, or startup.
 Dry runs inspect only permitted local inputs: no credentials, source read,
 publication, or scheduling effects. Inspection, priority preview, `--at`, and
-request selection never trigger acquisition or secret unlock.
+request selection never trigger acquisition or saved-secret resolution.
 
 Explicit operations validate the current saved declaration and capture its
 binding. A fetched or manually recorded head can affect the running service only
@@ -353,7 +353,7 @@ path. An explicit operation may request an existing same-authorization refresh
 through its declared login source where supported and may consume explicitly
 supplied protected input under the [CLI protection contract](../../cli/spec.md). It cannot sign in,
 interactively acquire a different account, borrow ambient browser credentials,
-import another agent's tokens, or unlock secrets implicitly. Public announcement
+import another agent's tokens, or resolve saved secrets implicitly. Public announcement
 reads use no authentication at all. A missing source capability does not block
 otherwise qualified inference.
 
@@ -392,9 +392,9 @@ views differ, their heads remain scoped to their declaration incarnations and
 revisions, and only a matching head applies to either view. Actual authorization
 generation changes remain live invalidation boundaries for both views.
 
-Automatic work uses already available credentials only. Unsupported
-noninteractive access, a locked store, or missing credentials produces the
-corresponding unavailable attempt; no prompt, login, or implicit unlock occurs.
+Automatic work uses already available credentials only. An unavailable local
+secret file or missing credentials produces the corresponding unavailable
+attempt; no prompt, login, or implicit secret resolution occurs.
 
 Disabling/changing the interval stops/reschedules new automatic attempts; a
 captured in-flight attempt may finish only if its declaration, authorization, and
@@ -525,7 +525,7 @@ claims of exercised runtime integration:
 2. Manual recording and explicit supported refresh persist usable values with or
    without the service. Source separation is exact: neither operation silently
    overrides, merges with, or switches the other source. Read-only and dry-run
-   operations cause no acquisition, unlock, publication, or service start.
+   operations cause no acquisition, secret resolution, publication, or service start.
 3. Quota values accept exactly a documented decimal percentage or complete
    comparable counters. Counter ratios such as one out of three compare exactly;
    missing denominators, incompatible units/windows, absent data, and local

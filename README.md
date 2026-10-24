@@ -16,7 +16,7 @@ can use upstream providers and tmax together; the personal proxy uses one shared
 key and the model list derived from enabled concrete models and model aliases.
 
 The workspace includes explicit management operations, a shared local Web
-surface, encrypted secret/recovery storage, rule-driven model selection, and a
+surface, per-user secret and recovery files, rule-driven model selection, and a
 same-protocol resident proxy. Native adapters are version- and scope-specific;
 configuration application is not proof of a running agent's use or upstream
 entitlement. Provider-authorized streaming/tool/continuation qualification remains
@@ -55,16 +55,15 @@ See the [usage guide](docs/usage.md) for incremental provider/model setup,
 protected input, native pi direct/proxy application and restoration, and manual
 quota-driven rules. The examples use finite commands, not configuration blobs.
 
-Protected key entry and encrypted-store unlock use separate hidden terminal or
-explicit inherited-pipe inputs; secrets never belong in argv or TOML. Saving
-settings does not sign in, apply native files, start inference, or send a paid
-probe. Use command help for explicit proxy setup, native application, and recovery.
-`web open --no-browser` starts supplementary loopback management independently of
-inference. The resident uses Unix local sockets or same-user Windows named pipes.
-Windows supports hidden-console input, protected Web entry, detached startup,
-and opt-in current-user login startup without a service installation. Linux
-login startup uses an owned per-user systemd unit. Locked credentials remain an
-explicit unlock requirement, never a plaintext fallback or a claim of readiness.
+Provider API keys and credential-bearing recovery data are stored as plaintext files under `~/.tmax`, restricted to the current OS account. File permissions are not encryption. Ordinary configuration stores references, not keys. Never put credentials in argv, environment variables, or TOML, and never expose them through stdout, logs, or ordinary inspection.
+Enter provider keys through hidden terminal input or explicit `--key-stdin`. The Web form has a provider-key field. See the [configuration contract](specs/configuration/spec.md) for restricted storage and recovery behavior.
+Saving settings does not sign in, apply native files, start inference, or send a paid probe. Use command help for explicit proxy setup, native application, and recovery.
+`web open --no-browser` starts supplementary loopback management independently of inference. The resident uses Unix local sockets or same-user Windows named pipes.
+Windows supports hidden-console key input, Web key entry, detached startup, and opt-in current-user login startup without a service installation. Linux login startup uses an owned per-user systemd unit.
+Unsupported storage-format records return `storage_version_unsupported` or `storage_record_invalid` and remain unchanged. Re-enter provider keys with `provider key set` or replace the shared key with `proxy key replace`. Cleanup/discard applies only to supported current-format records when ownership and reference safety are known; corrupt or unknown metadata blocks deletion. If current CLI reports
+`resident_incompatible`, use that resident's matching older CLI (`tmax proxy stop`
+and `tmax web stop`) or its existing Web controls to stop it before starting the
+new executable. The new CLI will not take over the old resident.
 
 ### Native qualification
 

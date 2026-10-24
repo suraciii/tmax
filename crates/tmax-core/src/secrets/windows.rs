@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_pipe_round_trip_and_separation_use_native_handles() {
+    fn protected_pipe_round_trip_uses_native_handles() {
         let (reader, mut writer) = std::io::pipe().unwrap();
         writer.write_all("密钥-🔑\r\n".as_bytes()).unwrap();
         drop(writer);
@@ -540,10 +540,6 @@ mod tests {
         assert_eq!(output.descriptor(), Some(descriptor(&writer)));
         output.deliver("密钥-🔑".as_bytes()).unwrap();
         drop(output);
-        request
-            .arguments
-            .insert("unlock-fd".into(), vec![descriptor(&reader).to_string()]);
-        assert!(super::super::qualify_output(&request).is_err());
         drop(writer);
         let mut received = Vec::new();
         reader.read_to_end(&mut received).unwrap();

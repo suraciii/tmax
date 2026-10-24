@@ -58,13 +58,15 @@ Integration setup and recovery must be reachable through explicit CLI arguments,
 including the native target and authentication owner; callers must not author
 configuration documents or use the Web first. tmax's sole private authority is
 `~/.tmax/tmax.toml`, independent of the working directory or calling agent. All
-tmax-owned persistent data, caches, logs, recovery data, and protected secret
-files remain under `~/.tmax` in the OS user's home, including on Windows.
-Agent-owned configuration and supported native credential stores retain their
-native locations and ownership; those native scopes are not alternative tmax
-homes or configuration authorities. tmax-owned reusable secrets use the protected
-encrypted store and protected input/platform unlocking, without clear reusable
-copies outside it. Upstream login and refresh remain with their declared owner.
+tmax-owned persistent data, caches, logs, recovery data, and secret files remain
+under `~/.tmax` in the OS user's home, including on Windows. API-key and
+credential-bearing recovery payloads are plaintext files restricted to the current
+OS account; ordinary configuration stores secret references, not key bytes.
+File permissions are not encryption. Never place credentials in argv, environment
+variables, TOML, stdout, logs, or ordinary inspection. Agent-owned configuration
+and supported native credential stores retain their native locations and ownership;
+those native scopes are not alternative tmax homes or configuration authorities.
+Upstream login and refresh remain with their declared owner.
 
 tmax-owned credential work follows
 [credential refresh coordination](../product/spec.md#credential-refresh-coordination)

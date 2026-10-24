@@ -3,8 +3,8 @@
 //! Each adapter declares a concrete native schema, credential owner, precedence,
 //! and exact researched version. Config files are edited at owned paths, never
 //! regenerated from imported native state. Exact originals and written bytes are
-//! encrypted before the first external write. A write-ahead record survives an
-//! interruption, and three-way restoration preserves unowned later edits.
+//! stored in current-user-only files before the first external write. A write-ahead
+//! record survives interruption, and three-way restoration preserves unowned later edits.
 //! Native auth inspection projects root namespace presence only, skipping every
 //! credential value without materializing, retaining, or exporting it.
 mod adapters;
@@ -138,7 +138,7 @@ fn unavailable() -> Error {
         "Native scope or configuration is unavailable; inspect the exact selected native path",
     )
 }
-fn scope(store: &Store, path: &Path) -> Result<PathBuf> {
+fn scope_evidence(store: &Store, path: &Path) -> Result<(PathBuf, &'static str)> {
     let path = if path.is_absolute() {
         path.to_owned()
     } else {
@@ -150,9 +150,21 @@ fn scope(store: &Store, path: &Path) -> Result<PathBuf> {
             "Native scope must not contain parent traversal",
         ));
     }
-    let canonical = fs::canonicalize(&path).map_err(|_| unavailable())?;
+    let canonical = match fs::canonicalize(&path) {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok((
+                path,
+                match error.kind() {
+                    std::io::ErrorKind::NotFound => "absent",
+                    std::io::ErrorKind::PermissionDenied => "unreadable",
+                    _ => "unavailable",
+                },
+            ));
+        }
+    };
     if !canonical.is_dir() {
-        return Err(unavailable());
+        return Ok((canonical, "not_directory"));
     }
     if canonical == store.root || canonical.starts_with(&store.root) {
         return Err(Error::new(
@@ -160,7 +172,20 @@ fn scope(store: &Store, path: &Path) -> Result<PathBuf> {
             "Native scopes must remain outside tmax-owned storage",
         ));
     }
-    Ok(canonical)
+    Ok((canonical, "available"))
+}
+fn scope(store: &Store, path: &Path) -> Result<PathBuf> {
+    let (path, state) = scope_evidence(store, path)?;
+    if state != "available" {
+        return Err(Error::new(
+            "native_scope_unavailable",
+            &format!(
+                "Native scope {} is {state}; select an existing native configuration directory or create the intended directory explicitly before applying",
+                path.display()
+            ),
+        ));
+    }
+    Ok(path)
 }
 fn read_native(path: &Path) -> Result<Option<String>> {
     let meta = match fs::symlink_metadata(path) {
@@ -386,7 +411,31 @@ async fn version(agent: &str, path: &Path) -> Value {
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|text| detected_version(agent, text));
     let exact = found.as_deref() == Some(adapters::qualified_version(agent));
-    json!({"executable":exe,"version":found,"state":if found.is_some(){"detected"}else{"unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
+    json!({"executable":exe,"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
+}
+fn version_blocker(installation: &Value) -> Option<Value> {
+    if installation["compatibility"] == "documented" {
+        return None;
+    }
+    let (code, message) = match installation["state"].as_str() {
+        Some("not_installed") => (
+            "native_not_installed",
+            "The native executable is not on PATH; install it or correct PATH before applying",
+        ),
+        Some("probe_failed") => (
+            "native_version_probe_failed",
+            "The native version probe could not complete successfully; inspect executable permissions and version-command availability",
+        ),
+        Some("detected") => (
+            "native_version_unqualified",
+            "The detected version differs from the exact researched schema; inspect version evidence before applying. Unknown support is not a prohibition claim",
+        ),
+        _ => (
+            "native_version_unknown",
+            "The native version output did not identify a qualified version; inspect version-command evidence",
+        ),
+    };
+    Some(json!({"code":code,"message":message}))
 }
 fn omp_root(store: &Store) -> PathBuf {
     std::env::var_os("PI_CONFIG_DIR")
@@ -535,12 +584,12 @@ pub async fn discover(store: &Store, agent: Option<&str>, path: Option<&str>) ->
         let selected = path
             .map(PathBuf::from)
             .unwrap_or_else(|| default_scope(store, a));
-        let resolved = scope(store, &selected);
-        // Version commands are finite read-only native flags. Inspection never
-        // starts a native server, calls model discovery, or evaluates key helpers.
-        let evidence = version(a, resolved.as_deref().unwrap_or(&store.home)).await;
+        let (resolved, reason) = scope_evidence(store, &selected)?;
+        let available = reason == "available";
+        // Version commands use an existing directory and never select credentials.
+        let evidence = version(a, if available { &resolved } else { &store.home }).await;
         let scopes = profile_paths(store, a);
-        installations.push(json!({"target":null,"agent":a,"path":resolved.as_ref().unwrap_or(&selected),"scope_state":if resolved.is_ok(){"available"}else{"unavailable"},"installation":evidence,"profiles":scopes,"files":safe_files(a,&selected),"credential_scopes":auth_paths(a,&selected).iter().map(|p|json!({"path":p,"present":p.exists(),"contents":"not_read","owner":a})).collect::<Vec<_>>(),"precedence":adapters::precedence(a),"supported_roles":supported_roles(a),"imported":false}));
+        installations.push(json!({"target":null,"agent":a,"path":resolved,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(reason)},"installation":evidence,"profiles":scopes,"files":if available{safe_files(a,&resolved)}else{Vec::new()},"credential_scopes":if available{auth_paths(a,&resolved).iter().map(|p|json!({"path":p,"present":p.exists(),"contents":"not_read","owner":a})).collect::<Vec<_>>()}else{Vec::new()},"precedence":adapters::precedence(a),"supported_roles":supported_roles(a),"imported":false}));
     }
     Ok(if path.is_some() {
         installations.remove(0)
@@ -595,37 +644,65 @@ fn field_drift(record: &Record, read_credentials: bool) -> Result<Vec<Value>> {
     }
     Ok(drift)
 }
-fn record_view(record: &Record) -> Value {
+fn record_view(store: &Store, record: &Record) -> Value {
     let drift = field_drift(record, false);
-    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":"encrypted","files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":["agent restore --recovery","agent recovery discard"]})
+    let protection = secrets::check_recovery(store, &record.payload_ref, &record.owner)
+        .map(|_| "current_user_files");
+    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":protection.as_ref().ok(),"restore_available":protection.is_ok(),"storage_reason_code":protection.as_ref().err().map(|error|error.code.as_str()),"files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":if protection.is_ok(){json!(["agent restore --recovery","agent recovery discard"])}else{json!([])}})
 }
 
 pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> {
     let target = target(config, id)?;
-    let path = scope(store, &target.scope)?;
+    let (path, scope_reason) = scope_evidence(store, &target.scope)?;
+    let available = scope_reason == "available";
     let index: Index = store.read_json(INDEX)?;
     let identity = owner(store, id)?;
     let record = record_for(&index, identity.as_deref(), &path);
     let mut blockers = Vec::new();
+    if !available {
+        blockers.push(json!({"code":"native_scope_unavailable","path":path,"reason_code":scope_reason,"message":"Select an existing native configuration directory or explicitly create the intended directory before applying"}));
+    }
     if target.default.is_none()
         || target.providers.is_empty()
         || target.providers.values().any(|p| p.models.is_empty())
     {
         blockers.push(json!({"code":"target_incomplete","message":"Explicit provider selections and default are required for application"}));
     }
-    let plan = entries(store, config, id, target, &path, true, None).await;
-    if let Err(e) = &plan {
-        blockers.push(json!({"code":e.code,"field":e.field,"message":e.message}));
+    let mut pending = None;
+    if available {
+        let plan = match entries(store, config, id, target, &path, true).await {
+            Ok((entries, references)) => adapters::build(target, &path, &entries)
+                .and_then(|files| pending_native_changes(target, &files, &references, record)),
+            Err(error) => Err(error),
+        };
+        match plan {
+            Ok(changes) => pending = Some(changes),
+            Err(error) => blockers
+                .push(json!({"code":error.code,"field":error.field,"message":error.message})),
+        }
+        if let Some(record) = record {
+            match field_drift(record, false) {
+                Ok(drift) => blockers.extend(drift),
+                Err(error) => blockers.push(json!({"code":error.code,"message":error.message})),
+            }
+        }
     }
-    if let Some(record) = record {
-        blockers.extend(field_drift(record, false)?);
+    let installed = if available {
+        version(&target.agent, &path).await
+    } else {
+        json!({"state":"not_checked","version":null,"compatibility":"unknown","reason_code":"native_scope_unavailable"})
+    };
+    if available && let Some(blocker) = version_blocker(&installed) {
+        blockers.push(blocker);
     }
-    let installed = version(&target.agent, &path).await;
-    if installed["compatibility"] != "documented" {
-        blockers.push(json!({"code":"native_version_unknown","message":"Only the exact researched native version has schema evidence; unknown is not an incompatibility claim"}));
-    }
+    let applied_state = match &pending {
+        None => "unknown",
+        Some(_) if record.is_none() => "not_applied",
+        Some(changes) if !changes.is_empty() => "pending_native_changes",
+        Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
+    };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider {json!({"provider":p})}else{json!({"proxy":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"precedence":adapters::precedence(&target.agent),"files":safe_files(&target.agent,&path),"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":record.map(|r|r.state.as_str()).unwrap_or("not_applied"),"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(record_view)}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"proxy":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -636,7 +713,6 @@ async fn entries(
     target: &AgentTarget,
     path: &Path,
     _dry_run: bool,
-    _unlock: Option<&[u8]>,
 ) -> Result<(Vec<Entry>, Vec<String>)> {
     let mut entries = Vec::new();
     let mut references = Vec::new();
@@ -912,6 +988,71 @@ fn desired_fields(agent: &str, desired: &Value, current: &Value) -> Vec<(Vec<Str
     });
     fields
 }
+
+fn pending_native_changes(
+    target: &AgentTarget,
+    files: &[File],
+    references: &[String],
+    record: Option<&Record>,
+) -> Result<Vec<Value>> {
+    let mut changes = Vec::new();
+    for file in files
+        .iter()
+        .filter(|file| file.format != Format::Credential)
+    {
+        let current = document::parse(
+            read_native(&file.path)?.as_deref().unwrap_or(""),
+            file.format,
+        )?;
+        let desired = desired_fields(&target.agent, &file.desired, &current);
+        let previous = record.and_then(|record| {
+            record
+                .files
+                .iter()
+                .find(|previous| previous.path == file.path)
+        });
+        for (path, value) in &desired {
+            if !previous.is_some_and(|file| {
+                file.written
+                    && file.fields.iter().any(|field| {
+                        !field.released
+                            && field.path == *path
+                            && field.after_hash == field_hash(Some(value))
+                    })
+                    && document::get(&current, path) == Some(value)
+            }) {
+                changes.push(json!({"path":file.path,"field":path,"change":"set"}));
+            }
+        }
+        if let Some(previous) = previous {
+            for field in previous.fields.iter().filter(|field| !field.released) {
+                if !desired.iter().any(|(path, _)| *path == field.path) {
+                    changes.push(json!({"path":file.path,"field":field.path,"change":"release"}));
+                }
+            }
+        }
+    }
+    if let Some(record) = record {
+        for file in record.files.iter().filter(|file| {
+            file.format != Format::Credential
+                && !files.iter().any(|desired| desired.path == file.path)
+        }) {
+            for field in file.fields.iter().filter(|field| !field.released) {
+                changes.push(json!({"path":file.path,"field":field.path,"change":"release"}));
+            }
+        }
+    }
+    if record
+        .map(|record| record.secret_refs.as_slice())
+        .unwrap_or_default()
+        != references
+    {
+        changes.push(
+            json!({"field":["credential_reference"],"change":"replace","secret_reads":false}),
+        );
+    }
+    Ok(changes)
+}
 fn source_guard(store: &Store) -> Result<String> {
     Ok(config::load(store)?.revision)
 }
@@ -932,7 +1073,6 @@ fn protect_payload(
     owner: &str,
     target: &str,
     payload: &Payload,
-    unlock: Option<&[u8]>,
 ) -> Result<String> {
     let mut bytes = serde_json::to_vec(payload).map_err(|_| {
         Error::new(
@@ -940,7 +1080,7 @@ fn protect_payload(
             "Cannot encode protected native recovery",
         )
     })?;
-    let result = secrets::put(store, &format!("agent:{owner}:{target}"), &bytes, unlock);
+    let result = secrets::put(store, &format!("agent:{owner}:{target}"), &bytes);
     bytes.zeroize();
     result.map_err(|e| {
         Error::new(
@@ -949,8 +1089,9 @@ fn protect_payload(
         )
     })
 }
-fn decode_payload(store: &Store, record: &Record, unlock: Option<&[u8]>) -> Result<Payload> {
-    let bytes = secrets::get(store, &record.payload_ref, unlock)?;
+fn decode_payload(store: &Store, record: &Record) -> Result<Payload> {
+    secrets::check_recovery(store, &record.payload_ref, &record.owner)?;
+    let bytes = secrets::get(store, &record.payload_ref)?;
     let payload: Payload = serde_json::from_slice(&bytes).map_err(|_| {
         Error::new(
             "recovery_invalid",
@@ -1016,30 +1157,14 @@ fn namespace_conflicts(file: &File, current: &Value, previous: Option<&Record>) 
     Ok(())
 }
 
-pub async fn apply(
-    store: &Store,
-    config: &Config,
-    id: &str,
-    dry_run: bool,
-    unlock: Option<&[u8]>,
-) -> Result<Value> {
-    apply_inner(store, config, id, dry_run, unlock, None).await
-}
 pub async fn apply_request(store: &Store, config: &Config, request: &Request) -> Result<Value> {
     let id = request
         .operands
         .first()
         .ok_or_else(|| Error::new("invalid_arguments", "An agent target is required"))?;
-    apply_inner(store, config, id, request.dry_run, None, Some(request)).await
+    apply(store, config, id, request.dry_run).await
 }
-async fn apply_inner(
-    store: &Store,
-    config: &Config,
-    id: &str,
-    dry_run: bool,
-    unlock: Option<&[u8]>,
-    request: Option<&Request>,
-) -> Result<Value> {
+pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> Result<Value> {
     let target = target(config, id)?;
     let path = scope(store, &target.scope)?;
     let _configuration = if dry_run {
@@ -1074,8 +1199,7 @@ async fn apply_inner(
             "An interrupted native operation has retained recovery; restore its exact record before applying again",
         ));
     }
-    let (mut entries, secret_refs) =
-        entries(store, config, id, target, &path, dry_run, unlock).await?;
+    let (mut entries, secret_refs) = entries(store, config, id, target, &path, dry_run).await?;
     let files = adapters::build(target, &path, &entries);
     for entry in &mut entries {
         if let Some(key) = &mut entry.key {
@@ -1165,32 +1289,25 @@ async fn apply_inner(
     }
     if dry_run {
         return Ok(
-            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":supported_roles(&target.agent),"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"encrypted exact native bytes before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
+            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":supported_roles(&target.agent),"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
         );
     }
     let installed = version(&target.agent, &path).await;
-    if installed["compatibility"] != "documented" {
-        return Err(Error::new(
-            "native_version_unknown",
-            "The detected native version differs from the exact researched schema; inspect version evidence before applying. This is unknown support, not a prohibition claim",
-        ));
+    if let Some(blocker) = version_blocker(&installed) {
+        return Ok(
+            json!({"_code":blocker["code"],"_status":"blocked","target":id,"agent":target.agent,"path":path,"installation":installed,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false},"qualification":"not_established"}),
+        );
     }
     if desired_unchanged {
         return Ok(
-            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"unlock_requested":false,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
+            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
         );
     }
-    let unlocked = if unlock.is_none() {
-        request.map(secrets::unlock).transpose()?.flatten()
-    } else {
-        None
-    };
-    let unlock = unlock.or_else(|| unlocked.as_deref().map(Vec::as_slice));
     for file in &mut files {
         if file.format == Format::Credential
             && let Some(reference) = file.desired.as_str()
         {
-            let bytes = secrets::get(store, reference, unlock)?;
+            let bytes = secrets::get(store, reference)?;
             let key = std::str::from_utf8(&bytes).map_err(|_| {
                 Error::new("invalid_credential", "Native handoff requires a UTF-8 key")
             })?;
@@ -1208,7 +1325,7 @@ async fn apply_inner(
     }
     let previous_payload = previous
         .as_ref()
-        .map(|r| decode_payload(store, r, unlock))
+        .map(|r| decode_payload(store, r))
         .transpose()?;
     let mut prepared = Vec::new();
     for file in files {
@@ -1338,7 +1455,7 @@ async fn apply_inner(
             })
             .collect(),
     };
-    let payload_ref = protect_payload(store, &recovery_id, &stable, id, &payload, unlock)?;
+    let payload_ref = protect_payload(store, &recovery_id, &stable, id, &payload)?;
     let mut record = Record {
         id: recovery_id.clone(),
         owner: stable,
@@ -1552,14 +1669,6 @@ fn restore_text(
         Ok(Some(text))
     }
 }
-pub async fn restore(
-    store: &Store,
-    id: &str,
-    dry_run: bool,
-    unlock: Option<&[u8]>,
-) -> Result<Value> {
-    restore_inner(store, id, dry_run, unlock, None).await
-}
 pub async fn restore_request(store: &Store, request: &Request) -> Result<Value> {
     let id = request
         .arguments
@@ -1572,15 +1681,9 @@ pub async fn restore_request(store: &Store, request: &Request) -> Result<Value> 
                 "An agent target or exact recovery handle is required",
             )
         })?;
-    restore_inner(store, id, request.dry_run, None, Some(request)).await
+    restore(store, id, request.dry_run).await
 }
-async fn restore_inner(
-    store: &Store,
-    id: &str,
-    dry_run: bool,
-    unlock: Option<&[u8]>,
-    request: Option<&Request>,
-) -> Result<Value> {
+pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
     let _lock = if dry_run {
         None
     } else {
@@ -1620,6 +1723,12 @@ async fn restore_inner(
     if record.state == "restored" {
         return Ok(json!({"recovery":selected,"state":"already_restored","native_writes":false}));
     }
+    let payload = if dry_run {
+        secrets::check_recovery(store, &record.payload_ref, &record.owner)?;
+        None
+    } else {
+        Some(decode_payload(store, &record)?)
+    };
     let conflicts = field_drift(&record, !dry_run)?;
     if !conflicts.is_empty() {
         return Err(Error::new(
@@ -1632,13 +1741,7 @@ async fn restore_inner(
             json!({"target":record.target,"recovery":selected,"dry_run":true,"files":record.files.iter().map(|f|&f.path).collect::<Vec<_>>(),"restoration":"three_way_owned_fields_only","secret_reads":false,"native_writes":false,"native_reload":"required_after_execution"}),
         );
     }
-    let unlocked = if unlock.is_none() {
-        request.map(secrets::unlock).transpose()?.flatten()
-    } else {
-        None
-    };
-    let unlock = unlock.or_else(|| unlocked.as_deref().map(Vec::as_slice));
-    let payload = decode_payload(store, &record, unlock)?;
+    let payload = payload.expect("executing restoration resolves its payload");
     let mut prepared = Vec::new();
     for (file, capture) in record.files.iter().zip(&payload.files) {
         let before = read_native(&file.path)?;
@@ -1726,7 +1829,7 @@ pub async fn recovery(store: &Store, request: &Request) -> Result<Value> {
             let selected = request.arguments.get("target").and_then(|v| v.first());
             let stable = selected.map(|id| owner(store, id)).transpose()?.flatten();
             Ok(
-                json!({"records":index.records.iter().filter(|r|r.state!="discarded" && selected.is_none_or(|target|stable.as_deref()==Some(&r.owner)||r.target==*target)).map(record_view).collect::<Vec<_>>()}),
+                json!({"records":index.records.iter().filter(|r|r.state!="discarded" && selected.is_none_or(|target|stable.as_deref()==Some(&r.owner)||r.target==*target)).map(|r|record_view(store,r)).collect::<Vec<_>>()}),
             )
         }
         "inspect" => {
@@ -1743,7 +1846,7 @@ pub async fn recovery(store: &Store, request: &Request) -> Result<Value> {
                 .ok_or_else(|| {
                     Error::new("unknown_resource", "Native recovery handle is not retained")
                 })?;
-            Ok(record_view(record))
+            Ok(record_view(store, record))
         }
         "discard" => {
             let id = request.operands.first().ok_or_else(|| {
@@ -1752,20 +1855,37 @@ pub async fn recovery(store: &Store, request: &Request) -> Result<Value> {
                     "An exact native recovery handle is required",
                 )
             })?;
-            let record = index
+            let position = index
                 .records
-                .iter_mut()
-                .find(|r| r.id == *id && r.state != "discarded")
+                .iter()
+                .position(|record| record.id == *id && record.state != "discarded")
                 .ok_or_else(|| {
                     Error::new("unknown_resource", "Native recovery handle is not retained")
                 })?;
+            let record = &index.records[position];
+            validate_record(record)?;
+            secrets::check_recovery(store, &record.payload_ref, &record.owner)?;
+            if index
+                .records
+                .iter()
+                .filter(|other| {
+                    other.state != "discarded" && other.payload_ref == record.payload_ref
+                })
+                .count()
+                != 1
+            {
+                return Err(Error::new(
+                    "recovery_invalid",
+                    "Recovery payload is shared by inconsistent records; preserve the files before discarding",
+                ));
+            }
             if request.dry_run {
                 return Ok(
                     json!({"recovery":id,"dry_run":true,"discard":"protected restoration information only","native_writes":false,"credentials_deleted":false}),
                 );
             }
             secrets::remove(store, &record.payload_ref)?;
-            record.state = "discarded".into();
+            index.records[position].state = "discarded".into();
             // Keep non-secret dependency tombstones: discarding the ability to
             // restore does not prove a plaintext native key was removed.
             store.write_json(INDEX, &index)?;
@@ -2430,6 +2550,236 @@ async fn native_auth(
 mod tests {
     use super::*;
     #[test]
+    fn unsupported_recovery_payload_exposes_no_available_actions_and_stays_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let reference =
+            secrets::put(&store, "agent:stable:managed", b"private fixture payload").unwrap();
+        let name = format!(
+            "secrets/{}.json",
+            reference.strip_prefix("secret:").unwrap()
+        );
+        let mut envelope: Value = store.read_json(&name).unwrap();
+        envelope["metadata"]["version"] = json!(99);
+        store.write_json(&name, &envelope).unwrap();
+        let before = fs::read(store.path(&name).unwrap()).unwrap();
+        let record = Record {
+            id: "recovery".into(),
+            owner: "stable".into(),
+            target: "managed".into(),
+            agent: "pi".into(),
+            scope: directory.path().join("native"),
+            payload_ref: reference,
+            secret_refs: vec![],
+            state: "applied_reload_pending".into(),
+            files: vec![],
+        };
+        let view = record_view(&store, &record);
+        assert_eq!(view["available_actions"], json!([]));
+        assert_eq!(view["restore_available"], false);
+        assert_eq!(view["storage_reason_code"], "storage_version_unsupported");
+        assert_eq!(fs::read(store.path(&name).unwrap()).unwrap(), before);
+    }
+    #[tokio::test]
+    async fn recovery_discard_rejects_mismatched_or_shared_payload_without_deleting_secrets() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let proxy_ref = secrets::put(&store, "proxy", b"synthetic-proxy").unwrap();
+        let mut record = Record {
+            id: "recovery-one".into(),
+            owner: "stable".into(),
+            target: "managed".into(),
+            agent: "pi".into(),
+            scope: directory.path().join("native"),
+            payload_ref: proxy_ref.clone(),
+            secret_refs: vec![],
+            state: "applied_reload_pending".into(),
+            files: vec![],
+        };
+        let request = Request {
+            command: vec!["agent".into(), "recovery".into(), "discard".into()],
+            operands: vec![record.id.clone()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        store
+            .write_json(
+                INDEX,
+                &Index {
+                    records: vec![record.clone()],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            recovery(&store, &request).await.unwrap_err().code,
+            "recovery_invalid"
+        );
+        assert_eq!(
+            secrets::get(&store, &proxy_ref).unwrap().as_slice(),
+            b"synthetic-proxy"
+        );
+        record.payload_ref =
+            secrets::put(&store, "agent:stable:managed", b"synthetic-recovery").unwrap();
+        let mut duplicate = record.clone();
+        duplicate.id = "recovery-two".into();
+        store
+            .write_json(
+                INDEX,
+                &Index {
+                    records: vec![record.clone(), duplicate],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            recovery(&store, &request).await.unwrap_err().code,
+            "recovery_invalid"
+        );
+        assert!(secrets::get(&store, &record.payload_ref).is_ok());
+        store
+            .write_json(
+                INDEX,
+                &Index {
+                    records: vec![record.clone()],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            recovery(&store, &request).await.unwrap()["state"],
+            "discarded"
+        );
+        assert!(secrets::get(&store, &record.payload_ref).is_err());
+        assert!(secrets::get(&store, &proxy_ref).is_ok());
+    }
+    fn inspection_target(scope: PathBuf) -> AgentTarget {
+        AgentTarget {
+            agent: "pi".into(),
+            scope,
+            providers: BTreeMap::from([(
+                "local".into(),
+                config::NativeProvider {
+                    provider: Some("p".into()),
+                    proxy: None,
+                    models: vec![config::ModelSelection {
+                        id: "first".into(),
+                        protocol: "chat-completions".into(),
+                    }],
+                },
+            )]),
+            default: Some(config::ModelReference {
+                provider: "local".into(),
+                id: "first".into(),
+                protocol: "chat-completions".into(),
+            }),
+            roles: BTreeMap::new(),
+        }
+    }
+    #[tokio::test]
+    async fn unavailable_scope_inspection_retains_desired_target_and_apply_stays_blocked() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let mut config = Config::empty();
+        let path = directory.path().join("not-created");
+        config
+            .agents
+            .insert("managed".into(), inspection_target(path.clone()));
+        let inspected = inspect(&store, &config, "managed").await.unwrap();
+        assert_eq!(inspected["path"], json!(path));
+        assert_eq!(inspected["scope_reason_code"], "absent");
+        assert_eq!(inspected["default"]["id"], "first");
+        assert_eq!(inspected["providers"][0]["models"][0]["id"], "first");
+        assert_eq!(inspected["applied_state"], "unknown");
+        assert!(inspected["pending_native_changes"].is_null());
+        let error = apply(&store, &config, "managed", false).await.unwrap_err();
+        assert_eq!(error.code, "native_scope_unavailable");
+        assert!(error.message.contains(path.to_str().unwrap()));
+        assert!(!store.root.exists());
+        fs::write(&path, b"not a directory").unwrap();
+        let inspected = inspect(&store, &config, "managed").await.unwrap();
+        assert_eq!(inspected["scope_reason_code"], "not_directory");
+        assert_eq!(inspected["files"], json!([]));
+    }
+    #[test]
+    fn current_native_projection_reports_changed_default_separately_from_last_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let target = inspection_target(directory.path().to_owned());
+        fs::write(&path, b"{\"defaultModel\":\"first\"}").unwrap();
+        let mut record = Record {
+            id: "retained".into(),
+            owner: "stable".into(),
+            target: "managed".into(),
+            agent: "pi".into(),
+            scope: target.scope.clone(),
+            payload_ref: "not-read".into(),
+            secret_refs: vec![],
+            state: "applied_reload_pending".into(),
+            files: vec![FileRecord {
+                path: path.clone(),
+                format: Format::Json,
+                original_absent: false,
+                after_revision: "old".into(),
+                written: true,
+                fields: vec![Field {
+                    path: vec!["defaultModel".into()],
+                    after_hash: field_hash(Some(&json!("first"))),
+                    before_hash: "absent".into(),
+                    observed_hash: "absent".into(),
+                    released: false,
+                }],
+            }],
+        };
+        let files = [File {
+            path: path.clone(),
+            format: Format::Json,
+            desired: json!({"defaultModel":"second"}),
+        }];
+        let changes = pending_native_changes(&target, &files, &[], Some(&record)).unwrap();
+        assert_eq!(
+            changes,
+            vec![json!({"path":path,"field":["defaultModel"],"change":"set"})]
+        );
+        assert_eq!(record.state, "applied_reload_pending");
+        record.files[0].fields[0].after_hash = field_hash(Some(&json!("second")));
+        fs::write(&path, b"{\"defaultModel\":\"second\"}").unwrap();
+        assert!(
+            pending_native_changes(&target, &files, &[], Some(&record))
+                .unwrap()
+                .is_empty()
+        );
+        record.files[0].written = false;
+        record.state = "recovery_required".into();
+        assert_eq!(
+            pending_native_changes(&target, &files, &[], Some(&record)).unwrap()[0]["field"],
+            json!(["defaultModel"])
+        );
+        record.files[0].written = true;
+        fs::write(&path, b"{\"defaultModel\":\"first\"}").unwrap();
+        assert_eq!(
+            pending_native_changes(&target, &files, &[], Some(&record)).unwrap()[0]["change"],
+            "set"
+        );
+        assert_eq!(
+            pending_native_changes(&target, &[], &[], Some(&record)).unwrap()[0]["change"],
+            "release"
+        );
+    }
+    #[test]
+    fn installation_blockers_distinguish_absence_probe_and_detected_qualification() {
+        for (state, code) in [
+            ("not_installed", "native_not_installed"),
+            ("probe_failed", "native_version_probe_failed"),
+            ("version_unknown", "native_version_unknown"),
+            ("detected", "native_version_unqualified"),
+        ] {
+            let evidence = json!({"state":state,"version":if state=="detected"{Some("0.0.0")}else{None},"compatibility":"unknown"});
+            assert_eq!(version_blocker(&evidence).unwrap()["code"], code);
+        }
+        assert!(
+            version_blocker(&json!({"state":"detected","compatibility":"documented"})).is_none()
+        );
+    }
+    #[test]
     fn omp_profile_selection_matches_native_default_and_fallback_without_global_environment() {
         use std::ffi::OsStr;
         let root = Path::new("/private/custom-omp");
@@ -2875,17 +3225,9 @@ mod tests {
             }),
             roles: BTreeMap::new(),
         };
-        let (entries, _) = entries(
-            &store,
-            &config,
-            "target",
-            &target,
-            &target.scope,
-            true,
-            None,
-        )
-        .await
-        .unwrap();
+        let (entries, _) = entries(&store, &config, "target", &target, &target.scope, true)
+            .await
+            .unwrap();
         assert_eq!(
             entries[0].model_metadata["m"],
             json!({"contextWindow":1000000,"maxTokens":4096,"reasoning":false,"input":["image"]})
@@ -2919,17 +3261,10 @@ mod tests {
         for agent in ["opencode", "hermes"] {
             let mut target = target.clone();
             target.agent = agent.into();
-            let (prepared, references) = super::entries(
-                &store,
-                &config,
-                "target",
-                &target,
-                &target.scope,
-                true,
-                None,
-            )
-            .await
-            .unwrap();
+            let (prepared, references) =
+                super::entries(&store, &config, "target", &target, &target.scope, true)
+                    .await
+                    .unwrap();
             assert_eq!(references, ["opaque-reference-not-read"]);
             let files = adapters::build(&target, &target.scope, &prepared).unwrap();
             let file = files
@@ -3221,18 +3556,24 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn dry_restore_creates_no_locks_and_reads_no_protected_payload() {
+    async fn dry_restore_creates_no_locks_and_checks_metadata_without_resolving_payload() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::at(home.path().to_owned());
         let native = home.path().join("native");
         fs::create_dir(&native).unwrap();
+        let payload_ref = secrets::put(
+            &store,
+            "agent:stable:removed",
+            b"not a decoded recovery payload",
+        )
+        .unwrap();
         let record = Record {
             id: "native-record".into(),
             owner: "stable".into(),
             target: "removed".into(),
             agent: "pi".into(),
             scope: native,
-            payload_ref: "missing-protected-payload".into(),
+            payload_ref,
             secret_refs: vec![],
             state: "write_pending".into(),
             files: vec![],
@@ -3245,7 +3586,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let result = restore(&store, "native-record", true, None).await.unwrap();
+        let result = restore(&store, "native-record", true).await.unwrap();
         assert_eq!(result["secret_reads"], false);
         assert!(!store.root.join("locks/native.lock").exists());
     }

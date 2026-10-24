@@ -31,30 +31,16 @@ options and read no configuration, secrets, observations, or network resources.
 Management uses `tmax [GLOBAL-OPTIONS] COMMAND [COMMAND-OPTIONS]`. Long global
 options may follow a subcommand. Unknown commands, arguments, fields, and flags
 are errors. Do not guess commands, ignore options, accept duplicate single-valued
-options, or treat a missing value as a default choice.
+options, or treat a missing value as a default choice. A single-valued global may
+appear at most once across the full command path, including parent and leaf levels.
 
 | Global option | Contract |
 | --- | --- |
-| `--format json` or `--format text` | Compact JSON is the management default. Text reports the same facts and effects. |
-| `--non-interactive` | Never prompt, open sign-in, or wait for terminal input. Explicit protected-input operands remain permitted; missing interaction is a blocker. |
-| `--unlock-stdin` | Read a protected-store unlock value from stdin only when execution needs it, never for help, ordinary inspection, or dry-run. Explicit `proxy key show` is sensitive retrieval, not inspection. |
-| `--unlock-fd FD` | Platform-qualified unlock input through an inherited readable pipe. `FD` is a nonnegative integer, not a path or secret. |
+| `--format json` or `--format text` | Compact JSON is the management default. Text reports the same facts and effects. One valid occurrence is supported before or after subcommands. An invalid or repeated value is rejected in default JSON without echoing argv. |
+| `--non-interactive` | Never prompt or launch interactive sign-in. Explicit key input and qualified native authorization/key input remain permitted; missing required interaction is a blocker. |
 
-For qualified pipe operands, `FD` is a genuine descriptor number on Unix and a
-pointer-width inherited native handle value on Windows; zero selects standard
-input. Values must fit that platform's range without truncation. Ordinary
-interactive and Web entry does not require users to supply these values.
-
-Unlock options are mutually exclusive. Without one, use supported platform
-protection or permitted hidden terminal input; otherwise return
-`credential_unavailable` and the required action. Unlock is not management login.
-No secret value is accepted through argv, environment discovery, or a secret-file
-path. Do not read an explicit descriptor for an unrelated command or reuse one
-for key input, unlock input, or protected key output. Offline help identifies
-platform-supported pipe forms. Unsupported requested input returns
-`unsupported_protected_input`, not an argv/file fallback. Protected output follows
-[shared-key delivery](providers/authentication/spec.md#shared-proxy-key).
-There is no persistent unlock session or input document.
+New API keys use explicit hidden terminal input or `--key-stdin`. See
+[configuration recovery](configuration/spec.md#invalid-file-recovery) for invalid-file handling.
 
 All invocations use the OS user's home, including on Windows. All tmax-owned
 persistent artifacts remain under `~/.tmax`; the sole config is
@@ -86,8 +72,9 @@ IDs are exact and case-sensitive.
 ## Offline help and capability discovery
 
 `tmax help [COMMAND...]` and `tmax COMMAND... --help` describe the path without
-reading settings, secrets, native files, service state, or remote state. Root
-help groups and lists the capabilities above and their purposes.
+reading settings, secrets, native files, service state, or remote state. Both
+forms expose the same inherited `--format` and `--non-interactive` options at a
+supported path. Root help groups and lists the capabilities above and their purposes.
 
 Leaf help supplies complete grammar, defaults, required combinations, enums,
 effects/non-effects, summary and detail output, exit outcomes, and a valid example.
@@ -133,7 +120,9 @@ in these specifications.
 
 - Strings are one literal shell operand, without TOML/JSON quoting or environment
   interpolation. Booleans are exactly `true` or `false`. Integers/numbers obey
-  schema ranges and finiteness. Dates, enums, URLs, and zones obey their schemas.
+  schema ranges and finiteness. Signed priority fields accept negative decimal
+  operands (for example `--set priority -10` and `--priority -10`); other options
+  retain strict flag/operand parsing. Dates, enums, URLs, and zones obey their schemas.
 - Clear removes an optional field/object and restores its documented default,
   inheritance, or unknown fact. It does not write null, zero, false, or an empty
   string. Required fields cannot be cleared into invalid state.
@@ -176,7 +165,7 @@ reads/explanations reject it.
 It reports full redacted changes, affected scopes/sessions, boundaries, warnings,
 known blockers, and deferred checks. It must not write files/state/log/cache or
 recovery records, reserve references/record sets, generate keys, read protected
-input, unlock/resolve secrets, refresh/sign in, launch native programs/browsers,
+input, resolve saved secrets, refresh/sign in, launch native programs/browsers,
 change services/OS registration, call upstream, or run inference. Safe existing
 local config/ownership/runtime reads are permitted.
 

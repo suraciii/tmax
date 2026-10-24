@@ -2,13 +2,6 @@ use crate::{
     Error, Request, Result,
     storage::{self, Store},
 };
-use argon2::{Algorithm, Argon2, Params, Version};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use chacha20poly1305::{
-    ChaCha20Poly1305, Nonce,
-    aead::{Aead, KeyInit, Payload},
-};
-use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -18,7 +11,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_INPUT: usize = 1024 * 1024;
 
 #[cfg(windows)]
@@ -80,19 +73,38 @@ struct Recovery {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Envelope {
+struct Envelope<T = Vec<u8>> {
     metadata: Metadata,
-    algorithm: String,
-    kdf: String,
-    salt: String,
-    nonce: String,
-    ciphertext: String,
+    bytes: T,
 }
 
-fn locked() -> Error {
+// Discovery validates the byte sequence without constructing a credential value.
+struct DiscardBytes;
+impl<'de> Deserialize<'de> for DiscardBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = DiscardBytes;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("an array of bytes")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                while sequence.next_element::<u8>()?.is_some() {}
+                Ok(DiscardBytes)
+            }
+        }
+        deserializer.deserialize_seq(Visitor)
+    }
+}
+fn invalid_record() -> Error {
     Error::new(
-        "credential_unavailable",
-        "Protected storage is locked or the supplied unlock value is incorrect; unlock through ordinary interactive CLI or Web input, or use a qualified separate protected input stream for automation",
+        "storage_record_invalid",
+        "The retained storage record is corrupt or unsupported. Preserve the file; re-enter the affected key or recover original native files independently",
     )
 }
 fn unavailable() -> Error {
@@ -108,41 +120,18 @@ fn input_error() -> Error {
     )
 }
 
-/// Resolve unlock input only for an operation which actually needs a credential.
-pub fn unlock(request: &Request) -> Result<Option<Zeroizing<Vec<u8>>>> {
-    input_selection(request, "unlock")?;
-    check_input_separation(request)?;
-    if request.dry_run {
-        return Ok(None);
-    }
-    if has(request, "unlock-stdin") || has(request, "unlock-fd") {
-        return Ok(Some(Zeroizing::new(read_protected_input(
-            request, "unlock",
-        )?)));
-    }
-    if has(request, "non-interactive") {
-        return Ok(None);
-    }
-    match read_terminal("Unlock protected tmax storage: ") {
-        Ok(bytes) => Ok(Some(Zeroizing::new(bytes))),
-        Err(error) if error.code == "interactive_required" => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 /// A single explicit UTF-8 line. No inspection or dry-run consumes input.
 pub fn read_protected_input(request: &Request, prefix: &str) -> Result<Vec<u8>> {
     let selected = input_selection(request, prefix)?;
-    check_input_separation(request)?;
     if request.dry_run {
         return Ok(Vec::new());
     }
     match selected {
         Some(fd) => read_descriptor(fd, fd == 0),
-        None if !has(request, "non-interactive") => read_terminal("Enter protected tmax value: "),
+        None if !has(request, "non-interactive") => read_terminal("Enter provider API key: "),
         None => Err(Error::new(
             "interactive_required",
-            "Supply explicit protected stdin or inherited pipe input in non-interactive mode",
+            "Supply the API key through explicit protected stdin or an inherited pipe in non-interactive mode",
         )),
     }
 }
@@ -181,59 +170,41 @@ fn input_selection(request: &Request, prefix: &str) -> Result<Option<Descriptor>
     }
     Ok(None)
 }
-fn check_input_separation(request: &Request) -> Result<()> {
-    if let (Some(unlock), Some(key)) = (
-        input_selection(request, "unlock")?,
-        input_selection(request, "key")?,
-    ) && (unlock == key || descriptors_alias(unlock, key)?)
-    {
+
+pub fn put(store: &Store, owner: &str, value: &[u8]) -> Result<String> {
+    let _lock = store.lock("secrets")?;
+    let owner = resolve_owner(store, owner)?;
+    write_envelope(store, "secrets", owner, "secret", None, value)
+}
+
+pub fn get(store: &Store, reference: &str) -> Result<Zeroizing<Vec<u8>>> {
+    Ok(Zeroizing::new(load(store, "secrets", reference)?.bytes))
+}
+
+pub(crate) fn check_recovery(store: &Store, reference: &str, identity: &str) -> Result<()> {
+    let envelope = load_metadata(store, "secrets", reference)?;
+    if envelope.metadata.owner.kind != "agent" || envelope.metadata.owner.identity != identity {
         return Err(Error::new(
-            "invalid_arguments",
-            "Key and unlock input must use separate protected streams",
+            "recovery_invalid",
+            "Retained recovery payload ownership does not match its recovery record; preserve the files",
         ));
     }
     Ok(())
 }
 
-pub fn put(store: &Store, owner: &str, value: &[u8], unlock: Option<&[u8]>) -> Result<String> {
-    let unlock = unlock
-        .filter(|value| !value.is_empty())
-        .ok_or_else(locked)?;
-    let _lock = store.lock("secrets")?;
-    let owner = resolve_owner(store, owner)?;
-    write_envelope(store, "secrets", owner, "secret", None, value, unlock)
-}
-
-pub fn get(store: &Store, reference: &str, unlock: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>> {
-    let unlock = unlock
-        .filter(|value| !value.is_empty())
-        .ok_or_else(locked)?;
-    let envelope = load(store, "secrets", reference)?;
-    decrypt(&envelope, unlock)
-}
-
-/// Check that an encrypted entry can actually benefit from an unlock prompt.
-/// This validates protected metadata without resolving or decrypting its secret.
-pub(crate) fn check_unlock_entry(store: &Store, reference: &str) -> Result<()> {
-    load(store, "secrets", reference).map(|_| ())
-}
-
 pub fn remove(store: &Store, reference: &str) -> Result<()> {
     let _lock = store.lock("secrets")?;
-    let _ = load(store, "secrets", reference)?;
+    let _ = load_metadata(store, "secrets", reference)?;
     remove_envelope(store, "secrets", reference)
 }
 
-/// The inventory is safe while locked, including unreferenced entries left by a failed save.
+/// Safe inventory includes unreferenced entries left by a failed save.
 pub fn inventory(store: &Store) -> Result<Value> {
     list_envelopes(store, "secrets", false)
 }
 
-pub fn protect_recovery(store: &Store, bytes: &[u8], unlock: Option<&[u8]>) -> Result<String> {
+pub fn protect_recovery(store: &Store, bytes: &[u8]) -> Result<String> {
     use sha2::{Digest, Sha256};
-    let unlock = unlock
-        .filter(|value| !value.is_empty())
-        .ok_or_else(locked)?;
     let _lock = store.lock("recovery")?;
     let recovery = Recovery {
         config_file: "tmax.toml".into(),
@@ -252,19 +223,18 @@ pub fn protect_recovery(store: &Store, bytes: &[u8], unlock: Option<&[u8]>) -> R
         "config-recovery",
         Some(recovery),
         bytes,
-        unlock,
     )
 }
 pub fn recovery_list(store: &Store) -> Result<Value> {
     list_envelopes(store, "recovery", true)
 }
 pub fn recovery_inspect(store: &Store, reference: &str) -> Result<Value> {
-    let envelope = load(store, "recovery", reference)?;
+    let envelope = load_metadata(store, "recovery", reference)?;
     Ok(recovery_metadata(&envelope))
 }
 pub fn recovery_discard(store: &Store, reference: &str) -> Result<()> {
     let _lock = store.lock("recovery")?;
-    let _ = load(store, "recovery", reference)?;
+    let _ = load_metadata(store, "recovery", reference)?;
     remove_envelope(store, "recovery", reference)
 }
 
@@ -275,7 +245,6 @@ fn write_envelope(
     kind: &str,
     recovery: Option<Recovery>,
     bytes: &[u8],
-    unlock: &[u8],
 ) -> Result<String> {
     let reference = format!(
         "{}{}",
@@ -294,67 +263,10 @@ fn write_envelope(
         kind: kind.into(),
         recovery,
     };
-    let mut salt = [0u8; 32];
-    let mut nonce = [0u8; 12];
-    OsRng.try_fill_bytes(&mut salt).map_err(|_| unavailable())?;
-    OsRng
-        .try_fill_bytes(&mut nonce)
-        .map_err(|_| unavailable())?;
-    let key = derive_key(unlock, &salt)?;
-    let aad = serde_json::to_vec(&metadata).map_err(|_| unavailable())?;
-    let cipher = ChaCha20Poly1305::new_from_slice(key.as_slice()).map_err(|_| unavailable())?;
-    let ciphertext = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: bytes,
-                aad: &aad,
-            },
-        )
-        .map_err(|_| unavailable())?;
-    let envelope = Envelope {
-        metadata,
-        algorithm: "chacha20poly1305".into(),
-        kdf: "argon2id-v19-m65536-t3-p1".into(),
-        salt: STANDARD.encode(salt),
-        nonce: STANDARD.encode(nonce),
-        ciphertext: STANDARD.encode(ciphertext),
-    };
-    store.write_json(&entry_name(directory, &reference)?, &envelope)?;
+    let envelope = Envelope { metadata, bytes };
+    let serialized = Zeroizing::new(serde_json::to_vec(&envelope).map_err(|_| unavailable())?);
+    store.write_raw(&entry_name(directory, &reference)?, &serialized)?;
     Ok(reference)
-}
-fn derive_key(unlock: &[u8], salt: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let mut key = Zeroizing::new(vec![0u8; 32]);
-    let params = Params::new(65536, 3, 1, Some(32)).map_err(|_| unavailable())?;
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-        .hash_password_into(unlock, salt, &mut key)
-        .map_err(|_| unavailable())?;
-    Ok(key)
-}
-fn decrypt(envelope: &Envelope, unlock: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let salt = STANDARD.decode(&envelope.salt).map_err(|_| unavailable())?;
-    let nonce = STANDARD
-        .decode(&envelope.nonce)
-        .map_err(|_| unavailable())?;
-    let ciphertext = STANDARD
-        .decode(&envelope.ciphertext)
-        .map_err(|_| unavailable())?;
-    if salt.len() != 32 || nonce.len() != 12 {
-        return Err(unavailable());
-    }
-    let key = derive_key(unlock, &salt)?;
-    let cipher = ChaCha20Poly1305::new_from_slice(key.as_slice()).map_err(|_| unavailable())?;
-    let aad = serde_json::to_vec(&envelope.metadata).map_err(|_| unavailable())?;
-    cipher
-        .decrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: &ciphertext,
-                aad: &aad,
-            },
-        )
-        .map(Zeroizing::new)
-        .map_err(|_| locked())
 }
 fn entry_name(directory: &str, reference: &str) -> Result<String> {
     let prefix = if directory == "recovery" {
@@ -378,7 +290,11 @@ fn entry_name(directory: &str, reference: &str) -> Result<String> {
     }
     Ok(format!("{directory}/{suffix}.json"))
 }
-fn load(store: &Store, directory: &str, reference: &str) -> Result<Envelope> {
+fn read_record<T: serde::de::DeserializeOwned>(
+    store: &Store,
+    directory: &str,
+    reference: &str,
+) -> Result<T> {
     let path = store.path(&entry_name(directory, reference)?)?;
     #[cfg(unix)]
     {
@@ -390,30 +306,34 @@ fn load(store: &Store, directory: &str, reference: &str) -> Result<Envelope> {
             return Err(unavailable());
         }
     }
-    let bytes = storage::read_optional(&path)?.ok_or_else(unavailable)?;
-    let envelope: Envelope = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
-    validate_envelope(&envelope, directory, reference)?;
+    let bytes = Zeroizing::new(storage::read_optional(&path)?.ok_or_else(unavailable)?);
+    serde_json::from_slice(&bytes).map_err(|_| invalid_record())
+}
+fn load(store: &Store, directory: &str, reference: &str) -> Result<Envelope> {
+    let envelope: Envelope = read_record(store, directory, reference)?;
+    validate_metadata(&envelope.metadata, directory, reference)?;
     Ok(envelope)
 }
-fn validate_envelope(envelope: &Envelope, directory: &str, reference: &str) -> Result<()> {
-    let metadata = &envelope.metadata;
-    if metadata.version != VERSION
-        || metadata.reference != reference
-        || envelope.algorithm != "chacha20poly1305"
-        || envelope.kdf != "argon2id-v19-m65536-t3-p1"
+fn load_metadata(
+    store: &Store,
+    directory: &str,
+    reference: &str,
+) -> Result<Envelope<DiscardBytes>> {
+    let envelope: Envelope<DiscardBytes> = read_record(store, directory, reference)?;
+    validate_metadata(&envelope.metadata, directory, reference)?;
+    Ok(envelope)
+}
+fn validate_metadata(metadata: &Metadata, directory: &str, reference: &str) -> Result<()> {
+    if metadata.version != VERSION {
+        return Err(Error::new(
+            "storage_version_unsupported",
+            "The stored record version is unsupported. Preserve its file; re-enter affected keys through provider key set or proxy key replace. This version cannot read its recovery contents",
+        ));
+    }
+    if metadata.reference != reference
         || chrono::DateTime::parse_from_rfc3339(&metadata.created_at).is_err()
     {
-        return Err(unavailable());
-    }
-    let salt = STANDARD.decode(&envelope.salt).map_err(|_| unavailable())?;
-    let nonce = STANDARD
-        .decode(&envelope.nonce)
-        .map_err(|_| unavailable())?;
-    let ciphertext = STANDARD
-        .decode(&envelope.ciphertext)
-        .map_err(|_| unavailable())?;
-    if salt.len() != 32 || nonce.len() != 12 || ciphertext.len() < 16 {
-        return Err(unavailable());
+        return Err(invalid_record());
     }
     let owner = &metadata.owner;
     if !safe_label(&owner.identity) || owner.id.as_deref().is_some_and(|id| !safe_label(id)) {
@@ -506,7 +426,7 @@ fn list_envelopes(store: &Store, directory: &str, recovery: bool) -> Result<Valu
             unavailable_scopes.push(directory.to_owned());
             continue;
         }
-        match load(store, directory, &reference) {
+        match load_metadata(store, directory, &reference) {
             Ok(mut envelope) => {
                 if !recovery {
                     if let Some(owners) = &owners {
@@ -520,11 +440,11 @@ fn list_envelopes(store: &Store, directory: &str, recovery: bool) -> Result<Valu
                         envelope.metadata.owner.id = None;
                     }
                 }
-                entries.push(if recovery { recovery_metadata(&envelope) } else { json!({"reference":reference,"created_at":envelope.metadata.created_at,"metadata_state":"known","owner":envelope.metadata.owner}) });
+                entries.push(if recovery { recovery_metadata(&envelope) } else { json!({"reference":reference,"created_at":envelope.metadata.created_at,"metadata_state":"known","owner":envelope.metadata.owner,"storage_format":"current_user_files"}) });
             }
-            Err(_) => {
+            Err(error) => {
                 unavailable_scopes.push(reference.clone());
-                entries.push(json!({"reference":reference,"created_at":null,"metadata_state":"unavailable","owner":null}));
+                entries.push(json!({"reference":reference,"created_at":null,"metadata_state":"unavailable","owner":null,"reason_code":error.code}));
             }
         }
     }
@@ -535,9 +455,9 @@ fn list_envelopes(store: &Store, directory: &str, recovery: bool) -> Result<Valu
         json!({"coverage":if unavailable_scopes.is_empty() {"complete"} else {"partial"},"unavailable_scopes":unavailable_scopes,"entries":entries}),
     )
 }
-fn recovery_metadata(envelope: &Envelope) -> Value {
+fn recovery_metadata(envelope: &Envelope<DiscardBytes>) -> Value {
     let recovery = envelope.metadata.recovery.as_ref();
-    json!({"reference":envelope.metadata.reference,"created_at":envelope.metadata.created_at,"metadata_state":"known","owner":envelope.metadata.owner,"config_file":recovery.map(|r| &r.config_file),"original_revision":recovery.map(|r| &r.original_revision),"byte_count":recovery.map(|r| r.byte_count),"rejection_category":recovery.map(|r| &r.rejection_category),"protection":{"state":"encrypted","unlock_required":true,"algorithm":"chacha20poly1305","kdf":"argon2id"},"capture_state":"retained","discard_supported":true})
+    json!({"reference":envelope.metadata.reference,"created_at":envelope.metadata.created_at,"metadata_state":"known","owner":envelope.metadata.owner,"config_file":recovery.map(|r| &r.config_file),"original_revision":recovery.map(|r| &r.original_revision),"byte_count":recovery.map(|r| r.byte_count),"rejection_category":recovery.map(|r| &r.rejection_category),"protection":{"state":"current_user_files"},"capture_state":"retained","discard_supported":true})
 }
 fn safe_label(label: &str) -> bool {
     !label.is_empty() && label.len() <= 512 && !label.chars().any(char::is_control)
@@ -638,8 +558,7 @@ fn resolve_owner(store: &Store, text: &str) -> Result<Owner> {
     Ok(owner)
 }
 
-/// Update safe labels without decrypting or changing a stable local owner identity.
-/// Immutable capture metadata authenticates ciphertext; the label registry supplies current display IDs.
+/// Update safe labels without changing a stable local owner identity.
 pub fn rename_owner(store: &Store, kind: &str, old_id: &str, new_id: &str) -> Result<()> {
     if !matches!(kind, "provider" | "agent") || !safe_label(old_id) || !safe_label(new_id) {
         return Err(Error::new(
@@ -661,11 +580,11 @@ pub fn rename_owner(store: &Store, kind: &str, old_id: &str, new_id: &str) -> Re
         owner.id = Some(new_id.into());
         owners.insert(new_key, owner);
     }
-    // Display labels are maintained separately so a rename never invalidates ciphertext authentication.
+    // Display labels are maintained separately from immutable capture metadata.
     store.write_json("secret-owners.json", &owners)
 }
 
-/// Detach a removed resource's current label without deleting its retained encrypted entries.
+/// Detach a removed resource's current label without deleting retained entries.
 /// Reusing the label then receives a new stable local identity.
 pub fn detach_owner(store: &Store, kind: &str, id: &str) -> Result<()> {
     if !matches!(kind, "provider" | "agent") || !safe_label(id) {
@@ -710,11 +629,6 @@ pub fn qualify_output(request: &Request) -> Result<ProtectedOutput> {
         qualify_pipe(fd, false).map_err(|_| output_error())?;
         if descriptors_alias(fd, 1).map_err(|_| output_error())?
             || descriptors_alias(fd, 2).map_err(|_| output_error())?
-        {
-            return Err(output_error());
-        }
-        if let Some(unlock) = input_selection(request, "unlock")?
-            && (fd == unlock || descriptors_alias(fd, unlock).map_err(|_| output_error())?)
         {
             return Err(output_error());
         }
@@ -768,7 +682,7 @@ pub fn deliver(output: &mut ProtectedOutput, bytes: &[u8]) -> Result<()> {
 fn output_error() -> Error {
     Error::new(
         "unsupported_protected_output",
-        "Use a writable inherited pipe numbered at least 3, separate from stdout, stderr, and unlock input",
+        "Use a writable inherited pipe numbered at least 3, separate from stdout and stderr",
     )
 }
 
@@ -942,6 +856,38 @@ fn read_hidden(_file: &mut fs::File) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_and_full_readers_reject_null_and_unknown_format_fields_consistently() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_owned());
+        let reference = put(&store, "proxy", b"synthetic-key").unwrap();
+        let name = entry_name("secrets", &reference).unwrap();
+        let plain = serde_json::to_value(load(&store, "secrets", &reference).unwrap()).unwrap();
+        for (field, value) in [("bytes", Value::Null), ("unknown", json!(true))] {
+            let mut invalid = plain.clone();
+            invalid[field] = value;
+            store.write_json(&name, &invalid).unwrap();
+            assert!(
+                matches!(load(&store, "secrets", &reference), Err(error) if error.code == "storage_record_invalid")
+            );
+            assert!(
+                matches!(load_metadata(&store, "secrets", &reference), Err(error) if error.code == "storage_record_invalid")
+            );
+            assert!(remove(&store, &reference).is_err());
+            assert_eq!(inventory(&store).unwrap()["coverage"], "partial");
+        }
+        let mut unsupported = plain;
+        unsupported["metadata"]["version"] = json!(99);
+        store.write_json(&name, &unsupported).unwrap();
+        let before = fs::read(store.path(&name).unwrap()).unwrap();
+        assert_eq!(
+            get(&store, &reference).unwrap_err().code,
+            "storage_version_unsupported"
+        );
+        assert!(remove(&store, &reference).is_err());
+        assert_eq!(inventory(&store).unwrap()["coverage"], "partial");
+        assert_eq!(fs::read(store.path(&name).unwrap()).unwrap(), before);
+    }
     pub(super) fn request() -> Request {
         Request {
             command: vec![],
@@ -974,8 +920,11 @@ mod tests {
         request.dry_run = true;
         request
             .arguments
-            .insert("unlock-fd".into(), vec!["18446744073709551616".into()]);
-        assert_eq!(unlock(&request).unwrap_err().code, "invalid_arguments");
+            .insert("key-fd".into(), vec!["18446744073709551616".into()]);
+        assert_eq!(
+            read_protected_input(&request, "key").unwrap_err().code,
+            "invalid_arguments"
+        );
     }
 
     #[test]
@@ -998,32 +947,19 @@ mod tests {
         request
             .arguments
             .insert("key-stdin".into(), vec!["true".into()]);
-        request
-            .arguments
-            .insert("unlock-stdin".into(), vec!["true".into()]);
-        assert!(unlock(&request).is_err());
-        request.arguments.remove("key-stdin");
-        assert!(unlock(&request).unwrap().is_none());
-        assert!(read_protected_input(&request, "unlock").unwrap().is_empty());
+        request.arguments.insert("key-fd".into(), vec!["3".into()]);
+        assert!(read_protected_input(&request, "key").is_err());
+        request.arguments.remove("key-fd");
+        assert!(read_protected_input(&request, "key").unwrap().is_empty());
     }
     #[test]
-    fn locked_creation_has_no_store_effects() {
-        let home = tempfile::tempdir().unwrap();
-        let store = Store::at(home.path().to_owned());
-        assert!(put(&store, "proxy", b"test credential", None).is_err());
-        assert!(!store.root.exists());
-        assert_eq!(inventory(&store).unwrap()["coverage"], "complete");
-        assert!(!store.root.exists());
-    }
-    #[test]
-    fn ciphertext_and_metadata_commit_together_and_orphans_remain_discoverable() {
+    fn plaintext_and_metadata_commit_together_and_orphans_remain_discoverable() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::at(home.path().to_owned());
         let reference = put(
             &store,
             "provider:stable-local-id:example",
             b"unmistakable-private-test-value",
-            Some(b"test unlock"),
         )
         .unwrap();
         let bytes = fs::read(
@@ -1032,7 +968,23 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert!(!String::from_utf8_lossy(&bytes).contains("unmistakable-private-test-value"));
+        let saved: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(saved["metadata"]["version"], VERSION);
+        assert_eq!(
+            saved["bytes"],
+            json!(b"unmistakable-private-test-value".to_vec())
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = store
+                .path(&entry_name("secrets", &reference).unwrap())
+                .unwrap();
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         let inventory = inventory(&store).unwrap();
         assert_eq!(inventory["entries"][0]["reference"], reference);
         assert_eq!(
@@ -1051,24 +1003,9 @@ mod tests {
             Some("stable-local-id")
         );
         assert_eq!(
-            get(&store, &reference, Some(b"test unlock"))
-                .unwrap()
-                .as_slice(),
+            get(&store, &reference).unwrap().as_slice(),
             b"unmistakable-private-test-value"
         );
-        assert!(get(&store, &reference, Some(b"wrong unlock")).is_err());
-        assert!(get(&store, &reference, None).is_err());
-        let mut envelope = load(&store, "secrets", &reference).unwrap();
-        let original_identity = envelope.metadata.owner.identity.clone();
-        envelope.metadata.owner.identity = "different-local-identity".into();
-        store
-            .write_json(&entry_name("secrets", &reference).unwrap(), &envelope)
-            .unwrap();
-        assert!(get(&store, &reference, Some(b"test unlock")).is_err());
-        envelope.metadata.owner.identity = original_identity;
-        store
-            .write_json(&entry_name("secrets", &reference).unwrap(), &envelope)
-            .unwrap();
         remove(&store, &reference).unwrap();
         assert_eq!(
             super::inventory(&store).unwrap()["entries"]
@@ -1097,16 +1034,13 @@ mod tests {
         assert!(remove(&store, &reference).is_err());
     }
     #[test]
-    fn recovery_retains_exact_non_utf8_bytes_but_inspection_never_decrypts() {
+    fn recovery_retains_exact_non_utf8_bytes_but_inspection_never_exports_them() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::at(home.path().to_owned());
         let bytes = b"invalid\xffsecret\0configuration";
-        let reference = protect_recovery(&store, bytes, Some(b"test unlock")).unwrap();
+        let reference = protect_recovery(&store, bytes).unwrap();
         let envelope = load(&store, "recovery", &reference).unwrap();
-        assert_eq!(
-            decrypt(&envelope, b"test unlock").unwrap().as_slice(),
-            bytes
-        );
+        assert_eq!(envelope.bytes, bytes);
         let inspected = recovery_inspect(&store, &reference).unwrap();
         assert_eq!(inspected["byte_count"], bytes.len());
         assert!(!inspected.to_string().contains("secret"));
@@ -1165,30 +1099,6 @@ mod tests {
             .arguments
             .insert("key-fd".into(), vec![file.as_raw_fd().to_string()]);
         assert!(read_protected_input(&request, "key").is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn input_and_output_cannot_share_the_same_pipe() {
-        use std::os::fd::{AsRawFd, FromRawFd};
-        let mut fds = [-1; 2];
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        let reader = unsafe { fs::File::from_raw_fd(fds[0]) };
-        let writer = unsafe { fs::File::from_raw_fd(fds[1]) };
-        let mut request = request();
-        request.dry_run = true;
-        request
-            .arguments
-            .insert("unlock-fd".into(), vec![reader.as_raw_fd().to_string()]);
-        request
-            .arguments
-            .insert("key-fd".into(), vec![reader.as_raw_fd().to_string()]);
-        assert!(unlock(&request).is_err());
-        request.arguments.remove("key-fd");
-        request
-            .arguments
-            .insert("output-fd".into(), vec![writer.as_raw_fd().to_string()]);
-        assert!(qualify_output(&request).is_err());
     }
 
     #[test]

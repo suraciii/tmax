@@ -41,18 +41,19 @@ These addresses do not claim a running proxy or successful connectivity.
 
 `proxy configure [--listen ADDRESS] [--clear autostart]` creates/edits the optional
 proxy table. At least one operand is required; creation requires listen and
-explicitly provisions the sole shared protected key, saving its generated
-`key_ref` with the settings. Listen is numeric loopback `host:port` (bracket IPv6),
-port 1–65535. Preserve unrelated settings and never start inference or write
-native files. Existing-table edits retain the key reference; no implicit repair
-or key generation occurs on ordinary configure/start/reload/apply. Missing/locked
-key blocks readiness; explicit [key replacement](../providers/authentication/spec.md#shared-proxy-key)
-repairs unavailable retained key material.
+explicitly provisions the sole shared key in a current-user-restricted plaintext
+storage-version-2 file, saving its `key_ref` with the settings. Listen is numeric
+loopback `host:port` (bracket IPv6), port 1–65535. Preserve unrelated settings and
+never start inference or write native files. Existing-table edits retain the key
+reference; no implicit repair or key generation occurs on ordinary
+configure/start/reload/apply. Missing or unreadable key material blocks
+readiness; explicit [key replacement](../providers/authentication/spec.md#shared-proxy-key)
+repairs a missing or unreadable retained key.
 
 Report provisioning, save, and activation separately. Dry-run describes key
-provisioning without generating/reserving a reference or reading protected input.
-Actual provisioning uses `data.proxy_key` from the shared-key contract; failed
-save retains any orphan reference for explicit cleanup. Never return key bytes.
+provisioning without generating/reserving a reference or reading key bytes. Actual
+provisioning uses `data.proxy_key` from the shared-key contract; failed save retains
+any orphan reference for explicit cleanup. Never return key bytes.
 Clear autostart restores disabled intent, not unconditional registration retry.
 
 `proxy remove` requires stopped inference and resolved native `--proxy` entry
@@ -80,10 +81,9 @@ a resident and reports separately from save/activation; failure is incomplete.
 
 Unchanged-intent unrelated edits/reloads neither retry/remove registration nor
 fail only for drift. Report `not_requested` plus drift/failed state and the repair
-command. `proxy autostart enable|disable` always reconciles, even at the same saved
 value, without starting inference. Startup validates current config and enabled
-intent; stale OS registration cannot override disabled intent. Locked secrets
-remain an unlock condition, not an insecure fallback or false ready state.
+intent; stale OS registration cannot override disabled intent. Missing or
+unavailable credentials block readiness, not an insecure fallback or a false ready state.
 
 Upstream credential changes on reload/start/restart use
 [replacement safety](../providers/authentication/spec.md#authorization-replacement),
@@ -99,7 +99,7 @@ follow [their independent lifecycle](../providers/authentication/spec.md#shared-
 | `proxy start` | Reuse compatible running inference without reload, or validate saved config/shared key and start inference in the sole acquired resident. No managed-target prerequisite, key provisioning, or native application. |
 | `proxy stop [--cancel-active]` | Stop inference, not Web. Refuse active work unless interruption is explicitly requested; report actual affected requests and only independently established targets. |
 | `proxy restart [--cancel-active]` | Explicit stop/start using current valid settings, including saved address change, without stopping Web/replacing the resident. Same active-request rule. |
-| `proxy autostart enable` | Save true and always reconcile per-user login-start registration; disclose unlock requirements. |
+| `proxy autostart enable` | Save true and always reconcile per-user login-start registration; disclose missing or unavailable credential state. |
 | `proxy autostart disable` | Save false and always reconcile registration removal, not stop inference. |
 | `web open [--listen ADDRESS] [--no-browser]` | Start/reuse management in the sole compatible resident, report actual URL, and open browser unless suppressed. Do not implicitly start inference or reload. |
 | `web stop` | Stop management only in the identified compatible resident, not inference/native agents. |
@@ -210,9 +210,9 @@ Partial start after a completed boundary retains the incomplete/failure result.
 
 Detailed `proxy status` additionally returns `data.shared_key = {file_reference,
 loaded_reference, loaded_state}`. References are safe strings or null; loaded
-state is `absent`, `ready`, `locked`, `missing`, `unavailable`, or `unknown`.
-Status never unlocks/resolves/reveals a key to establish readiness. It returns
-actual retained resident evidence, not a fabricated success from a reference.
+state is `absent`, `ready`, or `unavailable`. Status reports retained loaded state
+without reading, resolving, or revealing a key. It returns actual resident evidence,
+not fabricated success from a reference.
 `data.publication = {snapshot_state, model_count}` summarizes the loaded derived
 list; snapshot state uses common available/absent/unavailable values, and count
 is a nonnegative integer or null without available data. It does not repeat

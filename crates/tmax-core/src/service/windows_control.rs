@@ -60,8 +60,6 @@ struct SidAndAttributes {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetCurrentProcess() -> Handle;
-    fn GetStdHandle(which: u32) -> Handle;
-    fn GetFileType(handle: Handle) -> u32;
     fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
     fn GetNamedPipeServerProcessId(pipe: Handle, pid: *mut u32) -> i32;
     fn GetNamedPipeClientProcessId(pipe: Handle, pid: *mut u32) -> i32;
@@ -85,9 +83,6 @@ unsafe extern "system" {
         descriptor: *mut Handle,
         length: *mut u32,
     ) -> i32;
-}
-pub(super) fn stdin_is_pipe() -> bool {
-    unsafe { GetFileType(GetStdHandle((-10i32) as u32)) == 3 }
 }
 fn identity_error() -> crate::Error {
     failure(

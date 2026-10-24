@@ -77,7 +77,7 @@ does not prevent a later separately begun refresh from publishing.
 Refresh distinguishes qualified absence/withdrawal from transport, parse, or
 credential failure. Failure records an attempt without refreshing prior data;
 unknown never means zero quota. Qualified same-identity credential refresh may run
-under existing source coordination, without interactive login or implicit unlock.
+under existing source coordination, without interactive login or implicit secret resolution.
 Automatic acquisition is opt-in through the interval and runs only with the
 existing service; inspect reports paused without starting it. Dry-run never
 fetches, consumes protected input, resolves secrets, or creates/reserves data,

@@ -521,8 +521,8 @@ Pending file settings must not supply facts under a different loaded definition.
    ranking presented as the reason for that request.
 
 Selection consumes already published local evidence. It must not fetch an input,
-resolve a secret, unlock credentials, perform a recovery probe, or wait for an
-in-flight refresh to complete in order to evaluate priority. An explicitly
+resolve a secret, perform a recovery probe, or wait for an in-flight refresh to
+complete in order to evaluate priority. An explicitly
 opted-in service acquisition may publish facts independently under the input
 authority; request admission neither starts it nor waits for it.
 
@@ -1016,7 +1016,7 @@ error after execution starts does not replay on a sibling.
     candidates while another operation publishes a head. A new publication
     cannot change an in-flight snapshot. Pending saved input definitions or
     changed authorization generations cannot lend incompatible facts to loaded
-    definitions. Admission never fetches, unlocks credentials, or waits for an
+    definitions. Admission never resolves secrets or waits for an
     in-flight acquisition.
 33. Evaluate `--at` only against applicable held facts and the explicitly
     selected configuration state. Missing past heads remain unknown; a future

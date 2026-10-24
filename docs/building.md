@@ -56,27 +56,31 @@ daemon, service installation, or administrator setup: ordinary CLI and Web
 actions launch the detached executable. Browser launch uses the Windows system
 browser. Opt-in Windows login startup uses only tmax's owned current-user Run
 value; Linux uses `systemctl --user` and tmax's owned unit. Missing session
-services or locked credentials remain visible blockers, not implicit inference
-startup or plaintext-unlock fallbacks.
+services or unavailable credentials remain visible blockers; they do not trigger
+implicit inference startup or route fallback.
 
-Persistent secrets and credential-bearing recovery use Argon2id (64 MiB, three
-passes, one lane) with per-entry salt, and ChaCha20Poly1305 authenticated
-encryption with per-entry nonce. Unlock material is supplied through qualified
-hidden terminal or inherited-pipe input and is not saved beside ciphertext.
-Safe inventory and recovery metadata remain inspectable while locked. Native
-credential-file handoff is version-qualified, restricted, and explicitly
-disclosed; it is not an export command or token-import feature.
+The tmax store keeps API keys and credential-bearing recovery data as plaintext
+under `~/.tmax`. Unix uses mode-0600 files and mode-0700 directories; Windows
+uses an owner-only ACL. These permissions are not encryption. Ordinary
+configuration stores references, not key bytes. Credential contents never
+appear in stdout, logs, or ordinary inspection.
 
-Resident unlock and protected Web key/unlock handoff use owned anonymous pipes,
-available in the standard library since Rust 1.87 and within the Rust 1.88
-minimum. Unix launch deliberately enables only its FD 3 unlock handoff in the
-child; Windows uses the child's bounded standard-input pipe. Owners close pipe
-ends without named plaintext files or secret argv/environment values. Unix
-parent pipe ends are close-on-exec: Linux allocates them atomically, while Rust
-1.88 on macOS sets close-on-exec after creation; no stronger process-wide
-fork-race guarantee is claimed for that fallback. Windows protected console
-input is hidden and uses separate console handles, keeping management JSON
-separate from prompts and explicit key delivery.
+Unsupported storage-format records return `storage_version_unsupported` or
+`storage_record_invalid` and remain unchanged. Re-enter provider keys through
+`provider key set` or replace the shared key with `proxy key replace`. Recovery
+contents in unsupported formats are unavailable to current recovery operations.
+
+If the current CLI reports `resident_incompatible`, use the running service's
+matching older CLI (`tmax proxy stop`, then `tmax web stop`) or its existing Web
+controls to perform explicit stops before starting the new executable. The new
+CLI does not take over or terminate an incompatible resident.
+
+Native credential-file handoff is version-qualified, restricted, and explicitly
+disclosed; it is not an export command or token-import feature. Provider-key
+entry uses hidden terminal input or explicit `--key-stdin`. Shared proxy-key
+delivery uses a qualified terminal or output pipe. Never place credential bytes
+in argv, environment variables, or ordinary output. Native provider sign-in
+retains its native owner's platform-specific input and credential-storage rules.
 
 Windows source review and cross-compilation do not establish actual Windows
 startup, console, security-descriptor, or browser runtime behavior. Record those

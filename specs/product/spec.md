@@ -142,13 +142,13 @@ saving or reloading tmax configuration must not silently rewrite agent files.
 
 An invalid saved configuration must have an explicit CLI recovery path that does
 not require authoring a replacement document. Reset is a last-resort operation
-only for an existing invalid file: preserve its exact bytes as protected recovery
-data before replacing desired settings with empty configuration. Report lost
-desired selections and resulting access revocation. Do not change native files,
-sign out, delete stored secrets, discard prior recovery information, or move old
-sessions to another destination. Recovery artifacts remain inspectable without
-exposing secrets and are retained until explicitly discarded; resetting does
-not authorize replay of rejected content.
+only for an existing invalid file: preserve its exact bytes in a current-user-
+restricted plaintext recovery artifact before replacing desired settings with
+empty configuration. Report lost desired selections and resulting access
+revocation. Do not change native files, sign out, delete stored secrets, discard
+prior recovery information, or move old sessions to another destination. Recovery
+artifacts remain inspectable without exposing secrets and are retained until
+explicitly discarded; resetting does not authorize replay of rejected content.
 
 ### Backup and restoration boundary
 
@@ -160,14 +160,15 @@ Guidance for external system backups must identify `~/.tmax` as the tmax-owned
 state boundary. A consistent file copy requires stopping the resident service
 and all other tmax writers; copying only `tmax.toml` is not a complete backup.
 Secret-bearing backup copies require the same protection as their source.
-Encrypted secret files alone do not guarantee recovery: their unlock material
-or platform protection must remain available. Native-agent files, native-owned
-credentials, and OS startup registration are outside that directory.
+Secret and credential-bearing recovery files contain plaintext; copying them
+does not encrypt their contents. Backups must retain the source's current-OS-user
+access restriction. Native-agent files, native-owned credentials, and OS startup
+registration are outside that directory.
 
 Restoring external files does not verify credentials, restore upstream account
 state, or establish that native settings still match. Startup must validate the
 restored authority normally and retain unknown or unavailable evidence where
-dependencies cannot be established. Machine-bound protection and native paths
+dependencies cannot be established. OS-account file restrictions and native paths
 may prevent reuse on another machine. tmax must not promise portable recovery,
 replay requests, or overwrite current native settings as a side effect of startup.
 
@@ -532,8 +533,9 @@ owner cannot be removed until that dependency is explicitly resolved. Removing
 a target or one of its provider entries does not revoke the shared proxy key,
 change the proxy's models, or stop the service. Existing native settings may
 continue to work. Offer restoration before removal, not as an implicit side
-effect. Retain protected restore information until restoration completes or the
-user explicitly discards it; this is recovery data, not desired configuration.
+effect. Retain current-user-restricted plaintext restore information until
+restoration completes or the user explicitly discards it; this is recovery data,
+not desired configuration.
 
 ## Model proxy
 
@@ -548,10 +550,10 @@ The first proxy start must be explicit. Once started, it runs in the background
 independently of the launching terminal or Web session. Opening management,
 saving settings, or applying native configuration does not start inference.
 Closing the browser does not stop it. User-login autostart is optional and
-disabled until enabled; setup explains the credential unlock requirement.
-A locked store produces an actionable blocked state, not an insecure fallback
-or false readiness. CLI and Web provide stop and autostart controls. Stopping
-reports known affected targets and does not switch them to upstream access;
+disabled until enabled; startup uses the current user's secret files. Missing or
+unavailable credentials produce an actionable blocked state, not false readiness.
+CLI and Web provide stop and autostart controls. Stopping reports
+known affected targets and does not switch them to upstream access;
 independently configured clients cannot be enumerated reliably.
 
 Normal stop must refuse while requests are in flight and report the affected
@@ -885,13 +887,19 @@ not persist secrets in local storage or return them through ordinary read respon
 Explicit shared-proxy-key reveal is a separate same-origin user action, not an
 inspection response; it must not cache or log the key.
 
-tmax-owned persistent secrets and credential-bearing recovery files must be
-protected in encrypted storage under `~/.tmax`, with user-restricted access and
-an explicit unlock or supported OS-protection mechanism. Unlock material must
-not be persisted beside encrypted data as an unprotected reusable secret.
-Locked or unavailable storage must be visible, never a reason to fall back to
-plaintext files. Native-owned credential stores remain subject to the explicit
-credential-handoff rule and are not imported into tmax.
+tmax-owned API keys and credential-bearing recovery bytes are plaintext files
+under `~/.tmax`; ordinary configuration stores references, not key bytes. Unix
+files use mode `0600` and directories use mode `0700`; Windows uses an owner-only
+ACL. These permissions restrict access by other OS accounts, but do not encrypt
+files or isolate processes running as the same user. The [configuration contract](../configuration/spec.md)
+defines storage and desired configuration versions.
+Credential bytes must never appear in argv, environment variables, stdout, logs,
+ordinary configuration, or ordinary inspection.
+
+Unsupported storage-format records are rejected and left unchanged. API keys may
+be re-entered through the normal provider-key or proxy-key operation. Native-owned
+credential stores follow the explicit credential-handoff rule and are not
+imported into tmax.
 
 The [diagnostics contract](../diagnostics/spec.md) owns operational evidence,
 request-history coverage, and cleanup. Diagnostics must not expose provider
@@ -943,8 +951,8 @@ versions and provider-authorized credentials where a provider request is needed:
     observations out of ordinary configuration. Inspect native agent configuration
     without importing providers, models, settings, or credentials, or overwriting later edits.
 13. Keep an explicitly started proxy running after its launching terminal and Web
-    session close. Exercise opt-in login startup and a locked credential store;
-    do not claim readiness or change to direct access when unlock is required.
+session close. Exercise opt-in login startup with missing or unavailable
+credentials; do not claim readiness or add a fallback.
     Refuse normal stop with active requests; explicit force-stop reports interruption.
     Preserve retained conversation destinations across a normal stop/start.
     An unrelated direct-configuration edit must not retry failed startup

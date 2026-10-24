@@ -336,7 +336,6 @@ pub async fn refresh(
     config: &Config,
     provider_id: &str,
     scope: &str,
-    unlock: Option<&[u8]>,
     dry_run: bool,
 ) -> Result<Value> {
     let provider = config
@@ -365,8 +364,7 @@ pub async fn refresh(
         // No publication/configuration lock is held during credential or source I/O.
         let acquired = match destination {
             Some(destination) => {
-                integrations::acquire_observation(store, config, provider, destination, unlock)
-                    .await
+                integrations::acquire_observation(store, config, provider, destination).await
             }
             None => Err(Error::new(
                 "unsupported_source",
@@ -1308,7 +1306,7 @@ mod tests {
     #[tokio::test]
     async fn go_quota_dry_run_declares_supported_read_without_secret_or_publication() {
         let (_dir, store, config) = go_fixture();
-        let result = refresh(&store, &config, "go-a", "quota", None, true)
+        let result = refresh(&store, &config, "go-a", "quota", true)
             .await
             .unwrap();
         assert_eq!(result["checks"][0]["outcome"], "not_executed");

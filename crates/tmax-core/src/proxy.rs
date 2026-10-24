@@ -44,11 +44,7 @@ const BINDING_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const ACTIVE_LIMIT: usize = 16;
 static CREDENTIAL_SLOTS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
     std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(ACTIVE_LIMIT)));
-pub async fn credential(
-    store: Store,
-    reference: String,
-    unlock: Option<Zeroizing<Vec<u8>>>,
-) -> Result<Zeroizing<Vec<u8>>> {
+pub async fn credential(store: Store, reference: String) -> Result<Zeroizing<Vec<u8>>> {
     let slot = CREDENTIAL_SLOTS.clone().try_acquire_owned().map_err(|_| {
         Error::new(
             "credential_capacity",
@@ -57,7 +53,7 @@ pub async fn credential(
     })?;
     let job = tokio::task::spawn_blocking(move || {
         let _slot = slot;
-        crate::secrets::get(&store, &reference, unlock.as_deref().map(Vec::as_slice))
+        crate::secrets::get(&store, &reference)
     });
     tokio::time::timeout(Duration::from_secs(CREDENTIAL_SECONDS), job)
         .await
@@ -90,7 +86,6 @@ pub struct Runtime {
     pub snapshot: RwLock<Option<Arc<Snapshot>>>,
     pub history: Arc<History>,
     admission: Mutex<Admission>,
-    pub unlock: RwLock<Option<Zeroizing<Vec<u8>>>>,
     bindings: Mutex<Bindings>,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -147,11 +142,7 @@ fn load_bindings(store: &Store) -> Result<Bindings> {
     Ok(bindings)
 }
 impl Runtime {
-    pub fn new(
-        store: Store,
-        process: String,
-        unlock: Option<Zeroizing<Vec<u8>>>,
-    ) -> Result<Arc<Self>> {
+    pub fn new(store: Store, process: String) -> Result<Arc<Self>> {
         let path = store.root.join("session-bindings.json");
         let bindings = load_bindings(&store)?;
         if !path.exists() {
@@ -165,7 +156,6 @@ impl Runtime {
                 enabled: false,
                 active: HashMap::new(),
             }),
-            unlock: RwLock::new(unlock),
             bindings: Mutex::new(bindings),
         }))
     }
@@ -1014,8 +1004,7 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
     };
     let store = runtime.store.clone();
     let key_ref = key_ref.clone();
-    let unlock = runtime.unlock.read().expect("unlock lock").clone();
-    let key = tokio::select! {biased;_ = flight.cancel.changed()=>return flight.reject(StatusCode::SERVICE_UNAVAILABLE,"force_stop","credential_acquisition"),result=credential(store,key_ref,unlock)=>match result{Ok(value)=>value,Err(error)=>return flight.reject(StatusCode::SERVICE_UNAVAILABLE,&error.code,"credential_acquisition")}};
+    let key = tokio::select! {biased;_ = flight.cancel.changed()=>return flight.reject(StatusCode::SERVICE_UNAVAILABLE,"force_stop","credential_acquisition"),result=credential(store,key_ref)=>match result{Ok(value)=>value,Err(error)=>return flight.reject(StatusCode::SERVICE_UNAVAILABLE,&error.code,"credential_acquisition")}};
     let key = match std::str::from_utf8(&key) {
         Ok(v) => v,
         Err(_) => {
@@ -1354,12 +1343,7 @@ pub fn publication(config: &Config) -> Value {
 }
 
 /// Explicit paid, fixed-destination diagnostic request. It does not start a resident.
-pub async fn probe(
-    store: &Store,
-    config: &Config,
-    request: &Request,
-    unlock: Option<&[u8]>,
-) -> Result<Value> {
+pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<Value> {
     let id = request
         .operands
         .first()
@@ -1425,12 +1409,7 @@ pub async fn probe(
             "API-key authorization required",
         ));
     };
-    let key = credential(
-        store.clone(),
-        key_ref.clone(),
-        unlock.map(|v| Zeroizing::new(v.to_vec())),
-    )
-    .await?;
+    let key = credential(store.clone(), key_ref.clone()).await?;
     let key = std::str::from_utf8(&key).map_err(|_| {
         Error::new(
             "credential_invalid",
@@ -1521,8 +1500,7 @@ mod tests {
     #[test]
     fn immediate_active_admission_and_atomic_stop() {
         let temporary = tempfile::tempdir().unwrap();
-        let runtime =
-            Runtime::new(Store::at(temporary.path().into()), "admission".into(), None).unwrap();
+        let runtime = Runtime::new(Store::at(temporary.path().into()), "admission".into()).unwrap();
         runtime.open();
         let mut flights = Vec::new();
         for _ in 0..ACTIVE_LIMIT {
@@ -1597,7 +1575,6 @@ mod tests {
                 &store,
                 &format!("provider:{identity}:{id}"),
                 b"test-provider-key",
-                Some(b"test-unlock"),
             )
             .unwrap();
             config.providers.get_mut(id).unwrap().auth = Some(Auth::ApiKey { key_ref: reference });
@@ -1614,7 +1591,7 @@ mod tests {
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
         crate::inputs::activate(&store, &config, "fixture-1").unwrap();
-        let runtime = Runtime::new(store, "sessions".into(), None).unwrap();
+        let runtime = Runtime::new(store, "sessions".into()).unwrap();
         (temporary, runtime, config)
     }
     fn test_snapshot(config: &Config, revision: &str) -> Snapshot {
@@ -1888,7 +1865,7 @@ mod tests {
         assert_eq!(first.selection.evidence, original);
         let store = runtime.store.clone();
         drop(runtime);
-        let restarted = Runtime::new(store, "restart".into(), None).unwrap();
+        let restarted = Runtime::new(store, "restart".into()).unwrap();
         let after = restarted
             .choose(
                 &test_snapshot(&updated, "fixture-2"),
@@ -1985,7 +1962,7 @@ mod tests {
             impact["blocked_sessions"][0]["reason_code"],
             "alias_disabled"
         );
-        let restarted = Runtime::new(runtime.store.clone(), "retry".into(), None).unwrap();
+        let restarted = Runtime::new(runtime.store.clone(), "retry".into()).unwrap();
         let error = restarted
             .choose(
                 &test_snapshot(&config, "fixture-1"),
@@ -2093,7 +2070,7 @@ mod tests {
             std::fs::read(store.root.join("session-bindings.json")).unwrap(),
             bindings_before
         );
-        let runtime = Runtime::new(store, "after-historical-cutover".into(), None).unwrap();
+        let runtime = Runtime::new(store, "after-historical-cutover".into()).unwrap();
         let error = runtime
             .choose(
                 &test_snapshot(&config, "restored"),
@@ -2266,7 +2243,7 @@ mod tests {
         }
         let store = runtime.store.clone();
         drop(runtime);
-        let resumed = Runtime::new(store, "go-resume".into(), None).unwrap();
+        let resumed = Runtime::new(store, "go-resume".into()).unwrap();
         let retained = resumed
             .choose(
                 &snapshot,
@@ -2431,7 +2408,6 @@ mod tests {
             .insert("messages".into(), format!("http://{address}"));
         publish(&runtime, &config, &messages, "messages-query");
         runtime.open();
-        *runtime.unlock.write().unwrap() = Some(Zeroizing::new(b"test-unlock".to_vec()));
         for path in ["/v1/messages", "/v1/messages?beta=true"] {
             let body = json!({"model":"p/m","messages":[{"role":"user","content":"x"}],"max_tokens":1,"stream":false,"extension":{"enabled":false}});
             let request = axum::http::Request::builder()
