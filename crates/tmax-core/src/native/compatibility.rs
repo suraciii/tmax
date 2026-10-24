@@ -104,10 +104,12 @@ impl Context<'_> {
                 ));
             }
         } else {
-            if integration == "opencode-go" && !matches!(self.agent, "pi" | "hermes" | "opencode") {
+            if integration == "opencode-go"
+                && !matches!(self.agent, "pi" | "hermes" | "opencode" | "omp")
+            {
                 return Err(Error::new(
                     "compatibility_unavailable",
-                    "This exact native client lacks qualified per-conversation Go header coverage; pi 1.2.0 and Hermes 0.22.1 have separately sourced direct paths",
+                    "This exact native client lacks qualified per-conversation Go header coverage; pi 1.2.0, omp 18.12.6, Hermes 0.22.1, and OpenCode 2.0.28 have separately sourced direct paths",
                 ));
             }
             if integration == "kimi-coding-plan" && self.agent == "hermes" && protocol == "messages"

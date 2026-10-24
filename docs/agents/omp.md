@@ -216,6 +216,26 @@ No auth-file import, broker migration, or Pi-to-OMP credential mirroring is part
 of this mapping. tmax's key handoff uses native `!` syntax and a private native
 artifact; native OAuth refresh remains with the native store/broker owner.
 
+## OpenCode Go session identity
+
+`packages/ai/src/providers/inference-headers.ts` projects omp's authoritative
+conversation session ID onto Go-bound requests. For providers `opencode-go` and
+`opencode-zen`, `applyInferenceHeaders` sets `x-opencode-session` to that live
+ID and overwrites any same-named header; `User-Agent` uses a caller-wins rule
+instead. The companion `applySessionHeader` supplies a model's configured
+`compat.sessionHeader` name with the same live ID for other hosts.
+
+This is a per-conversation value, not a static provider, key, process, or
+conversation-set constant. tmax does not write this header: the agent supplies
+it on its own request path, and tmax is absent from that path. A fixed
+`extraHeaders` entry is a different static mechanism and does not qualify
+per-conversation coverage.
+
+The [Go integration contract](../../specs/integrations/opencode-go/spec.md#conversation-and-client-identity)
+owns the boundary. Source inspection qualifies the mechanism only; it does not
+establish Go's recognition of the header, coverage of every auxiliary Go-bound
+path, or successful Go inference.
+
 ## Qualification
 
 Retained installed evidence observed actual tmax apply, installed
