@@ -204,6 +204,9 @@ async fn selected(store: &Store, r: &Request) -> Result<Option<config::LoadedFil
 }
 async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     let path = r.command.join(" ");
+    if path == "skill install" {
+        return crate::skill::install(store, r);
+    }
     if path == "integration list" {
         return Ok(json!({"integrations":crate::integrations::registry()}));
     }

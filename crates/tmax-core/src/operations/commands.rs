@@ -10,6 +10,13 @@ struct Command {
 }
 const COMMANDS: &[Command] = &[
     Command {
+        path: "skill install",
+        min: 0,
+        max: 0,
+        options: "agent",
+        mutation: true,
+    },
+    Command {
         path: "status",
         min: 0,
         max: 0,
@@ -788,7 +795,7 @@ const COMMANDS: &[Command] = &[
     },
 ];
 pub fn catalog() -> Value {
-    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="proxy configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"model"),"switch":matches!(name,"all-day"|"last"|"proxy"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation})}).collect::<Vec<_>>())
+    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="proxy configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"model"),"switch":matches!(name,"all-day"|"last"|"proxy"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation})}).collect::<Vec<_>>())
 }
 fn operand_labels(path: &str) -> &'static [&'static str] {
     match path {
@@ -862,7 +869,7 @@ pub fn validate(r: &Request) -> Result<()> {
             "Effect-free reads do not accept dry-run",
         ));
     }
-    if r.if_revision.is_some() && !c.mutation {
+    if r.if_revision.is_some() && (!c.mutation || path == "skill install") {
         return Err(Error::new(
             "invalid_arguments",
             "This operation does not save configuration",
@@ -957,7 +964,11 @@ pub fn validate(r: &Request) -> Result<()> {
                     crate::config::PROTOCOLS.contains(&values[0].as_str())
                 }
                 "agent" => {
-                    ["codex", "pi", "omp", "opencode", "hermes"].contains(&values[0].as_str())
+                    if path == "skill install" {
+                        values[0] == "hermes"
+                    } else {
+                        ["codex", "pi", "omp", "opencode", "hermes"].contains(&values[0].as_str())
+                    }
                 }
                 "snapshot" => ["accepted", "latest"].contains(&values[0].as_str()),
                 _ => true,
@@ -998,6 +1009,28 @@ mod tests {
             dry_run: false,
             if_revision: None,
         };
+        assert!(validate(&request).is_err());
+    }
+
+    #[test]
+    fn skill_install_rejects_unsupported_agent_and_config_revision() {
+        let mut request = Request {
+            command: vec!["skill".into(), "install".into()],
+            operands: vec![],
+            arguments: std::collections::BTreeMap::new(),
+            dry_run: true,
+            if_revision: None,
+        };
+        assert!(validate(&request).is_ok());
+        for agent in ["codex", "pi", "omp", "opencode", "agents", "unknown"] {
+            request.arguments.insert("agent".into(), vec![agent.into()]);
+            assert_eq!(validate(&request).unwrap_err().code, "invalid_arguments");
+        }
+        request
+            .arguments
+            .insert("agent".into(), vec!["hermes".into()]);
+        assert!(validate(&request).is_ok());
+        request.if_revision = Some("absent".into());
         assert!(validate(&request).is_err());
     }
 }
