@@ -435,10 +435,10 @@ fn project_view(old: &View, config: &Config) -> View {
             .retain(|input, _| p.inputs.contains_key(input));
         for (input, d) in &p.inputs {
             let definition = source_definition(p, d);
-            if !ids
+            if ids
                 .declarations
                 .get(input)
-                .is_some_and(|prior| prior.definition == definition)
+                .is_none_or(|prior| prior.definition != definition)
             {
                 ids.declarations.insert(
                     input.clone(),
@@ -508,10 +508,10 @@ fn make_view(
             .retain(|name, _| provider.inputs.contains_key(name));
         for (input, declaration) in &provider.inputs {
             let definition = source_definition(provider, declaration);
-            if !ids
+            if ids
                 .declarations
                 .get(input)
-                .is_some_and(|old| old.definition == definition)
+                .is_none_or(|old| old.definition != definition)
             {
                 ids.declarations.insert(
                     input.clone(),

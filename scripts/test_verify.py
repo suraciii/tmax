@@ -28,7 +28,7 @@ class VerificationTests(unittest.TestCase):
         self.git('config', 'commit.gpgsign', 'false')
         self.git('config', 'core.hooksPath', str(self.work / 'no-hooks'))
         self.justfile('ci:\n    @echo main-gate\nci-pr:\n    @echo pr-gate\n')
-        (self.repo / 'source.txt').write_text('original\n')
+        (self.repo / 'source.txt').write_bytes(b'original\n')
         self.evidence = self.work / 'evidence'
 
     def git(self, *args):
@@ -104,7 +104,7 @@ ci: bad
 
     def test_dirty_committed_sources_are_measured_without_requiring_clean_tree(self):
         self.commit()
-        (self.repo / 'source.txt').write_text('dirty\n')
+        (self.repo / 'source.txt').write_bytes(b'dirty\n')
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.report()['before']['tracked_sha256']['source.txt'],
@@ -142,10 +142,11 @@ ci: bad
 
     def test_symlink_repointing_is_detected_even_when_both_targets_are_missing(self):
         (self.repo / 'link').symlink_to('missing-before')
-        self.justfile('ci:\n    rm link\n    ln -s missing-after link\n')
+        self.justfile('ci:\n    python3 -B -c \'from pathlib import Path; p = Path("link"); p.unlink(); p.symlink_to("missing-after")\'\n')
         self.commit()
         result = self.invoke()
         self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(self.report()['gate_exit_code'], 0)
         self.assertTrue(self.report()['source_changed'])
         self.assertEqual(self.report()['after']['tracked_sha256']['link'],
                          hashlib.sha256(b'missing-after').hexdigest())

@@ -293,7 +293,7 @@ function stopLoginPolling() { clearTimeout(loginPoll); loginPoll=null; }
 const loginErrors = {
   saved_not_active:'登录设置已保存，但运行状态尚未同步。请刷新检查，避免重复创建。',
   native_not_installed:'未找到 Codex。请安装官方 Codex CLI 后重试。',
-  native_version_unqualified:'此登录流程目前适配 Codex CLI 0.159.2。请检查本机版本。',
+  native_login_unsupported:'当前 Codex 不支持所需的登录接口。请更新官方 Codex CLI 后重试。',
   native_ambient_login_not_adopted:'此工具已有其他登录。请选择独立认证空间，避免覆盖现有授权。',
   native_scope_conflict:'此认证空间已被其他服务商使用，请选择独立认证空间。',
   acquisition_in_progress:'另一个授权正在进行，请完成或取消后重试。',

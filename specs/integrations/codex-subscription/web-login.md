@@ -54,8 +54,9 @@ refresh owner for native credentials.
 - [Magpie refresh coordination](https://github.com/yetone/magpie/blob/ed91aa04ef1f79bdc7edd28de33e26dca8e1a49e/internal/provider/account.go)
 - [Codex app-server authentication](https://learn.chatgpt.com/docs/app-server#authentication)
 
-Protocol qualification is independent of native model-configuration qualification:
-Codex CLI 0.159.2 exposes the required managed login/account protocol in its
-generated JSON schema. Other versions require explicit qualification. No shell
+Authentication support is independent of native model-configuration support.
+Sign-in uses the installed Codex managed login/account protocol without an exact
+CLI version gate. Missing methods or incompatible parameters produce an actionable
+update message; a version difference alone does not block sign-in. No shell
 wrapper, terminal parsing, credential export, or externally managed token mode
 is used. A successful login alone does not qualify gateway forwarding.

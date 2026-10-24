@@ -344,14 +344,28 @@ mod tests {
     }
     #[tokio::test]
     async fn discarded_server_disconnects_stale_client_before_rebind() {
+        use tokio::io::AsyncReadExt;
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
         let mut listener = Listener::bind(&store).await.unwrap();
-        let client = connect(&store).await.unwrap().unwrap();
+        let mut client = connect(&store).await.unwrap().unwrap();
         let server = listener.accept().await.unwrap();
         drop(server);
         listener.release().unwrap();
-        // Keep the old client alive: dropping server handles alone is not enough.
+        // Keep the client handle alive, but observe disconnection so the IOCP
+        // reactor drains cancelled operations and releases the server handle.
+        let mut byte = [0];
+        let closed =
+            tokio::time::timeout(Duration::from_secs(CONTROL_SECONDS), client.read(&mut byte))
+                .await
+                .unwrap();
+        assert!(
+            matches!(closed, Ok(0))
+                || closed
+                    .as_ref()
+                    .is_err_and(|e| matches!(e.raw_os_error(), Some(109 | 233))),
+            "{closed:?}"
+        );
         let replacement = Listener::bind(&store).await.unwrap();
         drop(client);
         replacement.release().unwrap();

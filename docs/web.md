@@ -61,9 +61,10 @@ Configuration changes during sign-in prevent saving over newer edits. If login
 succeeds but saving or runtime activation fails, inspect the reported outcome
 before retrying. An existing unrelated login is never imported automatically.
 
-The official Codex executable is required. Browser authentication is currently
-qualified with Codex CLI 0.159.2; native model configuration has its own version
-qualification. The optional device-code method depends on OpenAI account
+The official Codex executable is required. Browser authentication checks the
+installed authentication interface, without requiring an exact CLI version.
+If the required methods are unavailable, update Codex and retry. Native model
+configuration has separate compatibility checks. The optional device-code method depends on OpenAI account
 settings and availability. Codex stores and refreshes credentials; tmax stores
 only a reference and account metadata. The independent scope uses Codex's file
 credential store with private local permissions, not encryption.

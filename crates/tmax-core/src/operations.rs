@@ -1019,6 +1019,7 @@ mod tests {
         );
         assert_eq!(login.exit_code, 3);
     }
+    #[cfg(unix)]
     fn request(command: &[&str], operands: &[&str], arguments: &[(&str, &[&str])]) -> Request {
         Request {
             command: command.iter().map(|value| (*value).into()).collect(),

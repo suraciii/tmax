@@ -169,7 +169,14 @@ fn scope_evidence(store: &Store, path: &Path) -> Result<(PathBuf, &'static str)>
     if !canonical.is_dir() {
         return Ok((canonical, "not_directory"));
     }
-    if canonical == store.root || canonical.starts_with(&store.root) {
+    // Windows canonicalization adds a verbatim prefix. Compare both directories
+    // in the same filesystem form, including aliases of the storage root.
+    let root = match fs::canonicalize(&store.root) {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => store.root.clone(),
+        Err(_) => return Err(unavailable()),
+    };
+    if canonical.starts_with(root) {
         return Err(Error::new(
             "invalid_native_scope",
             "Native scopes must remain outside tmax-owned storage",
@@ -1014,15 +1021,17 @@ fn desired_fields(agent: &str, desired: &Value, current: &Value) -> Vec<(Vec<Str
     let mut fields = Vec::new();
     leaves(desired, &mut Vec::new(), &mut fields);
     fields.retain(|(path, value)| {
-        !path.is_empty()
-            && !(agent == "hermes"
-                && path.len() == 4
-                && path[0] == "providers"
-                && path[2] == "models"
-                && value.as_object().is_some_and(|model| model.is_empty())
-                && document::get(current, path)
-                    .and_then(Value::as_object)
-                    .is_some_and(|model| !model.is_empty()))
+        if path.is_empty() {
+            return false;
+        }
+        !(agent == "hermes"
+            && path.len() == 4
+            && path[0] == "providers"
+            && path[2] == "models"
+            && value.as_object().is_some_and(|model| model.is_empty())
+            && document::get(current, path)
+                .and_then(Value::as_object)
+                .is_some_and(|model| !model.is_empty()))
     });
     fields
 }
@@ -2914,16 +2923,19 @@ mod tests {
             roles: BTreeMap::new(),
         };
         fs::create_dir(&target.scope).unwrap();
+        // Login writers retain the resolved scope and fingerprint, not the
+        // spelling originally entered in the target configuration.
+        let path = scope(&store, &target.scope).unwrap();
         let record = LoginRecord {
             provider: "p".into(),
             target: "owner".into(),
-            scope: target.scope.clone(),
+            scope: path.clone(),
             agent: target.agent.clone(),
             native_provider: "openai".into(),
             credential_id: None,
             session_ref: "native-session-test".into(),
             state: "signed_in".into(),
-            source_revision: login_source_revision(&target, &target.scope),
+            source_revision: login_source_revision(&target, &path),
             account: None,
         };
         config.agents.insert("owner".into(), target);
@@ -3410,6 +3422,7 @@ mod tests {
         let outer = directory.path().join("hermes");
         let inner = directory.path().join("native-launcher");
         let marker = directory.path().join("wrapper-executed");
+        let python = directory.path().join("unexecuted-python");
         fs::write(
             &outer,
             format!(
@@ -3419,9 +3432,9 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::write(&inner,format!("#!/bin/sh\nexec /unexecuted/python -I -c 'import sys\nsys.path.insert(0, '\"'\"'{}'\"'\"')\nimport hermes_bootstrap\n' \"$@\"\n",directory.path().display())).unwrap();
-        let (python, source) = hermes_provenance_runtime(&outer).unwrap();
-        assert_eq!(python, PathBuf::from("/unexecuted/python"));
+        fs::write(&inner,format!("#!/bin/sh\nexec {} -I -c 'import sys\nsys.path.insert(0, '\"'\"'{}'\"'\"')\nimport hermes_bootstrap\n' \"$@\"\n",python.display(),directory.path().display())).unwrap();
+        let (resolved_python, source) = hermes_provenance_runtime(&outer).unwrap();
+        assert_eq!(resolved_python, python);
         assert_eq!(source, directory.path());
         assert!(!marker.exists());
     }

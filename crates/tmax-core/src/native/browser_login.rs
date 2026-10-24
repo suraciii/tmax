@@ -38,8 +38,8 @@ fn err(code: &str) -> Error {
         "native_not_installed" => {
             "Install the official Codex CLI and make its native executable available on PATH"
         }
-        "native_version_unqualified" => {
-            "Browser sign-in is qualified for Codex CLI 0.159.2; inspect or install that version"
+        "native_login_unsupported" => {
+            "This Codex installation does not support the required authentication interface; update the official Codex CLI and retry"
         }
         "native_ambient_login_not_adopted" => {
             "This scope has an existing login not owned by this provider; choose a new independent scope"
@@ -439,8 +439,12 @@ impl Rpc {
             loop {
                 let message = self.message().await?;
                 if message["id"] == id {
-                    if message.get("error").is_some() {
-                        return Err(err("login_failed"));
+                    if let Some(error) = message.get("error") {
+                        return Err(err(if error["code"] == -32601 || error["code"] == -32602 {
+                            "native_login_unsupported"
+                        } else {
+                            "login_failed"
+                        }));
                     }
                     return message
                         .get("result")
@@ -536,14 +540,8 @@ async fn run(store: &Store, plan: &mut Plan, flow: &Flow, process: &mut Option<R
     plan.path = scope(store, &plan.path)?;
     plan.target.scope = plan.path.clone();
     flow.progress.lock().expect("login progress").path = plan.path.clone();
-    let installation = version("codex", &plan.path).await;
-    if installation["version"] != "0.159.2" {
-        return Err(err(if installation["state"] == "not_installed" {
-            "native_not_installed"
-        } else {
-            "native_version_unqualified"
-        }));
-    }
+    // The managed authentication protocol determines support. A CLI version
+    // difference alone must not prevent the user from signing in.
     *process = Some(Rpc::spawn(&plan.path)?);
     run_protocol(
         store,

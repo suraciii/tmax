@@ -58,6 +58,14 @@ fn peer(store: Store, flow: Arc<Flow>, scenario: &'static str) -> Rpc {
             if message.get("id").is_none() {
                 continue;
             }
+            if scenario == "unsupported" && message["method"] == "account/read" {
+                let response = json!({"id":message["id"],"error":{"code":-32601,"message":"sensitive-native-output-must-not-escape"}});
+                writer
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+                break;
+            }
             let result = match message["method"].as_str().unwrap() {
                 "initialize" => json!({}),
                 "account/read" => {
@@ -199,6 +207,50 @@ async fn browser_login_does_not_adopt_ambient_or_replace_known_account() {
             assert_eq!(logins.entries[0].state, "native_effect_uncertain");
         }
     }
+}
+
+#[tokio::test]
+async fn browser_login_unsupported_protocol_explains_update_without_changing_authorization() {
+    let (_dir, store, plan, flow) = fixture();
+    let original = config::raw_revision(&store).unwrap();
+    let mut rpc = peer(store.clone(), flow.clone(), "unsupported");
+    let error = run_protocol(&store, &plan, &flow, &mut rpc)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "native_login_unsupported");
+    assert!(!error.message.contains("sensitive-native-output"));
+    assert_eq!(config::raw_revision(&store).unwrap(), original);
+    assert!(
+        !flow
+            .progress
+            .lock()
+            .unwrap()
+            .native_authorization_may_have_changed
+    );
+    let logins: Logins = store.read_json(LOGINS).unwrap();
+    assert!(logins.entries.is_empty());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn browser_login_recognizes_managed_scope_entered_without_verbatim_prefix() {
+    let (_dir, store, plan, flow) = fixture();
+    let mut rpc = peer(store.clone(), flow.clone(), "success");
+    run_protocol(&store, &plan, &flow, &mut rpc).await.unwrap();
+    let mut loaded = config::load(&store).unwrap();
+    let path = plan.path.to_str().unwrap().strip_prefix(r"\\?\").unwrap();
+    loaded.document["agents"][&plan.via]["scope"] = toml_edit::value(path);
+    config::save(&store, &loaded.revision, &loaded.document).unwrap();
+    let request = Request {
+        command: vec!["provider".into(), "login-start".into()],
+        operands: vec!["work".into()],
+        arguments: [("via".into(), vec![plan.via.clone()])].into(),
+        dry_run: false,
+        if_revision: None,
+    };
+    let retry = prepare(&store, &request).unwrap();
+    assert!(retry.managed);
+    assert_eq!(retry.path, plan.path);
 }
 
 #[test]
@@ -404,7 +456,7 @@ async fn browser_login_created_scope_runs_native_process_and_commits_only_comple
     let executable = directory.path().join("codex");
     fs::write(&executable, r#"#!/bin/sh
 if [ "$1" = --version ]; then
-    printf 'codex-cli 0.159.2\n'
+    printf 'codex-cli 99.0.0\n'
     exit 0
 fi
 [ "$1" = app-server ] || exit 1

@@ -318,12 +318,14 @@ pub(crate) fn ensure_directory(path: &Path) -> Result<()> {
                 .filter(|p| !p.as_os_str().is_empty())
                 .ok_or_else(storage_error)?;
             ensure_directory(parent)?;
-            let mut builder = fs::DirBuilder::new();
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
-            {
+            let builder = {
                 use std::os::unix::fs::DirBuilderExt;
+                let mut builder = builder;
                 builder.mode(0o700);
-            }
+                builder
+            };
             match builder.create(path) {
                 Ok(()) => {
                     #[cfg(windows)]
