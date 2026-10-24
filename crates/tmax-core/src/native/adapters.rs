@@ -109,6 +109,7 @@ pub(super) struct Entry {
     pub models: Vec<String>,
     pub model_routes: BTreeMap<String, (String, String)>,
     pub model_metadata: BTreeMap<String, Value>,
+    pub model_projection: BTreeMap<String, Value>,
 }
 impl Entry {
     pub(super) fn native_name(&self) -> &str {
@@ -118,7 +119,177 @@ impl Entry {
             .unwrap_or(&self.name)
     }
 }
-pub(super) fn pi_omp_model_metadata(effective: &Value) -> Result<Value> {
+const PI_THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const OMP_EFFORT_LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+// Reasoning options are capability declarations. They are projected into the
+// native agent's own selector vocabulary; they never choose a default level or
+// rewrite a request. Inexact names are not translated.
+fn effort_values(effective: &Value) -> Option<Vec<String>> {
+    if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let options = effective.get("reasoning_options")?.as_array()?;
+    let mut values: Vec<String> = Vec::new();
+    for option in options {
+        if option.get("type").and_then(Value::as_str) != Some("effort") {
+            continue;
+        }
+        let Some(list) = option.get("values").and_then(Value::as_array) else {
+            continue;
+        };
+        for value in list {
+            let Some(value) = value.as_str().filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            if !values.iter().any(|existing| existing == value) {
+                values.push(value.to_owned());
+            }
+        }
+    }
+    (!values.is_empty()).then_some(values)
+}
+
+struct ReasoningProjection {
+    state: &'static str,
+    reason_code: Option<&'static str>,
+    fields: Value,
+    omitted: Vec<String>,
+}
+
+fn project_reasoning(
+    agent: &str,
+    protocol: &str,
+    values: &[String],
+) -> Result<ReasoningProjection> {
+    match agent {
+        "pi" => {
+            let mut map = serde_json::Map::new();
+            let mut positive = false;
+            let mut represented: Vec<&str> = Vec::new();
+            for level in PI_THINKING_LEVELS {
+                if values.iter().any(|value| value == level) {
+                    map.insert(level.to_owned(), json!(level));
+                    represented.push(level);
+                    positive |= level != "off";
+                } else {
+                    map.insert(level.to_owned(), Value::Null);
+                }
+            }
+            if !positive {
+                return Err(Error::new(
+                    "native_metadata_unrepresentable",
+                    "This model's declared reasoning efforts cannot be represented by Pi's thinking levels; adjust reasoning_options or leave native reasoning metadata unmanaged",
+                )
+                .field("reasoning_options"));
+            }
+            let omitted = values
+                .iter()
+                .filter(|value| !represented.contains(&value.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            Ok(ReasoningProjection {
+                state: if omitted.is_empty() {
+                    "projected"
+                } else {
+                    "partial"
+                },
+                reason_code: if omitted.is_empty() {
+                    None
+                } else {
+                    Some("native_reasoning_options_partial")
+                },
+                fields: json!({"thinkingLevelMap": map}),
+                omitted,
+            })
+        }
+        "omp" => {
+            let efforts = values
+                .iter()
+                .filter(|value| OMP_EFFORT_LEVELS.contains(&value.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if efforts.is_empty() {
+                return Err(Error::new(
+                    "native_metadata_unrepresentable",
+                    "This model's declared reasoning efforts cannot be represented by OMP's thinking effort levels; adjust reasoning_options or leave native reasoning metadata unmanaged",
+                )
+                .field("reasoning_options"));
+            }
+            let omitted = values
+                .iter()
+                .filter(|value| !OMP_EFFORT_LEVELS.contains(&value.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            Ok(ReasoningProjection {
+                state: if omitted.is_empty() {
+                    "projected"
+                } else {
+                    "partial"
+                },
+                reason_code: if omitted.is_empty() {
+                    None
+                } else {
+                    Some("native_reasoning_options_partial")
+                },
+                fields: json!({"thinking": {"mode": "effort", "efforts": efforts}}),
+                omitted,
+            })
+        }
+        "opencode" => {
+            let setting = match protocol {
+                "chat-completions" | "responses" => "reasoningEffort",
+                "messages" => "effort",
+                _ => {
+                    return Err(Error::new(
+                        "incompatible",
+                        "Unknown native reasoning protocol",
+                    ));
+                }
+            };
+            Ok(ReasoningProjection {
+                state: "projected",
+                reason_code: None,
+                fields: json!({"variants": values.iter().map(|value| json!({
+                    "id": value,
+                    "settings": {setting: value},
+                })).collect::<Vec<_>>()}),
+                omitted: Vec::new(),
+            })
+        }
+        _ => Ok(ReasoningProjection {
+            state: "not_supported",
+            reason_code: Some("native_reasoning_options_unavailable"),
+            fields: json!({}),
+            omitted: Vec::new(),
+        }),
+    }
+}
+
+pub(super) fn projection_view(agent: &str, protocol: &str, effective: &Value) -> Result<Value> {
+    if matches!(agent, "codex" | "hermes") {
+        return Ok(
+            json!({"state":"not_supported","reason_code":"native_reasoning_options_unavailable","fields":{},"omitted":[]}),
+        );
+    }
+    let Some(values) = effort_values(effective) else {
+        let reason = if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
+            "reasoning_disabled"
+        } else {
+            "reasoning_options_unavailable"
+        };
+        return Ok(json!({"state":"unavailable","reason_code":reason,"fields":{},"omitted":[]}));
+    };
+    let projection = project_reasoning(agent, protocol, &values)?;
+    Ok(json!({
+        "state": projection.state,
+        "reason_code": projection.reason_code,
+        "fields": projection.fields,
+        "omitted": projection.omitted,
+    }))
+}
+
+fn pi_omp_model_metadata(effective: &Value) -> Result<Value> {
     let mut metadata = json!({});
     for (source, native) in [("context", "contextWindow"), ("output", "maxTokens")] {
         if let Some(value) = effective.get("limit").and_then(|limit| limit.get(source))
@@ -155,11 +326,12 @@ pub(super) fn pi_omp_model_metadata(effective: &Value) -> Result<Value> {
 }
 // Hermes consumes route context and catalog capability patches separately.
 // `model_overrides` here is an intermediate projection, never a provider-model key.
-pub(super) fn model_metadata(agent: &str, effective: &Value) -> Result<Value> {
-    if matches!(agent, "pi" | "omp") {
-        return pi_omp_model_metadata(effective);
-    }
-    let mut metadata = json!({});
+pub(super) fn model_metadata(agent: &str, protocol: &str, effective: &Value) -> Result<Value> {
+    let mut metadata = if matches!(agent, "pi" | "omp") {
+        pi_omp_model_metadata(effective)?
+    } else {
+        json!({})
+    };
     if agent == "opencode" {
         for field in ["context", "input", "output"] {
             if let Some(value) = effective.get("limit").and_then(|limit| limit.get(field))
@@ -214,6 +386,17 @@ pub(super) fn model_metadata(agent: &str, effective: &Value) -> Result<Value> {
                     .iter()
                     .any(|modality| modality.as_str() == Some("image"))
             );
+        }
+    }
+    if matches!(agent, "pi" | "omp" | "opencode")
+        && let Some(values) = effort_values(effective)
+    {
+        let projection = project_reasoning(agent, protocol, &values)?;
+        if let Value::Object(fields) = projection.fields {
+            metadata
+                .as_object_mut()
+                .expect("native model metadata object")
+                .extend(fields);
         }
     }
     Ok(metadata)
@@ -642,6 +825,7 @@ mod tests {
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
+            model_projection: BTreeMap::new(),
         };
         let files = build(&target, Path::new("/explicit/native"), &[entry]).unwrap();
         assert_eq!(
@@ -673,6 +857,7 @@ mod tests {
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
+            model_projection: BTreeMap::new(),
         };
         let files = build(&target("omp"), scope, &[entry]).unwrap();
         assert!(!files.iter().any(|f| f.path == scope.join("config.yml")));
@@ -708,6 +893,7 @@ mod tests {
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
+            model_projection: BTreeMap::new(),
         };
         assert_eq!(
             build(&t, Path::new("/explicit/native"), &[e])
@@ -738,6 +924,7 @@ mod tests {
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
+            model_projection: BTreeMap::new(),
         };
         let error = build(
             &target,
@@ -764,6 +951,7 @@ mod tests {
                 ("responses".into(), "http://127.0.0.1:3210/v1".into()),
             )]),
             model_metadata: BTreeMap::new(),
+            model_projection: BTreeMap::new(),
         };
         let files = build(&target, Path::new("/explicit/native"), &[entry]).unwrap();
         let provider = &files[0].desired["providers"]["local"];
@@ -787,6 +975,7 @@ mod tests {
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
             model_metadata: BTreeMap::new(),
+            model_projection: BTreeMap::new(),
         };
         let direct = build(&target, Path::new("/explicit/native"), &[entry]).unwrap();
         assert!(direct[0].desired["providers"]["local"]["models"][0]["compat"].is_null());
@@ -841,6 +1030,7 @@ mod tests {
             model_metadata: BTreeMap::from([("m".into(), pi_omp_model_metadata(&json!({
                 "limit":{"context":1000000,"output":65536},"reasoning":true,"modalities":{"input":["text","image","video"]}
             })).unwrap())]),
+            model_projection: BTreeMap::new(),
         }
         };
         let pi = build(&target("pi"), Path::new("/explicit/native"), &[entry()]).unwrap();
@@ -884,32 +1074,135 @@ mod tests {
         assert_eq!(
             model_metadata(
                 "opencode",
+                "chat-completions",
                 &json!({"limit":{"context":0,"input":0,"output":0}})
             )
             .unwrap(),
             json!({"limit":{"context":0,"input":0,"output":0}})
         );
-        assert_eq!(model_metadata("opencode", &json!({})).unwrap(), json!({}));
+        assert_eq!(
+            model_metadata("opencode", "chat-completions", &json!({})).unwrap(),
+            json!({})
+        );
         for field in ["context", "input", "output"] {
             let mut effective = json!({"limit":{}});
             effective["limit"][field] = json!(9_007_199_254_740_992u64);
-            let error = model_metadata("opencode", &effective).unwrap_err();
+            let error = model_metadata("opencode", "chat-completions", &effective).unwrap_err();
             assert_eq!(error.code, "native_metadata_unrepresentable");
             assert_eq!(error.field, Some(format!("limit.{field}")));
         }
         assert_eq!(
-            model_metadata("hermes", &json!({"limit":{"context":0}}))
-                .unwrap_err()
-                .code,
+            model_metadata(
+                "hermes",
+                "chat-completions",
+                &json!({"limit":{"context":0}})
+            )
+            .unwrap_err()
+            .code,
             "native_metadata_unrepresentable"
         );
         assert_eq!(
             model_metadata(
                 "hermes",
+                "chat-completions",
                 &json!({"limit":{"context":9_007_199_254_740_992u64}})
             )
             .unwrap()["context_length"],
             json!(9_007_199_254_740_992u64)
+        );
+    }
+
+    #[test]
+    fn reasoning_options_project_only_capability_selectors_never_defaults() {
+        let effective = json!({
+            "reasoning":true,
+            "reasoning_options":[{"type":"effort","values":["low","high","max"]}]
+        });
+        assert_eq!(
+            model_metadata("pi", "chat-completions", &effective).unwrap()["thinkingLevelMap"],
+            json!({"off":null,"minimal":null,"low":"low","medium":null,"high":"high","xhigh":null,"max":"max"})
+        );
+        assert_eq!(
+            model_metadata("omp", "chat-completions", &effective).unwrap()["thinking"],
+            json!({"mode":"effort","efforts":["low","high","max"]})
+        );
+        assert_eq!(
+            model_metadata("opencode", "chat-completions", &effective).unwrap()["variants"],
+            json!([
+                {"id":"low","settings":{"reasoningEffort":"low"}},
+                {"id":"high","settings":{"reasoningEffort":"high"}},
+                {"id":"max","settings":{"reasoningEffort":"max"}}
+            ])
+        );
+        assert_eq!(
+            model_metadata("opencode", "messages", &effective).unwrap()["variants"],
+            json!([
+                {"id":"low","settings":{"effort":"low"}},
+                {"id":"high","settings":{"effort":"high"}},
+                {"id":"max","settings":{"effort":"max"}}
+            ])
+        );
+        let view = projection_view("pi", "chat-completions", &effective).unwrap();
+        assert_eq!(view["state"], "projected");
+        assert_eq!(view["omitted"], json!([]));
+        assert_eq!(view["fields"]["thinkingLevelMap"]["off"], Value::Null);
+        for agent in ["codex", "hermes"] {
+            assert_eq!(
+                projection_view(agent, "chat-completions", &effective).unwrap()["state"],
+                "not_supported"
+            );
+        }
+        let no_options = json!({"reasoning":true});
+        assert!(
+            model_metadata("pi", "chat-completions", &no_options)
+                .unwrap()
+                .get("thinkingLevelMap")
+                .is_none()
+        );
+        assert_eq!(
+            projection_view("pi", "chat-completions", &no_options).unwrap()["reason_code"],
+            "reasoning_options_unavailable"
+        );
+        let disabled =
+            json!({"reasoning":false,"reasoning_options":[{"type":"effort","values":["high"]}]});
+        assert!(
+            model_metadata("pi", "chat-completions", &disabled)
+                .unwrap()
+                .get("thinkingLevelMap")
+                .is_none()
+        );
+        assert_eq!(
+            projection_view("pi", "chat-completions", &disabled).unwrap()["reason_code"],
+            "reasoning_disabled"
+        );
+    }
+
+    #[test]
+    fn reasoning_options_report_partial_and_block_unrepresentable_vocabularies() {
+        let partial = json!({
+            "reasoning":true,
+            "reasoning_options":[{"type":"effort","values":["low","ultra"]}]
+        });
+        assert_eq!(
+            model_metadata("pi", "chat-completions", &partial).unwrap()["thinkingLevelMap"],
+            json!({"off":null,"minimal":null,"low":"low","medium":null,"high":null,"xhigh":null,"max":null})
+        );
+        let view = projection_view("pi", "chat-completions", &partial).unwrap();
+        assert_eq!(view["state"], "partial");
+        assert_eq!(view["omitted"], json!(["ultra"]));
+
+        let unrepresentable = json!({
+            "reasoning":true,
+            "reasoning_options":[{"type":"effort","values":["ultra"]}]
+        });
+        for agent in ["pi", "omp"] {
+            let error = model_metadata(agent, "chat-completions", &unrepresentable).unwrap_err();
+            assert_eq!(error.code, "native_metadata_unrepresentable");
+            assert_eq!(error.field.as_deref(), Some("reasoning_options"));
+        }
+        assert_eq!(
+            model_metadata("opencode", "chat-completions", &unrepresentable).unwrap()["variants"],
+            json!([{"id":"ultra","settings":{"reasoningEffort":"ultra"}}])
         );
     }
 
@@ -932,12 +1225,17 @@ mod tests {
                 models: vec!["m".into(), "dynamic".into(), "unknown".into()],
                 model_routes: BTreeMap::new(),
                 model_metadata: BTreeMap::from([
-                    ("m".into(), model_metadata(agent, &effective).unwrap()),
+                    (
+                        "m".into(),
+                        model_metadata(agent, "chat-completions", &effective).unwrap(),
+                    ),
                     (
                         "unknown".into(),
-                        model_metadata(agent, &json!({"reasoning":false})).unwrap(),
+                        model_metadata(agent, "chat-completions", &json!({"reasoning":false}))
+                            .unwrap(),
                     ),
                 ]),
+                model_projection: BTreeMap::new(),
             };
             let files = build(&target(agent), Path::new("/explicit/native"), &[entry]).unwrap();
             let config = &files[0].desired;

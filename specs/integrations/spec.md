@@ -56,6 +56,31 @@ preferences. The [request-parameter contract](../model-routing/spec.md#request-p
 owns preservation of sampling, reasoning effort, and output-budget settings.
 This rule supplies no alias capability aggregation or current-winner snapshot.
 
+Effective `reasoning_options` entries with `type = "effort"` and explicit
+`values` declare a concrete model's reasoning selector capabilities. Only these
+entries declare effort names; other entry types and missing `values` declare
+none. `reasoning = true` declares support only and synthesizes no names. An
+explicit `reasoning = false` stays explicit and suppresses the effort
+projection. Missing effort declarations stay unknown.
+
+| Agent | Projected native fields | Exact-name rule |
+| --- | --- | --- |
+| stock pi | `thinkingLevelMap` | Every native thinking-level key is written explicitly, holding its exact declared name or null. |
+| omp | `thinking` with `mode: "effort"` and `efforts` | `efforts` holds the declared names that exactly match the native effort vocabulary. |
+| OpenCode, Chat Completions and Responses | `variants` entries with `id` and `settings.reasoningEffort` | Each declared name becomes one entry; no catalog field is pasted into the custom model. |
+| OpenCode, Messages | `variants` entries with `id` and `settings.effort` | Each declared name becomes one entry holding only `id` and that setting; no other variant field or thinking flag is written. |
+| Codex CLI, Hermes Agent | None | These agents have no native reasoning-effort selector to project. |
+
+Projection maps exact names only and never translates or renames a name. A
+partial intersection projects the representable names and keeps every other
+declared name visible as omitted. A projection with no usable native level is
+unrepresentable: it blocks that agent's application before native writes and
+stays visible in inspection. These fields declare selector capability only.
+They set no default effort, level, budget, thinking flag, or request value, and
+the native tool keeps ownership of thinking enablement, its defaults, and its
+request preferences under the
+[request-parameter contract](../model-routing/spec.md#request-parameters).
+
 The [versioned native field references](../../docs/agents/README.md#qualification-and-evidence)
 record external model/authentication schemas and evidence for each Agent.
 They do not replace these contracts or establish provider entitlement.

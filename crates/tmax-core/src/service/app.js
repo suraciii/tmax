@@ -150,7 +150,7 @@ function renderModelList() {
   if (!state.models) {$('model-list').innerHTML=empty('模型列表读取失败','刷新后重试。');return;}
   const rows=state.models.filter(m=>m.kind===state.modelKind && m.id.toLowerCase().includes(state.query.toLowerCase()));
   if (!rows.length) {$('model-list').innerHTML=`<div class="panel">${empty(state.query?'没有匹配的模型':state.modelKind==='alias'?'还没有模型别名':'还没有登记模型',state.query?'试试其他关键词。':state.modelKind==='alias'?'创建别名并选择候选模型，供网关使用。':'添加服务商后，登记要使用的上游模型。',state.query?'':button(state.modelKind==='alias'?'新建别名':'添加模型',state.modelKind==='alias'?'alias-add':'model-add','','primary','plus'))}</div>`;return;}
-  $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'服务商'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):state.config.model_aliases.find(a=>a.id===m.id&&a.protocol===m.protocol);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${(m.published_protocols || []).map(p=>badge(protocolNames[p] || p)).join('') || badge('未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td>${button('管理',m.kind==='alias'?'alias-edit':'model-edit',m.kind==='alias'?JSON.stringify([m.id,m.protocol]):m.id,'small')}</td></tr>`;}).join('')}</tbody></table></div>`;
+  $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'服务商'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):state.config.model_aliases.find(a=>a.id===m.id&&a.protocol===m.protocol);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${(m.published_protocols || []).map(p=>badge(protocolNames[p] || p)).join('') || badge('未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td><div class="actions">${m.kind==='alias'?button('管理','alias-edit',JSON.stringify([m.id,m.protocol]),'small'):button('管理','model-edit',m.id,'small')+button('详情','model-detail',m.id,'small soft')}</div></td></tr>`;}).join('')}</tbody></table></div>`;
 }
 function renderAgents() {
   $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',state.config.agents[t.target]?.default?.id || (id==='codex'?'尚未选择':'沿用工具当前选择'))}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
@@ -463,11 +463,72 @@ function agentForm(agent='') {
   $('agent-rescan').onclick=discover;
   changeAgent();
 }
+// Projection rendering is presentation only: core owns the mapping; these
+// helpers never derive levels, defaults, or alias capabilities.
+const projectionStates={projected:['可完整映射','green'],partial:['部分映射','amber'],not_supported:['工具不支持档位声明',''],unavailable:['暂无可投影声明',''],alias:['别名不推断能力','amber'],blocked:['无法映射，将阻止写入','amber']};
+const projectionReasons={native_reasoning_options_partial:'部分声明值不在该工具的档位词汇中，将被忽略，未映射值列在下方。',native_reasoning_options_unavailable:'该工具没有可写的原生推理档位声明字段。',native_reasoning_protocol_unsupported:'该原生协议不支持此工具的推理档位声明字段；此协议下不写入档位映射。',reasoning_disabled:'模型显式声明关闭推理（reasoning 为 false），不投影档位。',reasoning_options_unavailable:'模型未声明推理档位（reasoning options 缺失），没有可投影的档位。',native_projection_unavailable:'未生成该模型的投影信息，请以阻塞原因与检查结果为准。',alias_metadata_unavailable:'别名不从候选模型或当前选择推断推理能力；档位由请求与别名候选决定。',native_metadata_unrepresentable:'声明的档位无法用该工具的原生词汇表示，会在写入原生配置前阻止应用。'};
+function projectionLevels(fields) {
+  const rows=[];
+  if(fields?.thinkingLevelMap && typeof fields.thinkingLevelMap==='object')for(const [level,target] of Object.entries(fields.thinkingLevelMap))rows.push([level,target==null?'不支持（null）':String(target)]);
+  if(fields?.thinking && typeof fields.thinking==='object')rows.push([`thinking · ${fields.thinking.mode ?? '未知模式'}`,(fields.thinking.efforts||[]).join('、')||'未列出']);
+  if(Array.isArray(fields?.variants))rows.push(['variants',fields.variants.map(v=>v?.id ?? JSON.stringify(v)).join('、')||'未列出']);
+  for(const key of Object.keys(fields||{}))if(!['thinkingLevelMap','thinking','variants'].includes(key))rows.push([key,JSON.stringify(fields[key])]);
+  return rows.length?`<div class="detail-facts">${rows.map(([label,value])=>fact(label,value)).join('')}</div>`:'';
+}
+function projectionBlock(projection) {
+  const p=projection && typeof projection==='object'?projection:{state:'unavailable',reason_code:'native_projection_unavailable'};
+  const [label,tone]=projectionStates[p.state]||[p.state?`未知状态 ${p.state}`:'状态未知',''];
+  const reason=p.reason_code?(projectionReasons[p.reason_code]||p.reason_code):'';
+  const nested=p.protocols&&typeof p.protocols==='object'&&!Array.isArray(p.protocols)?`<p class="label-note">逐协议投影（上方档位字段为代表性协议的期望映射）：</p>${Object.entries(p.protocols).map(([protocol,sub])=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(protocolNames[protocol]||protocol)}</strong>${projectionBlock(sub)}</div></div>`).join('')}`:'';
+  return `<div class="projection-state">${badge(label,tone)}${reason?`<p class="muted">${escapeHtml(reason)}</p>`:''}${p.message?`<p class="muted">${escapeHtml(p.message)}</p>`:''}${projectionLevels(p.fields)}${Array.isArray(p.omitted)&&p.omitted.length?`<p class="label-note">未映射的声明值：${escapeHtml(p.omitted.join('、'))}</p>`:''}${nested}${detail(p,'查看投影原始字段')}</div>`;
+}
+function nativeProjectionSection(data) {
+  const intro=notice('以下是依据模型能力声明生成的期望档位映射：只描述“应用到工具”后将写入的档位声明，不代表已应用，也不是工具当前生效状态。推理档位的默认值由工具自身管理，tmax 不选择默认档位。');
+  if(!Array.isArray(data.native_projection))return `<h3 class="subheading">原生推理档位映射（期望能力）</h3>${intro}${notice('未能生成期望档位映射（规划失败或信息不可用）。请以阻塞原因与检查结果为准。','warning')}`;
+  const entries=data.native_projection.map(entry=>{
+    const source=entry.source?.gateway?'tmax 本地网关':entry.source?.provider?providerName(entry.source.provider):'来源未知';
+    const models=(entry.models||[]).map(m=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(m.id)}</strong> <small class="label-note mono">${escapeHtml(entry.name)} · ${escapeHtml(protocolNames[m.protocol]||m.protocol)}</small>${projectionBlock(m.projection)}</div></div>`).join('');
+    return `<div class="list-row split"><div><h3>${escapeHtml(entry.name)}</h3><small class="label-note">${escapeHtml(source)}</small></div></div>${models||'<p class="muted">尚未配置模型。</p>'}`;
+  }).join('');
+  return `<h3 class="subheading">原生推理档位映射（期望能力）</h3>${intro}${entries||'<p class="muted">尚未生成映射。</p>'}`;
+}
+function blockersSection(blockers) {
+  const list=Array.isArray(blockers)?blockers:[];
+  return list.length?`<h3 class="subheading">阻塞原因</h3>${list.map(b=>notice(escapeHtml(b.message||'存在未说明的阻塞原因。')+(b.code?` <span class="mono">${escapeHtml(b.code)}</span>`:''),'warning')).join('')}`:'';
+}
+async function modelDetail(id) {
+  const generation=openDialog(id,'<div class="loading">正在读取模型详情…</div>','MODEL');
+  try {
+    const data=await read('model inspect',[id]);
+    if(generation!==state.dialogGeneration)return;
+    if(data.kind!=='concrete'){$('dialog-content').innerHTML=notice('此详情仅支持具体模型；别名请使用“管理”。','warning')+detail(data,'查看检查结果');return;}
+    const meta=data.metadata||{};const effective=meta.effective||{};const catalog=meta.catalog||{};const overrides=meta.overrides||{};
+    const reasoning=effective.reasoning;
+    const options=Array.isArray(effective.reasoning_options)?effective.reasoning_options:[];
+    const efforts=[...new Set(options.filter(o=>o?.type==='effort').flatMap(o=>Array.isArray(o.values)?o.values:[]))];
+    const layer=key=>{const inCatalog=Object.hasOwn(catalog,key),inOverride=Object.hasOwn(overrides,key);return inCatalog&&inOverride?'目录与手动覆盖':inCatalog?'仅目录':inOverride?'仅手动覆盖':'未声明';};
+    const catalogState={accepted:'已引用目录条目',missing_entry:'目录中无此模型条目',unavailable:'未启用目录'}[meta.catalog_state]||'未知';
+    const declared=meta.overrides;
+    const displayName=declared&&Object.hasOwn(declared,'name')?(declared.name===''?'（显式空名称）':declared.name):effective.name ?? '未声明';
+    const matrix=data.native_projection&&typeof data.native_projection==='object'&&!Array.isArray(data.native_projection)?agentTypes.map(([agent,name])=>({name,projection:data.native_projection[agent]})).filter(entry=>entry.projection):[];
+    $('dialog-content').innerHTML=notice('此处只显示已保存的能力声明与期望映射，不代表工具当前生效状态。推理档位的默认值由工具自身管理，tmax 不选择默认档位。')+
+      `<div class="detail-facts">${fact('模型引用',data.qualified_model)}${fact('显示名称',displayName)}${fact('模型状态',data.configuration?(data.configuration.enabled===false?'已停用':'已启用'):'未知')}${fact('基础优先级',data.configuration?String(data.configuration.priority ?? 0):'未知')}${fact('原生协议',(data.protocols||[]).map(p=>protocolNames[p]||p).join('、')||'未发布')}${fact('上下文上限',effective.limit?.context)}${fact('输出上限',effective.limit?.output)}${fact('目录状态',catalogState)}${fact('目录来源',meta.source)}${fact('目录修订',meta.metadata_revision)}${fact('目录引用',meta.catalog_reference)}</div>`+
+      `<h3 class="subheading">推理能力（有效值）</h3><div class="detail-facts">${fact('推理支持',reasoning===true?'声明支持':reasoning===false?'声明不支持':'未声明')}${fact('推理声明来源',layer('reasoning'))}${fact('推理档位来源',layer('reasoning_options'))}${fact('effort 档位声明',efforts.join('、')||'无')}</div>`+
+      (reasoning===false?notice('模型显式声明关闭推理（reasoning 为 false）。即使存在档位声明，也不会投影到编程工具。','warning'):'')+
+      (options.length?options.map(o=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(o?.type||'未声明类型')}</strong><small class="label-note mono">${escapeHtml((Array.isArray(o?.values)?o.values:[]).join('、')||'未列出值')}</small>${o?.type==='effort'?'<p class="muted">effort 值声明工具可选择的推理档位，不是默认档位。</p>':''}</div></div>`).join(''):'<p class="muted">未声明推理档位（reasoning options 缺失）；不会合成或推断档位。</p>')+
+      notice('来源区分：手动覆盖优先于目录合并；“未声明”表示该层没有此字段，不代表能力为否。')+
+      `<h3 class="subheading">各编程工具的期望档位映射</h3>`+
+      (matrix.length?matrix.map(({name,projection})=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(name)}</strong>${projectionBlock(projection)}</div></div>`).join(''):notice('此次模型检查未提供各工具的期望档位映射。','warning'))+
+      notice('以上是按模型能力声明生成的通用能力映射。将模型加入工具配置后，可在“编程工具”的配置详情中查看针对具体配置的映射与应用影响。')+
+      `<div class="actions">${button('打开工具配置','navigate','agents','soft')}</div>`+
+      detail(data,'查看检查结果与原始信息');
+  }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
+}
 async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
   try {const data=await read('agent inspect',[target]);if(generation!==state.dialogGeneration)return;
     const config=state.config.agents[target];
-    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',config.default?.id || (config.agent==='codex'?'未选择':'沿用工具当前选择'))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
+    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',config.default?.id || (config.agent==='codex'?'未选择':'沿用工具当前选择'))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
 function agentSource(target) {
@@ -600,6 +661,7 @@ async function dispatch(action,id) {
     case 'provider-input': openOperation('provider input add',[id]);break;
     case 'model-add': modelForm('',id);break;
     case 'model-edit': modelForm(id);break;
+    case 'model-detail': await modelDetail(id);break;
     case 'model-advanced': openOperation('model update',[id]);break;
     case 'model-inherit': openOperation('model update',[id],{clear:['overrides.name']});break;
     case 'model-remove': openOperation('model remove',[id]);break;

@@ -26,6 +26,9 @@ page makes no external font, image, or script requests.
   preserves caller input. Chat Completions and Responses support overrides;
   Messages does not. Restore name inheritance with the separate clear action; an
   explicit empty string remains different from an absent override.
+  Concrete **Details** shows effective reasoning declarations, catalog/override
+  provenance, and each tool's desired selector mapping, including protocol-specific
+  OpenCode fields. Missing declarations are not inferred from reasoning support.
 - **Coding tools** keeps Codex, pi, omp, OpenCode, and Hermes separate. Adding a
   configuration checks local directories and tool versions for the selected tool.
   Select a found directory or enter a path manually; registered directories link
@@ -35,6 +38,9 @@ page makes no external font, image, or script requests.
   Add an upstream or gateway provider entry, select its models, then
   choose its default. Saving these declarations does not write native files.
   Apply and restore remain separate explicit actions with optional previews.
+  Details also show desired per-model reasoning selectors, omitted names, and
+  blockers. These are not evidence of native reload or inference; default effort
+  remains tool-owned.
 - **Gateway** shows the listener, shared-key state, and current-process request
   history. Configure, start, stop, and change login startup explicitly. Revealed
   keys disappear on hide, navigation, page exit, or switching away from the tab.

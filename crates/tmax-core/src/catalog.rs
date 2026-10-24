@@ -271,8 +271,9 @@ fn adoption_impact(
                     .map(|provider| format!("{provider}/{}", selected.id));
                 let name = qualified.as_deref().unwrap_or(&selected.id);
                 if let Some((before, after)) = models.get(name) {
-                    let old_native = crate::native::model_metadata(&target.agent, before);
-                    match crate::native::model_metadata(&target.agent, after) {
+                    let old_native =
+                        crate::native::model_metadata(&target.agent, &selected.protocol, before);
+                    match crate::native::model_metadata(&target.agent, &selected.protocol, after) {
                         Ok(new_native) => {
                             let mut projected = crate::operations::diff_values(
                                 old_native.as_ref().ok(),

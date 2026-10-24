@@ -84,11 +84,22 @@ exact safe range block application rather than being rounded. Unknown fields sta
 absent in the generated patch, leaving native defaults/overlays to the native
 consumer; this does not establish actual endpoint capabilities.
 
-The custom-model schema cannot express a reasoning-support boolean. tmax emits
-neither that unsupported field nor reasoning options, prices, or request-body
-defaults. A model alias receives no candidate aggregation or current-winner
-metadata. Native request settings, variants, bodies, and unrelated model entries
-are preserved; metadata output capacity is not a generation budget.
+The custom-model schema cannot express a reasoning-support boolean. tmax never
+emits that unsupported field, prices, or request-body defaults. Effective
+`reasoning_options` effort values project as `variants` entries instead: each
+entry's `id` and one settings key carry an exact declared name as a capability
+declaration. Chat Completions and Responses use `settings.reasoningEffort`;
+Messages uses `settings.effort` alone. The entry writes no other variant field
+and synthesizes no thinking flag, budget, or default variant/effort; the native
+tool owns thinking enablement and request defaults. A model alias receives no
+candidate aggregation or current-winner metadata. Projected `variants` are owned
+model fields like the other capability fields; native request settings, bodies,
+and unrelated model entries are preserved. Metadata output capacity is not a
+generation budget. Native variant-mapping sources:
+[`variant.ts`](https://github.com/anomalyco/opencode/blob/026b106bc5d41b679ffc413264229c340871e4d3/packages/core/src/variant.ts#L78-L105)
+(Chat Completions/Responses) and
+[`variant.ts`](https://github.com/anomalyco/opencode/blob/026b106bc5d41b679ffc413264229c340871e4d3/packages/core/src/variant.ts#L311-L331)
+(Messages).
 
 Native catalog input is a different grammar: `release_date`, `reasoning`,
 `reasoning_options`, `tool_call`, `modalities`, prices/tiers, and limits from
