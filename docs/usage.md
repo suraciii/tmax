@@ -141,6 +141,22 @@ turn unknown quota into zero. Keep consumed-only observations provider-local; do
 not pool their percentages or allowances. Show a renewal date only when known,
 and keep a past date distinct from an unknown date.
 
+### Web language
+
+The Web interface initially follows the first supported browser language in
+preference order: `zh*` selects Simplified Chinese and `en*` selects English. If
+none is supported, the browser's primary language is checked, then English is the
+fallback. An explicit selector choice overrides the browser preference and only
+that language preference is stored locally. If browser storage is unavailable,
+the interface remains usable.
+
+Changing language does not send a management request or clear the selected task,
+form values, preview, revision guard, or supplied key. Provider/model/target IDs,
+command paths and options, configuration field names, and raw JSON remain
+unchanged. A localized status and explanation appear separately from each raw
+operation result. The CLI remains English.
+
+
 ## Explaining models and applying metadata
 
 Use `tmax model explain ID --protocol PROTOCOL` for an effect-free explanation of

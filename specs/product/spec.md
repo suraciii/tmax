@@ -782,6 +782,17 @@ The supplementary Web interface must have these task-oriented areas:
 | Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
 | Proxy | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
 
+The Web interface must offer English and Simplified Chinese. An explicit valid
+language choice takes precedence and persists locally as a language preference
+only. Otherwise, select the first supported browser language in preference order:
+`zh*` selects Simplified Chinese and `en*` selects English. If none is supported,
+use the browser's primary language when supported, then fall back to English.
+Unavailable preference storage must not impair management. Changing language
+must not issue an operation or clear in-progress form values, including an entered
+key, the selected task, preview, or revision guard. Provider/model/target IDs,
+configuration field names, and raw JSON remain unchanged. Localized result status
+and explanation accompany the unmodified raw result. CLI output remains English.
+
 Provider creation and native provider/model selections are explicit operations.
 CLI operations persist their own changes; they do not require a caller-authored
 complete document. Sign-in, native application, and proxy startup remain separate
