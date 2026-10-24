@@ -38,6 +38,24 @@ string remain explicit values; `--clear FIELD` restores inheritance/defaults.
 For example, supported fields include `--set enabled false`,
 `--set priority 0`, and `--set overrides.name ""`.
 
+## DeepSeek model discovery
+
+For an official DeepSeek provider whose key is already configured, explicitly
+refresh its model list without running inference:
+
+```sh
+tmax provider refresh personal --scope models
+tmax provider inspect personal
+```
+
+This authenticated operation reads `https://api.deepseek.com/models` and retains
+exact upstream IDs as an observation. It does not register offerings, download or
+apply catalog metadata, verify inference, or incur a tmax paid probe. Register
+only the desired exact IDs separately with `model add`. A failed refresh retains
+the last good list separately from its failed attempt. Auth and quota refreshes
+use the separate official balance endpoint; neither discovery nor balance
+establishes the account owner's identity.
+
 ## OpenCode Go observations
 
 Configure each independently selected account under its own provider ID, supply
@@ -173,6 +191,14 @@ require unlock, use the documented inherited readable descriptor form, e.g.
 the shared key to a client only through the protected `proxy key show` delivery
 flow. Ordinary inspection does not reveal it. All current-key holders share the
 same published model list; no client registration is required.
+
+tmax resolves the OS account's home, not an override of the `HOME` environment
+variable. On Unix, a home that yields an unrepresentable control-socket pathname
+blocks startup with `resident_control_path_invalid`, the actual path, and the
+platform's representation error before launching a resident. Use an OS account
+whose home permits that pathname; tmax does not relocate its store or fall back
+to a shorter endpoint. No listener, credentials, or native configuration are
+changed by this startup blocker.
 
 The proxy accepts same-protocol requests and forwards to the configured provider;
 it does not translate protocols. Configure a real provider credential before

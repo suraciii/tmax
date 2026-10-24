@@ -142,6 +142,19 @@ fn address(value: &str, allow_zero: bool) -> Result<SocketAddr> {
 fn socket_path(store: &Store) -> PathBuf {
     store.root.join("resident.sock")
 }
+#[cfg(unix)]
+fn validate_control_path(path: &std::path::Path) -> Result<()> {
+    std::os::unix::net::SocketAddr::from_pathname(path).map_err(|error| {
+        failure(
+            "resident_control_path_invalid",
+            &format!(
+                "Resident control socket path '{}' is not representable on this Unix platform: {error}. Use an OS account with a home that permits this socket path; tmax does not relocate its store or use an alternate endpoint",
+                path.display()
+            ),
+        )
+    })?;
+    Ok(())
+}
 fn absent() -> Value {
     json!({"resident":{"discovery_state":"absent","reason_code":null,"identity":null,"inference":null,"web":null},"proxy":{"ready":false,"listen":null,"key_ref":null,"config_revision":null},"shared_key":{"loaded_reference":null,"loaded_state":"absent"},"publication":{"snapshot_state":"absent","model_count":null},"limits":crate::proxy::limits(),"unmanaged_clients":"unknown"})
 }
@@ -797,6 +810,15 @@ pub async fn control(
         let discovery = before["resident"]["discovery_state"]
             .as_str()
             .unwrap_or("unavailable");
+        #[cfg(unix)]
+        if discovery == "absent"
+            && matches!(
+                (group, action),
+                ("proxy", "start" | "restart") | ("web", "open")
+            )
+        {
+            validate_control_path(&socket_path(store))?;
+        }
         if !matches!(discovery, "absent" | "compatible") {
             blockers.push(json!({"code":"resident_identity_unavailable","state":discovery}));
         }
@@ -895,11 +917,9 @@ fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
 async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
     use std::{
         io::Write,
-        os::{
-            fd::{AsRawFd, FromRawFd},
-            unix::process::CommandExt,
-        },
+        os::{fd::AsRawFd, unix::process::CommandExt},
     };
+    validate_control_path(&socket_path(store))?;
     let _launch = store.lock("resident-launch")?;
     if rpc(store, "status", None, None).await?.is_some() {
         return Ok(());
@@ -917,17 +937,15 @@ async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
                 "Unlock material exceeds the protected-input limit",
             ));
         }
-        let mut fds = [-1; 2];
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-            return Err(failure(
+        // Standard-library pipes own both ends and set close-on-exec using the
+        // platform implementation; only the child hook below exposes FD 3.
+        let (reader, writer) = std::io::pipe().map_err(|_| {
+            failure(
                 "resident_launch_failed",
                 "Cannot allocate inherited anonymous unlock pipe",
-            ));
-        }
-        (
-            Some(unsafe { std::fs::File::from_raw_fd(fds[0]) }),
-            Some(unsafe { std::fs::File::from_raw_fd(fds[1]) }),
-        )
+            )
+        })?;
+        (Some(reader), Some(writer))
     } else {
         (None, None)
     };
@@ -1015,6 +1033,7 @@ pub async fn run_resident() -> Result<()> {
 async fn run_owner(autostart: bool) -> Result<()> {
     use std::{io::Read, os::fd::FromRawFd};
     let store = Store::discover()?;
+    validate_control_path(&socket_path(&store))?;
     let Some(ownership) = store.try_lock("resident-owner")? else {
         return Ok(());
     };
@@ -1056,6 +1075,7 @@ async fn run_owned(
 ) -> Result<()> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
     let path = socket_path(&store);
+    validate_control_path(&path)?;
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if !meta.file_type().is_socket() || meta.uid() != unsafe { libc::geteuid() } {
             return Err(failure(
@@ -1692,11 +1712,8 @@ fn execute_web(
     Box::pin(crate::execute(request))
 }
 #[cfg(unix)]
-fn protected_form_input(value: &str) -> Result<(std::fs::File, i32)> {
-    use std::{
-        io::Write,
-        os::fd::{AsRawFd, FromRawFd},
-    };
+fn protected_form_input(value: &str) -> Result<(std::io::PipeReader, i32)> {
+    use std::{io::Write, os::fd::AsRawFd};
     if value.is_empty()
         || value.len() > 2048
         || value.bytes().any(|b| matches!(b, 0 | b'\n' | b'\r'))
@@ -1706,15 +1723,12 @@ fn protected_form_input(value: &str) -> Result<(std::fs::File, i32)> {
             "Protected form input must be a nonempty bounded UTF-8 line",
         ));
     }
-    let mut fds = [-1; 2];
-    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        return Err(failure(
+    let (reader, mut writer) = std::io::pipe().map_err(|_| {
+        failure(
             "protected_input_unavailable",
             "Cannot create protected anonymous input channel",
-        ));
-    }
-    let reader = unsafe { std::fs::File::from_raw_fd(fds[0]) };
-    let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+        )
+    })?;
     writer
         .write_all(value.as_bytes())
         .and_then(|_| writer.write_all(b"\n"))
@@ -1729,7 +1743,7 @@ fn protected_form_input(value: &str) -> Result<(std::fs::File, i32)> {
     Ok((reader, fd))
 }
 #[cfg(not(unix))]
-fn protected_form_input(_value: &str) -> Result<(std::fs::File, i32)> {
+fn protected_form_input(_value: &str) -> Result<(std::io::PipeReader, i32)> {
     Err(failure(
         "platform_unavailable",
         "Protected Web input requires supported anonymous pipes",
@@ -1955,6 +1969,68 @@ pub async fn run_autostart() -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn protected_web_lines_reach_secret_consumer_without_relaxing_input_bounds() {
+        for value in ["synthetic-web-key".to_owned(), "é".repeat(1024)] {
+            let (_reader, fd) = protected_form_input(&value).unwrap();
+            let request = Request {
+                command: vec!["provider".into(), "key".into(), "set".into()],
+                operands: vec!["test".into()],
+                arguments: std::collections::BTreeMap::from([
+                    ("key-fd".into(), vec![fd.to_string()]),
+                    ("non-interactive".into(), vec!["true".into()]),
+                ]),
+                dry_run: false,
+                if_revision: None,
+            };
+            assert_eq!(
+                crate::secrets::read_protected_input(&request, "key").unwrap(),
+                value.as_bytes()
+            );
+        }
+        for value in [
+            "".to_owned(),
+            "x".repeat(2049),
+            "key\n".into(),
+            "key\r".into(),
+            "key\0".into(),
+        ] {
+            let error = protected_form_input(&value).unwrap_err();
+            assert_eq!(error.code, "invalid_protected_input");
+            if !value.is_empty() {
+                assert!(!error.message.contains(&value));
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unrepresentable_control_path_blocks_start_before_service_effects() {
+        let temporary = tempfile::tempdir().unwrap();
+        // A valid filesystem component whose UTF-8 bytes exceed Unix socket
+        // pathname capacity, without assuming one platform's sun_path size.
+        let store = Store::at(temporary.path().join("é".repeat(100)));
+        for (group, action) in [("proxy", "start"), ("proxy", "restart"), ("web", "open")] {
+            for dry_run in [false, true] {
+                let request = Request {
+                    command: vec![group.into(), action.into()],
+                    operands: Vec::new(),
+                    arguments: Default::default(),
+                    dry_run,
+                    if_revision: None,
+                };
+                let error = control(&store, &Config::empty(), &request, None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, "resident_control_path_invalid");
+                assert!(
+                    !store.root.exists(),
+                    "blocked startup must not create locks or service state"
+                );
+            }
+        }
+        assert!(!store.home.exists());
+    }
     #[tokio::test]
     async fn loaded_advice_retains_accepted_metadata_without_an_inference_snapshot() {
         let directory = tempfile::tempdir().unwrap();

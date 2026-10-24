@@ -964,16 +964,204 @@ mod tests {
                 .is_some()
         );
     }
+    fn deepseek_models() -> AcquiredObservation {
+        AcquiredObservation {
+            status: 200,
+            data: integrations::normalize_observation(
+                "official_models_api",
+                &json!({"data":[{"id":"deepseek-flash","owned_by":"not-account-identity"},{"id":"deepseek-v4-pro"}]}),
+            )
+            .unwrap(),
+        }
+    }
+
     #[test]
-    fn discovered_models_are_not_registered() {
-        let normalized = integrations::normalize_observation(
-            "official_models_api",
-            &json!({"data":[{"id":"model"}]}),
-        )
-        .unwrap();
-        assert_eq!(normalized["models"], json!(["model"]));
-        assert_eq!(normalized["registered_models"], json!([]));
-        assert_eq!(normalized["registration"], "not_performed");
+    fn deepseek_discovery_is_dated_read_only_evidence_not_balance_or_model_verification() {
+        let (_dir, store, mut config) = fixture();
+        config
+            .providers
+            .get_mut("original")
+            .unwrap()
+            .models
+            .insert("configured-model".into(), config::Model::default());
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let previous = inputs::read_runtime(&store).unwrap().saved.config;
+        inputs::reconcile(&store, &previous, &config, &[]).unwrap();
+        let catalog = crate::catalog::Snapshot {
+            revision: "unchanged-directory".into(),
+            ..Default::default()
+        };
+        for snapshot in ["accepted", "latest"] {
+            store
+                .write_json(&format!("catalog/{snapshot}.json"), &catalog)
+                .unwrap();
+        }
+        let saved = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        let accepted = std::fs::read(store.root.join("catalog/accepted.json")).unwrap();
+        let latest = std::fs::read(store.root.join("catalog/latest.json")).unwrap();
+        let captured = capture(&store, &config, "original", "models").unwrap();
+        commit(&store, &captured, Ok(deepseek_models())).unwrap();
+        let detail = inspect(&store, &config, "original").unwrap();
+        let models = &detail["observations"][1];
+        assert_eq!(models["state"], "observed");
+        assert_eq!(models["source"], "official_models_api");
+        assert_eq!(models["binding"]["source_contract"], "deepseek_models_v1");
+        assert_eq!(models["fact"]["data"], deepseek_models().data);
+        assert_eq!(models["observed_at_basis"], "retrieval_time");
+        assert!(models["source_provided_timestamp"].is_null());
+        assert_eq!(models["freshness"]["state"], "unqualified");
+        assert!(models["freshness"]["valid_until"].is_null());
+        assert_eq!(models["verification"]["models"], "unverified");
+        assert_eq!(models["verification"]["conversation"], "unverified");
+        assert!(models["account_identity"].is_null());
+        assert_eq!(detail["observations"][0]["state"], "unknown");
+        assert_eq!(detail["observations"][2]["state"], "unknown");
+        assert_eq!(detail["billing"]["state"], "unknown");
+        assert_eq!(detail["billing"]["kind"], "api_balance");
+        let observed = models["fact"]["observed_at"]
+            .as_str()
+            .unwrap()
+            .parse::<DateTime<Utc>>()
+            .unwrap();
+        assert_eq!(
+            routing_availability(&store, &config, "original", observed).unwrap(),
+            None
+        );
+        let summary = summary(&store, &config, "original").unwrap();
+        assert_eq!(summary["observations"][1]["state"], "observed");
+        assert_eq!(
+            summary["observations"][1]["last_attempt_outcome"],
+            "completed"
+        );
+        assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), saved);
+        assert_eq!(
+            std::fs::read(store.root.join("catalog/accepted.json")).unwrap(),
+            accepted
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("catalog/latest.json")).unwrap(),
+            latest
+        );
+        assert_eq!(
+            config::load(&store).unwrap().config.providers["original"]
+                .models
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["configured-model"]
+        );
+    }
+
+    #[test]
+    fn deepseek_model_refresh_failures_retain_ids_and_leave_auth_and_quota_balance_unchanged() {
+        let (_dir, store, config) = fixture();
+        for scope in ["auth", "quota"] {
+            let captured = capture(&store, &config, "original", scope).unwrap();
+            commit(&store, &captured, Ok(balance(true))).unwrap();
+        }
+        let captured = capture(&store, &config, "original", "models").unwrap();
+        commit(&store, &captured, Ok(deepseek_models())).unwrap();
+        let before = inspect(&store, &config, "original").unwrap();
+        let fact = before["observations"][1]["fact"].clone();
+        for reason in [
+            "source_format_error",
+            "upstream_rejection",
+            "transport_error",
+            "observation_deadline",
+            "credential_unavailable",
+        ] {
+            let captured = capture(&store, &config, "original", "models").unwrap();
+            let acquired = if reason == "source_format_error" {
+                integrations::normalize_observation(
+                    "official_models_api",
+                    &json!({"data":[{"id":"valid"},{"id":"bad\n"}]}),
+                )
+                .map(|data| AcquiredObservation { data, status: 200 })
+            } else {
+                Err(Error::new(reason, "safe failure"))
+            };
+            commit(&store, &captured, acquired).unwrap();
+            let after = inspect(&store, &config, "original").unwrap();
+            assert_eq!(after["observations"][1]["fact"], fact);
+            assert_eq!(
+                after["observations"][1]["latest_attempt"]["reason_code"],
+                reason
+            );
+            assert_eq!(
+                after["observations"][1]["latest_attempt"]["outcome"],
+                if reason == "credential_unavailable" {
+                    "unavailable"
+                } else {
+                    "failed"
+                }
+            );
+            for index in [0, 2] {
+                assert_eq!(
+                    after["observations"][index]["fact"],
+                    before["observations"][index]["fact"]
+                );
+                assert_eq!(
+                    after["observations"][index]["source"],
+                    "official_balance_api"
+                );
+                assert_eq!(
+                    after["observations"][index]["binding"]["source_contract"],
+                    "deepseek_balance_v1"
+                );
+            }
+            assert_eq!(
+                after["billing"]["observation"],
+                before["billing"]["observation"]
+            );
+        }
+    }
+
+    #[test]
+    fn deepseek_discovery_rejects_late_credentials_and_corrupt_retained_model_ids() {
+        let (_dir, store, config) = fixture();
+        let first = capture(&store, &config, "original", "models").unwrap();
+        let late = capture(&store, &config, "original", "models").unwrap();
+        commit(&store, &first, Ok(deepseek_models())).unwrap();
+        assert_eq!(
+            commit(&store, &late, Ok(deepseek_models()))
+                .unwrap_err()
+                .code,
+            "observations_changed"
+        );
+        let captured = capture(&store, &config, "original", "models").unwrap();
+        inputs::authorization_changed(&store, "original").unwrap();
+        let after = inspect(&store, &config, "original").unwrap();
+        assert_eq!(after["observations"][1]["state"], "unknown");
+        assert!(after["observations"][1]["fact"].is_null());
+        assert_eq!(
+            commit(&store, &captured, Ok(deepseek_models()))
+                .unwrap_err()
+                .code,
+            "observations_changed"
+        );
+        let captured = capture(&store, &config, "original", "models").unwrap();
+        commit(&store, &captured, Ok(deepseek_models())).unwrap();
+        assert_eq!(
+            inspect(&store, &config, "original").unwrap()["observations"][1]["state"],
+            "observed"
+        );
+        let mut heads = read(&store).unwrap();
+        heads
+            .heads
+            .values_mut()
+            .next()
+            .unwrap()
+            .fact
+            .as_mut()
+            .unwrap()
+            .data["models"] = json!(["invalid\n"]);
+        store.write_json(STATE, &heads).unwrap();
+        assert_eq!(
+            inspect(&store, &config, "original").unwrap_err().code,
+            "invalid_record"
+        );
     }
     fn go_usage() -> AcquiredObservation {
         AcquiredObservation {

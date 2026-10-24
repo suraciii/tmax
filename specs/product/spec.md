@@ -685,6 +685,14 @@ Web controls, to perform the existing explicit stops before starting the new
 executable. If no compatible control surface is available, report that missing
 prerequisite instead of claiming that the incompatible client's stop can work.
 
+On Unix, the control socket pathname under the OS user's home must be
+representable by the platform's pathname Unix socket API. An unsupported path
+must produce an actionable `resident_control_path_invalid` blocker before
+resident launch or owner locks, child creation, or service initialization.
+Dry-run reports this known blocker without effects. A path-representation failure
+is not endpoint occupation or an unidentified child-start failure. Do not
+relocate the store, shorten the path, or choose an alternate control endpoint.
+
 ### Local request admission
 
 The proxy must bound active requests, accepted request size, and request/response
