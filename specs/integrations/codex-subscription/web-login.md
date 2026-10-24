@@ -12,11 +12,12 @@ Configure authorization → choose independent Codex scope or existing Codex tar
 ```
 
 - An independent scope requires no pre-existing agent configuration. The explicit
-  action creates a private Codex directory; its target and provider reference are
-  saved only after successful authentication. An interrupted or failed attempt can
-  explicitly reuse its retained private scope. Existing Codex installations keep
-  their authorization. The resulting target can subsequently be configured for
-  direct Codex use.
+  action creates a private Codex home at `~/.codex/tmax/<UUID>`, outside tmax-owned
+  storage, and selects it through `CODEX_HOME`. Its target and provider reference
+  are saved only after successful authentication. An interrupted or failed attempt
+  can explicitly reuse its retained private scope. Existing Codex installations
+  keep their authorization. The resulting target can subsequently be configured
+  for direct Codex use.
 - Reauthentication through an existing target discloses its path and shared
   consumers. Before OAuth changes that scope, invalidate managed authorization
   and persist uncertain native-effect metadata. Failure is not rollback.

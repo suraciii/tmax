@@ -14,6 +14,8 @@ fn fixture() -> (tempfile::TempDir, Store, Plan, Arc<Flow>) {
         if_revision: None,
     };
     let mut plan = prepare(&store, &request).unwrap();
+    assert!(plan.path.starts_with(store.home.join(".codex/tmax")));
+    assert!(!plan.path.starts_with(&store.root));
     storage::ensure_directory(&plan.path).unwrap();
     plan.path = scope(&store, &plan.path).unwrap();
     plan.target.scope = plan.path.clone();
@@ -222,6 +224,7 @@ fn browser_login_preview_has_no_process_or_scope_effects() {
     assert!(result["path"].is_null());
     assert_eq!(config::raw_revision(&store).unwrap(), before);
     assert!(!store.root.join("native").exists());
+    assert!(!store.home.join(".codex").exists());
     assert!(!store.root.join("locks").exists());
 }
 
@@ -338,4 +341,155 @@ async fn browser_login_recreated_provider_is_rejected_before_native_changes() {
             .auth
             .is_none()
     );
+}
+
+// Isolate executable discovery in a child test process: parallel tests must not
+// share PATH mutations, and the fake Codex never contacts an upstream service.
+#[cfg(unix)]
+#[tokio::test]
+async fn browser_login_created_scope_runs_native_process_and_commits_only_completed_auth() {
+    const TEST: &str = "native::browser_login::tests::browser_login_created_scope_runs_native_process_and_commits_only_completed_auth";
+    if let Ok(scenario) = std::env::var("TMAX_BROWSER_LOGIN_TEST_CHILD") {
+        let (_directory, store, mut plan, flow) = fixture();
+        // Let run create the scope and its native credential-store configuration.
+        fs::remove_dir(&plan.path).unwrap();
+        let ambient = store.home.join(".codex/auth.json");
+        fs::write(
+            &ambient,
+            b"ambient-native-authorization-must-remain-untouched",
+        )
+        .unwrap();
+        let before = config::raw_revision(&store).unwrap();
+        let mut process = None;
+        let result = run(&store, &mut plan, &flow, &mut process).await;
+        process
+            .as_mut()
+            .expect("fake native process started")
+            .stop()
+            .await;
+        let native_config: toml::Value =
+            toml::from_str(&fs::read_to_string(plan.path.join("config.toml")).unwrap()).unwrap();
+        assert_eq!(
+            native_config["cli_auth_credentials_store"].as_str(),
+            Some("file")
+        );
+        assert_eq!(
+            fs::read(&ambient).unwrap(),
+            b"ambient-native-authorization-must-remain-untouched"
+        );
+        let loaded = config::load(&store).unwrap();
+        if scenario == "success" {
+            result.unwrap();
+            assert_eq!(flow.progress.lock().unwrap().save, "saved");
+            assert!(matches!(&loaded.config.providers["work"].auth,
+                Some(Auth::Login { via, session_ref: Some(_) }) if via == &plan.via));
+            let target = &loaded.config.agents[&plan.via];
+            assert_eq!(scope(&store, &target.scope).unwrap(), plan.path);
+            assert_eq!(
+                retained_status(&store, "work").unwrap()["state"],
+                "succeeded"
+            );
+        } else {
+            assert_eq!(result.unwrap_err().code, "login_failed");
+            assert_eq!(loaded.revision, before);
+            assert!(loaded.config.providers["work"].auth.is_none());
+            assert!(loaded.config.agents.is_empty());
+            assert_eq!(flow.progress.lock().unwrap().save, "not_requested");
+        }
+        return;
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("codex");
+    fs::write(&executable, r#"#!/bin/sh
+if [ "$1" = --version ]; then
+    printf 'codex-cli 0.159.2\n'
+    exit 0
+fi
+[ "$1" = app-server ] || exit 1
+signed_in=false
+while IFS= read -r line; do
+    case "$line" in *'"id":'*) ;; *) continue ;; esac
+    id=${line#*\"id\":}
+    id=${id%%,*}
+    case "$line" in
+        *'"method":"initialize"'*) result='{}' ;;
+        *'"method":"account/read"'*)
+            if [ "$signed_in" = true ]; then
+                result='{"account":{"type":"chatgpt","email":"person@example.test","planType":"plus"}}'
+            else
+                result='{"account":null}'
+            fi ;;
+        *'"method":"account/login/start"'*)
+            success=false
+            [ "$TMAX_BROWSER_LOGIN_TEST_CHILD" = success ] && success=true
+            printf '{"method":"account/login/completed","params":{"loginId":"native-id","success":%s}}\n' "$success"
+            signed_in=true
+            result='{"type":"chatgpt","loginId":"native-id","authUrl":"https://auth.openai.com/oauth/authorize?state=fixture"}' ;;
+        *) exit 1 ;;
+    esac
+    printf '{"id":%s,"result":%s}\n' "$id" "$result"
+done
+"#).unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![directory.path().to_owned()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).unwrap();
+    for scenario in ["success", "refused"] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture"])
+            .env("TMAX_BROWSER_LOGIN_TEST_CHILD", scenario)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{scenario}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn browser_login_existing_target_inside_tmax_storage_is_rejected() {
+    let (_directory, store, _plan, _flow) = fixture();
+    let path = store.root.join("native/user-selected");
+    storage::ensure_directory(&path).unwrap();
+    let mut loaded = config::load(&store).unwrap();
+    loaded.document["agents"]["existing"]["agent"] = toml_edit::value("codex");
+    loaded.document["agents"]["existing"]["scope"] =
+        toml_edit::value(path.to_string_lossy().as_ref());
+    config::save(&store, &loaded.revision, &loaded.document).unwrap();
+    let request = Request {
+        command: vec!["provider".into(), "login-start".into()],
+        operands: vec!["work".into()],
+        arguments: [("via".into(), vec!["existing".into()])].into(),
+        dry_run: false,
+        if_revision: None,
+    };
+    assert_eq!(
+        prepare(&store, &request).err().unwrap().code,
+        "invalid_native_scope"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn browser_login_generated_scope_rejects_symlinked_native_parent() {
+    let (directory, store, mut plan, flow) = fixture();
+    fs::remove_dir(&plan.path).unwrap();
+    fs::remove_dir(private_root(&store)).unwrap();
+    let elsewhere = directory.path().join("unowned");
+    fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, private_root(&store)).unwrap();
+    let before = config::raw_revision(&store).unwrap();
+    let mut process = None;
+    assert!(run(&store, &mut plan, &flow, &mut process).await.is_err());
+    assert!(process.is_none());
+    assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+    assert_eq!(config::raw_revision(&store).unwrap(), before);
 }

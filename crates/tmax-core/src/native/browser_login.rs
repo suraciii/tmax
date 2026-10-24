@@ -87,6 +87,10 @@ struct Plan {
     managed: bool,
 }
 
+fn private_root(store: &Store) -> PathBuf {
+    store.home.join(".codex/tmax")
+}
+
 fn prepare(store: &Store, request: &Request) -> Result<Plan> {
     let loaded = config::load(store)?;
     if request
@@ -116,7 +120,7 @@ fn prepare(store: &Store, request: &Request) -> Result<Plan> {
     }
     let (via, target, path) = if new_scope {
         let id = uuid::Uuid::new_v4().to_string();
-        let path = store.root.join("native/codex").join(&id);
+        let path = private_root(store).join(&id);
         (
             format!("codex-{id}"),
             AgentTarget {
@@ -146,7 +150,7 @@ fn prepare(store: &Store, request: &Request) -> Result<Plan> {
                 .rev()
                 .find(|r| r.provider == provider && r.target == via && r.agent == "codex")
                 .ok_or_else(|| err("unknown_resource"))?;
-            let private_root = scope(store, &store.root.join("native/codex"))?;
+            let private_root = scope(store, &private_root(store))?;
             let path = scope(store, &record.scope)?;
             if !path.starts_with(private_root) {
                 return Err(err("native_scope_conflict"));
