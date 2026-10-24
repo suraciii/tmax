@@ -9,8 +9,8 @@ local Web interface is also available.
 - Keep multiple accounts for one service in separate named provider instances.
 - Manage native model-provider settings for Codex CLI, pi, omp, OpenCode, and
   Hermes Agent.
-- Run a local, same-protocol model proxy with concrete models or user-defined
-  aliases. Native configuration and proxying are independent capabilities.
+- Run a local, same-protocol model gateway with concrete models or user-defined
+  aliases. Native configuration and gateway forwarding are independent capabilities.
 - Use offline CLI help and JSON output for explicit management operations.
 
 ## Build
@@ -28,7 +28,7 @@ just build
 ## Documentation
 
 - [CLI usage](docs/usage.md) — provider and model setup, native configuration,
-  and the local proxy.
+  and the local gateway.
 - [Documentation index](docs/README.md) — user guides.
 - [Product specification](specs/product/spec.md) — product scope and boundaries.
 - [Building and verification](docs/building.md) — dependencies and project checks.

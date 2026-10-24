@@ -57,7 +57,7 @@ tmax lets one person manage model access through locally named provider instance
 including multiple accounts for one service, authentication, billing information,
 and access for local coding agents. It is CLI-first, with a supplementary local
 Web interface. Users can manage native model-provider settings, run a local
-model proxy, or combine both, with each operation reporting its actual effect.
+model gateway, or combine both, with each operation reporting its actual effect.
 Any calling agent able to run local commands may use tmax; it does not need a
 tmax-specific runtime integration. The calling agent interprets the user's goal
 and chooses operations. tmax supplies explicit capabilities, checks its domain
@@ -82,13 +82,13 @@ candidates. Alias IDs such as L0, L1, coding, or deepseek-v4.1-flash are arbitra
 user-defined names with no built-in meaning. [Model selection](../model-routing/spec.md)
 owns candidate validation, selection, and time-based schedules.
 
-Agent provider configuration and model proxying are independent capabilities.
-An agent target may contain both upstream provider entries and a tmax proxy entry
+Agent provider configuration and model gateway forwarding are independent capabilities.
+An agent target may contain both upstream provider entries and a tmax gateway entry
 where its native capabilities permit. Neither capability requires use of the other.
-The proxy must perform same-protocol forwarding only. It must not translate
+The gateway must perform same-protocol forwarding only. It must not translate
 Responses, Chat Completions, or Anthropic Messages into one another.
 
-Team administration, remote proxy sharing, subscription purchase/cancellation,
+Team administration, remote gateway sharing, subscription purchase/cancellation,
 and payment execution are outside this product scope. Selection must stay within
 user-configured candidates; inferred global cost optimization and hidden replay
 after upstream execution are excluded. The product must not bypass provider
@@ -195,7 +195,7 @@ separate settings. Setup must show inherited values, local overrides, and the
 effective result, with an action to remove an override and restore inheritance.
 
 Custom setup must expose locally supported integration choices without requiring
-a catalog entry, catalog download, credentials, or a running proxy. Each choice
+a catalog entry, catalog download, credentials, or a running gateway. Each choice
 must identify its stable integration ID, native protocols, base-URL convention,
 required setup fields, and supported authentication methods. These declarations
 do not verify an endpoint or grant a subscription entitlement.
@@ -203,7 +203,7 @@ do not verify an endpoint or grant a subscription entitlement.
 Endpoint selection follows the shared
 [endpoint-resolution contract](../integrations/spec.md#endpoint-resolution).
 Known services use one integration-owned region/protocol mapping for direct
-configuration and proxy forwarding. Custom services use explicit per-protocol
+configuration and gateway forwarding. Custom services use explicit per-protocol
 bases within the same provider. A catalog URL is not universal protocol support;
 missing or ambiguous endpoint selection must remain unavailable.
 
@@ -226,8 +226,8 @@ provider has one active authentication method. Login authentication declares a
 login source; missing authentication is valid setup but cannot serve inference.
 Upstream user/workspace identity is optional metadata, not a setup prerequisite.
 Authentication method and billing are independent. Automatic creation or rotation
-of upstream API-key secrets is excluded; the shared local proxy key follows
-the [model-proxy lifecycle](#model-proxy).
+of upstream API-key secrets is excluded; the shared local gateway key follows
+the [model-gateway lifecycle](#model-proxy).
 
 Replacing a key for the same upstream identity preserves the provider. Adding
 independently selectable access creates another provider. Different authorizations
@@ -261,11 +261,11 @@ Login authentication and API-key authentication must be separate workflows:
 - API-key setup must accept a supplied key or a supported secret reference.
   Signing in to a provider website to create a key does not make this provider
   login-authenticated. Replacing a key for the same upstream identity must preserve
-  the local provider identity and show affected agent configurations and proxy routes.
+  the local provider identity and show affected agent configurations and gateway routes.
 
 A credential must have one refresh owner. tmax must not copy one refresh token
 into multiple independently refreshing agent stores. Native-agent sessions may
-remain native-agent-owned. A proxy route may use such a session only through an
+remain native-agent-owned. A gateway route may use such a session only through an
 explicitly supported forwarding contract. Technical token readability is not
 proof of credential portability or permitted use.
 The [provider-specific contracts](../integrations/spec.md#provider-specific-contracts)
@@ -281,7 +281,7 @@ probe requires an explicit action with its cost risk shown before execution.
 Disabling a provider must stop its new tmax-managed use without disabling other
 instances of the same service. It must identify direct agent configurations that
 must be changed; it is not upstream credential revocation. Removal must identify
-affected agent configurations and proxy routes before applying changes. Stopping
+affected agent configurations and gateway routes before applying changes. Stopping
 agent configuration management, deleting a local credential, signing out, revoking
 an upstream key, and cancelling a subscription are distinct operations. tmax must
 not silently perform one as a side effect of another.
@@ -381,10 +381,10 @@ and manually entered information. Unavailable is not zero, and unknown auto-rene
 is not disabled auto-renewal. Different billing scopes, windows, currencies, model
 pools, or units must not be added into a misleading total.
 
-Provider-reported upstream account usage and proxy-observed usage must appear
+Provider-reported upstream account usage and gateway-observed usage must appear
 separately. Local observations must not be presented as an official bill or used
 to invent remaining subscription quota. The [diagnostics contract](../diagnostics/spec.md)
-owns direct/proxy observation coverage, incomplete usage, and retained-history limits.
+owns direct/gateway observation coverage, incomplete usage, and retained-history limits.
 
 A provider dashboard is not a machine-readable usage API. When no supported
 query exists, tmax must provide an explicit unknown state, a provider dashboard
@@ -451,26 +451,26 @@ providers from native settings or collect existing agent credentials.
 
 For each target, the user can configure named native provider entries, their
 model choices, a default model, and any native model roles. An entry refers to
-one upstream provider or to the tmax proxy. Upstream entries select that provider's
-concrete models; proxy entries select public concrete model IDs or model aliases.
+one upstream provider or to the tmax gateway. Upstream entries select that provider's
+concrete models; gateway entries select public concrete model IDs or model aliases.
 Both kinds may coexist in the same target. There is no target-wide operating mode.
 Unsupported native multi-provider configurations must be explained, not silently
 collapsed to one provider. Defaults and native roles identify both the entry and
 its model. tmax must not invent universal role or reasoning-level names.
-These choices control native configuration and model pickers, not proxy permissions.
+These choices control native configuration and model pickers, not gateway permissions.
 Alias continuity belongs to the shared alias definition under
 [Model selection](../model-routing/spec.md#selection-and-continuity).
 A target may be registered before its model set or default is complete, including
 when it is needed as a native login source. Missing setup is an explicit unavailable
 state, not a new draft resource. Any declared references must resolve. Native
 application remains blocked until its required selections, credentials, and
-compatibility are established; incomplete targets do not block standalone proxy use.
+compatibility are established; incomplete targets do not block standalone gateway use.
 Model addition, removal, and default selection are distinct requested changes;
 tmax must not infer them from a generic request to switch or optimize access.
 
 Direct model selections must resolve to a specific qualified model and therefore
 its provider's authorization. Adding another instance must not switch direct
-selections or established proxy sessions. Dry runs of alias candidate
+selections or established gateway sessions. Dry runs of alias candidate
 changes must show effects on future selections and any existing sessions that
 will be blocked under the [continuity rules](../model-routing/spec.md#selection-and-continuity).
 A native account switch must show affected targets and credential scope.
@@ -479,7 +479,7 @@ When an agent shares an active account across a profile, process, or server,
 tmax must expose that scope and detect conflicting account selections. It must
 not promise per-project or per-session isolation that the native agent cannot
 provide. It must block incompatible selections and explain whether supported
-separate native scopes or proxy routes can provide the requested separation.
+separate native scopes or gateway routes can provide the requested separation.
 
 The agent configuration view must report whether the requested changes are not
 applied, applied, awaiting agent reload, conflicted, or blocked. It must distinguish
@@ -489,7 +489,7 @@ claimed as active.
 
 Application state and runtime verification must be presented separately under
 the [diagnostics contract](../diagnostics/spec.md). Applied files are not proof
-of running-agent use; missing proxy traffic is not proof of bypass.
+of running-agent use; missing gateway traffic is not proof of bypass.
 
 Support is scoped to an agent version, target, provider entry, authentication
 method, protocol, and model capability. Explain unavailable combinations before
@@ -502,10 +502,10 @@ model, provider, credential, or billing product.
 An upstream entry configures inference directly to its selected provider.
 No running tmax server is required on that inference path. Supported on-demand
 secret resolution may require the installed tmax CLI; disclose that dependency.
-A proxy entry uses the tmax listener address and shared access key. Applying it
+A gateway entry uses the tmax listener address and shared access key. Applying it
 requires an explicitly started, ready listener; application must not start it.
 Adapters supply the native model list through supported discovery or static
-configuration. Saving settings and choosing a model never start the proxy.
+configuration. Saving settings and choosing a model never start the gateway.
 
 Every native application must support a redacted dry run showing target files,
 credential handoff, affected model selections, and reload or restart requirements.
@@ -530,23 +530,25 @@ credentials must receive the same protection as those credentials.
 Stopping management removes the target from desired configuration without
 rewriting its native files or signing it out. A target referenced as a login
 owner cannot be removed until that dependency is explicitly resolved. Removing
-a target or one of its provider entries does not revoke the shared proxy key,
-change the proxy's models, or stop the service. Existing native settings may
+a target or one of its provider entries does not revoke the shared gateway key,
+change the gateway's models, or stop the service. Existing native settings may
 continue to work. Offer restoration before removal, not as an implicit side
 effect. Retain current-user-restricted plaintext restore information until
 restoration completes or the user explicitly discards it; this is recovery data,
 not desired configuration.
 
-## Model proxy
+<a id="model-proxy"></a>
 
-The proxy serves compatible local clients independently of native agent
+## Model gateway
+
+The gateway serves compatible local clients independently of native agent
 configuration management. No registered agent target or client record is required.
 It exposes one shared model list derived from enabled provider offerings and
 alias definitions under their declared protocols, not another publication or
 permission list. An agent's native model picker can show a subset without
-restricting requests to the proxy. Runtime requests do not create configuration.
+restricting requests to the gateway. Runtime requests do not create configuration.
 
-The first proxy start must be explicit. Once started, it runs in the background
+The first gateway start must be explicit. Once started, it runs in the background
 independently of the launching terminal or Web session. Opening management,
 saving settings, or applying native configuration does not start inference.
 Closing the browser does not stop it. User-login autostart is optional and
@@ -563,16 +565,16 @@ them. Admission and stopping must be coordinated so a successful normal stop
 cannot interrupt a newly admitted request. There is no background drain queue
 or automatic force-stop timeout. Stopping does not change the autostart setting.
 
-Agent application state and proxy availability are independent. A stopped or
-blocked listener leaves native proxy configuration applied but unavailable;
+Agent application state and gateway availability are independent. A stopped or
+blocked listener leaves native gateway configuration applied but unavailable;
 it must not be reported as an unapplied configuration or silently replaced with
 direct access. Restart follows the configuration contract's startup validation
 and checks required local credentials before reporting availability. An unavailable
-upstream credential blocks its routes; an unavailable shared key blocks proxy admission.
+upstream credential blocks its routes; an unavailable shared key blocks gateway admission.
 Conversation bindings follow the
 [continuity contract](../model-routing/spec.md#selection-and-continuity).
 
-Concrete proxy mappings must be derived from enabled, authorized provider/model
+Concrete gateway mappings must be derived from enabled, authorized provider/model
 configuration, using qualified `provider-id/model-id` public names. They do not
 require another route resource. Concrete requests pin that offering; unknown or
 unavailable models must not cause registration, fuzzy lookup, or implicit fallback.
@@ -582,14 +584,14 @@ required nonempty list of unique, registered qualified `provider-id/model-id`
 candidates under [Model selection](../model-routing/spec.md#model-aliases).
 It is not a new model, account pool, route resource, or protocol converter.
 The [multi-source example](../model-routing/spec.md#multi-source-model-alias-example)
-shows different upstream IDs behind one request ID. Concrete proxy access still
+shows different upstream IDs behind one request ID. Concrete gateway access still
 needs no alias definition.
 
 Matching protocol names are necessary but not sufficient. Before applying an
 agent configuration, the product must check the known transport, streaming, tool-call,
 reasoning, context, and conversation-state requirements of the selected agent
 against the selected upstream. A known unsupported requirement must block the
-configuration change or request with an actionable explanation. The proxy must not strip
+configuration change or request with an actionable explanation. The gateway must not strip
 unsupported fields to make a request appear successful, fabricate tool results,
 or rebuild conversation history on behalf of an incompatible client.
 
@@ -616,7 +618,7 @@ Each in-flight request must keep its selected concrete or alias ID, provider,
 model, and authorization. Configuration changes must expose their impact before
 activation. Provider-issued conversation, response, file, or cache identifiers must
 not cross authorization or endpoint boundaries. An agent that cannot safely resume
-must require a new conversation or remain blocked; the proxy must not emulate
+must require a new conversation or remain blocked; the gateway must not emulate
 another provider's state store. Ambiguous failures must not trigger hidden
 resubmission that duplicates billing or side effects.
 
@@ -627,14 +629,14 @@ configured candidates, native compatibility, and upstream credential requirement
 still determine whether a request can run. The key neither identifies an agent
 or conversation nor authenticates management or bypasses browser protections.
 
-Native-login forwarding keeps local-proxy and upstream authentication distinct.
+Native-login forwarding keeps local-gateway and upstream authentication distinct.
 Agent-held tokens must not be persisted or forwarded to an arbitrary host.
 Where an upstream requires native session identity, the integration must establish
 that identity and use its matching provider credentials. It must not forward one
 native session under another account. Missing identity support makes that path
 unavailable; it does not justify a local client-permission system.
 
-Initial explicit proxy configuration provisions one unpredictable key in protected
+Initial explicit gateway configuration provisions one unpredictable key in protected
 storage and saves its reference. Dry runs describe provisioning without generating
 a secret or reserving a reference. Native application reuses this key through the
 normal credential-handoff rules. Save, start, reload, model changes, and agent
@@ -652,7 +654,7 @@ Report known native configurations needing reapplication and explain that manual
 configured clients must update too. There is no overlapping-key grace period.
 Replacing this local key does not change conversation identities or retained
 upstream destinations; later requests must supply the current key.
-Removing an agent never revokes this key. Removing proxy configuration stops its
+Removing an agent never revokes this key. Removing gateway configuration stops its
 use after dependencies are resolved; stored-secret cleanup remains explicit.
 Failures distinguish provisioning, save, activation, and native application.
 A generated but unreferenced key remains discoverable for explicit cleanup.
@@ -698,7 +700,7 @@ relocate the store, shorten the path, or choose an alternate control endpoint.
 
 ### Local request admission
 
-The proxy must bound active requests, accepted request size, and request/response
+The gateway must bound active requests, accepted request size, and request/response
 buffers. When local capacity is unavailable, reject a new request immediately
 with a distinguishable local-capacity result before upstream dispatch. There is
 no request waiting queue or local retry/failover. A caller decides whether to
@@ -753,6 +755,11 @@ tmax-controlled traffic.
 
 ## Local Web and CLI experience
 
+The product name is **Gateway** (Simplified Chinese: **网关**). Navigation,
+actions, and explanatory copy use this term. Literal CLI commands, configuration
+keys, API paths, and diagnostic codes retain their documented `proxy` spelling.
+Outbound HTTP/SOCKS proxies remain a separate networking concept.
+
 The CLI is the primary product entrypoint. `tmax --help` must explain what tmax
 can do and list its capability groups. Command help must explain purpose, inputs,
 effects, important limits, and how to inspect the result. Help must be usable
@@ -776,11 +783,11 @@ The supplementary Web interface must have these task-oriented areas:
 
 | Area | Primary information and actions |
 | --- | --- |
-| Overview | Provider-instance problems grouped by service, agent configuration state, proxy health, stale quota information, upcoming known renewal dates |
+| Overview | Provider-instance problems grouped by service, agent configuration state, gateway health, stale quota information, upcoming known renewal dates |
 | Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota and freshness |
 | Models | Concrete qualified offerings with metadata overrides, capabilities, priorities and schedules; model aliases with public names, explicit candidate lists, and selection previews |
 | Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
-| Proxy | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
+| Gateway | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
 
 The Web interface must offer English and Simplified Chinese. An explicit valid
 language choice takes precedence and persists locally as a language preference
@@ -795,7 +802,7 @@ and explanation accompany the unmodified raw result. CLI output remains English.
 
 Provider creation and native provider/model selections are explicit operations.
 CLI operations persist their own changes; they do not require a caller-authored
-complete document. Sign-in, native application, and proxy startup remain separate
+complete document. Sign-in, native application, and gateway startup remain separate
 operations; saving declarations must not perform them.
 Adding another provider instance must not silently replace an existing agent's
 selected provider or default model.
@@ -814,7 +821,7 @@ CLI and Web must expose the same next action for incomplete operations:
 | Outcome | Next action |
 | --- | --- |
 | Provider saved without authentication | Sign in through the supported owner or supply a key; model and subscription editing remain available |
-| Saved without a running service | Start explicitly when proxy use is wanted; direct native application remains independent |
+| Saved without a running service | Start explicitly when gateway use is wanted; direct native application remains independent |
 | Saved but not active | Fix the reported cause and explicitly reload; a listener-address change requires restart |
 | Invalid saved configuration | Inspect the validation error; correct supported fields through explicit operations where possible, or explicitly reset invalid configuration with protected preservation of the rejected bytes |
 | Concurrent or conflicting native edits | Inspect current inputs and issue the intended operation again; do not overwrite external changes or treat an earlier dry run as binding |
@@ -861,9 +868,9 @@ agent chooses operations from help and current state.
    selected models, default, and native roles through CLI operations. Inspect a
    requested concrete model or alias for the target before choosing its default;
    do not infer a selection from the Agent or model name. Upstream entries need
-   no proxy or model alias. Proxy entries can use a single concrete offering;
+   no gateway or model alias. Gateway entries can use a single concrete offering;
    schedules and model aliases are optional.
-5. For proxy use, explicitly configure, start, and validate the listener. Apply the target's
+5. For gateway use, explicitly configure, start, and validate the listener. Apply the target's
    desired configuration as a separate operation, optionally preceded by its
    dry run. Report written changes, outstanding native reload, and runtime
    evidence separately. The user or calling agent may perform the named native
@@ -877,13 +884,13 @@ application. Incomplete providers or targets remain inspectable and editable
 through CLI operations. Neither surface requires authoring a configuration
 document, importing native credentials, or inventing a workflow record to resume.
 
-Proxy-only use omits native target registration and application. Configure upstream
-access and models, configure and start the proxy, and explicitly retrieve its
+Gateway-only use omits native target registration and application. Configure upstream
+access and models, configure and start the gateway, and explicitly retrieve its
 shared key for the user's client. No client record or permission assignment is needed.
 
 ### Local access and secret protection
 
-Management and proxy listeners must remain loopback-only. The Web interface is
+Management and gateway listeners must remain loopback-only. The Web interface is
 a local visual equivalent of CLI operations: it has no login, pairing flow,
 management password, or authenticated browser session. Local processes with
 access to the listener are trusted; this is not isolation from other OS users
@@ -895,7 +902,7 @@ mutations must require same-origin request checks and a non-simple request forma
 not a link or cross-origin HTML form. Do not enable permissive CORS. These are
 browser-request protections, not a user authentication workflow. The browser must
 not persist secrets in local storage or return them through ordinary read responses.
-Explicit shared-proxy-key reveal is a separate same-origin user action, not an
+Explicit shared-gateway-key reveal is a separate same-origin user action, not an
 inspection response; it must not cache or log the key.
 
 tmax-owned API keys and credential-bearing recovery bytes are plaintext files
@@ -908,7 +915,7 @@ Credential bytes must never appear in argv, environment variables, stdout, logs,
 ordinary configuration, or ordinary inspection.
 
 Unsupported storage-format records are rejected and left unchanged. API keys may
-be re-entered through the normal provider-key or proxy-key operation. Native-owned
+be re-entered through the normal provider-key or gateway-key operation. Native-owned
 credential stores follow the explicit credential-handoff rule and are not
 imported into tmax.
 
@@ -934,18 +941,18 @@ versions and provider-authorized credentials where a provider request is needed:
    one upstream identity must not duplicate its quota or inherit another identity's observations.
 3. Configure and restore each of Codex, pi, omp, OpenCode, and Hermes without
    overwriting unrelated or concurrently changed configuration.
-4. Use an upstream native entry while tmax is stopped, and a proxy entry while
+4. Use an upstream native entry while tmax is stopped, and a gateway entry while
    the browser is closed. Configure both entries in one supported native target.
    Serve an independently configured client without registering any agent target.
 5. Complete streaming output and a tool-call round trip for each advertised
    agent/protocol route. Reject a protocol mismatch before upstream inference.
 6. Expose an expired login, revoked key, unavailable upstream, stale usage source,
    and exhausted quota as distinct conditions when the upstream evidence permits.
-7. Reject invalid shared proxy keys, unavailable models, and untrusted cross-site
+7. Reject invalid shared gateway keys, unavailable models, and untrusted cross-site
    management requests without leaking credentials or conversation content.
    Valid shared-key holders see the same model list; native picker subsets do not
    impose request permissions. Open the Web interface without login or pairing.
-8. Explain unknown quota and renewal information, and keep proxy observations
+8. Explain unknown quota and renewal information, and keep gateway observations
    separate from authoritative provider balances.
 9. Preserve a running request's provider and authorization during a route change,
    and prevent unsafe reuse of upstream conversation state across identity changes.
@@ -961,7 +968,7 @@ versions and provider-authorized credentials where a provider request is needed:
     competing authorities. Detect concurrent edits; keep credentials and runtime
     observations out of ordinary configuration. Inspect native agent configuration
     without importing providers, models, settings, or credentials, or overwriting later edits.
-13. Keep an explicitly started proxy running after its launching terminal and Web
+13. Keep an explicitly started gateway running after its launching terminal and Web
 session close. Exercise opt-in login startup with missing or unavailable
 credentials; do not claim readiness or add a fallback.
     Refuse normal stop with active requests; explicit force-stop reports interruption.
@@ -974,7 +981,7 @@ credentials; do not claim readiness or add a fallback.
     instance, restore inheritance by removing overrides, and leave the other
     instance's settings, credentials, subscription, and routing preferences unchanged.
 15. Map a concrete offering directly into each supported agent configuration without
-    requiring a model alias. Expose concrete proxy access from existing settings
+    requiring a model alias. Expose concrete gateway access from existing settings
     without storing redundant same-name routes or importing agent state.
 16. Configure a scenario model alias with explicit candidates from two OpenCode
     Go instances and official DeepSeek. Require a nonempty, unique list of
@@ -990,7 +997,7 @@ credentials; do not claim readiness or add a fallback.
 18. Remove providers and targets only after references are explicitly resolved.
     Distinguish retained native files and secrets from removed desired settings;
     stopping management must not silently sign out or revoke upstream access.
-19. Provision and explicitly replace the one shared proxy key. Ordinary reads
+19. Provision and explicitly replace the one shared gateway key. Ordinary reads
     must not expose it; explicit protected delivery supports unmanaged clients.
     Reject the old key after activation, report known configurations needing
     reapplication, and distinguish save, activation, and native-application failures.
@@ -1010,7 +1017,7 @@ credentials; do not claim readiness or add a fallback.
     requested concrete model or alias for an unsaved native target without a
     placeholder model selection.
     Register a native login source before model/default completion without native
-    writes, implicit login, or proxy startup.
+    writes, implicit login, or gateway startup.
 22. Follow the [diagnostics acceptance boundary](../diagnostics/spec.md#observable-acceptance):
     distinguish configuration from runtime evidence, explain historical decisions
     from their original revisions, and clear request history without losing
@@ -1048,7 +1055,7 @@ credentials; do not claim readiness or add a fallback.
     custom protocol bases and reject unsupported operations or unbound resource
     IDs without probing providers or creating a resource directory.
 32. Apply explicit global outbound policy consistently in CLI and service work;
-    never inherit ambient proxy settings or fall back directly after proxy failure.
+    never inherit ambient gateway settings or fall back directly after gateway failure.
 33. Converge concurrent starts on one resident owner, reuse compatible active
     listeners without reloading, and reject incompatible or unidentified owners
     without automatic takeover, restart, or port changes.
@@ -1065,7 +1072,7 @@ owns its provider-specific acceptance boundary and external evidence.
 ## Implementation status
 
 The workspace includes shared management, configuration, routing/input,
-protected-storage, native-adapter, Web, and proxy implementations. Runtime
+protected-storage, native-adapter, Web, and gateway implementations. Runtime
 qualification is scoped to actual versions, native scopes, credentials,
 operations, and transports. Local tests or parser checks do not establish
 provider entitlement or a verified hosted-provider tool-call conversation.

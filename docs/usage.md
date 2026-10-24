@@ -129,7 +129,7 @@ not prove that path.
 
 The Web Overview groups the provider and agent evidence already available through
 local read operations. It does not refresh providers, resolve secrets, sign in,
-start the proxy, or apply native files. An explicitly requested refresh or native
+start the gateway, or apply native files. An explicitly requested refresh or native
 change remains a separate task.
 
 Treat saved configuration, loaded state, applied files, and effective native
@@ -143,19 +143,10 @@ and keep a past date distinct from an unknown date.
 
 ### Web language
 
-The Web interface initially follows the first supported browser language in
-preference order: `zh*` selects Simplified Chinese and `en*` selects English. If
-none is supported, the browser's primary language is checked, then English is the
-fallback. An explicit selector choice overrides the browser preference and only
-that language preference is stored locally. If browser storage is unavailable,
-the interface remains usable.
-
-Changing language does not send a management request or clear the selected task,
-form values, preview, revision guard, or supplied key. Provider/model/target IDs,
-command paths and options, configuration field names, and raw JSON remain
-unchanged. A localized status and explanation appear separately from each raw
-operation result. The CLI remains English.
-
+The redesigned workspace uses Simplified Chinese labels, including 网关 for
+Gateway. See the [Web workspace guide](web.md) for its task areas and operation
+feedback. Stable IDs, CLI commands, configuration names, and raw results retain
+their documented spelling. The CLI remains English.
 
 ## Explaining models and applying metadata
 
@@ -185,7 +176,7 @@ explanation does not retrieve secrets, sign in, run inference, reserve a session
 or apply native files. It assesses only qualified local evidence; a readable tool
 or configured login does not verify native authentication, entitlement, or access.
 
-For an existing proxy request, use the opaque `scope_handle` returned in retained
+For an existing gateway request, use the opaque `scope_handle` returned in retained
 request decision evidence:
 
 ```sh
@@ -201,7 +192,7 @@ Catalog adoption is also explicit. `catalog apply --revision REVISION` applies a
 validated downloaded snapshot; its preview/result compares accepted and candidate
 effective metadata after overrides and reports affected concrete selections,
 aliases, and native projections. Review `reapply_required`, blocked
-unrepresentable facts, and any proxy-route revalidation even when native files are
+unrepresentable facts, and any gateway-route revalidation even when native files are
 unchanged. The result distinguishes accepted-before, candidate, and accepted-after
 revisions; a preview does not advance accepted metadata. Activation reports the
 actual service outcome. Catalog apply does not implicitly apply native files or
@@ -220,9 +211,9 @@ not assume the old authorization or observations were restored and do not retry
 blindly. Inspect the same provider and native scope, then recover through that
 scope's qualified owner; never copy native tokens into tmax or another agent.
 
-## Proxy-only access
+## Gateway-only access
 
-The local proxy is independent of managed Pi/Codex targets. Direct clients do not
+The local gateway is independent of managed Pi/Codex targets. Direct clients do not
 need an `agent` declaration or native apply. A concrete qualified model can be
 used directly; aliases are optional.
 
@@ -232,7 +223,7 @@ The default public ID can be the concrete offering:
 PUBLIC_ID="$PROVIDER_ID/$MODEL_ID"
 ```
 
-To use a stable alias instead, create it before starting the proxy:
+To use a stable alias instead, create it before starting the gateway:
 
 ```sh
 PUBLIC_ID=my-model
@@ -273,7 +264,7 @@ same-user named-pipe control. `tmax web open` opens the system browser;
 `--no-browser` starts management without opening it. Closing the browser or
 launching terminal does not stop inference. `tmax proxy autostart enable` opts
 into current-user login startup, and `disable` removes only tmax's owned startup
-entry without stopping the proxy. Startup reads the same current-user-restricted
+entry without stopping the gateway. Startup reads the same current-user-restricted
 secret files. Unsupported storage-format records return `storage_version_unsupported` or
 `storage_record_invalid` and remain unchanged. Re-enter the provider key with
 `provider key set` or replace the shared key with `proxy key replace`. Recovery
@@ -285,7 +276,7 @@ pre-cutover CLI (`tmax proxy stop`, then `tmax web stop`) or its existing Web
 controls to perform the explicit stops before starting the current executable;
 the new CLI will not take over or terminate an incompatible resident.
 
-The proxy accepts same-protocol requests and forwards to the configured provider;
+The gateway accepts same-protocol requests and forwards to the configured provider;
 it does not translate protocols. Configure a real provider credential before
 expecting upstream completion. Synthetic loopback checks qualify local wiring
 only. The exact hosted scenario and its native request-control qualifications are
@@ -385,7 +376,7 @@ separate: use `--if-input-revision` with `provider input record|clear`.
 
 ## Pi target: apply, reload, restore
 
-Native configuration is explicit and separate from proxy startup. Use an existing
+Native configuration is explicit and separate from gateway startup. Use an existing
 Pi scope outside `~/.tmax`; a path inside tmax-owned storage is rejected. This is
 the direct-provider command sequence; scope and IDs are examples:
 
@@ -434,7 +425,7 @@ returned exit 3 / `awaiting_native_reload`; the installed Pi parser recognized
 the selected model. This proves local native configuration parsing, not hosted
 credentials, entitlement, or permission.
 
-For a Pi client that should use the proxy, add an explicit proxy entry, select
+For a Pi client that should use the gateway, add an explicit gateway entry, select
 the public model ID, set it as default, then apply the target:
 
 ```sh
@@ -444,10 +435,10 @@ tmax agent default set "$TARGET" local "$PUBLIC_ID" --protocol chat-completions
 tmax agent apply "$TARGET"
 ```
 
-The proxy itself must already be configured and explicitly started; this native
+The gateway itself must already be configured and explicitly started; this native
 target path is optional. Pi 1.2.0 completed a same-protocol Chat Completions
 round-trip through tmax to a private synthetic loopback provider using a
-synthetic key. This is local proxy/native wiring evidence, not hosted access.
+synthetic key. This is local gateway/native wiring evidence, not hosted access.
 
 `model probe` is a separate potentially paid operation. Choose a transport
 listed by `integration inspect` and invoke it explicitly; apply/restore never

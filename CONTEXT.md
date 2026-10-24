@@ -55,8 +55,8 @@ _Avoid_: Model alias, universal model ID, protocol-specific duplicate
 
 **Qualified model name**:
 The exact `provider-id/model-id` reference to a local provider instance and its
-model offering, independent of wire protocol. It is not a catalog ID, proxy alias, or upstream URL.
-_Avoid_: Display label, catalog model ID, proxy model ID
+model offering, independent of wire protocol. It is not a catalog ID, gateway alias, or upstream URL.
+_Avoid_: Display label, catalog model ID, gateway model ID
 
 **Effective priority**:
 A model offering's preference score at a particular instant, after applying
@@ -91,7 +91,7 @@ _Avoid_: Agent target, built-in tmax assistant
 
 **Agent provider**:
 A named provider entry in an agent target's native configuration. It connects to
-one configured upstream provider or to the tmax proxy. Several entries can coexist
+one configured upstream provider or to the tmax gateway. Several entries can coexist
 where the agent supports them; they are not separate upstream accounts.
 _Avoid_: Provider account, target operating mode
 
@@ -100,16 +100,16 @@ The application and native scope responsible for a provider's sign-in session
 and its refresh: tmax where supported, or an explicitly selected Agent target.
 _Avoid_: Account owner, permission role, credential import
 
-**Model proxy**:
+**Gateway**:
 The local service that forwards requests for concrete models or model aliases using
 the selected upstream provider. It can serve clients without managing their
 native configuration.
-_Avoid_: Agent operating mode, permission-management service
+_Avoid_: Proxy, model proxy, agent operating mode, permission-management service
 
 **Model alias**:
 A user-defined request model ID within a native protocol, mapped explicitly to
 one or more concrete offerings. Names such as L0 and L1 have no built-in meaning;
-an alias names access through the proxy, not a new model or identical weights.
+an alias names access through the gateway, not a new model or identical weights.
 _Avoid_: Virtual model, provider alias, separately managed account pool
 
 **Observed usage**:

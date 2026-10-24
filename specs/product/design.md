@@ -10,7 +10,7 @@ own exceptional service behavior and provider evidence.
 
 The confirmed choices are a local personal tool, CLI-first access from any calling
 agent, a supplementary local Web interface, subscription information, and
-same-protocol proxy forwarding. Payment operations and protocol translation are
+same-protocol gateway forwarding. Payment operations and protocol translation are
 excluded. The calling agent chooses and composes operations; tmax does not embed
 an assistant or an approval/workflow system.
 
@@ -22,7 +22,7 @@ an assistant or an approval/workflow system.
 | Configuration must not become a task for the caller | Require a complete TOML proposal for every change | Explicit CLI operations cover every setting; TOML remains an internal persistence format, not required authored input |
 | Saving desired settings differs from changing running agents | Watch every file or maintain per-field pending layers | Reload and executed management edits activate the whole valid file, including pending manual changes; native application remains separate |
 | Provider setup should not reconstruct another tool's state | Import providers and credentials from existing agents | Create providers from selected metadata or explicit custom settings; inspect agents only to configure them safely |
-| Agent configuration and inference forwarding are independent | Give each target a direct/proxy mode | Native provider entries refer to upstream access or the tmax proxy; one target can contain both, and the proxy needs no managed target |
+| Agent configuration and inference forwarding are independent | Give each target a direct/gateway mode | Native provider entries refer to upstream access or the tmax gateway; one target can contain both, and the gateway needs no managed target |
 | Consumers need fixed or multi-offering model access | Require a route for every concrete model or add a separate account pool | Concrete offerings map directly; model aliases list explicit qualified offerings selected with existing priority rules |
 | Multiple agents need predictable model choices | Infer candidate groups from alias names or add per-agent priority overrides | Share offering priorities and protocol-qualified model aliases; each user-defined alias explicitly names its candidates |
 | Equal-priority subscriptions should have predictable use | Rotate or balance every new request | Deterministic primary/standby selection; new sessions may use another eligible candidate without moving established ones |
@@ -38,11 +38,11 @@ an assistant or an approval/workflow system.
 | Quota/reset conditions must compose with existing calendars | Add an expression language or silently sum adjustments | Named ordered signal rules replace the score before the existing calendar fallback; keep finite typed predicates |
 | Rule evidence can come from a source or the user's agent | Merge conflicting values or infer trust from timestamps | One explicitly selected source per scoped input; source changes invalidate current facts |
 | Facts change while requests run | Fetch evidence on the inference path or create a scheduler service | Explicit refresh plus opt-in acquisition in the existing local service; admission reads a coherent fact snapshot |
-| Proxy lifetime must not follow an open browser | Couple inference to the UI or enable autostart implicitly | Explicit startup runs in the background; login autostart is opt-in and depends on secure credential availability |
+| Gateway lifetime must not follow an open browser | Couple inference to the UI or enable autostart implicitly | Explicit startup runs in the background; login autostart is opt-in and depends on secure credential availability |
 | Web is a local visual CLI | Add management accounts, pairing, or browser sessions | No Web authentication; trust local processes, retain loopback binding and browser-origin protections, and exclude remote publication |
 | Removing an object can strand its consumers | Cascade-delete references or choose replacement models | Reject unresolved references; explicit edits and existing restore operations keep changes understandable |
-| Stopping a proxy can interrupt paid work | Add a drain scheduler and automatic timeout | Refuse normal stop while requests are active; explicit force-stop reports interruption without replay |
-| One person uses several local clients | Register clients and assign keys or model permissions | One shared proxy key and a model list derived from enabled definitions; native picker choices are not permissions |
+| Stopping a gateway can interrupt paid work | Add a drain scheduler and automatic timeout | Refuse normal stop while requests are active; explicit force-stop reports interruption without replay |
+| One person uses several local clients | Register clients and assign keys or model permissions | One shared gateway key and a model list derived from enabled definitions; native picker choices are not permissions |
 | Provider consoles expose unrelated billing controls | Mirror their wallets, budgets, and plan-management screens | Keep access management and scoped observations; link to the console for supplier-owned controls |
 | First use crosses several operations | Persist onboarding progress or infer a task plan | Help exposes capabilities and current facts; the calling agent chooses explicit operations without a workflow record |
 | Callers need to inspect effects before acting | Require cross-command confirmation tokens and persisted plans | Optional same-command dry runs have no effects; normal calls execute against current state without prior approval artifacts |
@@ -54,7 +54,7 @@ an assistant or an approval/workflow system.
 | Direct edits should not repair unrelated OS integration | Update autostart on every save/reload | Update registration when startup intent changes or an explicit control runs; report unrelated drift without blocking edits |
 | Different assistants and working directories invoke tmax | Select or search a different configuration for each caller | One personal `~/.tmax` home and authority; caller identity is not native target identity |
 | Results feed subsequent operations | Require prose parsing or return all internal state on every call | Compact JSON identifies changes and their effect; detail reads expose evidence, and failures retain completed changes and recovery |
-| Native login sources are needed before model setup | Require complete model selections in a joint configuration document | Register the existing target with incomplete selections; block incomplete native application, not source registration or standalone proxy use |
+| Native login sources are needed before model setup | Require complete model selections in a joint configuration document | Register the existing target with incomplete selections; block incomplete native application, not source registration or standalone gateway use |
 | Local demand can exceed capacity | Queue requests or retry another provider | Apply [bounded admission](spec.md#local-request-admission); callers own retry decisions |
 | Reasoning can remain silent while a connection or refresh can stall | One timeout for every stage | Separate [connection/credential deadlines](spec.md#transport-deadlines) from inference lifetime |
 | One provider serves several native protocols | Treat one catalog URL as every protocol's base or split credentials across providers | Share [integration endpoint resolution](../integrations/spec.md#endpoint-resolution); custom bases are explicit per protocol |
@@ -69,7 +69,7 @@ an assistant or an approval/workflow system.
 The management plane owns provider instances, concrete model settings, model
 aliases, agent configuration, and change application. Authentication and billing
 belong to each upstream provider. CLI and Web share operations and validation.
-Agent configuration and proxy forwarding work independently or together.
+Agent configuration and gateway forwarding work independently or together.
 
 ```mermaid
 flowchart TB
@@ -78,37 +78,37 @@ flowchart TB
     Model["Concrete models<br/>Priority and rules"]
     Alias["Model aliases<br/>Candidates and continuity"]
     Agent["Agent target<br/>Named native provider entries"]
-    Proxy["Local model proxy<br/>Shared key and derived model list"]
+    Gateway["Local model gateway<br/>Shared key and derived model list"]
     Client["Independently configured client"]
     Provider -.->|Metadata defaults| Catalog
     Provider -->|Owns| Model
     Alias -->|Selects from| Model
     Agent -->|Upstream entry| Provider
-    Agent -->|Proxy entry| Proxy
-    Client -->|Requests| Proxy
-    Proxy -->|Fixed destination| Model
-    Proxy -->|Selected destination| Alias
+    Agent -->|Gateway entry| Gateway
+    Client -->|Requests| Gateway
+    Gateway -->|Fixed destination| Model
+    Gateway -->|Selected destination| Alias
 ```
 
 An agent's native provider entries and model choices are its configuration,
 not upstream accounts or permission grants. Preview, apply, conflict detection,
 and restoration act on that configuration. Removing a managed target does not
-remove the proxy or revoke its shared key.
+remove the gateway or revoke its shared key.
 
 Base priorities, time schedules, and signal rules belong to concrete offerings,
 not separate policy resources. Each model alias has a nonempty list of unique,
 registered qualified candidates. IDs such as L0, L1, or coding carry no selection
 semantics; only the explicit list defines membership. Concrete configuration and
-proxy mappings require no model alias or duplicated route definition. The contract
+gateway mappings require no model alias or duplicated route definition. The contract
 is in [Model selection](../model-routing/spec.md).
 
-The local service owns the Web interface and the optional proxy listener. CLI-only
+The local service owns the Web interface and the optional gateway listener. CLI-only
 configuration operations also work without a resident service. Both paths share
 the authoritative text configuration and serialize mutations of the same targets.
 Current-user-restricted secret files and runtime records are not competing
 configuration authorities. The [product contract](spec.md#configuration-authority)
-owns the manual-edit and read-only agent-inspection boundaries. Proxy startup and
-lifetime follow the [model-proxy contract](spec.md#model-proxy), independently of Web interactions.
+owns the manual-edit and read-only agent-inspection boundaries. Gateway startup and
+lifetime follow the [model-gateway contract](spec.md#model-proxy), independently of Web interactions.
 
 The [configuration contract](../configuration/spec.md) owns TOML field syntax and
 activation semantics. The service evaluates an immutable validated snapshot with
@@ -196,7 +196,7 @@ to copy its configuration schema or assume all Agents use the same syntax.
 ## Provider selection
 
 Concrete agent settings select a qualified offering and therefore one provider
-instance. Proxy access can use that same fixed offering through a derived mapping,
+instance. Gateway access can use that same fixed offering through a derived mapping,
 or a model alias that selects among qualified offerings. There is no later account
 selector. To group two OpenCode Go subscriptions and official DeepSeek under one
 alias ID, explicitly list each provider/model pair; matching names are not enough.
@@ -223,9 +223,9 @@ An unavailable pinned provider cannot fall through to another instance.
 
 ## Authentication and secret ownership
 
-| Credential path | Native upstream entry | Proxy forwarding |
+| Credential path | Native upstream entry | Gateway forwarding |
 | --- | --- | --- |
-| Provider API key | Supported secret reference or explicit native-store handoff | Proxy resolves the selected provider's key; the agent receives only a local proxy credential |
+| Provider API key | Supported secret reference or explicit native-store handoff | Gateway resolves the selected provider's key; the agent receives only a local gateway credential |
 | Native-agent login session | Native agent signs in and refreshes its session | Allowed only with a qualified native gateway contract; local authentication is separate from the forwarded upstream session |
 | tmax-owned login session | Only with an explicit supported handoff that leaves one refresh owner | tmax owns login and refresh when that provider authorizes such a client flow |
 
@@ -296,17 +296,19 @@ three-way comparison of prior values, tmax-applied values, and current values.
 An edit to a managed field after application is a conflict, not permission to
 replace the whole file with an old backup.
 
-Before applying any native proxy entry, require an explicitly started and ready
+Before applying any native gateway entry, require an explicitly started and ready
 listener. Upstream entries check prerequisites without starting inference or
 issuing a paid probe. Saving either kind does not apply native files.
 None of these operations kills a conversation or revokes a native session as an
 incidental step.
 
-## Proxy forwarding contract
+<a id="proxy-forwarding-contract"></a>
+
+## Gateway forwarding contract
 
 The initial protocol families are OpenAI Responses, OpenAI Chat Completions, and
 Anthropic Messages. Additional provider-native protocols require a separate
-explicit support contract. The proxy must not claim support for every protocol
+explicit support contract. The gateway must not claim support for every protocol
 that an agent or provider happens to implement.
 
 The shared integration contract owns [endpoint resolution](../integrations/spec.md#endpoint-resolution)
@@ -323,7 +325,7 @@ their priorities under one snapshot; concrete access stays fixed. Established
 conversations retain their selection, and in-flight execution never changes at
 a time boundary. Request handling never creates management configuration.
 
-The proxy forwards provider-native payloads. It may resolve an alias, use a
+The gateway forwards provider-native payloads. It may resolve an alias, use a
 configured upstream path, and perform the documented authentication/header
 handoff. It must preserve native tool and stream structure rather than parse
 messages into a universal intermediate conversation representation.
@@ -346,7 +348,7 @@ Changing an agent configuration's provider or upstream identity therefore requir
 a new conversation or a qualified agent-native reset. Where tmax cannot establish
 a safe continuation, it must block the switch rather than infer state ownership.
 
-Local proxy authentication is stripped before forwarding. Upstream secrets are
+Local gateway authentication is stripped before forwarding. Upstream secrets are
 attached only to the selected provider instance's configured destination. Neither
 an incoming model name nor an incoming header may choose an arbitrary upstream
 URL. Authenticated upstream calls use verified TLS, except an explicitly local
@@ -393,7 +395,7 @@ not serialized provider adapters, credential objects, raw errors, or payloads.
 
 Bounded in-memory request history is distinct from durable session bindings,
 applied-state recovery information, and provider quota observations. Clearing
-that history or restarting the proxy cannot release a destination or revoke
+that history or restarting the gateway cannot release a destination or revoke
 credentials. Retained-record aggregates describe only retained coverage, not
 an account-wide or lifetime bill. No disk request archive or body-capture mode
 is part of this design.

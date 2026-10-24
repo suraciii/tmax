@@ -2,12 +2,12 @@
 
 Run `tmax web open` to open the local workspace. It uses the same configuration
 and operations as the CLI. The browser does not require an account or start the
-inference proxy. The built binary includes all scripts, styles, and icons; the
+inference gateway. The built binary includes all scripts, styles, and icons; the
 page makes no external font, image, or script requests.
 
 ## Common tasks
 
-- **Overview** shows saved provider, model, and target counts, proxy state, and
+- **Overview** shows saved provider, model, and target counts, gateway state, and
   manually recorded renewal dates. Unknown quota is not zero quota. A recorded
   renewal date does not establish a billing outcome.
 - **Providers** groups independent instances by service. Search by name or ID.
@@ -20,19 +20,20 @@ page makes no external font, image, or script requests.
   and a native protocol. Restore name inheritance with the separate clear action;
   an explicit empty string remains different from an absent override.
 - **Coding tools** keeps Codex, pi, omp, OpenCode, and Hermes separate. Declare a
-  native target, add an upstream or proxy provider entry, select its models, then
+  native target, add an upstream or gateway provider entry, select its models, then
   choose its default. Saving these declarations does not write native files.
   Apply and restore remain separate explicit actions with optional previews.
-- **Proxy** shows the listener, shared-key state, and current-process request
+- **Gateway** shows the listener, shared-key state, and current-process request
   history. Configure, start, stop, and change login startup explicitly. Revealed
   keys disappear on hide, navigation, page exit, or switching away from the tab.
 
 The redesigned workspace uses Simplified Chinese labels and retains stable IDs,
 protocol names, and command names. It uses the same backend operations and local
-configuration as the CLI. Advanced operations expose the complete backend operation catalog.
+configuration as the CLI. Gateway is labeled 网关; literal `proxy` command and
+configuration names remain visible in technical details. Advanced operations
+expose the complete backend operation catalog.
 Credentials are separate password fields; browser storage is not used. Submission,
-including a preview or failed request, clears these fields. Previews send neither
-keys.
+including a preview or failed request, clears these fields. Previews do not send keys.
 
 Configuration forms capture the revision at opening. The backend catalog declares
 which commands support this guard; read operations and skill installation omit it. A conflicting edit must be
