@@ -45,7 +45,7 @@ async page => {
     await page.reload();
     await page.locator(`[data-action="agent-detail"][data-id="${target}"]`).click();
     await page.locator(`[data-action="agent-apply"][data-id="${target}"]`).waitFor();
-    assert('Native default can be retained', (await page.locator('#dialog-content').innerText()).includes('沿用 OpenCode 当前选择'));
+    assert('Native default can be retained', (await page.locator('#dialog-content').innerText()).includes('沿用工具当前选择'));
     assert('Default change is optional', (await page.locator('[data-action="agent-default"]').innerText()).includes('可选'));
     await page.locator('[data-action="agent-apply"]').click();
     assert('No target or revision fields to re-enter', await page.locator('#action-form input').count() === 0);
