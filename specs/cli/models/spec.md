@@ -26,6 +26,7 @@ saved fields. Use [common CLI rules](../spec.md),
 | Shared publication | Every shared-key holder sees the same list; no gateway-model CRUD, publishing/permission table, or automatic catalog enrollment. |
 | Compact list | Do not repeat metadata, full evaluations, or inspect argv per row. |
 | Detailed concrete read | Expose [priority evaluations](rules/spec.md#priority-evaluation-data) once per offering, not per protocol. |
+| Native reasoning projection | Concrete inspection includes `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the offering's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). This is desired capability mapping, not a default or evidence of native application. |
 
 Examples: `tmax model list --kind concrete`, `tmax model list --kind alias`,
 `tmax model inspect deepseek/deepseek-flash`,

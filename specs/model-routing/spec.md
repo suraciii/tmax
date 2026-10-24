@@ -135,7 +135,11 @@ Catalog `temperature = true` declares parameter support, not a numeric temperatu
 `reasoning_options` describes available controls, not a selected effort or mode.
 `limit.output` describes capacity, not a request output budget. Neither catalog
 metadata nor local metadata overrides choose, inject, cap, replace, or remove
-request values.
+request values. Capability projection writes the same control declarations into
+the native agent's own selector fields under the
+[shared agent boundary](../integrations/spec.md#agent-boundaries). It sets no
+default effort, level, budget, or thinking flag, and the native tool keeps
+ownership of thinking enablement, its defaults, and its request preferences.
 
 ### Fixed candidate reasoning effort
 
@@ -716,7 +720,13 @@ availability. Explicit detail and explanation reads expose metadata provenance,
 effective capabilities, base/effective priority, calendar fallback, and the
 [rule explanation](#rule-evaluation-and-explanation). Concrete inspection covers
 all supported native protocols unless explicitly filtered; inference and agent
-selection still require an explicit protocol. Alias inspection must resolve one
+selection still require an explicit protocol. It reports each agent's capability
+projection under `native_projection`, keyed by `pi`, `omp`, `opencode`, `codex`,
+and `hermes`. The `opencode` entry adds a `protocols` map keyed by the model's
+actual published protocols, each with the same projection shape, while its top
+level uses the first published protocol. The
+[agent result contract](../cli/agents/spec.md#agent-result-data)
+owns the projection shape and states. Alias inspection must resolve one
 configured protocol-qualified identity; an ambiguous ID requires a protocol.
 Alias inspection exposes its configured candidate-effort map. Explanations expose
 `candidate_reasoning_effort` for each evaluated candidate and the selected

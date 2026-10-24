@@ -33,8 +33,39 @@ use std::{
 };
 use zeroize::Zeroize;
 
-pub(crate) fn model_metadata(agent: &str, effective: &Value) -> Result<Value> {
-    adapters::model_metadata(agent, effective)
+pub(crate) fn model_metadata(agent: &str, protocol: &str, effective: &Value) -> Result<Value> {
+    adapters::model_metadata(agent, protocol, effective)
+}
+
+pub(crate) fn reasoning_projection(effective: &Value, protocols: &[String]) -> Value {
+    let view = |agent: &str, protocol: &str| {
+        adapters::projection_view(agent, protocol, effective).unwrap_or_else(|error| {
+            json!({"state":"blocked","reason_code":error.code,"message":error.message,"fields":{},"omitted":[]})
+        })
+    };
+    Value::Object(
+        ["pi", "omp", "opencode", "codex", "hermes"]
+            .into_iter()
+            .map(|agent| {
+                let mut projection = view(
+                    agent,
+                    protocols
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("chat-completions"),
+                );
+                if agent == "opencode" {
+                    projection["protocols"] = Value::Object(
+                        protocols
+                            .iter()
+                            .map(|protocol| (protocol.clone(), view(agent, protocol)))
+                            .collect(),
+                    );
+                }
+                (agent.to_owned(), projection)
+            })
+            .collect(),
+    )
 }
 
 const INDEX: &str = "native/recovery.json";
@@ -778,10 +809,14 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         blockers.push(json!({"code":"target_incomplete","message":"Select providers and models before applying; Codex also requires a default model"}));
     }
     let mut pending = None;
+    let mut native_projection = None;
     if available {
         let plan = match entries(store, config, id, target, &path, true).await {
-            Ok((entries, references)) => adapters::build(target, &path, &entries)
-                .and_then(|files| pending_native_changes(target, &files, &references, record)),
+            Ok((entries, references)) => {
+                native_projection = Some(projection_view(target, &entries));
+                adapters::build(target, &path, &entries)
+                    .and_then(|files| pending_native_changes(target, &files, &references, record))
+            }
             Err(error) => Err(error),
         };
         match plan {
@@ -811,8 +846,36 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"native_projection":native_projection,"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
+}
+
+fn projection_view(target: &AgentTarget, entries: &[Entry]) -> Vec<Value> {
+    entries
+        .iter()
+        .map(|entry| {
+            let source = target
+                .providers
+                .get(&entry.name)
+                .map(|binding| {
+                    if let Some(provider) = &binding.provider {
+                        json!({"provider":provider})
+                    } else {
+                        json!({"gateway":true})
+                    }
+                })
+                .unwrap_or(Value::Null);
+            json!({
+                "name":entry.name,
+                "source":source,
+                "models":entry.models.iter().map(|id|json!({
+                    "id":id,
+                    "protocol":entry.model_routes.get(id).map(|(protocol,_)|protocol.as_str()).unwrap_or(entry.protocol.as_str()),
+                    "projection":entry.model_projection.get(id).cloned().unwrap_or_else(||json!({"state":"unavailable","reason_code":"native_projection_unavailable","fields":{},"omitted":[]}))
+                })).collect::<Vec<_>>()
+            })
+        })
+        .collect()
 }
 
 async fn entries(
@@ -859,6 +922,7 @@ async fn entries(
         let mut canonical = None;
         let mut model_routes = BTreeMap::new();
         let mut model_metadata = BTreeMap::new();
+        let mut model_projection = BTreeMap::new();
         let (base, key_ref, login_provider) = if let Some(provider_id) = &binding.provider {
             let provider = config.providers.get(provider_id).ok_or_else(|| {
                 Error::new(
@@ -901,7 +965,19 @@ async fn entries(
                     )?;
                     model_metadata.insert(
                         selected.id.clone(),
-                        adapters::model_metadata(&target.agent, &projection["effective"])?,
+                        adapters::model_metadata(
+                            &target.agent,
+                            &selected.protocol,
+                            &projection["effective"],
+                        )?,
+                    );
+                    model_projection.insert(
+                        selected.id.clone(),
+                        adapters::projection_view(
+                            &target.agent,
+                            &selected.protocol,
+                            &projection["effective"],
+                        )?,
                     );
                 }
             }
@@ -967,11 +1043,21 @@ async fn entries(
             }
             for m in &binding.models {
                 requirements.assess_public(config, &m.id, &m.protocol)?;
-                if !config
+                if config
                     .model_aliases
                     .iter()
                     .any(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
                 {
+                    model_projection.insert(
+                        m.id.clone(),
+                        json!({
+                            "state": "alias",
+                            "reason_code": "alias_metadata_unavailable",
+                            "fields": {},
+                            "omitted": [],
+                        }),
+                    );
+                } else {
                     let (_, model_id) = config::qualified(&m.id)?;
                     let (p, model) = config::model(config, &m.id)?;
                     if !p.enabled
@@ -993,7 +1079,19 @@ async fn entries(
                         )?;
                         model_metadata.insert(
                             m.id.clone(),
-                            adapters::model_metadata(&target.agent, &projection["effective"])?,
+                            adapters::model_metadata(
+                                &target.agent,
+                                &m.protocol,
+                                &projection["effective"],
+                            )?,
+                        );
+                        model_projection.insert(
+                            m.id.clone(),
+                            adapters::projection_view(
+                                &target.agent,
+                                &m.protocol,
+                                &projection["effective"],
+                            )?,
                         );
                     }
                 }
@@ -1037,6 +1135,14 @@ async fn entries(
                 "The selected exact native provider namespace has saved authentication that can override this key reference; resolve it through the native owner or select an independent scope. Credential values were not materialized",
             ));
         }
+        if target.agent == "codex" {
+            for selected in &binding.models {
+                model_projection.insert(
+                    selected.id.clone(),
+                    adapters::projection_view(&target.agent, &selected.protocol, &Value::Null)?,
+                );
+            }
+        }
         let key = key_ref.inspect(|reference| {
             references.push(reference.clone());
         });
@@ -1051,6 +1157,7 @@ async fn entries(
             models: binding.models.iter().map(|m| m.id.clone()).collect(),
             model_routes,
             model_metadata,
+            model_projection,
         });
     }
     if (target.agent == "codex" && target.default.is_none()) || entries.is_empty() {
@@ -1457,7 +1564,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     }
     if dry_run {
         return Ok(
-            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":supported_roles(&target.agent),"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
+            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
         );
     }
     let installed = version(&target.agent, &path).await;

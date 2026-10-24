@@ -104,7 +104,7 @@ Help uses supported native roles, not invented ones.
 | --- | --- |
 | `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, `default_configured`, and desired/applied/effective condition. |
 | `agent discover [--agent AGENT]` | Supported installations/paths, versions, profiles, and compatibility without registration/import. |
-| `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, desired/applied/effective differences, blockers, and recovery. |
+| `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, native capability projection, desired/applied/effective differences, blockers, and recovery. |
 | `agent inspect --agent AGENT --path PATH` | Inspect an explicit undeclared native path without registration/import. |
 | `agent apply TARGET` | Apply current complete desired configuration; identify owned files, credential handoff, native reload, affected paths, and recovery. |
 | `agent restore TARGET` | Restore owned changes using the declared target's retained recovery. |
@@ -161,7 +161,23 @@ restoring native settings never revokes the shared key. Stop management with
 | `AgentProviderView` | `name`, `source` (`{provider: string}` or `{gateway: true}`), and exact `{id, protocol}` selections. |
 | Provider detail | Qualified requirements, readiness, native precedence/evidence, and desired/applied/effective differences; no mode, target credential, permission list, or target continuity field. |
 | `agent inspect` | `data.providers` contains entries; `data.default` and `data.roles` use `NativeModelRef`, with null default when absent. |
+| `native_projection` | `agent inspect` and `agent apply --dry-run` return one entry per native provider entry: `name`, `source` (`{provider: string}` or `{gateway: true}`), and `models` of `{id, protocol, projection}`. A `projection` has `state`, `reason_code`, `fields`, and `omitted`; a blocked projection adds `message`. `fields` carries only safe capability metadata and never secrets. |
 | Lists | Target/tool identities, counts, and readiness summaries instead of complete entries/evaluations; `default_configured` reports whether the target has a configured default. |
+
+Projection semantics follow the shared
+[capability mapping](../../integrations/spec.md#agent-boundaries) boundary.
+
+| Projection `state` | `reason_code` and meaning |
+| --- | --- |
+| `projected` | Null `reason_code`; `fields` carries the projected native capability fields. |
+| `partial` | `native_reasoning_options_partial`; `fields` carries the representable exact names and `omitted` lists the declared names the native schema cannot express. |
+| `not_supported` | `native_reasoning_options_unavailable`; the agent has no native reasoning-effort selector and `fields` is empty. |
+| `unavailable` | `reasoning_disabled` (explicit `reasoning = false`), `reasoning_options_unavailable` (no declared effort names), or `native_projection_unavailable` (no projection for this model); `fields` is empty. |
+| `alias` | `alias_metadata_unavailable`; the entry projects no candidate or current-winner metadata and `fields` is empty. |
+| `blocked` | `native_metadata_unrepresentable` with `message` explaining the unrepresentable capability; the error never fails inspection and blocks only that agent's application before native writes. |
+
+A null `native_projection` means planning failed or is unavailable; `blockers`
+remain authoritative.
 
 Native inspection reports `scope_state` separately from the saved target. When a
 declared path is absent or unusable, it retains the target and resolved `path`,

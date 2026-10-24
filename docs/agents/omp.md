@@ -106,7 +106,12 @@ Native `thinking.mode` accepts `effort`, `budget`, `google-level`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `efforts` (or the native legacy
 range fields) is required. `defaultLevel`, `effortMap`, `supportsDisplay`, and
 `requiresEffort` describe actual native controls. Do not synthesize a ladder
-from `reasoning: true`. Native compatibility keys are a curated per-API schema
+from `reasoning: true`. tmax projects effective `reasoning_options` effort values
+as `thinking` with `mode: "effort"` and `efforts` holding the exact declared
+names inside that vocabulary, as capability declarations. Names outside the
+vocabulary are never translated and stay visible as omitted. With no name inside
+the vocabulary, the ladder is unrepresentable and blocks application before
+native writes. The projection sets no `defaultLevel`, budget, or request value. Native compatibility keys are a curated per-API schema
 plus recognized runtime wire axes. Unknown compatibility keys warn nonfatally;
 preservation does not prove the API reads them. No guessed compatibility flags
 are needed for the basic provider example.

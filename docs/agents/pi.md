@@ -61,7 +61,13 @@ million tokens, with optional `tiers[]` adding `inputTokensAbove` plus those fou
 rates. Zero price is valid and is not unknown price. `promptCache.short/long`
 are optional positive seconds. `thinkingLevelMap` keys are `off`, `minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`, with string or null values. It is not permission
-to fabricate effort support from `reasoning: true`.
+to fabricate effort support from `reasoning: true`. tmax projects effective
+`reasoning_options` effort values into this map as capability declarations: every
+key is written explicitly, holding its exact declared name or null. Names outside
+the keys are never translated and stay visible as omitted. A declaration with no
+level besides `off` is unrepresentable and blocks application before native
+writes. The map declares selector capability and sets no default thinking level
+or request value.
 
 `inputLimits.maxRequestBytes`, `images.maxPerMessage`, and `images.maxPerRequest`
 are positive integers. `images.resize` accepts positive integer `maxWidth`,

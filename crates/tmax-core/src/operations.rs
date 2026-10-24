@@ -422,8 +422,13 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     if path == "model inspect" {
         let id = operand(r, 0)?;
         if let Ok((p, m)) = config::model(config, id) {
+            let metadata =
+                crate::catalog::effective(store, p, Some((config::qualified(id)?.1, m)))?;
+            let protocols = crate::integrations::protocols(p, config::qualified(id)?.1)?;
+            let native_projection =
+                crate::native::reasoning_projection(&metadata["effective"], &protocols);
             return Ok(
-                json!({"kind":"concrete","qualified_model":id,"configuration":m,"metadata":crate::catalog::effective(store,p,Some((config::qualified(id)?.1,m)))?,"protocols":crate::integrations::protocols(p,config::qualified(id)?.1)?,"revision":file.revision,"priority_evaluation":crate::routing::explain(store,config,id,arg(r,"protocol").unwrap_or("chat-completions"),None)?}),
+                json!({"kind":"concrete","qualified_model":id,"configuration":m,"metadata":metadata,"native_projection":native_projection,"protocols":protocols,"revision":file.revision,"priority_evaluation":crate::routing::explain(store,config,id,arg(r,"protocol").unwrap_or("chat-completions"),None)?}),
             );
         }
         let aliases: Vec<_> = config
