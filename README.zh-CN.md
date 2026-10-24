@@ -9,6 +9,22 @@
 - 通过本地同协议网关访问具体模型或自定义别名。原生配置和网关功能互相独立。
 - CLI 提供离线命令帮助，管理结果默认使用 JSON 格式。
 
+## 使用场景
+
+你可以这样向 agent 提出需求：
+
+### 多个账号共用一个模型名
+
+> 将我的两个 OpenCode Go 账号下的 `deepseek-v4.1-flash` 和官方 DeepSeek API 的 `deepseek-v4.1-flash` 都映射到同一个 `deepseek-v4.1-flash`，优先使用 OpenCode Go 里的 DeepSeek。
+
+### 根据峰谷定价切换默认模型
+
+> 根据模型供应商的峰谷定价，定时帮我切换 OpenCode 的默认模型：谷价时用 DeepSeek，峰价时切回我指定的另一个模型。
+
+### 为所有 agent 配置阶跃星辰模型
+
+> 帮我为所有 agent 配置阶跃星辰的 `step-5-preview`，这是 API key：`***`。
+
 ## 构建
 
 需要 Rust 1.88 或更新版本、C 工具链和 `just`。

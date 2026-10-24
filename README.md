@@ -13,6 +13,22 @@ local Web interface is also available.
   aliases. Native configuration and gateway forwarding are independent capabilities.
 - Use offline CLI help and JSON output for explicit management operations.
 
+## Usage scenarios
+
+Examples of requests to your agent:
+
+### One model name across accounts
+
+> Map `deepseek-v4.1-flash` from both my OpenCode Go accounts and the official DeepSeek API to the same model name, `deepseek-v4.1-flash`. Prefer DeepSeek through OpenCode Go.
+
+### Switch OpenCode’s default model based on provider pricing
+
+> Schedule OpenCode’s default model to switch with providers’ peak and off-peak pricing: use DeepSeek during off-peak hours and switch back to another model I specify during peak hours.
+
+### Configure StepFun for every agent
+
+> Configure every agent to use StepFun’s `step-5-preview`. My API key is: `***`.
+
 ## Build
 
 Build requirements: Rust 1.88 or newer, a C toolchain, and `just`.
