@@ -19,8 +19,13 @@ page makes no external font, image, or script requests.
   enabled state, and base priority. Alias forms select exact concrete candidates
   and a native protocol. Restore name inheritance with the separate clear action;
   an explicit empty string remains different from an absent override.
-- **Coding tools** keeps Codex, pi, omp, OpenCode, and Hermes separate. Declare a
-  native target, add an upstream or gateway provider entry, select its models, then
+- **Coding tools** keeps Codex, pi, omp, OpenCode, and Hermes separate. Adding a
+  configuration checks local directories and tool versions for the selected tool.
+  Select a found directory or enter a path manually; registered directories link
+  to their existing configuration. Discovery failure does not block manual entry.
+  Discovery does not import settings or credentials, and installation detection
+  does not establish compatibility. Saving opens the configuration details.
+  Add an upstream or gateway provider entry, select its models, then
   choose its default. Saving these declarations does not write native files.
   Apply and restore remain separate explicit actions with optional previews.
 - **Gateway** shows the listener, shared-key state, and current-process request
@@ -92,3 +97,9 @@ search, navigation, narrow layouts, credential-preview isolation, skill preview,
 and advanced reads. It performs no authentication, upstream
 inference, or native application. A failed cleanup must be investigated before
 rerunning. Browser snapshots belong outside the repository.
+
+The optional [`scripts/web_discovery_smoke.js`](../scripts/web_discovery_smoke.js)
+scenario controls discovery responses to verify directory selection, duplicate
+targets, missing installations, failures, delayed results, and the handoff to
+model configuration. It creates and removes one uniquely named target declaration;
+it never applies native files. Run it in the same dedicated browser session.

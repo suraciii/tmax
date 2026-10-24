@@ -153,7 +153,7 @@ function renderModelList() {
   $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'服务商'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):state.config.model_aliases.find(a=>a.id===m.id&&a.protocol===m.protocol);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${(m.published_protocols || []).map(p=>badge(protocolNames[p] || p)).join('') || badge('未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td>${button('管理',m.kind==='alias'?'alias-edit':'model-edit',m.kind==='alias'?JSON.stringify([m.id,m.protocol]):m.id,'small')}</td></tr>`;}).join('')}</tbody></table></div>`;
 }
 function renderAgents() {
-  $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',state.config.agents[t.target]?.default?.id || '尚未选择')}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}${button('发现本地安装','agent-discover',id,'text small')}</div></section>`;}).join('')}</div>`;
+  $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',state.config.agents[t.target]?.default?.id || '尚未选择')}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
 }
 function clearReveal() { revealGeneration++;const output=$('revealed'); if(output){output.textContent='';output.hidden=true;} }
 function renderGateway() {
@@ -212,8 +212,9 @@ function formDialog(title, description, fields, build, options={}) {
       if(generation!==state.dialogGeneration)return;
       presentResult(response,$('form-result'));
       if(!preview) await refresh();
+      if(generation!==state.dialogGeneration)return;
       const needsAttention=response.body.warnings?.length || response.body.data?.warnings?.length || ['failed','blocked','unavailable'].includes(response.body.data?.activation?.activation || response.body.data?.activation?.state);
-      if(isSuccess(response)&&!preview&&!options.stayOpen&&!needsAttention){$('dialog').close();toast(options.success || '设置已保存');}
+      if(isSuccess(response)&&!preview&&!options.stayOpen&&!needsAttention){toast(options.success || '设置已保存');if(options.onSaved)await options.onSaved(request,response);else $('dialog').close();}
       else if(isSuccess(response)&&!preview){$('action-form').dataset.saved='true';}
     } catch(error) {if(generation===state.dialogGeneration)$('form-result').innerHTML=notice(escapeHtml(error.message),'error');}
     finally {request=null;optionsForRequest.key=null;state.busy=false;if(generation===state.dialogGeneration)$('action-form')?.querySelectorAll('button').forEach(b=>{b.disabled=b.value==='save' && $('action-form').dataset.saved==='true';});}
@@ -398,9 +399,52 @@ function aliasForm(encoded='') {
   const update=()=>{$('candidates').innerHTML=models.length?models.map(m=>{const supported=m.published_protocols?.includes(value('protocol'));return `<label><input type="checkbox" name="candidate" value="${escapeHtml(m.id)}" ${current?.candidates.includes(m.id)?'checked':''} ${!supported&&!current?.candidates.includes(m.id)?'disabled':''}><span>${escapeHtml(m.id)}${!supported?'<small class="label-note">此模型未发布所选协议，保存时仍需通过完整校验</small>':''}</span></label>`;}).join(''):notice('还没有具体模型，请先添加模型。','warning');};
   $('f-protocol').addEventListener('change',update);update();
 }
+function nativePathKey(path) {
+  const text=String(path || '').replaceAll('\\','/').replace(/^\/\/\?\//,'').replace(/\/+$/,'');
+  return /^[a-z]:\//i.test(text) || text.startsWith('//')?text.toLowerCase():text;
+}
 function agentForm(agent='') {
-  formDialog('添加工具配置','登记一个本地安装或配置目录。此操作只保存管理信息，不修改工具文件。',
-    field('agent','编程工具',agent || 'codex',{required:true,options:agentTypes.map(a=>[a[0],a[1]])})+field('target','配置名称','',{required:true,placeholder:'例如：codex-main'})+field('path','原生配置路径','',{required:true,placeholder:'填写该工具的配置目录或适配器支持的文件路径',help:'可先在工具卡片中“发现本地安装”，查看实际路径。'}),()=>({operation:'agent add',operands:[value('target').trim()],args:{agent:[value('agent')],path:[value('path').trim()]}}));
+  let suggested='';
+  const suggest=kind=>{let id=kind+'-main',n=2;while(Object.hasOwn(state.config.agents,id))id=kind+'-'+n++;return id;};
+  const registered=(kind,path)=>(state.agents || []).find(t=>t.agent===kind && nativePathKey(t.path)===nativePathKey(path));
+  const generation=formDialog('添加工具配置','选择编程工具和配置目录，保存后继续选择模型。此处只登记配置；应用到工具时才会修改文件。',
+    field('agent','编程工具',agent || 'codex',{required:true,options:agentTypes.map(a=>[a[0],a[1]])})+
+    '<section class="tool-discovery" aria-label="本地配置检测"><div class="actions"><h3 class="grow">本地配置目录</h3><button type="button" class="btn text small" id="agent-rescan">重新检测</button></div><div id="agent-discovery" aria-live="polite"></div></section>'+
+    field('path','配置目录','',{required:true,placeholder:'选择检测结果，或直接填写配置目录',help:'使用其他目录时可直接填写。相对路径以 tmax 配置目录为基准。'})+
+    field('target','配置名称','',{required:true,placeholder:'例如：codex-main',help:'用于区分同一个工具的不同配置，可自行修改。'}),()=>{
+      const duplicate=registered(value('agent'),value('path').trim());
+      if(duplicate)throw Error('此目录已添加为“'+duplicate.target+'”，请打开已有配置。');
+      return {operation:'agent add',operands:[value('target').trim()],args:{agent:[value('agent')],path:[value('path').trim()]}};
+    },{submit:'保存并配置模型',success:'工具配置已保存，接下来选择模型来源。',onSaved:request=>agentDetail(request.operands[0])});
+  let scan=0;
+  const current=()=>generation===state.dialogGeneration && $('dialog').open;
+  async function discover() {
+    const sequence=++scan,kind=value('agent');
+    $('agent-rescan').disabled=true;
+    $('agent-discovery').innerHTML='<p class="muted" role="status">正在检查本机配置目录和工具版本…你也可以直接填写目录。</p>';
+    try {
+      const result=await read('agent discover',[],{agent:[kind]});
+      if(!current() || sequence!==scan)return;
+      const found=result.installations?.find(item=>item.agent===kind);
+      if(!found)throw Error('未收到此工具的检测结果。');
+      const installation=found.installation || {};
+      const candidates=[...(found.scope_state==='available'?[{path:found.path,label:'当前配置目录'}]:[]),...(found.profiles || []).map(path=>({path,label:'其他配置目录'}))].filter((item,index,all)=>all.findIndex(other=>nativePathKey(other.path)===nativePathKey(item.path))===index);
+      const version=installation.version?'检测到版本 '+installation.version:'未获取到工具版本';
+      const advice=installation.state==='not_installed'?'未在本机命令路径中找到可运行的工具。可以先登记目录，安装并检查版本后再应用配置。':installation.compatibility==='documented'?'此版本的配置格式已适配；实际使用需在应用后验证。':`当前版本的配置适配尚未验证${installation.qualified_version?'，已验证版本为 '+installation.qualified_version:''}。可以先登记目录，应用前需检查兼容性。`;
+      $('agent-discovery').innerHTML=`<p class="muted">${escapeHtml(version)}</p><p class="muted">${escapeHtml(advice)}</p>`+
+        (candidates.length?candidates.map((item,index)=>{
+          const saved=registered(kind,item.path);
+          return `<div class="discovery-candidate"><div class="grow"><strong>${escapeHtml(item.label)}</strong>${saved?badge('已添加'):''}<p class="mono">${escapeHtml(item.path)}</p>${saved?`<p class="muted">${escapeHtml(saved.target)}</p>`:''}</div>${saved?button('打开配置','agent-detail',saved.target,'small soft'):`<button type="button" class="btn small soft" data-discovered-path="${index}">使用此目录</button>`}</div>`;
+        }).join(''):`<p class="discovery-empty">未找到可用配置目录。请先启动一次该工具，或在下方填写实际目录。</p>${found.path?`<p class="muted mono">已检查：${escapeHtml(found.path)}</p>`:''}`)+detail(result,'查看检测详情');
+      $('agent-discovery').querySelectorAll('[data-discovered-path]').forEach(control=>{control.onclick=()=>{$('f-path').value=candidates[Number(control.dataset.discoveredPath)].path;$('f-target').focus();};});
+    } catch(error) {
+      if(current() && sequence===scan)$('agent-discovery').innerHTML=notice('检测未完成，可以重新检测或在下方手动填写目录。'+detail(error.message,'查看原因'),'warning');
+    } finally {if(current() && sequence===scan)$('agent-rescan').disabled=false;}
+  }
+  const changeAgent=()=>{if(!value('target') || value('target')===suggested){suggested=suggest(value('agent'));$('f-target').value=suggested;}$('f-path').value='';discover();};
+  $('f-agent').onchange=changeAgent;
+  $('agent-rescan').onclick=discover;
+  changeAgent();
 }
 async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
@@ -548,7 +592,7 @@ async function dispatch(action,id) {
     case 'alias-remove': {const [name,protocol]=JSON.parse(id);openOperation('model alias remove',[name],{protocol:[protocol]});break;}
     case 'alias-explain': {const [name,protocol]=JSON.parse(id);openOperation('model explain',[name],{protocol:[protocol]});break;}
     case 'agent-add': agentForm(id);break;
-    case 'agent-discover': openOperation('agent discover',[],{agent:[id]});break;
+    case 'agent-discover': agentForm(id);break;
     case 'agent-detail': await agentDetail(id);break;
     case 'agent-source': agentSource(id);break;
     case 'agent-model': agentModel(id);break;
