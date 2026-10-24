@@ -69,13 +69,13 @@ pub fn command() -> Command {
     Command::new("tmax")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Manage your model-provider access, coding-agent settings, and local model proxy.")
-        .long_about("tmax manages provider access, subscriptions, model choices, native coding-agent configuration, and a local model proxy. It is CLI-first: compose explicit operations from offline help; no assistant, wizard, or configuration document is required. The supplementary local Web interface uses the same operations.")
+        .long_about("tmax manages provider access, subscriptions, model choices, native coding-agent configuration, and a local model proxy. It is CLI-first: compose explicit operations from offline help; no assistant, wizard, or configuration document is required. The supplementary local Web interface uses the same operations. Ordinary desired-state saves succeed after persistence and required safety work; background activation failures remain explicit warnings, not failed saves. Explicit reload, lifecycle, revocation, native and requested startup failures remain nonzero.")
         .subcommand_required(true)
         .disable_help_subcommand(true)
         .arg(global_value("format", "FORMAT", "Output format: json (default) or text.").value_parser(["json", "text"]).default_value("json"))
         .arg(global_flag("non-interactive", "Never prompt, open sign-in, or wait for terminal input."))
         .arg(global_flag("unlock-stdin", "Read a protected-store unlock value from stdin only if execution requires it.").conflicts_with("unlock-fd"))
-        .arg(global_value("unlock-fd", "FD", "Read protected-store unlock input from a qualified inherited readable pipe.").conflicts_with("unlock-stdin"))
+        .arg(global_value("unlock-fd", "FD", "Read protected unlock from an inherited readable pipe: Unix descriptor or Windows native handle; zero selects stdin. Ordinary interactive use prompts invisibly.").conflicts_with("unlock-stdin"))
         .subcommand(help_command())
         .subcommand(status_command())
         .subcommand(config_commands())
@@ -324,7 +324,7 @@ fn provider_commands() -> Command {
             leaf_with_fields(
                 "add",
                 "Create one independently managed provider instance.",
-                "Select catalog metadata or an explicit supported integration. Provider creation may remain incomplete and unauthenticated. --metadata, --integration, --region and repeated --endpoint are explicit selectors; do not set the same field through --set.\n\nExit: 0 when saved; 2 for invalid schema/duplicate ID; 3 for action-required qualification; 4 for partial save/activation.\nExample: tmax provider add custom-gateway --integration custom --endpoint chat-completions https://gateway.example/openai/v1",
+                "Select catalog metadata or an explicit supported integration. Provider creation may remain incomplete and unauthenticated. --metadata, --integration, --region and repeated --endpoint are explicit selectors; do not set the same field through --set.\n\nExit: 0 when saved; 2 for invalid schema/duplicate ID; 3 for action-required qualification; 4 for persistence or required safety/startup failure.\nExample: tmax provider add custom-gateway --integration custom --endpoint chat-completions https://gateway.example/openai/v1",
                 add_fields,
             ),
             add_fields,
@@ -343,7 +343,7 @@ fn provider_commands() -> Command {
             leaf_with_fields(
                 "update",
                 "Edit selected provider settings without replacing unrelated fields.",
-                "At least one change is required. --endpoint P URL replaces exactly one protocol base; --clear-endpoint P removes only that base. Region, endpoint, integration, and scalar edits are validated together.\n\nExit: 0 when saved; 2 for invalid schema; 4 for save/activation failure.",
+                "At least one change is required. --endpoint P URL replaces exactly one protocol base; --clear-endpoint P removes only that base. Region, endpoint, integration, and scalar edits are validated together.\n\nExit: 0 when saved; 2 for invalid schema; 4 for persistence or required safety/startup failure.",
                 add_fields,
             ),
             add_fields,
@@ -357,16 +357,16 @@ fn provider_commands() -> Command {
     );
     let auth = Command::new("auth")
         .about("Set or clear provider login authentication declaratively.")
-        .subcommand(mutation(leaf("set", "Replace provider authentication with explicit login-source configuration.", "Requires --method login and explicit --via SOURCE. This is declarative configuration only: it does not sign in or import native credentials. Omitted --session-ref removes the previous reference.\n\nExit: 0 when saved; 2 for invalid source/method; 3 for qualified action-required blockers; 4 for save/activation failure.\nExample: tmax provider auth set deepseek --method login --via pi-main")
+        .subcommand(mutation(leaf("set", "Replace provider authentication with explicit login-source configuration.", "Requires --method login and explicit --via SOURCE. This is declarative configuration only: it does not sign in or import native credentials. Omitted --session-ref removes the previous reference.\n\nExit: 0 when saved; 2 for invalid source/method; 3 for qualified action-required blockers; 4 for persistence or required safety/startup failure.\nExample: tmax provider auth set deepseek --method login --via pi-main")
             .arg(value("method", "METHOD", "Currently login; must be explicit.").value_parser(["login"]).required(true))
             .arg(value("via", "SOURCE", "Qualified login source: tmax or a declared target.").required(true))
             .arg(value("session-ref", "REF", "Optional opaque source-scoped session reference."))
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true))
-        .subcommand(mutation(leaf("clear", "Remove active provider authentication configuration.", "Does not delete stored keys, sign out native sessions, revoke upstream access, or remove subscription declarations.\n\nExit: 0 when saved; 3 for reference blockers; 4 for save/activation failure.\nExample: tmax provider auth clear deepseek")
+        .subcommand(mutation(leaf("clear", "Remove active provider authentication configuration.", "Does not delete stored keys, sign out native sessions, revoke upstream access, or remove subscription declarations.\n\nExit: 0 when saved; 3 for reference blockers; 4 for persistence or required safety/startup failure.\nExample: tmax provider auth clear deepseek")
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true));
     let key = Command::new("key")
         .about("Configure provider API-key authentication through protected input or a qualified reference.")
-        .subcommand(mutation(leaf("set", "Set or replace provider API-key authentication.", "Supply either --key-stdin, --key-ref REF, or hidden terminal input. --key-stdin reads one nonempty UTF-8 line without echo. Noninteractive entry requires explicit --key-stdin; never consume a pipe implicitly. Key input cannot share stdin with --unlock-stdin. Secrets are never accepted in argv/environment/files and are never printed.\n\nDry-run reads no stream, prompts, unlocks, or references. A key replacement removes prior auth fields but retains old stored secrets.\nExit: 0 when credential and requested save complete; 3 when protected input/unlock is required; 4 for partial credential/save/activation failure.\nExample: tmax provider key set deepseek --key-stdin --non-interactive")
+        .subcommand(mutation(leaf("set", "Set or replace provider API-key authentication.", "Supply either --key-stdin, --key-ref REF, or hidden terminal input. --key-stdin reads one nonempty UTF-8 line without echo. Noninteractive entry requires explicit --key-stdin; never consume a pipe implicitly. Key input cannot share stdin with --unlock-stdin. Secrets are never accepted in argv/environment/files and are never printed.\n\nDry-run reads no stream, prompts, unlocks, or references. A key replacement removes prior auth fields but retains old stored secrets.\nExit: 0 when credential and requested save complete; 3 when protected input/unlock is required; 4 for credential, persistence, or required safety/startup failure.\nExample: tmax provider key set deepseek --key-stdin --non-interactive")
             .arg(flag("key-stdin", "Read one key line explicitly from stdin.").conflicts_with("key-ref"))
             .arg(value("key-ref", "REF", "Select a qualified provider-owned secret reference without resolving it.").conflicts_with("key-stdin"))
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true));
@@ -386,10 +386,10 @@ fn provider_commands() -> Command {
         .subcommand(refresh)
         .subcommand(add)
         .subcommand(update)
-        .subcommand(mutation(leaf("rename", "Rename a provider ID and migrate all dependent qualified references in one change.", "Reject collisions and preserve provider identity. No compatibility alias, automatic session retarget, or remove/add inference.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for save/activation failure.\nExample: tmax provider rename deepseek deepseek-main")
+        .subcommand(mutation(leaf("rename", "Rename a provider ID and migrate all dependent qualified references in one change.", "Reject collisions and preserve provider identity. No compatibility alias, automatic session retarget, or remove/add inference.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax provider rename deepseek deepseek-main")
             .arg(required_pos(1, "OLD", "Current local provider ID."))
             .arg(required_pos(2, "NEW", "New unique local provider ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove one provider after explicit reference resolution.", "Rejects unresolved provider/model/alias/login-source references and reports them; no cascade, replacement choice, native-file deletion, secret cleanup, sign-out, or subscription cancellation. Reports retained secrets, affected targets, and direct consumers that may continue outside tmax.\n\nExit: 0 when saved; 2 for unresolved references; 4 for save/activation failure.\nExample: tmax provider remove deepseek")
+        .subcommand(mutation(leaf("remove", "Remove one provider after explicit reference resolution.", "Rejects unresolved provider/model/alias/login-source references and reports them; no cascade, replacement choice, native-file deletion, secret cleanup, sign-out, or subscription cancellation. Reports retained secrets, affected targets, and direct consumers that may continue outside tmax.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax provider remove deepseek")
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true))
         .subcommand(key)
         .subcommand(auth)
@@ -443,7 +443,7 @@ fn provider_input_commands() -> Command {
             .arg(required_pos(2, "INPUT", "Exact input name."))))
         .subcommand(add)
         .subcommand(replace)
-        .subcommand(mutation(leaf("remove", "Remove one input declaration after rule-reference checks.", "Does not delete rules, fetch data, or change source credentials; remove dependent rules first.\n\nExit: 0 when saved; 2 for unresolved references; 4 for save/activation failure.\nExample: tmax provider input remove opencode-go weekly-allowance")
+        .subcommand(mutation(leaf("remove", "Remove one input declaration after rule-reference checks.", "Does not delete rules, fetch data, or change source credentials; remove dependent rules first.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax provider input remove opencode-go weekly-allowance")
             .arg(required_pos(1, "PROVIDER", "Declared provider ID."))
             .arg(required_pos(2, "INPUT", "Exact input name.")), true, true))
         .subcommand(mutation(leaf("refresh", "Acquire and conditionally publish one declared nonmanual input.", "Uses the saved declaration. Does not edit/activate configuration or start services. Refresh is nonmanual-only; record is manual-only. Dry-run makes no network call, consumes no input, and creates no attempt/revision. Automatic acquisition is opt-in and only runs within an already-running service.\n\nExit: 0 for successful publication/withdrawal; 3 for qualification/credential/in-flight blockers; 4 for transport, parse, or persistence failure.\nExample: tmax provider input refresh opencode-go reset-announcement --dry-run")
@@ -483,7 +483,7 @@ fn catalog_commands() -> Command {
             .arg(value("model", "MODEL-ID", "Optional exact catalog model ID."))
             .arg(required_pos(1, "CATALOG-ID", "Exact catalog-provider ID."))))
         .subcommand(mutation(leaf("refresh", "Download and validate catalog metadata without credentials.", "Preserves accepted metadata; does not apply or activate a downloaded snapshot. Dry-run describes the operation without fetching or writing.\n\nExit: 0 for a successful validated download; 3 for action-required network policy; 4 for download/validation failure.\nExample: tmax catalog refresh --dry-run"), true, false))
-        .subcommand(mutation(leaf("apply", "Apply exactly one retained validated catalog revision.", "--revision selects downloaded catalog data, not a file revision or operation reservation. Never refreshes implicitly. Reports affected providers/models/targets and saved/loaded activation impact.\n\nExit: 0 when applied; 3 for required current action; 4 for save/activation failure.\nExample: tmax catalog apply --revision CATALOG-REVISION --dry-run")
+        .subcommand(mutation(leaf("apply", "Apply exactly one retained validated catalog revision.", "--revision selects downloaded catalog data, not a file revision or operation reservation. Never refreshes implicitly. Reports affected providers/models/targets and saved/loaded activation impact.\n\nExit: 0 when applied; 3 for required current action; 4 for persistence or required safety/startup failure.\nExample: tmax catalog apply --revision CATALOG-REVISION --dry-run")
             .arg(value("revision", "REVISION", "Exact retained downloaded catalog revision.")), true, true))
         .subcommand_required(true)
 }
@@ -500,33 +500,33 @@ fn model_commands() -> Command {
     );
     let reasoning = Command::new("reasoning")
         .about("Manage local reasoning-option metadata arrays.")
-        .subcommand(mutation(leaf("add", "Append one local reasoning-option table.", "Requires --type STRING. Repeat --value STRING in order, or use --empty-values for an explicit empty values array. An absent override starts empty, not from catalog metadata.\n\nExit: 0 when saved; 2 for invalid metadata; 4 for save/activation failure.\nExample: tmax model reasoning add deepseek/deepseek-flash --type effort --empty-values")
+        .subcommand(mutation(leaf("add", "Append one local reasoning-option table.", "Requires --type STRING. Repeat --value STRING in order, or use --empty-values for an explicit empty values array. An absent override starts empty, not from catalog metadata.\n\nExit: 0 when saved; 2 for invalid metadata; 4 for persistence or required safety/startup failure.\nExample: tmax model reasoning add deepseek/deepseek-flash --type effort --empty-values")
             .arg(value("type", "STRING", "Required reasoning option type."))
             .arg(repeated("value", "STRING", "Optional value; repeat in order."))
             .arg(flag("empty-values", "Write an explicit empty values array; conflicts with --value."))
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true))
-        .subcommand(mutation(leaf("replace", "Replace one complete local reasoning-option table at its guarded file revision.", "Requires --if-revision REVISION and --type STRING. Omitted --value removes optional values; --empty-values writes values=[]. Missing index is an error.\n\nExit: 0 when saved; 2 for invalid metadata/index; 3 for revision conflict; 4 for save/activation failure.\nExample: tmax model reasoning replace deepseek/deepseek-flash 0 --if-revision REVISION --type effort")
+        .subcommand(mutation(leaf("replace", "Replace one complete local reasoning-option table at its guarded file revision.", "Requires --if-revision REVISION and --type STRING. Omitted --value removes optional values; --empty-values writes values=[]. Missing index is an error.\n\nExit: 0 when saved; 2 for invalid metadata/index; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model reasoning replace deepseek/deepseek-flash 0 --if-revision REVISION --type effort")
             .arg(value("if-revision", "REVISION", "Required exact current file revision.").required(true))
             .arg(value("type", "STRING", "Required reasoning option type."))
             .arg(repeated("value", "STRING", "Optional values in order."))
             .arg(flag("empty-values", "Write an explicit empty values array; conflicts with --value."))
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "INDEX", "Zero-based local array position.")), true, false))
-        .subcommand(mutation(leaf("remove", "Remove exactly one reasoning-option table at its guarded file revision.", "Removing the final entry leaves an explicit empty local array; clear the parent override to restore inheritance.\n\nExit: 0 when saved; 2 for invalid index; 3 for revision conflict; 4 for save/activation failure.\nExample: tmax model reasoning remove deepseek/deepseek-flash 0 --if-revision REVISION")
+        .subcommand(mutation(leaf("remove", "Remove exactly one reasoning-option table at its guarded file revision.", "Removing the final entry leaves an explicit empty local array; clear the parent override to restore inheritance.\n\nExit: 0 when saved; 2 for invalid index; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model reasoning remove deepseek/deepseek-flash 0 --if-revision REVISION")
             .arg(value("if-revision", "REVISION", "Required exact current file revision.").required(true))
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "INDEX", "Zero-based local array position.")), true, false))
-        .subcommand(mutation(leaf("clear", "Write an explicit empty local reasoning-options array.", "This differs from clearing overrides.reasoning_options, which restores catalog inheritance.\n\nExit: 0 when saved; 4 for save/activation failure.\nExample: tmax model reasoning clear deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("clear", "Write an explicit empty local reasoning-options array.", "This differs from clearing overrides.reasoning_options, which restores catalog inheritance.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax model reasoning clear deepseek/deepseek-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
     let schedule = Command::new("schedule")
         .about("Manage calendar priority schedules on concrete offerings.")
         .subcommand(schedule_rule("add", false))
         .subcommand(schedule_rule("replace", true))
-        .subcommand(mutation(leaf("remove", "Remove one schedule entry at its required file revision.", "INDEX is a zero-based local position; guard is required and must match the current file. A later write requires a fresh revision.\n\nExit: 0 when saved; 2 for invalid index; 3 for revision conflict; 4 for save/activation failure.\nExample: tmax model schedule remove deepseek/deepseek-flash 0 --if-revision REVISION")
+        .subcommand(mutation(leaf("remove", "Remove one schedule entry at its required file revision.", "INDEX is a zero-based local position; guard is required and must match the current file. A later write requires a fresh revision.\n\nExit: 0 when saved; 2 for invalid index; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule remove deepseek/deepseek-flash 0 --if-revision REVISION")
             .arg(value("if-revision", "REVISION", "Required exact current file revision.").required(true))
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "INDEX", "Zero-based schedule position.")), true, false))
-        .subcommand(mutation(leaf("clear", "Remove the offering's schedule, not its base priority.", "An empty schedule permits clearing the timezone when no other time gate needs it.\n\nExit: 0 when saved; 4 for save/activation failure.\nExample: tmax model schedule clear deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("clear", "Remove the offering's schedule, not its base priority.", "An empty schedule permits clearing the timezone when no other time gate needs it.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule clear deepseek/deepseek-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
     let rule = model_rule_commands();
     let alias = model_alias_commands();
@@ -548,7 +548,7 @@ fn model_commands() -> Command {
         .about("Manage structured model metadata overrides.")
         .subcommand(Command::new("list")
             .about("Replace one input or output modality list.")
-            .subcommand(mutation(leaf("replace", "Replace one local input/output modality list.", "FIELD is exactly overrides.modalities.input or overrides.modalities.output. Repeat --value STRING in order. Omitting --value writes an explicit empty list; model update --clear restores inheritance.\n\nExit: 0 when saved; 2 for unsupported field; 4 for save/activation failure.\nExample: tmax model override list replace deepseek/deepseek-flash overrides.modalities.input --value image")
+            .subcommand(mutation(leaf("replace", "Replace one local input/output modality list.", "FIELD is exactly overrides.modalities.input or overrides.modalities.output. Repeat --value STRING in order. Omitting --value writes an explicit empty list; model update --clear restores inheritance.\n\nExit: 0 when saved; 2 for unsupported field; 4 for persistence or required safety/startup failure.\nExample: tmax model override list replace deepseek/deepseek-flash overrides.modalities.input --value image")
                 .arg(repeated("value", "STRING", "List member; repeat in order. Omit for an explicit empty list."))
                 .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
                 .arg(required_pos(2, "FIELD", "overrides.modalities.input or overrides.modalities.output.")), true, true)))
@@ -579,10 +579,10 @@ fn model_commands() -> Command {
             ),
             model_fields,
         ))
-        .subcommand(mutation(leaf("rename", "Rename an upstream model-ID component and migrate dependent references.", "The provider component cannot change. Preserve internal offering identity; reject collisions and leave no aliases.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for save/activation failure.\nExample: tmax model rename deepseek/deepseek-flash deepseek-v4.1-flash")
+        .subcommand(mutation(leaf("rename", "Rename an upstream model-ID component and migrate dependent references.", "The provider component cannot change. Preserve internal offering identity; reject collisions and leave no aliases.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax model rename deepseek/deepseek-flash deepseek-v4.1-flash")
             .arg(required_pos(1, "QUALIFIED", "Current provider-id/model-id."))
             .arg(required_pos(2, "NEW-MODEL-ID", "New upstream model-ID component.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove one model registration after reference and input-coverage checks.", "Does not delete catalog metadata or another provider's offering. Resolve references explicitly; do not cascade or choose a replacement.\n\nExit: 0 when saved; 2 for unresolved references; 4 for save/activation failure.\nExample: tmax model remove deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("remove", "Remove one model registration after reference and input-coverage checks.", "Does not delete catalog metadata or another provider's offering. Resolve references explicitly; do not cascade or choose a replacement.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax model remove deepseek/deepseek-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true))
         .subcommand(override_commands)
         .subcommand(reasoning)
@@ -600,7 +600,7 @@ fn schedule_rule(name: &'static str, indexed: bool) -> Command {
     } else {
         "Append one complete calendar schedule entry."
     };
-    let detail = "Requires --priority INTEGER, one unique selector form (--weekday DAY repeated or --date DATE repeated), and one complete window (--all-day or both --start HH:MM --end HH:MM). DAYS: mon,tue,wed,thu,fri,sat,sun. Weekdays and dates cannot mix. Optional --effective-from DATE and --effective-until DATE use local dates with an exclusive upper bound. Set the model timezone first. Times and DST follow the model time-rule contract.\n\nExit: 0 when saved; 2 for invalid rule; 3 for revision conflict; 4 for save/activation failure.\nExample: tmax model schedule add deepseek/deepseek-flash --priority 100 --weekday mon --start 00:00 --end 08:00";
+    let detail = "Requires --priority INTEGER, one unique selector form (--weekday DAY repeated or --date DATE repeated), and one complete window (--all-day or both --start HH:MM --end HH:MM). DAYS: mon,tue,wed,thu,fri,sat,sun. Weekdays and dates cannot mix. Optional --effective-from DATE and --effective-until DATE use local dates with an exclusive upper bound. Set the model timezone first. Times and DST follow the model time-rule contract.\n\nExit: 0 when saved; 2 for invalid rule; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule add deepseek/deepseek-flash --priority 100 --weekday mon --start 00:00 --end 08:00";
     let mut command = mutation(leaf(name, about, detail)
         .arg(value("priority", "INTEGER", "Signed replacement priority.").required(true))
         .arg(weekdays("weekday", "Weekday selector; repeat unique values.").conflicts_with("date"))
@@ -641,7 +641,7 @@ fn model_rule_commands() -> Command {
         } else {
             "Append a new immutable offering-local signal-rule ID."
         };
-        let detail = "Requires --input INPUT --priority INTEGER --reset-within DURATION. Quota inputs also require --remaining-at-least-percent DECIMAL; reset inputs forbid it. Optional --enabled BOOLEAN defaults true. The input must belong to this provider and cover the upstream model; kind is derived from the same declaration snapshot. Optional time gates require a complete date/weekday selector and complete --all-day or --start/--end window, and use the model timezone. DURATION is a positive integer and one lowercase s/m/h/d unit.\n\nReplace requires the complete required definition; omitted optional gate clears it and omitted enabled restores true. Missing/stale input keeps a valid rule unknown, never zero quota.\n\nExit: 0 when saved; 2 for invalid reference/definition; 3 for required current action; 4 for save/activation failure.\nExample: tmax model rule add opencode-go/deepseek-v4.1-flash use-weekly --input weekly-allowance --priority 120 --reset-within 6h --remaining-at-least-percent 75.0";
+        let detail = "Requires --input INPUT --priority INTEGER --reset-within DURATION. Quota inputs also require --remaining-at-least-percent DECIMAL; reset inputs forbid it. Optional --enabled BOOLEAN defaults true. The input must belong to this provider and cover the upstream model; kind is derived from the same declaration snapshot. Optional time gates require a complete date/weekday selector and complete --all-day or --start/--end window, and use the model timezone. DURATION is a positive integer and one lowercase s/m/h/d unit.\n\nReplace requires the complete required definition; omitted optional gate clears it and omitted enabled restores true. Missing/stale input keeps a valid rule unknown, never zero quota.\n\nExit: 0 when saved; 2 for invalid reference/definition; 3 for required current action; 4 for persistence or required safety/startup failure.\nExample: tmax model rule add opencode-go/deepseek-v4.1-flash use-weekly --input weekly-allowance --priority 120 --reset-within 6h --remaining-at-least-percent 75.0";
         mutation(
             leaf(name, about, detail)
                 .arg(
@@ -738,22 +738,22 @@ fn model_rule_commands() -> Command {
             .arg(required_pos(2, "RULE-ID", "Exact immutable rule ID."))))
         .subcommand(make("add", false))
         .subcommand(make("replace", true))
-        .subcommand(mutation(leaf("remove", "Remove one signal rule without changing its input, schedule, or base priority.", "Stable rule ID, not array position, addresses this operation.\n\nExit: 0 when saved; 2 for missing ID; 4 for save/activation failure.\nExample: tmax model rule remove opencode-go/deepseek-v4.1-flash use-weekly")
+        .subcommand(mutation(leaf("remove", "Remove one signal rule without changing its input, schedule, or base priority.", "Stable rule ID, not array position, addresses this operation.\n\nExit: 0 when saved; 2 for missing ID; 4 for persistence or required safety/startup failure.\nExample: tmax model rule remove opencode-go/deepseek-v4.1-flash use-weekly")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "RULE-ID", "Exact immutable rule ID.")), true, true))
-        .subcommand(mutation(leaf("move", "Move a signal rule before another or to the end; no priority sort.", "Supply exactly one of --before OTHER-RULE-ID or --last. Moving an already-last rule to last is an idempotent no-op.\n\nExit: 0 when moved/no-op; 2 for missing/self target; 4 for save/activation failure.\nExample: tmax model rule move opencode-go/deepseek-v4.1-flash use-weekly --last")
+        .subcommand(mutation(leaf("move", "Move a signal rule before another or to the end; no priority sort.", "Supply exactly one of --before OTHER-RULE-ID or --last. Moving an already-last rule to last is an idempotent no-op.\n\nExit: 0 when moved/no-op; 2 for missing/self target; 4 for persistence or required safety/startup failure.\nExample: tmax model rule move opencode-go/deepseek-v4.1-flash use-weekly --last")
             .arg(value("before", "RULE-ID", "Move before this distinct existing rule."))
             .arg(flag("last", "Move to the end; mutually exclusive with --before."))
             .group(ArgGroup::new("destination").args(["before", "last"]).required(true))
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "RULE-ID", "Rule to move.")), true, true))
-        .subcommand(mutation(leaf("enable", "Enable one rule without changing fields or order.", "Enabling does not create input data or change fixed selections/session destinations.\n\nExit: 0 when saved; 2 for missing ID; 4 for save/activation failure.\nExample: tmax model rule enable opencode-go/deepseek-v4.1-flash use-weekly")
+        .subcommand(mutation(leaf("enable", "Enable one rule without changing fields or order.", "Enabling does not create input data or change fixed selections/session destinations.\n\nExit: 0 when saved; 2 for missing ID; 4 for persistence or required safety/startup failure.\nExample: tmax model rule enable opencode-go/deepseek-v4.1-flash use-weekly")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "RULE-ID", "Exact immutable rule ID.")), true, true))
-        .subcommand(mutation(leaf("disable", "Disable one rule while retaining fields/references/data.", "Disabling does not remove input declarations or current data.\n\nExit: 0 when saved; 2 for missing ID; 4 for save/activation failure.\nExample: tmax model rule disable opencode-go/deepseek-v4.1-flash use-weekly")
+        .subcommand(mutation(leaf("disable", "Disable one rule while retaining fields/references/data.", "Disabling does not remove input declarations or current data.\n\nExit: 0 when saved; 2 for missing ID; 4 for persistence or required safety/startup failure.\nExample: tmax model rule disable opencode-go/deepseek-v4.1-flash use-weekly")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "RULE-ID", "Exact immutable rule ID.")), true, true))
-        .subcommand(mutation(leaf("clear", "Remove all signal rules without changing schedule, inputs, or base priority.", "\n\nExit: 0 when saved; 4 for save/activation failure.\nExample: tmax model rule clear opencode-go/deepseek-v4.1-flash")
+        .subcommand(mutation(leaf("clear", "Remove all signal rules without changing schedule, inputs, or base priority.", "\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax model rule clear opencode-go/deepseek-v4.1-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true))
         .subcommand_required(true)
 }
@@ -764,7 +764,7 @@ fn model_alias_commands() -> Command {
         leaf_with_fields(
             "add",
             "Create one protocol-qualified model alias backed by explicit candidates.",
-            "Requires one-or-more --candidate QUALIFIED. Candidates form the complete ordered list.\n\nExit: 0 when saved; 2 for invalid ID/candidates; 4 for save/activation failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate deepseek/deepseek-flash",
+            "Requires one-or-more --candidate QUALIFIED. Candidates form the complete ordered list.\n\nExit: 0 when saved; 2 for invalid ID/candidates; 4 for persistence or required safety/startup failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate deepseek/deepseek-flash",
             alias_edit,
         )
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
@@ -779,7 +779,7 @@ fn model_alias_commands() -> Command {
         leaf_with_fields(
             "update",
             "Edit alias fields and optionally replace its complete candidate list.",
-            "At least one change is required. Repeated --candidate replaces the full list, never appends. Omit --candidate to preserve the current list. --new-protocol changes identity only after collision/reference checks.\n\nExit: 0 when saved; 2 for invalid identity/candidates; 4 for save/activation failure.\nExample: tmax model alias update L0 --protocol chat-completions --set enabled false",
+            "At least one change is required. Repeated --candidate replaces the full list, never appends. Omit --candidate to preserve the current list. --new-protocol changes identity only after collision/reference checks.\n\nExit: 0 when saved; 2 for invalid identity/candidates; 4 for persistence or required safety/startup failure.\nExample: tmax model alias update L0 --protocol chat-completions --set enabled false",
             alias_edit,
         )
         .arg(protocol_value("protocol", "Current protocol identity.").required(true))
@@ -793,11 +793,11 @@ fn model_alias_commands() -> Command {
     );
     let candidates = Command::new("candidates")
         .about("Append or remove explicit candidates from an alias.")
-        .subcommand(mutation(leaf("add", "Append new unique candidates to an alias list.", "Rejects duplicate members and non-concrete/unregistered candidates. Candidate order is preserved.\n\nExit: 0 when saved; 2 for invalid member; 4 for save/activation failure.\nExample: tmax model alias candidates add L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("add", "Append new unique candidates to an alias list.", "Rejects duplicate members and non-concrete/unregistered candidates. Candidate order is preserved.\n\nExit: 0 when saved; 2 for invalid member; 4 for persistence or required safety/startup failure.\nExample: tmax model alias candidates add L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
             .arg(protocol_value("protocol", "Alias protocol identity.").required(true))
             .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete candidate; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove named members from an alias list.", "Rejects missing members and an empty resulting list. Does not select replacements.\n\nExit: 0 when saved; 2 for invalid member/result; 4 for save/activation failure.\nExample: tmax model alias candidates remove L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("remove", "Remove named members from an alias list.", "Rejects missing members and an empty resulting list. Does not select replacements.\n\nExit: 0 when saved; 2 for invalid member/result; 4 for persistence or required safety/startup failure.\nExample: tmax model alias candidates remove L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
             .arg(protocol_value("protocol", "Alias protocol identity.").required(true))
             .arg(repeated("candidate", "QUALIFIED", "Exact existing candidate to remove; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true));
@@ -806,73 +806,73 @@ fn model_alias_commands() -> Command {
         .subcommand(add)
         .subcommand(update)
         .subcommand(candidates)
-        .subcommand(mutation(leaf("rename", "Rename an alias and update target references without an old-ID redirect.", "Requires --protocol. Rejects collision and unresolved old references; does not convert protocols or retarget sessions.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for save/activation failure.\nExample: tmax model alias rename L0 preferred --protocol chat-completions")
+        .subcommand(mutation(leaf("rename", "Rename an alias and update target references without an old-ID redirect.", "Requires --protocol. Rejects collision and unresolved old references; does not convert protocols or retarget sessions.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax model alias rename L0 preferred --protocol chat-completions")
             .arg(protocol_value("protocol", "Exact alias protocol identity.").required(true))
             .arg(required_pos(1, "OLD", "Current public alias ID."))
             .arg(required_pos(2, "NEW", "New public alias ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove an alias definition after reference checks.", "Removal/disablement reports affected retained sessions; no cascade, retarget, or old-ID redirect.\n\nExit: 0 when saved; 2 for unresolved references; 4 for save/activation failure.\nExample: tmax model alias remove L0 --protocol chat-completions")
+        .subcommand(mutation(leaf("remove", "Remove an alias definition after reference checks.", "Removal/disablement reports affected retained sessions; no cascade, retarget, or old-ID redirect.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax model alias remove L0 --protocol chat-completions")
             .arg(protocol_value("protocol", "Exact alias protocol identity.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true))
         .subcommand_required(true)
 }
 fn agent_commands() -> Command {
-    let agent_update = mutation(leaf("update", "Change explicit structural fields of one declared native target.", "At least one of --agent AGENT or --path PATH is required. Does not restore old files, import credentials, or write native configuration. Relative path operands resolve under ~/.tmax.\n\nExit: 0 when saved; 2 for invalid target/path; 4 for save/activation failure.\nExample: tmax agent update pi-main --path /home/user/.pi/agent")
+    let agent_update = mutation(leaf("update", "Change explicit structural fields of one declared native target.", "At least one of --agent AGENT or --path PATH is required. Does not restore old files, import credentials, or write native configuration. Relative path operands resolve under ~/.tmax.\n\nExit: 0 when saved; 2 for invalid target/path; 4 for persistence or required safety/startup failure.\nExample: tmax agent update pi-main --path /home/user/.pi/agent")
         .arg(agent_value("agent", "codex, pi, omp, opencode, or hermes."))
         .arg(value("path", "PATH", "Native configuration scope; relative paths resolve under ~/.tmax."))
         .arg(required_pos(1, "TARGET", "Exact declared target ID."))
         .group(ArgGroup::new("scope_fields").args(["agent", "path"]).required(true).multiple(true)), true, true);
     let model = Command::new("model")
         .about("Manage selections within one target-local provider entry.")
-        .subcommand(mutation(leaf("add", "Add one exact model selection to a native provider entry.", "Does not edit the default or role mappings; first selection never becomes default. ID semantics depend on whether the entry points to an upstream provider or the local proxy.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for save/activation failure.\nExample: tmax agent model add pi-main upstream deepseek-flash --protocol chat-completions")
+        .subcommand(mutation(leaf("add", "Add one exact model selection to a native provider entry.", "Does not edit the default or role mappings; first selection never becomes default. ID semantics depend on whether the entry points to an upstream provider or the local proxy.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent model add pi-main upstream deepseek-flash --protocol chat-completions")
             .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local native provider-entry name."))
             .arg(required_pos(3, "ID", "Exact upstream model ID or public proxy ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove one selected model after default/role reference checks.", "Does not edit native files until explicit agent apply.\n\nExit: 0 when saved; 2 for unresolved default/role references; 4 for save/activation failure.\nExample: tmax agent model remove pi-main upstream deepseek-flash --protocol chat-completions")
+        .subcommand(mutation(leaf("remove", "Remove one selected model after default/role reference checks.", "Does not edit native files until explicit agent apply.\n\nExit: 0 when saved; 2 for unresolved default/role references; 4 for persistence or required safety/startup failure.\nExample: tmax agent model remove pi-main upstream deepseek-flash --protocol chat-completions")
             .arg(protocol_value("protocol", "Exact native model protocol.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local native provider-entry name."))
             .arg(required_pos(3, "ID", "Exact selected model ID.")), true, true))
-        .subcommand(mutation(leaf("clear", "Clear selections for one provider entry after default/role references are removed.", "Writes an empty selection list only in desired configuration; explicit apply is separate.\n\nExit: 0 when saved; 2 for unresolved references; 4 for save/activation failure.\nExample: tmax agent model clear pi-main upstream")
+        .subcommand(mutation(leaf("clear", "Clear selections for one provider entry after default/role references are removed.", "Writes an empty selection list only in desired configuration; explicit apply is separate.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent model clear pi-main upstream")
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local native provider-entry name.")), true, true));
     let default = Command::new("default")
         .about("Set or clear the native default for a target.")
-        .subcommand(mutation(leaf("set", "Set a target default to a model already selected in the named entry.", "Requires explicit --protocol. A default is configuration, not a proxy permission or inference request.\n\nExit: 0 when saved; 2 if selection/reference is invalid; 4 for save/activation failure.\nExample: tmax agent default set pi-main upstream deepseek-flash --protocol chat-completions")
+        .subcommand(mutation(leaf("set", "Set a target default to a model already selected in the named entry.", "Requires explicit --protocol. A default is configuration, not a proxy permission or inference request.\n\nExit: 0 when saved; 2 if selection/reference is invalid; 4 for persistence or required safety/startup failure.\nExample: tmax agent default set pi-main upstream deepseek-flash --protocol chat-completions")
             .arg(protocol_value("protocol", "Exact native protocol.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local entry name."))
             .arg(required_pos(3, "ID", "Model ID already selected in that entry.")), true, true))
-        .subcommand(mutation(leaf("clear", "Remove a target's default without changing entries/selections/roles.", "Native application is separate.\n\nExit: 0 when saved; 4 for save/activation failure.\nExample: tmax agent default clear pi-main")
+        .subcommand(mutation(leaf("clear", "Remove a target's default without changing entries/selections/roles.", "Native application is separate.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax agent default clear pi-main")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, true));
     let role = Command::new("role")
         .about("Map or remove native model roles supported by the selected Agent adapter.")
-        .subcommand(mutation(leaf("set", "Map one qualified native role to an existing selected model.", "ROLE names come from agent inspection; unknown names are invalid. A role is a native configuration setting, not an access-control role or request parameter.\n\nExit: 0 when saved; 2 for unsupported role/reference; 4 for save/activation failure.\nExample: tmax agent role set omp-main smol upstream deepseek-flash --protocol chat-completions")
+        .subcommand(mutation(leaf("set", "Map one qualified native role to an existing selected model.", "ROLE names come from agent inspection; unknown names are invalid. A role is a native configuration setting, not an access-control role or request parameter.\n\nExit: 0 when saved; 2 for unsupported role/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent role set omp-main smol upstream deepseek-flash --protocol chat-completions")
             .arg(protocol_value("protocol", "Exact native protocol.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "ROLE", "Adapter-supported native model role."))
             .arg(required_pos(3, "NAME", "Target-local provider-entry name."))
             .arg(required_pos(4, "ID", "Model selected by that entry.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove one native role mapping.", "Does not change selections/default or apply native files.\n\nExit: 0 when saved; 2 for unknown role; 4 for save/activation failure.\nExample: tmax agent role remove omp-main smol")
+        .subcommand(mutation(leaf("remove", "Remove one native role mapping.", "Does not change selections/default or apply native files.\n\nExit: 0 when saved; 2 for unknown role; 4 for persistence or required safety/startup failure.\nExample: tmax agent role remove omp-main smol")
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "ROLE", "Exact adapter-supported role.")), true, true))
-        .subcommand(mutation(leaf("clear", "Remove all native role mappings, not model selections/default.", "\n\nExit: 0 when saved; 4 for save/activation failure.\nExample: tmax agent role clear omp-main")
+        .subcommand(mutation(leaf("clear", "Remove all native role mappings, not model selections/default.", "\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax agent role clear omp-main")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, true));
     let provider = Command::new("provider")
         .about("Manage target-local provider entries with explicit upstream or proxy source.")
-        .subcommand(mutation(leaf("add", "Add an empty-model native provider entry with exactly one source.", "Choose exactly one of --provider PROVIDER or --proxy. An upstream provider is a tmax provider ID; proxy uses the sole local proxy. Does not provision a key, start services, or write native files.\n\nExit: 0 when saved; 2 for invalid/duplicate entry; 4 for save/activation failure.\nExample: tmax agent provider add pi-main local --proxy")
+        .subcommand(mutation(leaf("add", "Add an empty-model native provider entry with exactly one source.", "Choose exactly one of --provider PROVIDER or --proxy. An upstream provider is a tmax provider ID; proxy uses the sole local proxy. Does not provision a key, start services, or write native files.\n\nExit: 0 when saved; 2 for invalid/duplicate entry; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider add pi-main local --proxy")
             .arg(value("provider", "PROVIDER", "Existing tmax upstream provider ID."))
             .arg(flag("proxy", "Use the sole tmax model proxy."))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Unique target-local provider-entry name."))
             .group(ArgGroup::new("source").args(["provider", "proxy"]).required(true)), true, true))
-        .subcommand(mutation(leaf("update", "Replace a target-local provider entry's source.", "Choose exactly one of --provider PROVIDER or --proxy. Validates existing selections/default/roles against the new source; never reinterprets, repairs, clears, or adds them. Does not write native files.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for save/activation failure.\nExample: tmax agent provider update pi-main local --provider deepseek")
+        .subcommand(mutation(leaf("update", "Replace a target-local provider entry's source.", "Choose exactly one of --provider PROVIDER or --proxy. Validates existing selections/default/roles against the new source; never reinterprets, repairs, clears, or adds them. Does not write native files.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider update pi-main local --provider deepseek")
             .arg(value("provider", "PROVIDER", "Existing tmax upstream provider ID."))
             .arg(flag("proxy", "Use the sole tmax model proxy."))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local provider-entry name."))
             .group(ArgGroup::new("source").args(["provider", "proxy"]).required(true)), true, true))
-        .subcommand(mutation(leaf("remove", "Remove a provider entry after default/role/reference checks.", "Does not write native files or revoke shared proxy access. Explicit apply/restore is separate.\n\nExit: 0 when saved; 2 for unresolved references; 4 for save/activation failure.\nExample: tmax agent provider remove pi-main local")
+        .subcommand(mutation(leaf("remove", "Remove a provider entry after default/role/reference checks.", "Does not write native files or revoke shared proxy access. Explicit apply/restore is separate.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider remove pi-main local")
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local provider-entry name.")), true, true));
     let recovery = Command::new("recovery")
@@ -893,15 +893,15 @@ fn agent_commands() -> Command {
         .subcommand(leaf("discover", "Discover supported Agent installations, scopes, versions, and profiles.", "Read-only local discovery; does not register targets or import settings/credentials.\n\nExit: 0 when discovery completes; unsupported/unavailable installations remain explicit.\nExample: tmax agent discover --agent pi")
             .arg(agent_value("agent", "Optional filter: codex, pi, omp, opencode, or hermes.")))
         .subcommand(inspect)
-        .subcommand(mutation(leaf("add", "Declare a native target without provider entries, defaults, or roles.", "Requires --agent and --path. Does not provision a proxy key, start a service, or write native files. Relative paths resolve against ~/.tmax.\n\nExit: 0 when saved; 2 for invalid/duplicate target; 4 for save/activation failure.\nExample: tmax agent add pi-main --agent pi --path /home/user/.pi/agent")
+        .subcommand(mutation(leaf("add", "Declare a native target without provider entries, defaults, or roles.", "Requires --agent and --path. Does not provision a proxy key, start a service, or write native files. Relative paths resolve against ~/.tmax.\n\nExit: 0 when saved; 2 for invalid/duplicate target; 4 for persistence or required safety/startup failure.\nExample: tmax agent add pi-main --agent pi --path /home/user/.pi/agent")
             .arg(agent_value("agent", "codex, pi, omp, opencode, or hermes.").required(true))
             .arg(value("path", "PATH", "Native configuration scope.").required(true))
             .arg(required_pos(1, "TARGET", "New unique target ID.")), true, true))
         .subcommand(agent_update)
-        .subcommand(mutation(leaf("rename", "Rename a target and dependent login-source references.", "Retains ownership/recovery identity; no alias is left. Existing native paths/credentials are not moved.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for save/activation failure.\nExample: tmax agent rename pi-main pi-work")
+        .subcommand(mutation(leaf("rename", "Rename a target and dependent login-source references.", "Retains ownership/recovery identity; no alias is left. Existing native paths/credentials are not moved.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax agent rename pi-main pi-work")
             .arg(required_pos(1, "OLD", "Current target ID."))
             .arg(required_pos(2, "NEW", "New unique target ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Stop managing a target after reference checks.", "Leaves native files, credentials, protected recovery, and shared proxy access untouched. Restore first if desired. No implicit sign-out or native write.\n\nExit: 0 when saved; 2 for unresolved references; 4 for save/activation failure.\nExample: tmax agent remove pi-main")
+        .subcommand(mutation(leaf("remove", "Stop managing a target after reference checks.", "Leaves native files, credentials, protected recovery, and shared proxy access untouched. Restore first if desired. No implicit sign-out or native write.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent remove pi-main")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, true))
         .subcommand(provider)
         .subcommand(model)
@@ -920,9 +920,9 @@ fn agent_commands() -> Command {
 fn network_commands() -> Command {
     Command::new("network")
         .about("Configure and inspect the one explicit tmax outbound network policy.")
-        .subcommand(mutation(leaf("proxy", "Route new tmax-owned outbound work through one explicit proxy URL.", "URL schemes: http, https, socks5; scheme default ports apply. SOCKS5 destination DNS is proxy-side. Userinfo/proxy authentication, provider overrides, bypass lists, environment/system discovery, direct fallback, and TLS bypass are unsupported. Does not contact the proxy or change native networking.\n\nExit: 0 when saved; 2 for invalid URL; 4 for save/activation failure.\nExample: tmax network proxy http://127.0.0.1:8080")
+        .subcommand(mutation(leaf("proxy", "Route new tmax-owned outbound work through one explicit proxy URL.", "URL schemes: http, https, socks5; scheme default ports apply. SOCKS5 destination DNS is proxy-side. Userinfo/proxy authentication, provider overrides, bypass lists, environment/system discovery, direct fallback, and TLS bypass are unsupported. Does not contact the proxy or change native networking.\n\nExit: 0 when saved; 2 for invalid URL; 4 for persistence or required safety/startup failure.\nExample: tmax network proxy http://127.0.0.1:8080")
             .arg(required_pos(1, "URL", "Explicit outbound proxy URL.")), true, true))
-        .subcommand(mutation(leaf("direct", "Select the canonical direct outbound mode by removing the optional policy table.", "Does not contact remote services or alter native-agent network settings. No ambient proxy variables are inherited.\n\nExit: 0 when saved; 4 for save/activation failure.\nExample: tmax network direct --dry-run"), true, true))
+        .subcommand(mutation(leaf("direct", "Select the canonical direct outbound mode by removing the optional policy table.", "Does not contact remote services or alter native-agent network settings. No ambient proxy variables are inherited.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax network direct --dry-run"), true, true))
         .subcommand(state_arg(leaf("show", "Show effective and saved/loaded outbound network policy.", "Read-only; no connectivity or secret check. Future independent CLI work uses saved policy; resident work uses loaded policy; in-flight work retains its captured route.\n\nExit: 0 for available/absent/unavailable policy.\nExample: tmax network show --state loaded")))
         .subcommand_required(true)
 }
@@ -936,18 +936,18 @@ fn proxy_commands() -> Command {
         .about("Explicitly replace or securely reveal the sole shared local proxy key.")
         .subcommand(mutation(leaf("replace", "Generate/store a new shared inference key and save its reference.", "Validates current config/ownership before provisioning. Saves and activates separately; a provisioned key remains discoverable for explicit cleanup after save failure. Does not update native or unmanaged clients. Replacing revokes old-key admission after activation; admitted requests retain their captured credential.\n\nDry-run does not generate/reserve a key or read protected input.\nExit: 0 when requested boundaries complete; 3 when action/unlock required; 4 for credential/save/activation partial failure.\nExample: tmax proxy key replace --dry-run"), true, true))
         .subcommand(mutation(leaf("show", "Deliver the configured shared proxy key through one explicitly qualified protected output.", "Without --output-fd, writes one UTF-8 line only to the attached controlling terminal. --output-fd FD requires a qualified inherited writable pipe >=3, distinct from unlock input and not aliased to stdout/stderr. Noninteractive use requires the pipe. Qualify output before unlock/retrieval; never fall back to stdout, stderr, argv, environment, or a file. The result never contains key bytes. Delivery does not prove readiness, activate saved changes, start inference, or register clients.\n\nDry-run reads/resolves no key, consumes no unlock, and writes no secret bytes.\nExit: 0 on complete delivery; 3 when interaction/unlock is required; 4 on partial/uncertain delivery.\nExample: tmax proxy key show --output-fd 3 --unlock-fd 4 --non-interactive")
-            .arg(value("output-fd", "FD", "Qualified inherited writable pipe descriptor at least 3.")), true, false));
+            .arg(value("output-fd", "FD", "Qualified inherited writable pipe at least 3: Unix descriptor or Windows native handle; never stdout/stderr.")), true, false));
     Command::new("proxy")
         .about("Inspect and explicitly control the background inference listener.")
         .subcommand(leaf("status", "Report actual resident/listener identity, key readiness, publication, and safe-session conditions.", "Read actual resident state and versions; saved/loaded network policy remains distinct. Does not unlock or reveal shared key. Native target readiness is not an inference prerequisite.\n\nExit: 0 even when stopped, unavailable, or incompatible state is reported.\nExample: tmax proxy status"))
         .subcommand(mutation(
-            leaf("configure", "Create/edit the optional proxy settings; creation provisions the shared key explicitly.", "Initial creation requires --listen numeric loopback host:port and provisions one key. Existing edits retain the key. --clear autostart restores disabled intent but does not force reconciliation. No implicit start, native write, key repair, or key generation on an existing table. Report provision/save/activation separately.\n\nExit: 0 when save completes; 2 for invalid address/config; 3 for required action; 4 for partial provisioning/save/activation.\nExample: tmax proxy configure --listen 127.0.0.1:17840")
+            leaf("configure", "Create/edit the optional proxy settings; creation provisions the shared key explicitly.", "Initial creation requires --listen numeric loopback host:port and provisions one key. Existing edits retain the key. --clear autostart restores disabled intent but does not force reconciliation. No implicit start, native write, key repair, or key generation on an existing table. Report provision/save/activation separately.\n\nExit: 0 when save completes; 2 for invalid address/config; 3 for required action; 4 for provisioning, persistence, or required safety/startup failure.\nExample: tmax proxy configure --listen 127.0.0.1:17840")
                 .arg(value("listen", "ADDRESS", "Numeric loopback host:port; IPv6 must be bracketed."))
                 .arg(value("clear", "FIELD", "Only autostart; restores disabled intent.").value_parser(["autostart"])),
             true,
             true,
         ))
-        .subcommand(mutation(leaf("remove", "Remove proxy configuration only after inference is stopped and proxy references resolve.", "Does not stop inference implicitly, delete stored key material, edit native files, or remove unknown external copies. Explicit restart is needed to activate a saved address change.\n\nExit: 0 when removed; 3 if listener/references require action; 4 for save/activation failure.\nExample: tmax proxy remove --dry-run"), true, true))
+        .subcommand(mutation(leaf("remove", "Remove proxy configuration only after inference is stopped and proxy references resolve.", "Does not stop inference implicitly, delete stored key material, edit native files, or remove unknown external copies. Explicit restart is needed to activate a saved address change.\n\nExit: 0 when removed; 3 if listener/references require action; 4 for persistence or required safety/startup failure.\nExample: tmax proxy remove --dry-run"), true, true))
         .subcommand(mutation(leaf("start", "Explicitly start inference in the sole identified compatible resident.", "Reuses a compatible running listener without reload or reapply. A management-only resident may start inference explicitly. Validates saved config and existing shared key; never generates a key or applies native settings. No target prerequisite. On Unix, an unrepresentable OS-home control socket path blocks before resident launch with resident_control_path_invalid; the store is not relocated.\n\nDry-run does not start, reserve address, unlock, or resolve secrets.\nExit: 0 when started/reused; 3 for incompatible owner, unsupported control path, locked key, or required action; 4 for startup failure.\nExample: tmax proxy start"), true, false))
         .subcommand(mutation(leaf("stop", "Stop inference only; normal stop refuses while requests are active.", "Use --cancel-active to close admission, interrupt the actual active set as transports allow, and report effects. Does not stop Web, alter autostart, switch native clients to upstream, or discard retained sessions.\n\nDry-run reserves/freezes no active set.\nExit: 0 when stopped; 3 when active requests require explicit cancellation; 4 for failed/partial lifecycle.\nExample: tmax proxy stop --cancel-active")
             .arg(flag("cancel-active", "Explicitly interrupt currently active requests; no replay.")), true, false))

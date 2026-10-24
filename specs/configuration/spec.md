@@ -756,18 +756,23 @@ Reconciliation requires no resident service and never starts the proxy. A startu
 invocation must validate the current file and its enabled autostart setting before
 starting inference, so an obsolete registration cannot override a saved disable.
 
-File persistence and service activation are separate failure boundaries. If the
-file is saved but activation fails, report saved-but-not-active with the previous
-loaded revision retained. Do not report success, rewrite the file silently, or
-apply only the valid subset. Listener-address changes require an explicit restart;
-report known managed dependencies and the unknown unmanaged-client scope rather
-than hot-moving a listener. No activation or restart may replace an established
-conversation destination.
-Explicit reload is the retry operation for saved-but-not-active configuration.
-It validates the currently saved file rather than replaying an earlier
-management edit. The shared
-[operation outcomes](../product/spec.md#local-web-and-cli-experience) define next
-actions shown by CLI and Web.
+File persistence and service activation are separate boundaries:
+
+| Operation and runtime outcome | Reported result |
+| --- | --- |
+| Ordinary desired-state edit; validation, persistence and required safety/identity effects complete | Successful saved change, independently of background runtime readiness. Attempt whole-file activation in a compatible running service, including a management-only service with no loaded snapshot. |
+| Background activation fails or requires restart | Keep the saved fact/revision, actual failure/warning and separately observed loaded-before revision. An unconfirmed loaded-after revision remains unknown; a concurrent writer may have activated another snapshot. Do not claim activation success or ask the caller to repeat a committed create. |
+| Resident discovery/loaded state cannot be established | Report runtime/activation unavailable and its reason, not stopped, absent, active, or an empty complete session-impact set. |
+| Explicit reload/lifecycle/revocation/native/startup work or required safety/identity effect fails | Nonzero blocked/incomplete result with every completed save/credential/native effect retained. Never mask a requested failure as successful activation. |
+
+Listener-address changes require explicit restart; report known managed
+dependencies and unknown unmanaged-client scope rather than hot-moving a listener.
+No activation or restart may replace an established conversation destination.
+Do not silently rewrite a saved file or apply only its valid subset. Explicit
+reload recomputes from current saved configuration, never replays an earlier
+management edit. The [CLI outcomes](../cli/results/spec.md#outcomes-and-exit-categories)
+own exit categories; the [CLI impact contract](../cli/configuration/spec.md#configuration-impact-data)
+owns saved/loaded/unavailable projections.
 
 Native agent application is a separate explicit operation against current
 desired settings, accepted metadata, native inputs, and credential scope.

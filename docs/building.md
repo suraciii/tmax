@@ -50,11 +50,14 @@ The personal authority is resolved from the operating-system user account, not
 state is under that account's `~/.tmax`; native configuration and native-owned
 credential artifacts remain in their explicitly selected native scopes.
 
-The current resident/control implementation requires Unix local sockets. Linux
-login startup uses `systemctl --user` and only tmax's owned registration. Missing
-session services or protected credentials are visible prerequisites, not reasons
-to start inference implicitly. Other platform resident/startup paths report
-their unsupported boundary explicitly.
+Resident control uses Unix local sockets or local-only Windows named pipes with
+an explicit OS-user ACL and peer identity checks. Windows needs no separate
+daemon, service installation, or administrator setup: ordinary CLI and Web
+actions launch the detached executable. Browser launch uses the Windows system
+browser. Opt-in Windows login startup uses only tmax's owned current-user Run
+value; Linux uses `systemctl --user` and tmax's owned unit. Missing session
+services or locked credentials remain visible blockers, not implicit inference
+startup or plaintext-unlock fallbacks.
 
 Persistent secrets and credential-bearing recovery use Argon2id (64 MiB, three
 passes, one lane) with per-entry salt, and ChaCha20Poly1305 authenticated
@@ -64,15 +67,21 @@ Safe inventory and recovery metadata remain inspectable while locked. Native
 credential-file handoff is version-qualified, restricted, and explicitly
 disclosed; it is not an export command or token-import feature.
 
-Unix resident unlock and protected Web key/unlock handoff use the standard
-library's owned anonymous pipes, available since Rust 1.87 and within the
-project's Rust 1.88 minimum. Parent pipe ends are close-on-exec; resident launch
-deliberately enables only its FD 3 unlock handoff in the child. Pipe ends are
-closed by their owners, without named plaintext files or secret argv/environment
-values. This follows the standard library's platform guarantees: Linux uses an
-atomic close-on-exec pipe allocation, while the Rust 1.88 macOS implementation
-sets close-on-exec after pipe creation. No stronger atomic-allocation or
-process-wide fork-race guarantee is claimed for that macOS fallback.
+Resident unlock and protected Web key/unlock handoff use owned anonymous pipes,
+available in the standard library since Rust 1.87 and within the Rust 1.88
+minimum. Unix launch deliberately enables only its FD 3 unlock handoff in the
+child; Windows uses the child's bounded standard-input pipe. Owners close pipe
+ends without named plaintext files or secret argv/environment values. Unix
+parent pipe ends are close-on-exec: Linux allocates them atomically, while Rust
+1.88 on macOS sets close-on-exec after creation; no stronger process-wide
+fork-race guarantee is claimed for that fallback. Windows protected console
+input is hidden and uses separate console handles, keeping management JSON
+separate from prompts and explicit key delivery.
+
+Windows source review and cross-compilation do not establish actual Windows
+startup, console, security-descriptor, or browser runtime behavior. Record those
+as unverified unless the corresponding Windows operations were exercised; the
+portable CI help/version smoke alone is not resident lifecycle evidence.
 
 Installed native agent versions, effective configuration precedence, and provider
 permission remain independent prerequisites. A successful parser/apply/restore

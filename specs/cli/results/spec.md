@@ -98,10 +98,10 @@ effect-free cancellation or a replay of secret bytes.
 
 | Exit | Category | Interpretation |
 | --- | --- | --- |
-| `0` | Completed request or ready dry-run | Requested boundaries completed, or effect-free read/dry-run completed. Reads may successfully report unhealthy, stopped, stale, or unknown state. |
+| `0` | Completed request or ready dry-run | Requested persistence and mandatory safety effects completed, or effect-free read/dry-run completed. Ordinary desired-state edits may report failed/unavailable background activation as a warning; success never implies loaded or native readiness. Reads may report unhealthy, stopped, stale, or unknown state. |
 | `2` | Invalid input | Arguments, schema fields/types/references, TOML syntax, unsupported version, or invalid option combination rejected before effects. Post-effect failure uses 4. |
 | `3` | Action required | Protected input/unlock, interaction, qualified scope, complete target selections, no active requests, current-input retry, resident compatibility/identity, free consistent endpoint, explicit restart, or native reload is needed. Use blocked before effects, incomplete when earlier boundaries completed. |
-| `4` | Operation failure | Requested I/O/refresh/probe/activation/lifecycle/autostart/native work failed or has partial/uncertain effects, including native login before local failure and saved-but-not-active state. |
+| `4` | Operation failure | Requested I/O/refresh/probe/explicit activation/lifecycle/autostart/native work or mandatory safety effects failed or have partial/uncertain effects, including native login before local failure. Retain any completed save rather than claiming an effect-free failure. |
 | `5` | Cancelled without effects | Cancellation known to precede every local/native effect. Partial/uncertain native or other effects use 4. |
 
 Common stable codes are `ok`, `dry_run_ready`, `dry_run_blocked`,
@@ -116,14 +116,25 @@ categories; messages are not identifiers. Missing declarations/invalid reference
 are schema errors. Valid incomplete targets, locked credentials, or unqualified
 external combinations remain availability blockers, not invented access.
 
-Intentional save without native apply is successful. No-service edits/reload may
-exit 0 after validation, persistence when requested, and required startup
-reconciliation; activation is not applicable and native apply is not requested.
-Unchanged-intent drift alone does not prevent 0. Requested registration failure
-does, even without a service or on explicit same-state repair.
-Saved-but-failed activation returns 4/`saved_not_active`, retaining previous loaded
-revision. Listener change specifically requiring restart returns
-3/`restart_required`, not active success. Later reload recomputes current state.
+Ordinary desired-state edits complete successfully after validation, persistence,
+and required safety/identity effects. Attempt whole-file background activation
+when a compatible service runs. A failed or unavailable background activation
+does not turn the completed edit into a failed transaction: return `0`/`ok`, keep
+the actual activation reason and failed/blocked boundary in data/warnings, and
+report the saved and known loaded revisions separately. Unknown runtime state is
+`unavailable`, not `absent`; do not claim that loaded state changed. Guidance must
+inspect/reload/restart current saved state, not repeat an already committed create.
+The same distinction applies after successful catalog acceptance.
+
+Explicit `config reload`, lifecycle, native authorization, shared-key revocation,
+and requested autostart effects retain their own failure exits. Failed explicit
+activation uses `saved_not_active` with the previous known loaded revision;
+an explicit restart requirement remains action-required, not active success.
+No-service edits/reload may exit 0 after validation, persistence when requested,
+and required startup reconciliation. Unchanged-intent registration drift alone
+does not prevent 0; requested registration failure does, including explicit
+same-state repair. Any nonzero post-save outcome is incomplete with the saved
+fact/revision and actual failed/partial boundary, never an effect-free failure.
 
 Native write complete but required reload pending returns
 3/`awaiting_native_reload`; partial writes return 4 with changed/unchanged files

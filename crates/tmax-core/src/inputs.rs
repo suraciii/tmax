@@ -1782,9 +1782,20 @@ async fn handle_impl(store: &Store, saved: Option<&Config>, request: &Request) -
         .operands
         .first()
         .ok_or_else(|| Error::new("missing_argument", "Provider is required"))?;
-    let loaded_info = crate::service::loaded(store).await?;
+    let read_only = matches!(action, "list" | "inspect" | "show");
+    let (loaded_info, runtime_error) = match crate::service::loaded(store).await {
+        Ok(loaded) => (loaded, None),
+        Err(error) if read_only => (None, Some(error.code)),
+        Err(error) => return Err(error),
+    };
     let running = loaded_info.is_some();
     let loaded = argument(request, "state") == Some("loaded");
+    if read_only && loaded && loaded_info.is_none() {
+        return Ok(
+            json!({"provider":provider,"state":"loaded","snapshot_state":if runtime_error.is_some(){"unavailable"}else{"absent"},"configuration_revision":null,"reason_code":runtime_error.as_deref().unwrap_or("no_loaded_snapshot")}),
+        );
+    }
+    let runtime_view = json!({"snapshot_state":if runtime_error.is_some(){"unavailable"}else if running{"available"}else{"absent"},"configuration_revision":loaded_info.as_ref().map(|file|&file.revision),"reason_code":runtime_error});
     let saved_unavailable = saved.is_none();
     if saved_unavailable && (!loaded || !["list", "inspect", "show"].contains(&action)) {
         return Err(Error::new(
@@ -1863,6 +1874,11 @@ async fn handle_impl(store: &Store, saved: Option<&Config>, request: &Request) -
                 detail["saved_use"] =
                     json!({"state":"unavailable","reason_code":"configuration_unavailable"});
             }
+            if let Some(reason) = runtime_error.as_deref() {
+                detail["current_runtime_use"] = json!({"state":"unavailable","reason_code":reason});
+                detail["acquisition_state"] = json!("unavailable");
+                detail["acquisition"] = json!({"state":"unavailable","reason_code":reason,"policy_configuration_revision":null,"active_refresh_interval_seconds":null,"next_due_at":null});
+            }
             Ok(detail)
         };
         if action == "list" {
@@ -1884,7 +1900,7 @@ async fn handle_impl(store: &Store, saved: Option<&Config>, request: &Request) -
                 summaries.push(Value::Object(summary));
             }
             return Ok(
-                json!({"provider":provider,"state":if loaded{"loaded"}else{"saved"},"snapshot_state":"known","at":timestamp(at),"inputs":summaries}),
+                json!({"provider":provider,"state":if loaded{"loaded"}else{"saved"},"snapshot_state":"known","at":timestamp(at),"inputs":summaries,"runtime":runtime_view}),
             );
         }
         let name = request
@@ -1892,7 +1908,7 @@ async fn handle_impl(store: &Store, saved: Option<&Config>, request: &Request) -
             .get(1)
             .ok_or_else(|| Error::new("missing_argument", "Input is required"))?;
         return Ok(
-            json!({"provider":provider,"state":if loaded{"loaded"}else{"saved"},"snapshot_state":"known","at":timestamp(at),"input":render(name)?}),
+            json!({"provider":provider,"state":if loaded{"loaded"}else{"saved"},"snapshot_state":"known","at":timestamp(at),"input":render(name)?,"runtime":runtime_view}),
         );
     }
     let name = request

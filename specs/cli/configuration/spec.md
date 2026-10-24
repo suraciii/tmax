@@ -22,9 +22,12 @@ Edits validate the complete candidate, preserve unrelated comments/fields/order,
 and activate the whole valid candidate when the service runs. Pending manual
 edits are part of that activation, not a per-field overlay. There is no file
 watcher. Missing credentials/qualification remain availability conditions.
-No-service edits report saved but not loaded. A failed save cannot activate
-unsaved state. Secret creation, sign-in, save, catalog apply, activation, autostart,
-and native work remain separate failure boundaries.
+No-service edits report saved but not loaded. Unavailable service evidence does
+not block local desired-state inspection or preview: disclose unavailable loaded
+state and unknown activation/session impact instead of pretending the service or
+affected sessions are absent. A failed save cannot activate unsaved state. Secret
+creation, sign-in, save, catalog apply, activation, autostart, and native work
+remain separate boundaries under the [shared outcome contract](../results/spec.md#outcomes-and-exit-categories).
 
 Removal rejects unresolved references and reports them without cascade, guessed
 replacement, native-file deletion, secret cleanup, sign-out, or subscription
@@ -98,9 +101,16 @@ a later discard recomputes safety instead of relying on the preview.
 Routine success identifies the requested edit and affected resources, returns
 `config.file_revision` when saved state is known, and reports `data.save`
 (`saved`, `unchanged`, or `not_requested`) and `data.runtime` (`loaded`,
-`not_running`, `unchanged`, or `not_loaded`). State explicitly when native settings
-were not applied. Do not report saved state as loaded or native application.
-No-service validation/reload may succeed without a loaded snapshot.
+`not_running`, `unchanged`, `not_loaded`, or `unavailable`). State explicitly when
+native settings were not applied. Do not report saved state as loaded or native
+application. Background synchronization failure is a warning after a completed
+ordinary desired save, not a failed create. `data.loaded_revision_before` is the
+separately observed pre-activation revision, or null when unavailable.
+`data.loaded_revision_after` is populated only by an activation response that
+confirms its revision; rejected/unavailable activation leaves it null. Never copy
+the before observation into the after field: a concurrent writer may have loaded
+another revision meanwhile. No-service validation/reload may succeed without a
+loaded snapshot.
 
 Dry-run returns the full redacted intended save and activation impact. Actual
 results must also disclose consequential pending-file changes, session blocking,
@@ -116,6 +126,11 @@ Where detailed impact is required, `data.config_impact` contains:
   absence is `absent`. A computed candidate revision is not a reservation.
 - `activation_diff_state`: `complete`, `no_loaded_snapshot`, or `unavailable`.
 - `includes_pending_file_changes`: boolean, or null without a known loaded baseline.
+
+Unavailable loaded state leaves `activation_diff_state = unavailable` and
+`includes_pending_file_changes = null`. Keep the independently known `file_save`
+changes; do not fabricate loaded-to-candidate additions as a complete activation
+diff. Unavailable session impact uses null, not an empty complete affected set.
 
 Dry-run leaves `file_revision_after` unchanged. Candidate revision is null when
 provisioning is needed to determine it; never invent generated secret references.

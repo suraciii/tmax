@@ -60,9 +60,11 @@ explicit inherited-pipe inputs; secrets never belong in argv or TOML. Saving
 settings does not sign in, apply native files, start inference, or send a paid
 probe. Use command help for explicit proxy setup, native application, and recovery.
 `web open --no-browser` starts supplementary loopback management independently of
-inference. The resident uses Unix local IPC; Linux startup registration uses an
-owned per-user systemd unit. Other platform integrations report named limitations
-rather than claiming readiness or falling back to plaintext storage.
+inference. The resident uses Unix local sockets or same-user Windows named pipes.
+Windows supports hidden-console input, protected Web entry, detached startup,
+and opt-in current-user login startup without a service installation. Linux
+login startup uses an owned per-user systemd unit. Locked credentials remain an
+explicit unlock requirement, never a plaintext fallback or a claim of readiness.
 
 ### Native qualification
 

@@ -34,6 +34,19 @@ use tokio::{
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+#[cfg(unix)]
+#[path = "service/unix_control.rs"]
+mod control_transport;
+#[cfg(windows)]
+#[path = "service/windows_control.rs"]
+mod control_transport;
+#[cfg(windows)]
+#[path = "service/windows_startup.rs"]
+mod windows_startup;
+#[cfg(windows)]
+#[path = "service/windows_web.rs"]
+mod windows_web;
+
 const MANAGEMENT_PROTOCOL: &str = "tmax-control/1";
 const CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
 const CONTROL_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
@@ -72,6 +85,8 @@ struct Surface {
     address: SocketAddr,
     shutdown: watch::Sender<bool>,
     task: JoinHandle<()>,
+    #[cfg(windows)]
+    listener_closed: Option<watch::Receiver<bool>>,
 }
 impl Surface {
     async fn stop(self) {
@@ -79,11 +94,46 @@ impl Surface {
         self.task.abort();
         let _ = self.task.await;
     }
+    #[cfg(windows)]
+    async fn stop_web(self, owner: &Shutdown) -> Result<()> {
+        let _ = self.shutdown.send(true);
+        let mut closed = self.listener_closed.expect("Web listener completion");
+        let release = tokio::time::timeout(Duration::from_secs(CONTROL_SECONDS), async {
+            while !*closed.borrow_and_update() {
+                closed.changed().await.map_err(|_| {
+                    failure(
+                        "resident_control_failed",
+                        "Cannot establish Web listener release",
+                    )
+                })?;
+            }
+            Ok::<_, Error>(())
+        })
+        .await;
+        if !matches!(release, Ok(Ok(()))) {
+            self.task.abort();
+            let _ = self.task.await;
+            return Err(failure(
+                "resident_control_failed",
+                "Web listener did not release within its finite shutdown deadline",
+            ));
+        }
+        // Do not await the response-serving task from its own Web stop request.
+        // The owner drains it after private-control instances have closed.
+        let mut tasks = owner.web_tasks.lock().expect("Web shutdown tasks");
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(self.task);
+        Ok(())
+    }
 }
 struct Shutdown {
     requested: Notify,
     stopping: AtomicBool,
     released: watch::Sender<Option<Result<()>>>,
+    #[cfg(windows)]
+    endpoints_drained: watch::Sender<Option<Result<()>>>,
+    #[cfg(windows)]
+    web_tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
 }
 impl Shutdown {
     fn new() -> Self {
@@ -92,6 +142,10 @@ impl Shutdown {
             requested: Notify::new(),
             stopping: AtomicBool::new(false),
             released,
+            #[cfg(windows)]
+            endpoints_drained: watch::channel(None).0,
+            #[cfg(windows)]
+            web_tasks: std::sync::Mutex::new(Vec::new()),
         }
     }
     async fn wait_released(&self) -> Result<()> {
@@ -104,6 +158,21 @@ impl Shutdown {
                 failure(
                     "resident_control_failed",
                     "Resident ownership release could not be established",
+                )
+            })?;
+        }
+    }
+    #[cfg(windows)]
+    async fn wait_endpoints_drained(&self) -> Result<()> {
+        let mut complete = self.endpoints_drained.subscribe();
+        loop {
+            if let Some(result) = complete.borrow_and_update().clone() {
+                return result;
+            }
+            complete.changed().await.map_err(|_| {
+                failure(
+                    "resident_control_failed",
+                    "Cannot establish Windows control endpoint completion",
                 )
             })?;
         }
@@ -139,6 +208,7 @@ fn address(value: &str, allow_zero: bool) -> Result<SocketAddr> {
     }
     Ok(address)
 }
+#[cfg(unix)]
 fn socket_path(store: &Store) -> PathBuf {
     store.root.join("resident.sock")
 }
@@ -372,6 +442,8 @@ impl Resident {
             address: requested,
             shutdown,
             task,
+            #[cfg(windows)]
+            listener_closed: None,
         });
         let mut value = self.lifecycle(
             "inference",
@@ -397,7 +469,6 @@ impl Resident {
     }
 }
 
-#[cfg(unix)]
 async fn rpc_with_unlock(
     store: &Store,
     action: &str,
@@ -407,7 +478,6 @@ async fn rpc_with_unlock(
 ) -> Result<Option<Value>> {
     rpc_with_candidate(store, action, request, revision, unlock, None).await
 }
-#[cfg(unix)]
 async fn rpc_with_candidate(
     store: &Store,
     action: &str,
@@ -452,7 +522,6 @@ async fn rpc_with_candidate(
     )
     .await
 }
-#[cfg(unix)]
 async fn rpc_exchange(
     store: &Store,
     action: &str,
@@ -462,54 +531,15 @@ async fn rpc_exchange(
     expected_process: Option<String>,
     candidate: Option<Config>,
 ) -> Result<Option<Value>> {
-    use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    let path = socket_path(store);
-    match std::fs::symlink_metadata(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Ok(meta) if meta.file_type().is_socket() && meta.uid() == unsafe { libc::geteuid() } => {}
-        Ok(_) => {
-            return Err(failure(
-                "resident_identity_unavailable",
-                "Control endpoint is not an owned Unix socket; no takeover attempted",
-            ));
-        }
-        Err(_) => {
-            return Err(failure(
-                "resident_identity_unavailable",
-                "Cannot inspect resident control endpoint",
-            ));
-        }
-    }
-    let stream = tokio::net::UnixStream::connect(path).await;
-    let mut stream = match stream {
-        Ok(v) => v,
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
-            ) =>
-        {
-            return Ok(None);
-        }
-        Err(_) => {
-            return Err(failure(
-                "resident_identity_unavailable",
-                "Cannot connect to the resident control endpoint",
-            ));
-        }
+    let Some(mut stream) = control_transport::connect(store).await? else {
+        return Ok(None);
     };
-    let peer = stream.peer_cred().map_err(|_| {
-        failure(
-            "resident_identity_unavailable",
-            "Cannot establish resident peer identity",
-        )
-    })?;
-    if peer.uid() != unsafe { libc::geteuid() } {
-        return Err(failure(
-            "resident_identity_unavailable",
-            "Resident socket peer is not the authority owner",
-        ));
-    }
+    #[cfg(unix)]
+    let peer_pid = control_transport::peer_pid(&stream)?;
+    #[cfg(windows)]
+    let peer = control_transport::peer(&stream)?;
+    #[cfg(windows)]
+    let peer_pid = Some(peer.pid);
     let challenge = Uuid::new_v4().to_string();
     let call = Call {
         challenge: challenge.clone(),
@@ -556,6 +586,9 @@ async fn rpc_exchange(
             "Resident control exchange failed",
         )
     })?;
+    // Windows handlers retain ownership until the fully-read client closes,
+    // then explicitly disconnect stale client references before server drop.
+    drop(stream);
     let reply: Reply = serde_json::from_slice(&result).map_err(|_| {
         failure(
             "resident_identity_unavailable",
@@ -567,7 +600,7 @@ async fn rpc_exchange(
         || reply.process.is_empty()
         || reply.process.len() > 128
         || reply.pid == 0
-        || peer.pid().is_some_and(|pid| pid as u32 != reply.pid)
+        || peer_pid.is_some_and(|pid| pid != reply.pid)
         || expected_process.is_some_and(|expected| expected != reply.process)
     {
         return Err(failure(
@@ -583,6 +616,11 @@ async fn rpc_exchange(
         ));
     }
     let mut value = reply.result?;
+    #[cfg(windows)]
+    if value["shutdown"]["ownership_released"] == true && value["shutdown"]["state"] == "completed"
+    {
+        peer.wait_for_exit().await?;
+    }
     if let Some(resident) = value.get_mut("resident") {
         resident["caller_version"] = json!(env!("CARGO_PKG_VERSION"));
         resident["version_relation"] = json!(if reply.version == env!("CARGO_PKG_VERSION") {
@@ -597,7 +635,6 @@ async fn rpc_exchange(
     }
     Ok(Some(value))
 }
-#[cfg(unix)]
 async fn rpc(
     store: &Store,
     action: &str,
@@ -605,28 +642,6 @@ async fn rpc(
     revision: Option<String>,
 ) -> Result<Option<Value>> {
     rpc_with_unlock(store, action, request, revision, None).await
-}
-#[cfg(not(unix))]
-async fn rpc_with_unlock(
-    store: &Store,
-    action: &str,
-    request: Option<Request>,
-    revision: Option<String>,
-    _unlock: Option<&[u8]>,
-) -> Result<Option<Value>> {
-    rpc(store, action, request, revision).await
-}
-#[cfg(not(unix))]
-async fn rpc(
-    _store: &Store,
-    _action: &str,
-    _request: Option<Request>,
-    _revision: Option<String>,
-) -> Result<Option<Value>> {
-    Err(failure(
-        "platform_unavailable",
-        "Resident control requires the supported Unix local-IPC platform",
-    ))
 }
 
 pub async fn status(store: &Store) -> Result<Value> {
@@ -732,7 +747,6 @@ pub async fn activate(store: &Store, _config: &Config, revision: &str) -> Result
 }
 pub async fn preview_activation(store: &Store, config: &Config) -> Result<Value> {
     crate::config::validate(config)?;
-    #[cfg(unix)]
     let preview = rpc_with_candidate(
         store,
         "preview_activation",
@@ -742,8 +756,6 @@ pub async fn preview_activation(store: &Store, config: &Config) -> Result<Value>
         Some(config.clone()),
     )
     .await?;
-    #[cfg(not(unix))]
-    let preview: Option<Value> = None;
     if let Some(preview) = preview {
         return Ok(preview);
     }
@@ -858,10 +870,37 @@ pub async fn control(
             json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"resident":before["resident"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::proxy::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved; protected unlock may be required","reservation":false,"secret_reads":false}),
         );
     }
-    if let Some(value) =
-        rpc_with_unlock(store, "control", Some(request.clone()), None, unlock).await?
-    {
-        return maybe_browser(value, request);
+    let starts_inference = group == "proxy" && matches!(action, "start" | "restart");
+    match rpc_with_unlock(store, "control", Some(request.clone()), None, unlock).await {
+        Ok(Some(value)) => return maybe_browser(value, request),
+        Ok(None) => {}
+        Err(error) => {
+            // A compatible resident may already hold its unlock. Ask in the
+            // initiating terminal only after credential validation actually
+            // blocks, before start_inference can touch a listener.
+            if starts_inference
+                && unlock.is_none()
+                && error.code == "credential_unavailable"
+                && let Some(provided) = prompt_proxy_unlock(store, request)?
+            {
+                return rpc_with_unlock(
+                    store,
+                    "control",
+                    Some(request.clone()),
+                    None,
+                    Some(&provided),
+                )
+                .await?
+                .ok_or_else(|| {
+                    failure(
+                        "resident_identity_unavailable",
+                        "Resident disappeared before protected startup continuation",
+                    )
+                })
+                .and_then(|value| maybe_browser(value, request));
+            }
+            return Err(error);
+        }
     }
     if group == "model" && action == "explain" {
         let (id, protocol, session) = retained_session_arguments(request)?;
@@ -884,6 +923,14 @@ pub async fn control(
             "Unknown resident control operation",
         ));
     }
+    #[cfg(unix)]
+    validate_control_path(&socket_path(store))?;
+    let prompted = if starts_inference && unlock.is_none() {
+        prompt_proxy_unlock(store, request)?
+    } else {
+        None
+    };
+    let unlock = unlock.or_else(|| prompted.as_deref().map(Vec::as_slice));
     launch(store, unlock).await?;
     rpc_with_unlock(store, "control", Some(request.clone()), None, unlock)
         .await?
@@ -895,12 +942,29 @@ pub async fn control(
         })
         .and_then(|v| maybe_browser(v, request))
 }
+
+fn prompt_proxy_unlock(store: &Store, request: &Request) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    let config = crate::config::load(store)?.config;
+    crate::config::validate(&config)?;
+    let proxy = config.proxy.as_ref().ok_or_else(|| {
+        failure(
+            "proxy_unconfigured",
+            "Configure the proxy explicitly before starting it",
+        )
+    })?;
+    // Missing or malformed encrypted material cannot be repaired by prompting.
+    crate::secrets::check_unlock_entry(store, &proxy.key_ref)?;
+    crate::secrets::unlock(request)
+}
 fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
     if request.command.first().is_some_and(|v| v == "web")
         && request.command.get(1).is_some_and(|v| v == "open")
         && !request.arguments.contains_key("no-browser")
         && let Some(url) = value["resident"]["web"]["url"].as_str()
     {
+        #[cfg(windows)]
+        let opened = windows_startup::open_browser(url);
+        #[cfg(not(windows))]
         let opened = Command::new("xdg-open")
             .arg(url)
             .stdin(Stdio::null())
@@ -976,7 +1040,7 @@ async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
             Ok(())
         });
     }
-    let mut child = command.spawn().map_err(|_| {
+    let child = command.spawn().map_err(|_| {
         failure(
             "resident_launch_failed",
             "Cannot start the detached resident executable",
@@ -991,6 +1055,10 @@ async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
             )
         })?;
     }
+    wait_for_owner(store, child).await
+}
+
+async fn wait_for_owner(store: &Store, mut child: std::process::Child) -> Result<()> {
     // Bounded startup handshake, not a restart/retry policy. The one child either
     // establishes its owned endpoint or returns an actionable incomplete result.
     for _ in 0..100 {
@@ -1017,15 +1085,61 @@ async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
         "Resident startup did not establish identity within five seconds; inspect endpoint and executable compatibility",
     ))
 }
-#[cfg(not(unix))]
-async fn launch(_store: &Store, _unlock: Option<&[u8]>) -> Result<()> {
-    Err(failure(
-        "platform_unavailable",
-        "Detached resident launch requires the supported Unix platform",
-    ))
+#[cfg(windows)]
+async fn launch(store: &Store, unlock: Option<&[u8]>) -> Result<()> {
+    use std::{io::Write, os::windows::process::CommandExt};
+    if unlock.is_some_and(|value| value.len() > 4096) {
+        return Err(failure(
+            "invalid_argument",
+            "Unlock material exceeds the protected-input limit",
+        ));
+    }
+    let _launch = store.lock("resident-launch")?;
+    if rpc(store, "status", None, None).await?.is_some() {
+        return Ok(());
+    }
+    let executable = std::env::current_exe().map_err(|_| {
+        failure(
+            "resident_launch_failed",
+            "Cannot locate the current executable",
+        )
+    })?;
+    let mut command = Command::new(executable);
+    command
+        .arg("__resident")
+        .creation_flags(0x00000008 | 0x00000200)
+        .stdin(if unlock.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().map_err(|_| {
+        failure(
+            "resident_launch_failed",
+            "Cannot start the detached Windows resident executable",
+        )
+    })?;
+    if let Some(unlock) = unlock {
+        let mut writer = child.stdin.take().ok_or_else(|| {
+            failure(
+                "resident_launch_failed",
+                "Inherited anonymous unlock pipe is unavailable",
+            )
+        })?;
+        writer.write_all(unlock).map_err(|_| {
+            failure(
+                "resident_launch_failed",
+                "Cannot deliver protected unlock material to resident",
+            )
+        })?;
+        // Closing the sole parent writer terminates the bounded child handoff.
+        drop(writer);
+    }
+    wait_for_owner(store, child).await
 }
 
-#[cfg(unix)]
 pub async fn run_resident() -> Result<()> {
     run_owner(false).await
 }
@@ -1066,63 +1180,52 @@ async fn run_owner(autostart: bool) -> Result<()> {
     };
     run_owned(store, ownership, unlock, autostart).await
 }
-#[cfg(unix)]
+
+#[cfg(windows)]
+async fn run_owner(autostart: bool) -> Result<()> {
+    use std::io::Read;
+    let store = Store::discover()?;
+    let Some(ownership) = store.try_lock("resident-owner")? else {
+        return if autostart {
+            Err(failure(
+                "resident_identity_unavailable",
+                "Resident ownership changed before autostart; inspect the actual owner before retrying",
+            ))
+        } else {
+            Ok(())
+        };
+    };
+    let unlock = if !autostart && control_transport::stdin_is_pipe() {
+        let mut bytes = Zeroizing::new(Vec::new());
+        std::io::stdin()
+            .lock()
+            .take(4097)
+            .read_to_end(&mut bytes)
+            .map_err(|_| {
+                failure(
+                    "credential_unavailable",
+                    "Cannot read inherited unlock channel",
+                )
+            })?;
+        if bytes.len() > 4096 {
+            return Err(failure(
+                "credential_unavailable",
+                "Inherited unlock material exceeds its limit",
+            ));
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+    run_owned(store, ownership, unlock, autostart).await
+}
 async fn run_owned(
     store: Store,
     ownership: crate::storage::LockGuard,
     unlock: Option<Zeroizing<Vec<u8>>>,
     autostart: bool,
 ) -> Result<()> {
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-    let path = socket_path(&store);
-    validate_control_path(&path)?;
-    if let Ok(meta) = std::fs::symlink_metadata(&path) {
-        if !meta.file_type().is_socket() || meta.uid() != unsafe { libc::geteuid() } {
-            return Err(failure(
-                "resident_identity_unavailable",
-                "Refusing to replace an unidentified control endpoint",
-            ));
-        }
-        match tokio::net::UnixStream::connect(&path).await {
-            Ok(_) => {
-                return Err(failure(
-                    "resident_identity_unavailable",
-                    "Control endpoint is occupied without matching ownership; no takeover",
-                ));
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
-                ) =>
-            {
-                std::fs::remove_file(&path).map_err(|_| {
-                    failure(
-                        "resident_identity_unavailable",
-                        "Cannot remove this authority's stale socket",
-                    )
-                })?
-            }
-            Err(_) => {
-                return Err(failure(
-                    "resident_identity_unavailable",
-                    "Cannot establish control endpoint availability",
-                ));
-            }
-        }
-    }
-    let listener = tokio::net::UnixListener::bind(&path).map_err(|_| {
-        failure(
-            "endpoint_occupied",
-            "Control endpoint is unavailable; no fallback attempted",
-        )
-    })?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|_| {
-        failure(
-            "resident_identity_unavailable",
-            "Cannot protect resident socket",
-        )
-    })?;
+    let mut listener = control_transport::Listener::bind(&store).await?;
     let process = Uuid::new_v4().to_string();
     let runtime = Runtime::new(store.clone(), process.clone(), unlock)?;
     let shutdown = Arc::new(Shutdown::new());
@@ -1140,16 +1243,29 @@ async fn run_owned(
     if autostart {
         let result = state.lock().await.start_inference(false, false, None).await;
         match result {
-            Ok(value) if value["proxy"]["ready"] == true => {}
+            Ok(value) if value["proxy"]["ready"] == true => {
+                #[cfg(windows)]
+                if let Err(error) = windows_startup::record_launch(&store, None) {
+                    let mut resident = state.lock().await;
+                    let _ = resident.runtime.stop(true);
+                    if let Some(surface) = resident.inference.take() {
+                        surface.stop().await;
+                    }
+                    drop(resident);
+                    let _ = crate::inputs::deactivate(&store);
+                    let _ = listener.release();
+                    return Err(error);
+                }
+            }
             Ok(_) => {
-                let _ = std::fs::remove_file(&path);
+                let _ = listener.release();
                 return Err(failure(
                     "autostart_blocked",
                     "Autostart did not establish a ready inference listener; inspect saved intent, protected unlock, and endpoint state",
                 ));
             }
             Err(error) => {
-                let _ = std::fs::remove_file(&path);
+                let _ = listener.release();
                 return Err(error);
             }
         }
@@ -1165,7 +1281,7 @@ async fn run_owned(
             _ = shutdown.requested.notified() => break,
             _ = controls.join_next(), if !controls.is_empty() => {},
             _=interval.tick()=>{if acquisition.as_ref().is_none_or(JoinHandle::is_finished){let captured={let resident=state.lock().await;resident.loaded.as_ref().map(|v|(resident.store.clone(),v.0.clone()))};if let Some((store,config))=captured {acquisition=Some(tokio::spawn(async move{let _=crate::inputs::automatic_tick(&store,&config).await;}));}}},
-            connection=listener.accept()=>{let(stream,_)=connection.map_err(|_|failure("resident_control_failed","Resident control accept failed"))?;let Ok(slot)=connection_slots.clone().try_acquire_owned()else{drop(stream);continue};let state=state.clone();controls.spawn(async move{let _slot=slot;serve_control(state,stream).await});}
+            connection=listener.accept()=>{let stream=connection?;let Ok(slot)=connection_slots.clone().try_acquire_owned()else{drop(stream);continue};let state=state.clone();controls.spawn(async move{let _slot=slot;serve_control(state,stream).await});}
         }
     }
     if let Some(task) = acquisition {
@@ -1176,43 +1292,36 @@ async fn run_owned(
     let _ = resident.runtime.stop(true);
     let inputs_released = crate::inputs::deactivate(&store);
     drop(resident);
-    drop(listener);
-    let socket_released = std::fs::remove_file(path).map_err(|_| {
-        failure(
-            "resident_control_failed",
-            "Cannot release owned resident socket",
-        )
-    });
+    let endpoint_released = listener.release();
     // A stop acknowledgement is a completion boundary, not a shutdown request.
     // No old runtime publication can follow release of the one owner lock.
     drop(ownership);
-    let released = inputs_released.and(socket_released);
+    let released = inputs_released.and(endpoint_released);
     let _ = shutdown.released.send_replace(Some(released.clone()));
     while controls.join_next().await.is_some() {}
+    #[cfg(windows)]
+    {
+        let _ = shutdown
+            .endpoints_drained
+            .send_replace(Some(released.clone()));
+        let tasks = std::mem::take(&mut *shutdown.web_tasks.lock().expect("Web shutdown tasks"));
+        for mut task in tasks {
+            // Connections can now finish their self-stop response. Do not wait
+            // on them before signalling the private endpoint drain boundary.
+            if tokio::time::timeout(Duration::from_secs(CONTROL_SECONDS), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
     released
 }
-#[cfg(not(unix))]
-pub async fn run_resident() -> Result<()> {
-    Err(failure(
-        "platform_unavailable",
-        "Resident requires supported Unix local IPC",
-    ))
-}
 
-#[cfg(unix)]
-async fn serve_control(state: Shared, mut stream: tokio::net::UnixStream) -> Result<()> {
-    let credentials = stream.peer_cred().map_err(|_| {
-        failure(
-            "resident_identity_unavailable",
-            "Cannot identify local management peer",
-        )
-    })?;
-    if credentials.uid() != unsafe { libc::geteuid() } {
-        return Err(failure(
-            "resident_identity_unavailable",
-            "Local management peer is not this authority owner",
-        ));
-    }
+async fn serve_control(state: Shared, mut stream: control_transport::Server) -> Result<()> {
+    control_transport::authorize_client(&stream)?;
     let bytes = tokio::time::timeout(Duration::from_secs(CONTROL_SECONDS), async {
         let size = stream.read_u32().await? as usize;
         if size > CONTROL_REQUEST_BYTES {
@@ -1364,7 +1473,11 @@ async fn serve_control(state: Shared, mut stream: tokio::net::UnixStream) -> Res
     tokio::time::timeout(Duration::from_secs(CONTROL_SECONDS), async {
         stream.write_u32(bytes.len() as u32).await?;
         stream.write_all(&bytes).await?;
-        stream.shutdown().await
+        #[cfg(windows)]
+        control_transport::confirm_client_closed(&mut stream).await?;
+        #[cfg(unix)]
+        stream.shutdown().await?;
+        Ok::<_, std::io::Error>(())
     })
     .await
     .map_err(|_| {
@@ -1427,6 +1540,8 @@ async fn resident_control(
             let actual = listener.local_addr().map_err(|_| {
                 failure("listener_unavailable", "Cannot inspect actual Web address")
             })?;
+            #[cfg(windows)]
+            let (listener, listener_closed) = windows_web::Listener::new(listener);
             let (shutdown, mut cancelled) = watch::channel(false);
             let web = WebState {
                 resident: state.clone(),
@@ -1447,11 +1562,16 @@ async fn resident_control(
                 address: actual,
                 shutdown,
                 task,
+                #[cfg(windows)]
+                listener_closed: Some(listener_closed),
             });
             Ok(resident.lifecycle("web", "started", requested))
         }
         ("web", "stop") => {
             if let Some(surface) = resident.web.take() {
+                #[cfg(windows)]
+                surface.stop_web(&resident.shutdown).await?;
+                #[cfg(unix)]
                 surface.stop().await;
             }
             let value = resident.lifecycle("web", "stopped", None);
@@ -1620,8 +1740,26 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
             if request.command == ["proxy", "key", "show"] {
                 return(StatusCode::BAD_REQUEST,axum::Json(json!({"error":{"code":"protected_reveal_required","message":"Use the explicit Reveal shared key action"}}))).into_response();
             }
+            #[cfg(windows)]
+            let final_stop =
+                if !request.dry_run && matches!(path.as_str(), "proxy stop" | "web stop") {
+                    Some(web.resident.lock().await.shutdown.clone())
+                } else {
+                    None
+                };
             let response = execute_web(request).await;
             drop(channels);
+            #[cfg(windows)]
+            if let Some(shutdown) = final_stop
+                && shutdown.stopping.load(Ordering::Acquire)
+                && let Err(error) = shutdown.wait_endpoints_drained().await
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(json!({"error":error})),
+                )
+                    .into_response();
+            }
             axum::Json(response).into_response()
         }
         ("POST", "/api/proxy-key/reveal") => {
@@ -1711,9 +1849,12 @@ fn execute_web(
 ) -> std::pin::Pin<Box<dyn Future<Output = crate::Response> + Send>> {
     Box::pin(crate::execute(request))
 }
-#[cfg(unix)]
-fn protected_form_input(value: &str) -> Result<(std::io::PipeReader, i32)> {
-    use std::{io::Write, os::fd::AsRawFd};
+fn protected_form_input(value: &str) -> Result<(std::io::PipeReader, crate::secrets::Descriptor)> {
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::fd::AsRawFd;
+    #[cfg(windows)]
+    use std::os::windows::io::AsRawHandle;
     if value.is_empty()
         || value.len() > 2048
         || value.bytes().any(|b| matches!(b, 0 | b'\n' | b'\r'))
@@ -1739,25 +1880,32 @@ fn protected_form_input(value: &str) -> Result<(std::io::PipeReader, i32)> {
             )
         })?;
     drop(writer);
+    #[cfg(unix)]
     let fd = reader.as_raw_fd();
+    #[cfg(windows)]
+    let fd = reader.as_raw_handle() as usize;
     Ok((reader, fd))
 }
-#[cfg(not(unix))]
-fn protected_form_input(_value: &str) -> Result<(std::io::PipeReader, i32)> {
-    Err(failure(
-        "platform_unavailable",
-        "Protected Web input requires supported anonymous pipes",
-    ))
+#[cfg(windows)]
+fn autostart_status(store: &Store) -> Result<Value> {
+    windows_startup::status(store)
 }
+#[cfg(windows)]
+async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> Result<Value> {
+    windows_startup::reconcile(store, enabled, dry_run, force).await
+}
+#[cfg(not(windows))]
 #[derive(Default, Serialize, Deserialize)]
 struct Startup {
     acknowledged: Option<bool>,
     last_outcome: Option<String>,
     last_attempt: Option<chrono::DateTime<chrono::Utc>>,
 }
+#[cfg(not(windows))]
 fn registration_path(store: &Store) -> PathBuf {
     store.home.join(".config/systemd/user/tmax.service")
 }
+#[cfg(not(windows))]
 fn registration(store: &Store) -> Result<Vec<u8>> {
     let executable = std::env::current_exe().map_err(|_| {
         failure(
@@ -1779,6 +1927,7 @@ fn registration(store: &Store) -> Result<Vec<u8>> {
     }
     Ok(format!("# tmax-owned authority={}\n[Unit]\nDescription=tmax personal model proxy\n[Service]\nType=simple\nExecStart=\"{}\" __autostart\n[Install]\nWantedBy=default.target\n",store.root.display(),path).into_bytes())
 }
+#[cfg(not(windows))]
 fn autostart_status(store: &Store) -> Result<Value> {
     let state: Startup = store.read_json("autostart.json")?;
     let expected = registration(store)?;
@@ -1816,6 +1965,7 @@ fn autostart_status(store: &Store) -> Result<Value> {
         json!({"saved_intent":desired,"acknowledged_intent":state.acknowledged,"registration":if actual.is_none()&&link_state=="absent"{"absent"}else if !owned||matches!(link_state,"conflict"|"unavailable"){"conflict"}else if registered{"present"}else{"drifted"},"unit_matches":unit_matches,"login_link":link_state,"login_enabled":if link_state=="unavailable"{Value::Null}else{json!(registered)},"last_outcome":state.last_outcome,"last_attempt":state.last_attempt,"unlock_requirement":"Encrypted credentials require explicit protected unlock; no plaintext unattended fallback","repair":"proxy autostart enable|disable","reconciliation":"not_requested"}),
     )
 }
+#[cfg(not(windows))]
 async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> Result<Value> {
     let mut state: Startup = store.read_json("autostart.json")?;
     let unchanged =
@@ -1871,6 +2021,7 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> 
         json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"completed_effects":effects,"error":result.err(),"outcome_recording_error":metadata.err(),"status":autostart_status(store).ok(),"repair":"proxy autostart enable|disable"}),
     )
 }
+#[cfg(not(windows))]
 async fn startup_command(store: &Store, args: &[&str]) -> Result<()> {
     let mut command = tokio::process::Command::new("systemctl");
     command
@@ -1957,19 +2108,43 @@ pub async fn run_autostart() -> Result<Value> {
         run_owner(true).await?;
         Ok(json!({"autostart":"stopped"}))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        Err(failure(
-            "platform_unavailable",
-            "Autostart resident requires supported Unix local IPC",
-        ))
+        windows_startup::detach_console();
+        let result = async {
+            if let Some(current) = rpc(&store, "status", None, None).await? {
+                if current["resident"]["discovery_state"] != "compatible" {
+                    return Err(failure("resident_incompatible", "Autostart cannot control an incompatible resident; use its compatible CLI or Web controls"));
+                }
+                let request = Request {
+                    command: vec!["proxy".into(), "start".into()],
+                    operands: Vec::new(),
+                    arguments: Default::default(),
+                    dry_run: false,
+                    if_revision: None,
+                };
+                let started = rpc(&store, "control", Some(request), None).await?
+                    .ok_or_else(|| failure("resident_identity_unavailable", "Resident disappeared before autostart control"))?;
+                if started["proxy"]["ready"] != true {
+                    return Err(failure("autostart_blocked", "Autostart did not establish ready inference; unlock protected storage through normal CLI or Web controls"));
+                }
+                windows_startup::record_launch(&store, None)?;
+                return Ok(json!({"autostart":"reused","started":true}));
+            }
+            run_owner(true).await?;
+            Ok(json!({"autostart":"stopped"}))
+        }.await;
+        if let Err(error) = &result {
+            // Preserve the startup failure if safe outcome recording also fails.
+            let _ = windows_startup::record_launch(&store, Some(error));
+        }
+        result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     #[test]
     fn protected_web_lines_reach_secret_consumer_without_relaxing_input_bounds() {
         for value in ["synthetic-web-key".to_owned(), "é".repeat(1024)] {
@@ -2094,6 +2269,117 @@ mod tests {
         assert!(address("localhost:1234", false).is_err());
         assert!(address("127.0.0.1:0", false).is_err());
     }
+    #[test]
+    fn cold_start_unlock_checks_prerequisites_and_never_prompts_noninteractive() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().into());
+        let mut request = Request {
+            command: vec!["proxy".into(), "start".into()],
+            operands: Vec::new(),
+            arguments: std::collections::BTreeMap::from([(
+                "non-interactive".into(),
+                vec!["true".into()],
+            )]),
+            dry_run: false,
+            if_revision: None,
+        };
+        let mut config = Config::empty();
+        assert_eq!(
+            prompt_proxy_unlock(&store, &request).unwrap_err().code,
+            "proxy_unconfigured"
+        );
+        let reference = crate::secrets::put(
+            &store,
+            "proxy",
+            b"synthetic-shared-key",
+            Some(b"synthetic-unlock"),
+        )
+        .unwrap();
+        config.proxy = Some(crate::config::Proxy {
+            listen: "127.0.0.1:17840".into(),
+            key_ref: reference.clone(),
+            autostart: false,
+        });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        assert!(prompt_proxy_unlock(&store, &request).unwrap().is_none());
+        crate::secrets::remove(&store, &reference).unwrap();
+        request.arguments.clear();
+        // Even an interactive request must fail before opening a terminal when
+        // its encrypted key is absent; an unlock cannot repair missing bytes.
+        assert_eq!(
+            prompt_proxy_unlock(&store, &request).unwrap_err().code,
+            "credential_unavailable"
+        );
+        store.write_raw("tmax.toml", b"[broken").unwrap();
+        assert_eq!(
+            prompt_proxy_unlock(&store, &request).unwrap_err().code,
+            "invalid_configuration"
+        );
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_web_stop_releases_listener_before_draining_its_response() {
+        let owner = Arc::new(Shutdown::new());
+        let entered = Arc::new(Notify::new());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (listener, closed) = windows_web::Listener::new(listener);
+        let (shutdown, mut cancelled) = watch::channel(false);
+        let handler_owner = owner.clone();
+        let handler_entered = entered.clone();
+        let router = Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let owner = handler_owner.clone();
+                let entered = handler_entered.clone();
+                async move {
+                    entered.notify_one();
+                    owner.wait_endpoints_drained().await.unwrap();
+                    "completed"
+                }
+            }),
+        );
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = cancelled.changed().await;
+                })
+                .await
+                .unwrap();
+        });
+        let surface = Surface {
+            address,
+            shutdown,
+            task,
+            listener_closed: Some(closed),
+        };
+        let request = tokio::spawn(async move {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
+        entered.notified().await;
+        surface.stop_web(&owner).await.unwrap();
+        let replacement = TcpListener::bind(address).await.unwrap();
+        assert!(!owner.web_tasks.lock().unwrap()[0].is_finished());
+        let _ = owner.endpoints_drained.send_replace(Some(Ok(())));
+        assert_eq!(request.await.unwrap(), "completed");
+        let tasks = std::mem::take(&mut *owner.web_tasks.lock().unwrap());
+        for task in tasks {
+            task.await.unwrap();
+        }
+        drop(replacement);
+    }
     #[tokio::test]
     async fn web_origin_checks_reject_rebinding_and_forms() {
         let temporary = tempfile::tempdir().unwrap();
@@ -2138,12 +2424,15 @@ mod tests {
         let result = reconcile(&store, false, false, false).await.unwrap();
         assert_eq!(result["reconciliation"], "not_requested");
         assert!(!store.root.exists());
-        let unit = registration_path(&store);
-        crate::storage::atomic_write(&unit, b"foreign startup unit").unwrap();
-        let result = reconcile(&store, false, false, false).await.unwrap();
-        assert_eq!(result["registration"], "conflict");
-        assert_eq!(std::fs::read(&unit).unwrap(), b"foreign startup unit");
-        assert!(!store.root.exists());
+        #[cfg(unix)]
+        {
+            let unit = registration_path(&store);
+            crate::storage::atomic_write(&unit, b"foreign startup unit").unwrap();
+            let result = reconcile(&store, false, false, false).await.unwrap();
+            assert_eq!(result["registration"], "conflict");
+            assert_eq!(std::fs::read(&unit).unwrap(), b"foreign startup unit");
+            assert!(!store.root.exists());
+        }
     }
     #[tokio::test]
     async fn repeated_start_reuses_actual_listener_without_reading_pending_config_or_unlock() {
@@ -2302,6 +2591,7 @@ mod tests {
         assert_eq!(stopped["resident"]["discovery_state"], "absent");
         // These assertions are immediate: no sleep, discovery retry, or process
         // exit polling may hide a premature stop acknowledgement.
+        #[cfg(unix)]
         assert!(!socket_path(&store).exists());
         assert!(rpc(&store, "status", None, None).await.unwrap().is_none());
         let ownership = store
