@@ -694,11 +694,17 @@ fn invalidate_changed(runtime: &mut Runtime, previous: &Runtime) {
     }
 }
 
-/// An executed replacement/native authorization change can advance a lineage even
-/// when the desired reference spelling did not change. A qualified token refresh
-/// of the same authorization must not call this function.
+/// Authorization replacement or uncertainty advances a lineage even when the
+/// desired reference spelling did not change. A qualified token refresh of the
+/// same authorization must not call this function.
 pub fn authorization_changed(store: &Store, provider: &str) -> Result<()> {
     let _lock = store.lock("routing")?;
+    authorization_changed_locked(store, provider)
+}
+
+/// Caller holds the routing lock, acquired before any native lock. Native owner
+/// operations invalidate synchronously before recording uncertainty or spawning.
+pub(crate) fn authorization_changed_locked(store: &Store, provider: &str) -> Result<()> {
     let mut runtime = read_runtime(store)?;
     let previous = runtime.clone();
     let identity = runtime

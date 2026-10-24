@@ -365,10 +365,17 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             .providers
             .get(operand(r, 0)?)
             .ok_or_else(|| Error::new("unknown_resource", "Provider is not configured"))?;
-        let integration = crate::integrations::integration_id(provider)?;
         let scope = required(r, "scope")?;
-        let needs_secret = (integration == "deepseek" && matches!(scope, "auth" | "quota" | "all"))
-            || (integration == "opencode-go" && matches!(scope, "auth" | "models" | "all"));
+        let scopes = if scope == "all" {
+            &["auth", "models", "quota"][..]
+        } else {
+            std::slice::from_ref(&scope)
+        };
+        let mut needs_secret = false;
+        for scope in scopes {
+            needs_secret |=
+                crate::integrations::observation_destination(provider, scope)?.is_some();
+        }
         let unlock = if r.dry_run || !needs_secret {
             None
         } else {
@@ -515,11 +522,33 @@ fn model_list(config: &Config, r: &Request) -> Result<Value> {
     }
     Ok(json!({"models":entries}))
 }
-async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Value> {
-    let mut config = c.clone();
+pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Value> {
+    let loaded = if arg(r, "state") == Some("loaded") {
+        Some(
+            crate::service::loaded_with_metadata(store)
+                .await?
+                .ok_or_else(|| {
+                    Error::new(
+                        "runtime_unavailable",
+                        "There is no loaded configuration to explain",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    // The target, candidates and accepted metadata must belong to the same view.
+    let c = loaded.as_ref().map(|(file, _)| &file.config).unwrap_or(c);
+    let config = c;
     let mut id = r.operands.first().cloned();
     let protocol = required(r, "protocol")?;
     let context = if let Some(tier) = arg(r, "tier") {
+        if !matches!(tier, "L0" | "L1" | "L2" | "L3") {
+            return Err(Error::new(
+                "invalid_arguments",
+                "Select a configured L0, L1, L2 or L3 tier",
+            ));
+        }
         if id.is_some() || arg(r, "agent-provider").is_some() || arg(r, "session").is_some() {
             return Err(Error::new(
                 "invalid_arguments",
@@ -541,16 +570,7 @@ async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Value> {
             .await?;
             json!({"kind":"native_scope","target":null,"agent_provider":null,"agent":arg(r,"agent"),"path":arg(r,"path")})
         };
-        let preview_id = format!("__tier_preview_{}", uuid::Uuid::new_v4());
-        config.model_aliases.push(config::ModelAlias {
-            id: preview_id.clone(),
-            protocol: protocol.into(),
-            tier: Some(tier.into()),
-            candidates: None,
-            enabled: true,
-            continuity: None,
-        });
-        id = Some(preview_id);
+        id = Some(tier.into());
         context
     } else if let Some(target) = arg(r, "target") {
         let t = c
@@ -578,12 +598,54 @@ async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Value> {
         json!({"kind":"proxy","target":null,"agent_provider":null,"agent":null,"path":null})
     };
     let id = id.ok_or_else(|| Error::new("invalid_arguments", "Model ID or tier is required"))?;
-    let mut data = crate::routing::explain(store, &config, &id, protocol, arg(r, "at"))?;
+    let entry = context["target"]
+        .as_str()
+        .zip(context["agent_provider"].as_str())
+        .and_then(|(target, name)| c.agents.get(target)?.providers.get(name));
+    if arg(r, "session").is_some() {
+        if entry.is_some_and(|entry| entry.provider.is_some()) {
+            return Err(Error::new(
+                "invalid_arguments",
+                "A retained proxy session cannot be inspected through an upstream-source entry",
+            ));
+        }
+        let mut data = crate::service::control(store, config, r, None).await?;
+        data["context"] = context;
+        data["requested"] = json!({"id":r.operands.first(),"tier":null,"protocol":protocol});
+        data["native_assessment"] = json!({"state":"not_reassessed","reason":"retained_destination_inspection","authorization":"not_verified"});
+        return Ok(data);
+    }
+    let requirements =
+        context["agent"]
+            .as_str()
+            .map(|agent| crate::native::compatibility::Context {
+                agent,
+                target: context["target"].as_str(),
+                provider: entry.and_then(|e| e.provider.as_deref()),
+                proxy: entry.is_some_and(|e| e.proxy == Some(true)),
+            });
+    let advice = crate::routing::Advice {
+        native: requirements,
+        tier: arg(r, "tier"),
+    };
+    let mut data = if let Some((_, metadata)) = &loaded {
+        crate::routing::explain_loaded(
+            store,
+            config,
+            &id,
+            protocol,
+            arg(r, "at"),
+            metadata.as_ref(),
+            Some(&advice),
+        )?
+    } else {
+        crate::routing::explain_native(store, config, &id, protocol, arg(r, "at"), Some(&advice))?
+    };
+    if requirements.is_some() {
+        data["native_assessment"] = json!({"state":"assessed","scope":"protocol_provider_client_and_credential_handoff","native_login_readiness":"safe_operation_metadata_checked_for_direct_login","installation_and_authorization":"not_verified","ranking_is_live_authorization_proof":false,"secret_reads":false,"native_apply":"not_requested"});
+    }
     data["context"] = context;
     data["requested"] = json!({"id":r.operands.first(),"tier":arg(r,"tier"),"protocol":protocol});
-    if arg(r, "session").is_some() {
-        return crate::service::control(store, &config, r, None).await;
-    }
     Ok(data)
 }
 pub(crate) fn network_view(c: &Config, revision: &str, exists: bool, state: &str) -> Value {
@@ -617,7 +679,7 @@ pub(crate) async fn impact(
     }
     Ok(out)
 }
-fn diff_values(
+pub(crate) fn diff_values(
     before: Option<&Value>,
     after: Option<&Value>,
     path: &str,
@@ -843,6 +905,122 @@ mod tests {
         }
     }
     use super::*;
+    #[tokio::test]
+    async fn incomplete_native_entry_and_tier_advice_exclude_the_same_protocol_that_apply_rejects()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("state"));
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                endpoints: [(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]
+                .into(),
+                auth: Some(Auth::ApiKey {
+                    key_ref: "not-resolved".into(),
+                }),
+                models: [(
+                    "m".into(),
+                    config::Model {
+                        tier: Some("L0".into()),
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        );
+        config.agents.insert(
+            "target".into(),
+            config::AgentTarget {
+                agent: "codex".into(),
+                scope: directory.path().join("native"),
+                providers: [(
+                    "entry".into(),
+                    config::NativeProvider {
+                        provider: Some("p".into()),
+                        proxy: None,
+                        models: vec![],
+                    },
+                )]
+                .into(),
+                default: None,
+                roles: Default::default(),
+            },
+        );
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        let original = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        for tier in [false, true] {
+            let mut arguments = std::collections::BTreeMap::from([
+                ("protocol".into(), vec!["chat-completions".into()]),
+                ("target".into(), vec!["target".into()]),
+            ]);
+            arguments.insert(
+                if tier { "tier" } else { "agent-provider" }.into(),
+                vec![if tier { "L0" } else { "entry" }.into()],
+            );
+            let request = Request {
+                command: vec!["model".into(), "explain".into()],
+                operands: if tier { vec![] } else { vec!["m".into()] },
+                arguments,
+                dry_run: false,
+                if_revision: None,
+            };
+            let advice = explain(&store, &config, &request).await.unwrap();
+            assert!(advice["selection"].is_null());
+            assert_eq!(advice["excluded_candidates"][0]["qualified_model"], "p/m");
+            assert_eq!(
+                advice["excluded_candidates"][0]["reason_code"],
+                "incompatible"
+            );
+            assert!(
+                advice["excluded_candidates"][0]["native_requirement"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Responses")
+            );
+        }
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            original
+        );
+        assert!(!directory.path().join("native").exists());
+        let selection = config::ModelSelection {
+            id: "m".into(),
+            protocol: "chat-completions".into(),
+        };
+        let target = config.agents.get_mut("target").unwrap();
+        target
+            .providers
+            .get_mut("entry")
+            .unwrap()
+            .models
+            .push(selection);
+        target.default = Some(config::ModelReference {
+            provider: "entry".into(),
+            id: "m".into(),
+            protocol: "chat-completions".into(),
+        });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        std::fs::create_dir(directory.path().join("native")).unwrap();
+        assert_eq!(
+            crate::native::apply(&store, &config, "target", true, None)
+                .await
+                .unwrap_err()
+                .code,
+            "incompatible"
+        );
+    }
+
     #[test]
     fn exact_duration_and_no_document_input() {
         assert_eq!(duration("1d").unwrap(), 86400);

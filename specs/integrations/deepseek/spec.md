@@ -104,6 +104,21 @@ deletion, or cancellation forwarding. A returned ID or upstream documentation
 for another API does not qualify those operations under
 [the shared operation contract](../spec.md#supported-operations-and-resource-identity).
 
+The [first-call guide](https://api-docs.deepseek.com/) documents bearer API-key
+authentication for OpenAI-compatible calls. The
+[Anthropic header table](https://api-docs.deepseek.com/guides/anthropic_api#http-header)
+supports `x-api-key` for Messages. The consulted official API sources establish
+no recognized-client User-Agent requirement or special conversation header.
+Those requirements must not be invented from another access product.
+Truthful native identity and genuine session semantics still follow the
+[shared client-identity contract](../spec.md#client-and-conversation-identity)
+for direct/proxy main, tool-result, continuation, and auxiliary requests.
+
+The current first-call guide names `deepseek-flash` and `deepseek-v4-pro`.
+It notes that historical Flash IDs can resolve to a newer served model. A
+configured ID must remain exact; accepted aliases and catalog metadata do not
+prove an unchanged model, protocol capability, or account entitlement.
+
 ## Conversation and native scope
 
 The [Responses contract](https://api-docs.deepseek.com/guides/responses_api)
@@ -158,6 +173,11 @@ request count. The
 governs observation identity, freshness, and failed refreshes. The
 [Platform dashboard](https://platform.deepseek.com/) is the source for billing
 information the API does not provide.
+
+The documented balance response supplies no provider measurement timestamp,
+validity interval, or freshness guarantee. Local retrieval time must not become
+provider `asOf` or an invented TTL. Permission to read this balance must not be
+treated as permission for every public DeepSeek API operation.
 
 An authoritative `is_available: false` observation is balance-insufficiency
 evidence only for its observed authorization and scope. Automatic exclusion must

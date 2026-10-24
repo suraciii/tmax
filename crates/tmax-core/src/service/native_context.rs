@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 pub struct Context {
     pub family: &'static str,
     pub session: Option<String>,
+    pub go_session_header: Option<&'static str>,
     pub created_at: Option<DateTime<Utc>>,
     pub independent: bool,
 }
@@ -94,6 +95,18 @@ pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Con
         .or(affinity)
         .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
         .map(str::to_owned);
+    // Only the installed Pi Chat Completions compatibility path qualifies
+    // x-session-id for translation to Go's recommended header. Other native
+    // paths still need their qualified x-opencode-session mechanism.
+    let go_session_header = session.as_ref().and_then(|_| {
+        if opencode.is_some() {
+            Some("x-opencode-session")
+        } else if family == "pi" && protocol == "chat-completions" {
+            Some("x-session-id")
+        } else {
+            None
+        }
+    });
     let created_at = session
         .as_ref()
         .and_then(|s| uuid::Uuid::parse_str(s).ok())
@@ -109,6 +122,7 @@ pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Con
     Some(Context {
         family,
         session,
+        go_session_header,
         created_at,
         independent: independent(protocol, body),
     })

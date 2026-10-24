@@ -38,6 +38,106 @@ string remain explicit values; `--clear FIELD` restores inheritance/defaults.
 For example, supported fields include `--set enabled false`,
 `--set priority 0`, and `--set overrides.name ""`.
 
+## OpenCode Go observations
+
+Configure each independently selected account under its own provider ID, supply
+its key through protected input, and explicitly refresh the desired scope:
+
+```sh
+tmax provider add go-a --integration opencode-go
+tmax provider key set go-a
+tmax provider refresh go-a --scope quota
+tmax provider inspect go-a
+```
+
+Repeat with a distinct provider ID and its own key for another account. Inspection
+does not contact the provider. Go usage observations contain consumed percentages
+and reset announcements only; they do not report exact remaining allowance,
+workspace identity, entitlement, or a renewal date. Their source freshness is
+unqualified: local retrieval time is not a provider measurement time, and tmax
+does not infer staleness from age. These observations do not create priority-rule
+inputs or combine accounts' allowance. Renewal remains unknown unless explicitly
+known subscription information supplies it; a monthly plan alone is not a date.
+See the owning
+[Go quota contract](../specs/integrations/opencode-go/spec.md#quota-and-renewal)
+for the qualified current response boundary and source evidence.
+
+An unavailable or failed requested refresh returns exit 4 and retains the latest
+attempt separately from any prior applicable fact. It does not establish revoked
+authorization or exhausted quota. Inference still needs its own qualified model,
+protocol, client identity, and conversation session; a successful usage read does
+not prove that path.
+
+## Local Overview and evidence
+
+The Web Overview groups the provider and agent evidence already available through
+local read operations. It does not refresh providers, resolve secrets, sign in,
+start the proxy, or apply native files. An explicitly requested refresh or native
+change remains a separate task.
+
+Treat saved configuration, loaded state, applied files, and effective native
+runtime as separate facts. A configured authentication method is not verified
+authentication; an applied file is not proof that a running agent uses it. Missing,
+unavailable, stale under an explicitly declared rule, and freshness-unqualified
+observations are different states. Do not infer validity from retrieval age or
+turn unknown quota into zero. Keep consumed-only observations provider-local; do
+not pool their percentages or allowances. Show a renewal date only when known,
+and keep a past date distinct from an unknown date.
+
+## Explaining models and applying metadata
+
+Use `tmax model explain ID --protocol PROTOCOL` for an effect-free explanation of
+a public model. To assess a native entry, add both
+`--target TARGET --agent-provider ENTRY`. Resolve a tier in a declared target with
+`tmax model explain --tier L0 --protocol PROTOCOL --target TARGET`, or inspect an
+undeclared native path with `--agent AGENT --path PATH`. For example:
+
+```sh
+tmax model explain --tier L0 --protocol chat-completions --target pi-main
+tmax model explain --tier L0 --protocol chat-completions \
+  --agent omp --path "$HOME/.omp/agent"
+tmax model explain PUBLIC_MODEL --protocol responses --state loaded
+```
+
+`--state loaded` explains the resident loaded view, not pending saved edits. Model
+explanation does not retrieve secrets, sign in, run inference, reserve a session,
+or apply native files. It assesses only qualified local evidence; a readable tool
+or configured login does not verify native authentication, entitlement, or access.
+
+For an existing proxy request, use the opaque `scope_handle` returned in retained
+request decision evidence:
+
+```sh
+tmax model explain PUBLIC_MODEL --protocol PROTOCOL --session HANDLE
+```
+
+The command reports the retained destination or blocker without fresh ranking;
+it does not reserve a session, migrate a conversation, or unblock continuation.
+Session mode rejects an upstream-source entry and tier context.
+
+Catalog adoption is also explicit. `catalog apply --revision REVISION` applies a
+validated downloaded snapshot; its preview/result compares accepted and candidate
+effective metadata after overrides and reports affected concrete selections,
+explicit/tier aliases, and native projections. Review `reapply_required`, blocked
+unrepresentable facts, and any proxy-route revalidation even when native files are
+unchanged. The result distinguishes accepted-before, candidate, and accepted-after
+revisions; a preview does not advance accepted metadata. Activation reports the
+actual service outcome. Catalog apply does not implicitly apply native files or
+change endpoint, enablement, or destination settings.
+
+## Native login and logout boundaries
+
+Native sign-in and sign-out run through a qualified native command; they are not
+proof that tmax has OAuth access or provider entitlement. Before invoking the owner
+command, a protected preflight durably advances authorization lineage for both
+saved and loaded views. It invalidates dependent inputs (including manual quota)
+and prunes their observations, while retaining subscription and other manual
+declarations. An `authorization_invalidation` failure is pre-native: the owner
+command has not run. A `native_effect_uncertain` or partial native result means do
+not assume the old authorization or observations were restored and do not retry
+blindly. Inspect the same provider and native scope, then recover through that
+scope's qualified owner; never copy native tokens into tmax or another agent.
+
 ## Proxy-only access
 
 The local proxy is independent of managed Pi/Codex targets. Direct clients do not
@@ -76,9 +176,10 @@ same published model list; no client registration is required.
 
 The proxy accepts same-protocol requests and forwards to the configured provider;
 it does not translate protocols. Configure a real provider credential before
-expecting upstream completion. Pi 1.2.0 completed a same-protocol request through
-tmax to a private synthetic loopback provider; this verifies local wiring, not a
-hosted account, credential, or entitlement.
+expecting upstream completion. Synthetic loopback checks qualify local wiring
+only. The exact hosted scenario and its native request-control qualifications are
+recorded in the owning [Go evidence section](../specs/integrations/opencode-go/spec.md#sources-and-evidence-status);
+they do not establish every client's model access or entitlement.
 
 ## Manual quota inputs and ordered rules
 
@@ -197,6 +298,19 @@ required and the launcher has supplied a readable inherited pipe at FD 3, use
 `tmax --unlock-fd 3 agent apply "$TARGET"` instead; never name an FD that is not
 open or pass unlock bytes in argv, environment, or files. `awaiting_native_reload`
 means the native tool must reload/restart before the change is effective.
+
+For qualified Pi and OMP concrete selections, known effective model context/output
+limits, reasoning capability, and supported text/image input metadata are written
+using the versioned native schema. False values remain false; unknown metadata is
+not manufactured, and an unrepresentable explicit token limit blocks before native
+writes. Alias metadata is not copied from whichever candidate currently wins.
+See [versioned agent schemas](agents/README.md) for the distinct native fields,
+authentication precedence, scopes, and qualification limits.
+
+Model capability limits are not generation budgets. Native sampling, thinking
+effort, and requested output settings remain owned by the native agent; applying
+metadata does not cap a request to make a capability rejection pass. Use the
+agent's supported request controls when deliberately bounding an authorized probe.
 
 ```sh
 tmax agent restore "$TARGET"

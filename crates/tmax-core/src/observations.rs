@@ -111,6 +111,8 @@ fn valid_data(source: Option<&str>, data: &Value) -> bool {
             integrations::normalize_observation("official_balance_api", data)
                 .is_ok_and(|normalized| normalized == *data)
         }
+        Some("go_usage_api") => integrations::normalize_observation("go_usage_api", data)
+            .is_ok_and(|normalized| normalized == *data),
         Some("official_models_api") => {
             let Some(models) = data.get("models").and_then(Value::as_array) else {
                 return false;
@@ -428,7 +430,11 @@ fn temporal_applicability(
         } else {
             Some("source_validity_unavailable")
         },
-        as_of: Some(fact.observed_at),
+        as_of: if source == Some("go_usage_api") {
+            None
+        } else {
+            Some(fact.observed_at)
+        },
         valid_until: None,
     }
 }
@@ -465,6 +471,7 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
     let at = inputs::ExactInstant::from_chrono(Utc::now());
     let mut scopes = Vec::with_capacity(SCOPES.len());
     let mut balance = None;
+    let mut go_usage = None;
     for scope in SCOPES {
         let b = binding(&runtime, config, provider, scope)?;
         let head = b.as_ref().and_then(|b| heads.heads.get(&signature(b)));
@@ -477,16 +484,27 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
         {
             balance = Some(fact);
         }
+        if scope == "quota" {
+            go_usage = head
+                .filter(|h| h.binding.source.as_deref() == Some("go_usage_api"))
+                .and_then(|h| h.fact.as_ref());
+        }
         scopes.push(render_scope(head, scope, b.is_some(), &at));
     }
+    let billing_fact = balance.or(go_usage);
+    let billing_source = if go_usage.is_some() {
+        "go_usage_api"
+    } else {
+        "official_balance_api"
+    };
     Ok(
         json!({"provider":provider,"account_identity":null,"observations":scopes,
-        "billing":{"kind":if integrations::integration_id(p)?=="deepseek"{"api_balance"}else{"unknown"},
-            "state":if balance.is_some(){"observed"}else{"unknown"},"observation":balance,
-            "freshness":temporal_applicability(balance,Some("official_balance_api"),&at),
+        "billing":{"kind":if integrations::integration_id(p)?=="deepseek"{"api_balance"}else if integrations::integration_id(p)?=="opencode-go"{"go_allowance"}else{"unknown"},
+            "state":if billing_fact.is_some(){"observed"}else{"unknown"},"observation":billing_fact,
+            "freshness":temporal_applicability(billing_fact,Some(billing_source),&at),
             "subscription":p.subscription,"account_identity":null,
             "shared_upstream_limits":"unknown; providers may share upstream account limits",
-            "aggregation":"not_performed","renewal":"unknown","reset":"unknown",
+            "aggregation":"not_performed","renewal":"unknown","reset":if go_usage.is_some(){"announced"}else{"unknown"},
             "dashboard":integrations::dashboard(integrations::integration_id(p)?)}}),
     )
 }
@@ -727,6 +745,57 @@ mod tests {
         (dir, store, config)
     }
     #[test]
+    fn uncertain_authorization_prunes_saved_and_loaded_facts_not_manual_subscription() {
+        let (_dir, store, mut config) = fixture();
+        config.providers.get_mut("original").unwrap().subscription = Some(config::Subscription {
+            plan: Some("User-maintained plan".into()),
+            auto_renew: Some(false),
+            ..Default::default()
+        });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let previous = inputs::read_runtime(&store).unwrap().saved.config;
+        inputs::reconcile(&store, &previous, &config, &[]).unwrap();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let auth = capture(&store, &config, "original", "auth").unwrap();
+        let quota = capture(&store, &config, "original", "quota").unwrap();
+        commit(&store, &auth, Ok(balance(true))).unwrap();
+        commit(&store, &quota, Ok(balance(true))).unwrap();
+        assert_eq!(read(&store).unwrap().heads.len(), 2);
+        let before = inputs::read_runtime(&store).unwrap();
+        let original_config = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        {
+            let _configuration = store.lock("configuration").unwrap();
+            let _routing = store.lock("routing").unwrap();
+            let _native = store.lock("native").unwrap();
+            inputs::authorization_changed_locked(&store, "original").unwrap();
+        }
+        assert!(read(&store).unwrap().heads.is_empty());
+        let after = inputs::read_runtime(&store).unwrap();
+        assert_ne!(
+            before.saved.providers["original"].authorization,
+            after.saved.providers["original"].authorization
+        );
+        assert_eq!(
+            after.saved.providers["original"].authorization,
+            after.loaded.as_ref().unwrap().providers["original"].authorization
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            original_config
+        );
+        assert_eq!(
+            inspect(&store, &config, "original").unwrap()["billing"]["subscription"]["plan"],
+            "User-maintained plan"
+        );
+        assert_eq!(
+            commit(&store, &auth, Ok(balance(false))).unwrap_err().code,
+            "observations_changed"
+        );
+    }
+
+    #[test]
     fn rename_projects_identity_without_orphans_and_removal_prunes() {
         let (_dir, store, config) = fixture();
         let captured = capture(&store, &config, "original", "quota").unwrap();
@@ -905,5 +974,157 @@ mod tests {
         assert_eq!(normalized["models"], json!(["model"]));
         assert_eq!(normalized["registered_models"], json!([]));
         assert_eq!(normalized["registration"], "not_performed");
+    }
+    fn go_usage() -> AcquiredObservation {
+        AcquiredObservation {
+            status: 200,
+            data: integrations::normalize_observation(
+                "go_usage_api",
+                &json!({"usage":{
+                    "rolling":{"status":"ok","percent":0,"resetsAt":"2026-10-23T19:04:44.687Z"},
+                    "weekly":{"status":"ok","percent":0,"resetsAt":"2026-10-26T00:00:00.000Z"},
+                    "monthly":{"status":"ok","percent":62,"resetsAt":"2026-11-09T03:13:27.000Z"}
+                }}),
+            )
+            .unwrap(),
+        }
+    }
+    fn go_fixture() -> (tempfile::TempDir, Store, Config) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().to_path_buf());
+        let mut config = Config::empty();
+        for id in ["go-a", "go-b"] {
+            config.providers.insert(
+                id.into(),
+                config::Provider {
+                    integration: Some("opencode-go".into()),
+                    auth: Some(config::Auth::ApiKey {
+                        key_ref: format!("key-{id}"),
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        (dir, store, config)
+    }
+    #[test]
+    fn go_quota_failures_retain_exact_fact_without_sharing_or_inventing_availability() {
+        let (_dir, store, config) = go_fixture();
+        let captured = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &captured, Ok(go_usage())).unwrap();
+        let before = inspect(&store, &config, "go-a").unwrap();
+        let fact = before["billing"]["observation"].clone();
+        assert_eq!(before["billing"]["kind"], "go_allowance");
+        assert_eq!(before["billing"]["state"], "observed");
+        assert_eq!(fact["data"]["usage"]["monthly"]["percent"], 62);
+        assert_eq!(
+            fact["data"]["usage"]["monthly"]["resetsAt"],
+            "2026-11-09T03:13:27.000Z"
+        );
+        assert_eq!(before["billing"]["reset"], "announced");
+        assert_eq!(before["billing"]["renewal"], "unknown");
+        assert_eq!(before["billing"]["freshness"]["state"], "unqualified");
+        assert!(before["billing"]["freshness"]["as_of"].is_null());
+        assert!(before["billing"]["freshness"]["valid_until"].is_null());
+        assert!(before["account_identity"].is_null());
+        let quota = &before["observations"][2];
+        assert_eq!(quota["source"], "go_usage_api");
+        assert_eq!(quota["observed_at_basis"], "retrieval_time");
+        assert!(quota["source_provided_timestamp"].is_null());
+        assert!(quota["freshness"]["as_of"].is_null());
+        for reason in [
+            "source_format_error",
+            "upstream_rejection",
+            "transport_error",
+            "observation_deadline",
+            "credential_unavailable",
+        ] {
+            let captured = capture(&store, &config, "go-a", "quota").unwrap();
+            commit(&store, &captured, Err(Error::new(reason, "safe failure"))).unwrap();
+            let after = inspect(&store, &config, "go-a").unwrap();
+            assert_eq!(after["billing"]["observation"], fact);
+            assert_eq!(
+                after["observations"][2]["latest_attempt"]["reason_code"],
+                reason
+            );
+            assert_eq!(
+                after["observations"][2]["latest_attempt"]["outcome"],
+                if reason == "credential_unavailable" {
+                    "unavailable"
+                } else {
+                    "failed"
+                }
+            );
+            assert_eq!(
+                inspect(&store, &config, "go-b").unwrap()["billing"]["state"],
+                "unknown"
+            );
+            assert_eq!(after["observations"][0]["state"], "unknown");
+            assert_eq!(after["observations"][1]["state"], "unknown");
+        }
+        let observed = fact["observed_at"]
+            .as_str()
+            .unwrap()
+            .parse::<DateTime<Utc>>()
+            .unwrap();
+        for at in [observed, observed + chrono::Duration::days(365)] {
+            assert_eq!(
+                routing_availability(&store, &config, "go-a", at).unwrap(),
+                None
+            );
+        }
+        inputs::authorization_changed(&store, "go-a").unwrap();
+        assert_eq!(
+            inspect(&store, &config, "go-a").unwrap()["billing"]["state"],
+            "unknown"
+        );
+    }
+    #[test]
+    fn malformed_go_refresh_retains_fact_and_corrupt_retained_data_is_rejected() {
+        let (_dir, store, config) = go_fixture();
+        let captured = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &captured, Ok(go_usage())).unwrap();
+        let old = inspect(&store, &config, "go-a").unwrap()["billing"]["observation"].clone();
+        let mut malformed = go_usage().data;
+        malformed["usage"]["weekly"]["percent"] = json!("not-a-number");
+        let acquired = integrations::normalize_observation("go_usage_api", &malformed)
+            .map(|data| AcquiredObservation { data, status: 200 });
+        let captured = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &captured, acquired).unwrap();
+        let after = inspect(&store, &config, "go-a").unwrap();
+        assert_eq!(after["billing"]["observation"], old);
+        assert_eq!(
+            after["observations"][2]["latest_attempt"]["reason_code"],
+            "source_format_error"
+        );
+        let mut heads = read(&store).unwrap();
+        heads
+            .heads
+            .values_mut()
+            .next()
+            .unwrap()
+            .fact
+            .as_mut()
+            .unwrap()
+            .data["remaining"] = json!(38);
+        store.write_json(STATE, &heads).unwrap();
+        assert_eq!(
+            inspect(&store, &config, "go-a").unwrap_err().code,
+            "invalid_record"
+        );
+    }
+    #[tokio::test]
+    async fn go_quota_dry_run_declares_supported_read_without_secret_or_publication() {
+        let (_dir, store, config) = go_fixture();
+        let result = refresh(&store, &config, "go-a", "quota", None, true)
+            .await
+            .unwrap();
+        assert_eq!(result["checks"][0]["outcome"], "not_executed");
+        assert!(result["checks"][0]["reason_code"].is_null());
+        assert!(!store.path(STATE).unwrap().exists());
     }
 }

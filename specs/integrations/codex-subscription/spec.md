@@ -148,6 +148,13 @@ own finite declaration and reliable original binding under
 The two model-provider paths do not establish forwarding support for other Codex
 connections or product surfaces.
 
+The consulted OpenAI gateway documentation establishes no mandatory literal
+User-Agent or Go-style session header. The actual qualified native client must
+retain its truthful identity and conversation semantics under the
+[shared client-identity contract](../spec.md#client-and-conversation-identity),
+including tool turns, continuations, and any auxiliary model-provider requests.
+Optional routing headers do not replace native authorization or prove identity.
+
 The two credential paths must remain separate:
 
 - The client sends its native ChatGPT token in `Authorization`. The gateway must

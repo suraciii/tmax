@@ -11,6 +11,9 @@ Contracts live in [../specs/](../specs/AGENTS.md). Engineering practices live in
 - [CLI usage](usage.md) — provider/model setup, manual input and rule previews, proxy-only use, and the explicit Pi apply/restore path.
 - [Building and verification](building.md) — dependencies, build commands, the
   verification gates, and the evidence format.
+- [Native agent configuration references](agents/README.md) — version-qualified
+  model fields, native authentication ownership, scopes, and isolated evidence
+  for stock pi, omp, Codex CLI, OpenCode V2, and Hermes Agent.
 
 ## Evidence
 
