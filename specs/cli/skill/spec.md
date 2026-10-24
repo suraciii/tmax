@@ -26,9 +26,14 @@ of tmax's configuration authority.
 | Observed destination | Execution | Dry-run |
 | --- | --- | --- |
 | Absent | Create complete skill without replacing a concurrent entry; `state: installed`, `changed: true` | `state: would_install`, `changed: false`; create nothing |
-| Identical regular current-user-owned file | `state: already_installed`, `changed: false`; preserve file identity and permissions | Same |
+| Identical regular file passing platform checks | `state: already_installed`, `changed: false`; preserve file identity and permissions | Same |
 | Different existing content | Block with `inputs_changed`; preserve exact content | Same blocker |
-| Symlink, nonregular entry, foreign-owned native directory/file, group/world-writable native directory on Unix, or unavailable storage | Error without replacing that entry | Same blocker |
+| Symlink, nonregular entry, unavailable storage; on Unix, foreign-owned native directory/file or group/world-writable native directory | Error without replacing that entry | Same blocker |
+
+Existing-path UID and directory-write checks apply on Unix. Windows new entries
+receive the existing storage helper's owner-only ACLs; pre-existing paths remain
+subject to OS access controls and existing reparse checks, without owner
+attestation. Neither platform overwrites differing content.
 
 Results use the [shared envelope](../results/spec.md) and report `skill`, `agent`
 (`agents` by default or `hermes`), resolved absolute `path`, `state`, and `changed`.
