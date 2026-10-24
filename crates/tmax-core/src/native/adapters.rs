@@ -86,10 +86,10 @@ pub(super) fn precedence(agent: &str) -> Value {
             json!({"scope":"PI_CODING_AGENT_DIR", "order":["CLI and session selections", "trusted project settings/extensions", "agent settings.json and models.json"], "credentials":["runtime api-key", "native auth.json", "models.json apiKey", "provider environment"], "launch_environment":"PI_CODING_AGENT_DIR", "native_reload":"Open /model to reload models; restart for persisted startup defaults"})
         }
         "omp" => {
-            json!({"scope":"active profile agent directory", "order":["CLI and session selections", "extra --config overlays", "project .omp/config.yml", "active profile config.yml"], "models":["models.yml", "models.yaml", "legacy models.json migration"], "credentials":"native auth cascade and account policies can precede configured apiKey; unqualified existing native auth blocks handoff", "launch_environment":"PI_CODING_AGENT_DIR with OMP_PROFILE unset for explicit default-profile directory", "native_reload":"Restart omp in the selected profile; existing sessions retain selections"})
+            json!({"scope":"active profile agent directory", "order":["CLI and session selections", "extra --config overlays", "project .omp/config.yml", "active profile config.yml"], "models":["models.yml", "models.yaml", "legacy models.json migration"], "credentials":"runtime api-key precedes a pinned models.yml apiKey, which precedes stored OAuth and login keys; extension fallback, environment, and other stored keys follow; account restrictions still apply", "launch_environment":"PI_CODING_AGENT_DIR with OMP_PROFILE unset for explicit default-profile directory", "native_reload":"Restart omp in the selected profile; existing sessions retain selections"})
         }
         "opencode" => {
-            json!({"scope":"global config directory / explicit project config directory; accounts are server-scoped", "order":["managed policy", "system configuration", "project .opencode files", "project direct files", "global configuration"], "credentials":"saved server account precedes environment; explicit settings.apiKey pins a custom package key", "launch_environment":"OPENCODE_CONFIG_DIR; an isolated server also needs explicit OPENCODE_DB", "native_reload":"Run opencode reload on the intended server or start a private --standalone server; tmax does not restart a shared server"})
+            json!({"scope":"global config directory / explicit project config directory; accounts are server-scoped", "order_direction":"highest_to_lowest", "order":["inline configuration", "project .opencode files (cwd toward root)", "project direct files (cwd toward root)", "explicit configuration file", "global configuration", "well-known configuration", "system configuration", "MDM preferences"], "policy_evaluation":"File-based policy evaluation reverses ordinary configuration order; MDM preferences and system policy retain their separate authority", "credentials":"saved server account precedes environment; explicit settings.apiKey pins a custom package key", "launch_environment":"OPENCODE_CONFIG_DIR; an isolated server also needs explicit OPENCODE_DB", "native_reload":"Run opencode reload on the intended server or start a private --standalone server; tmax does not restart a shared server"})
         }
         "hermes" => {
             json!({"scope":"explicit HERMES_HOME, including an explicitly selected profile", "order":["managed scope", "CLI/environment model overrides", "selected profile config.yaml"], "credentials":"native pools and external login adoption can affect built-in providers; custom entries use the selected literal key", "launch_environment":"HERMES_HOME", "native_reload":"Restart Hermes in the selected HERMES_HOME; active sessions may retain model settings"})
@@ -108,6 +108,7 @@ pub(super) struct Entry {
     pub proxy: bool,
     pub models: Vec<String>,
     pub model_routes: BTreeMap<String, (String, String)>,
+    pub model_metadata: BTreeMap<String, Value>,
 }
 impl Entry {
     pub(super) fn native_name(&self) -> &str {
@@ -116,6 +117,106 @@ impl Entry {
             .or(self.canonical.as_deref())
             .unwrap_or(&self.name)
     }
+}
+pub(super) fn pi_omp_model_metadata(effective: &Value) -> Result<Value> {
+    let mut metadata = json!({});
+    for (source, native) in [("context", "contextWindow"), ("output", "maxTokens")] {
+        if let Some(value) = effective.get("limit").and_then(|limit| limit.get(source))
+            && !value.is_null()
+        {
+            // Independently qualified Pi 1.2.0 and OMP 18.12.6 custom schemas
+            // reject nonpositive limits. JS numbers must retain the exact integer.
+            let count = value.as_u64().filter(|count| *count > 0 && *count <= 9_007_199_254_740_991)
+                .ok_or_else(|| Error::new(
+                    "native_metadata_unrepresentable",
+                    "This concrete model limit cannot be represented exactly by the qualified native schema; select a representable explicit limit before applying",
+                ).field(format!("limit.{source}")))?;
+            metadata[native] = json!(count);
+        }
+    }
+    if let Some(reasoning) = effective.get("reasoning").and_then(Value::as_bool) {
+        metadata["reasoning"] = json!(reasoning);
+    }
+    if let Some(input) = effective
+        .pointer("/modalities/input")
+        .and_then(Value::as_array)
+    {
+        // Both qualified native schemas support only text and image, not the
+        // provider's entire modality vocabulary. An explicit empty list stays empty.
+        metadata["input"] = json!(
+            input
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|modality| matches!(*modality, "text" | "image"))
+                .collect::<Vec<_>>()
+        );
+    }
+    Ok(metadata)
+}
+// Hermes consumes route context and catalog capability patches separately.
+// `model_overrides` here is an intermediate projection, never a provider-model key.
+pub(super) fn model_metadata(agent: &str, effective: &Value) -> Result<Value> {
+    if matches!(agent, "pi" | "omp") {
+        return pi_omp_model_metadata(effective);
+    }
+    let mut metadata = json!({});
+    if agent == "opencode" {
+        for field in ["context", "input", "output"] {
+            if let Some(value) = effective.get("limit").and_then(|limit| limit.get(field))
+                && !value.is_null()
+            {
+                let count = value.as_u64().filter(|count| *count <= 9_007_199_254_740_991)
+                    .ok_or_else(|| Error::new(
+                        "native_metadata_unrepresentable",
+                        "This concrete model limit cannot be represented exactly by OpenCode's integer schema",
+                    ).field(format!("limit.{field}")))?;
+                metadata["limit"][field] = json!(count);
+            }
+        }
+        if let Some(tools) = effective.get("tool_call").and_then(Value::as_bool) {
+            metadata["capabilities"]["tools"] = json!(tools);
+        }
+        for field in ["input", "output"] {
+            if let Some(modalities) = effective.get("modalities").and_then(|m| m.get(field))
+                && modalities.is_array()
+            {
+                metadata["capabilities"][field] = modalities.clone();
+            }
+        }
+    } else if agent == "hermes" {
+        if let Some(value) = effective.pointer("/limit/context")
+            && !value.is_null()
+        {
+            let count = value.as_u64().filter(|count| *count > 0).ok_or_else(|| {
+                Error::new(
+                    "native_metadata_unrepresentable",
+                    "Hermes requires a positive concrete model context length",
+                )
+                .field("limit.context")
+            })?;
+            metadata["context_length"] = json!(count);
+            metadata["model_overrides"]["context_window"] = json!(count);
+        }
+        for (source, native) in [
+            ("reasoning", "supports_reasoning"),
+            ("tool_call", "supports_tools"),
+        ] {
+            if let Some(value) = effective.get(source).and_then(Value::as_bool) {
+                metadata["model_overrides"][native] = json!(value);
+            }
+        }
+        if let Some(input) = effective
+            .pointer("/modalities/input")
+            .and_then(Value::as_array)
+        {
+            metadata["model_overrides"]["supports_vision"] = json!(
+                input
+                    .iter()
+                    .any(|modality| modality.as_str() == Some("image"))
+            );
+        }
+    }
+    Ok(metadata)
 }
 #[derive(Debug)]
 pub(super) struct File {
@@ -274,7 +375,23 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 if entry.login_provider.is_some() {
                     continue;
                 }
-                let models: Vec<Value> = entry.models.iter().map(|id| {let (protocol,base)=entry.model_routes.get(id).map(|(p,b)|(p.as_str(),b.as_str())).unwrap_or((&entry.protocol,&entry.base));let mut model=json!({"id":id,"api":api(protocol)?,"baseUrl":base});if entry.proxy && target.agent=="pi" && protocol=="chat-completions"{model["compat"]=json!({"sendSessionAffinityHeaders":true,"sessionAffinityFormat":"openrouter"});}Ok(model)}).collect::<Result<_>>()?;
+                // Pi 1.2.0's generic Chat Completions path emits its actual
+                // session as x-session-id for this option, including local URLs.
+                // The Go proxy qualifies and forwards that dynamic identity;
+                // do not replace it with a provider-wide static headers object.
+                let models: Vec<Value> = entry.models.iter().map(|id| {
+                    let (protocol, base) = entry.model_routes.get(id)
+                        .map(|(p, b)| (p.as_str(), b.as_str()))
+                        .unwrap_or((&entry.protocol, &entry.base));
+                    let mut model = json!({"id":id,"api":api(protocol)?,"baseUrl":base});
+                    if let Some(metadata) = entry.model_metadata.get(id).and_then(Value::as_object) {
+                        model.as_object_mut().expect("native model object").extend(metadata.clone());
+                    }
+                    if target.agent == "pi" && entry.proxy && protocol == "chat-completions" {
+                        model["compat"] = json!({"sendSessionAffinityHeaders":true,"sessionAffinityFormat":"openrouter"});
+                    }
+                    Ok(model)
+                }).collect::<Result<_>>()?;
                 providers.insert(native_name.into(), json!({"baseUrl":entry.base,"api":api(&entry.protocol)?,"apiKey":format!("!{}",key_command(&credential_path(scope,entry))?),"models":models}));
                 if target.agent == "omp" {
                     providers[native_name]["auth"] = json!("apiKey");
@@ -317,7 +434,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     file(scope, models, Format::Yaml, json!({"providers":providers})),
                     file(
                         scope,
-                        "config.yml",
+                        super::omp_main_settings(scope),
                         Format::Yaml,
                         json!({"modelRoles":roles}),
                     ),
@@ -330,7 +447,16 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     continue;
                 }
                 let package = package(&entry.protocol)?;
-                let models: BTreeMap<&str, Value> = entry.models.iter().map(|id| {let (protocol,base)=entry.model_routes.get(id).map(|(p,b)|(p.as_str(),b.as_str())).unwrap_or((&entry.protocol,&entry.base));Ok((id.as_str(),json!({"modelID":id,"package":self::package(protocol)?,"settings":{"baseURL":base}})))}).collect::<Result<_>>()?;
+                let models: BTreeMap<&str, Value> = entry.models.iter().map(|id| {
+                    let (protocol, base) = entry.model_routes.get(id)
+                        .map(|(p, b)| (p.as_str(), b.as_str()))
+                        .unwrap_or((&entry.protocol, &entry.base));
+                    let mut model = json!({"modelID":id,"package":self::package(protocol)?,"settings":{"baseURL":base}});
+                    if let Some(metadata) = entry.model_metadata.get(id).and_then(Value::as_object) {
+                        model.as_object_mut().expect("native model object").extend(metadata.clone());
+                    }
+                    Ok((id.as_str(), model))
+                }).collect::<Result<_>>()?;
                 providers.insert(entry.name.clone(),json!({"name":entry.name,"package":package,"env":[],"settings":{"baseURL":entry.base,"apiKey":format!("{{file:{}}}",credential_path(scope,entry).display())},"models":models}));
             }
             let mut config = json!({"providers":providers,"model":reference(default,entries)?});
@@ -346,6 +472,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             Ok(vec![file(scope, name, Format::Json, config)])
         }
         "hermes" => {
+            let mut overrides = serde_json::Map::new();
             for entry in entries {
                 if entry.login_provider.is_some() {
                     continue;
@@ -353,7 +480,20 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 let models: BTreeMap<&str, Value> = entry
                     .models
                     .iter()
-                    .map(|id| (id.as_str(), json!({})))
+                    .map(|id| {
+                        let mut model = json!({});
+                        if let Some(metadata) = entry.model_metadata.get(id) {
+                            if let Some(context) = metadata.get("context_length") {
+                                model["context_length"] = context.clone();
+                            }
+                            if let Some(patch) = metadata.get("model_overrides") {
+                                overrides
+                                    .entry(entry.native_name().to_owned())
+                                    .or_insert_with(|| json!({}))[id] = patch.clone();
+                            }
+                        }
+                        (id.as_str(), model)
+                    })
                     .collect();
                 providers.insert(entry.name.clone(),json!({"name":entry.name,"base_url":entry.base,"key_cmd":key_command(&credential_path(scope,entry))?,"transport":transport(&entry.protocol)?,"models":models}));
                 if entry.proxy {
@@ -367,6 +507,9 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     Error::new("unresolved_reference", "Native default does not resolve")
                 })?;
             let mut config = json!({"providers":providers,"model":{"provider":active.native_name(),"default":default.id}});
+            if !overrides.is_empty() {
+                config["model_overrides"] = Value::Object(overrides);
+            }
             if active.login_provider.is_none() {
                 config["model"]["base_url"] = json!(active.base);
             }
@@ -428,6 +571,44 @@ mod tests {
         }
     }
     #[test]
+    fn omp_roles_update_existing_yaml_without_shadowing_unrelated_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let scope = directory.path();
+        let original = "# native policy\nmodelRoleStorage: project\ndefaultThinkingLevel: high\n";
+        std::fs::write(scope.join("config.yaml"), original).unwrap();
+        let entry = Entry {
+            name: "local".into(),
+            base: "https://example.invalid/v1".into(),
+            protocol: "chat-completions".into(),
+            key: Some("not-read".into()),
+            login_provider: None,
+            canonical: None,
+            proxy: false,
+            models: vec!["m".into()],
+            model_routes: BTreeMap::new(),
+            model_metadata: BTreeMap::new(),
+        };
+        let files = build(&target("omp"), scope, &[entry]).unwrap();
+        assert!(!files.iter().any(|f| f.path == scope.join("config.yml")));
+        let settings = files
+            .iter()
+            .find(|f| f.path == scope.join("config.yaml"))
+            .unwrap();
+        let rewritten = super::super::document::set(
+            original,
+            settings.format,
+            &["modelRoles".into()],
+            Some(&settings.desired["modelRoles"]),
+        )
+        .unwrap();
+        let effective = super::super::document::parse(&rewritten, settings.format).unwrap();
+        assert_eq!(effective["modelRoleStorage"], "project");
+        assert_eq!(effective["defaultThinkingLevel"], "high");
+        assert_eq!(effective["modelRoles"]["default"], "local/m");
+        assert!(rewritten.contains("# native policy"));
+    }
+
+    #[test]
     fn codex_never_converts_chat_protocol() {
         let t = target("codex");
         let e = Entry {
@@ -440,6 +621,7 @@ mod tests {
             proxy: false,
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
+            model_metadata: BTreeMap::new(),
         };
         assert_eq!(
             build(&t, Path::new("/explicit/native"), &[e])
@@ -469,6 +651,7 @@ mod tests {
             proxy: false,
             models: vec!["m".into()],
             model_routes: BTreeMap::new(),
+            model_metadata: BTreeMap::new(),
         };
         let error = build(
             &target,
@@ -477,5 +660,235 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "incompatible");
+    }
+    #[test]
+    fn pi_proxy_affinity_uses_native_session_option_only_on_qualified_api() {
+        let target = target("pi");
+        let entry = Entry {
+            name: "local".into(),
+            base: "http://127.0.0.1:3210/v1".into(),
+            protocol: "chat-completions".into(),
+            key: None,
+            login_provider: None,
+            canonical: None,
+            proxy: true,
+            models: vec!["m".into(), "r".into()],
+            model_routes: BTreeMap::from([(
+                "r".into(),
+                ("responses".into(), "http://127.0.0.1:3210/v1".into()),
+            )]),
+            model_metadata: BTreeMap::new(),
+        };
+        let files = build(&target, Path::new("/explicit/native"), &[entry]).unwrap();
+        let provider = &files[0].desired["providers"]["local"];
+        let models = provider["models"].as_array().unwrap();
+        assert_eq!(
+            models[0]["compat"],
+            json!({"sendSessionAffinityHeaders":true,"sessionAffinityFormat":"openrouter"})
+        );
+        assert!(models[0]["headers"].is_null());
+        assert!(models[1]["compat"].is_null());
+        assert!(provider["headers"].is_null());
+        assert_eq!(files[1].desired["defaultModel"], "m");
+        let entry = Entry {
+            name: "local".into(),
+            base: "https://example.invalid/v1".into(),
+            protocol: "chat-completions".into(),
+            key: None,
+            login_provider: None,
+            canonical: None,
+            proxy: false,
+            models: vec!["m".into()],
+            model_routes: BTreeMap::new(),
+            model_metadata: BTreeMap::new(),
+        };
+        let direct = build(&target, Path::new("/explicit/native"), &[entry]).unwrap();
+        assert!(direct[0].desired["providers"]["local"]["models"][0]["compat"].is_null());
+    }
+    #[test]
+    fn pi_metadata_preserves_false_empty_and_unknown_without_invalid_limit_defaults() {
+        let native = pi_omp_model_metadata(&json!({
+            "limit":{"context":1000000,"output":65536},
+            "reasoning":false,
+            "modalities":{"input":["text","image","video","audio"]},
+            "cost":{"input":0},
+            "samplingParams":{"temperature":0.7},
+        }))
+        .unwrap();
+        assert_eq!(
+            native,
+            json!({"contextWindow":1000000,"maxTokens":65536,"reasoning":false,"input":["text","image"]})
+        );
+        assert_eq!(pi_omp_model_metadata(&json!({})).unwrap(), json!({}));
+        assert_eq!(
+            pi_omp_model_metadata(&json!({"modalities":{"input":[]}})).unwrap(),
+            json!({"input":[]})
+        );
+        assert_eq!(
+            pi_omp_model_metadata(&json!({"modalities":{"input":["video"]}})).unwrap(),
+            json!({"input":[]})
+        );
+        for field in ["context", "output"] {
+            for value in [json!(0), json!(9_007_199_254_740_992u64)] {
+                let mut metadata = json!({"limit":{}});
+                metadata["limit"][field] = value;
+                let error = pi_omp_model_metadata(&metadata).unwrap_err();
+                assert_eq!(error.code, "native_metadata_unrepresentable");
+                assert_eq!(error.field, Some(format!("limit.{field}")));
+            }
+        }
+    }
+
+    #[test]
+    fn qualified_metadata_is_concrete_only_and_never_changes_native_preferences() {
+        let entry = || {
+            Entry {
+            name: "local".into(),
+            base: "http://127.0.0.1:3210".into(),
+            protocol: "chat-completions".into(),
+            key: None,
+            login_provider: None,
+            canonical: None,
+            proxy: true,
+            models: vec!["m".into(), "dynamic".into()],
+            model_routes: BTreeMap::new(),
+            model_metadata: BTreeMap::from([("m".into(), pi_omp_model_metadata(&json!({
+                "limit":{"context":1000000,"output":65536},"reasoning":true,"modalities":{"input":["text","image","video"]}
+            })).unwrap())]),
+        }
+        };
+        let pi = build(&target("pi"), Path::new("/explicit/native"), &[entry()]).unwrap();
+        let models = &pi[0].desired["providers"]["local"]["models"];
+        assert_eq!(models[0]["contextWindow"], 1000000);
+        assert_eq!(models[0]["maxTokens"], 65536);
+        assert_eq!(models[0]["reasoning"], true);
+        assert_eq!(models[0]["input"], json!(["text", "image"]));
+        for field in ["contextWindow", "maxTokens", "reasoning", "input"] {
+            assert!(models[1].get(field).is_none());
+        }
+        for field in [
+            "cost",
+            "samplingParams",
+            "samplingParamsByThinkingLevel",
+            "thinkingLevelMap",
+            "max_tokens",
+            "max_output_tokens",
+        ] {
+            assert!(models[0].get(field).is_none());
+        }
+        assert_eq!(
+            pi[1].desired,
+            json!({"defaultProvider":"local","defaultModel":"m"})
+        );
+        let omp = build(&target("omp"), Path::new("/explicit/native"), &[entry()]).unwrap();
+        for field in ["contextWindow", "maxTokens", "reasoning", "input"] {
+            assert_eq!(
+                omp[0].desired["providers"]["local"]["models"][0][field],
+                models[0][field]
+            );
+            assert!(
+                omp[0].desired["providers"]["local"]["models"][1]
+                    .get(field)
+                    .is_none()
+            );
+        }
+    }
+    #[test]
+    fn opencode_integer_limits_preserve_zero_but_never_round_known_limits() {
+        assert_eq!(
+            model_metadata(
+                "opencode",
+                &json!({"limit":{"context":0,"input":0,"output":0}})
+            )
+            .unwrap(),
+            json!({"limit":{"context":0,"input":0,"output":0}})
+        );
+        assert_eq!(model_metadata("opencode", &json!({})).unwrap(), json!({}));
+        for field in ["context", "input", "output"] {
+            let mut effective = json!({"limit":{}});
+            effective["limit"][field] = json!(9_007_199_254_740_992u64);
+            let error = model_metadata("opencode", &effective).unwrap_err();
+            assert_eq!(error.code, "native_metadata_unrepresentable");
+            assert_eq!(error.field, Some(format!("limit.{field}")));
+        }
+        assert_eq!(
+            model_metadata("hermes", &json!({"limit":{"context":0}}))
+                .unwrap_err()
+                .code,
+            "native_metadata_unrepresentable"
+        );
+        assert_eq!(
+            model_metadata(
+                "hermes",
+                &json!({"limit":{"context":9_007_199_254_740_992u64}})
+            )
+            .unwrap()["context_length"],
+            json!(9_007_199_254_740_992u64)
+        );
+    }
+
+    #[test]
+    fn supported_false_empty_and_unknown_capabilities_do_not_become_alias_winner_metadata() {
+        for agent in ["opencode", "hermes"] {
+            let effective = json!({
+                "limit":{"context":123456,"output":8192},"reasoning":false,"tool_call":false,
+                "modalities":{"input":[],"output":[]},
+                "reasoning_options":[{"type":"effort","values":["high"]}],"temperature":true
+            });
+            let entry = Entry {
+                name: "local".into(),
+                base: "http://127.0.0.1:3210".into(),
+                protocol: "chat-completions".into(),
+                key: None,
+                login_provider: None,
+                canonical: None,
+                proxy: true,
+                models: vec!["m".into(), "dynamic".into(), "unknown".into()],
+                model_routes: BTreeMap::new(),
+                model_metadata: BTreeMap::from([
+                    ("m".into(), model_metadata(agent, &effective).unwrap()),
+                    (
+                        "unknown".into(),
+                        model_metadata(agent, &json!({"reasoning":false})).unwrap(),
+                    ),
+                ]),
+            };
+            let files = build(&target(agent), Path::new("/explicit/native"), &[entry]).unwrap();
+            let config = &files[0].desired;
+            let models = &config["providers"]["local"]["models"];
+            if agent == "opencode" {
+                assert_eq!(
+                    models["m"]["capabilities"],
+                    json!({"tools":false,"input":[],"output":[]})
+                );
+                assert!(models["m"].get("reasoning").is_none());
+                for id in ["dynamic", "unknown"] {
+                    assert!(models[id].get("limit").is_none());
+                    assert!(models[id].get("capabilities").is_none());
+                }
+            } else {
+                assert_eq!(models["m"], json!({"context_length":123456}));
+                let overrides = &config["model_overrides"]["local"];
+                assert_eq!(
+                    overrides["m"],
+                    json!({"context_window":123456,"supports_reasoning":false,"supports_tools":false,"supports_vision":false})
+                );
+                assert_eq!(overrides["unknown"], json!({"supports_reasoning":false}));
+                assert!(overrides.get("dynamic").is_none());
+                assert_eq!(models["dynamic"], json!({}));
+            }
+            for field in [
+                "max_tokens",
+                "max_output_tokens",
+                "reasoning_effort",
+                "reasoning_options",
+                "temperature",
+                "cost",
+            ] {
+                assert!(models["m"].get(field).is_none());
+            }
+            assert!(config.get("agent").is_none());
+            assert!(config.get("reasoning_overrides").is_none());
+        }
     }
 }

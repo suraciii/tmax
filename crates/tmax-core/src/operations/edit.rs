@@ -1381,6 +1381,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         } else {
             crate::native::logout(store, original, provider, via, false).await?
         };
+        data["authorization_invalidation"] = effect["authorization_invalidation"].clone();
         if let Some(code) = effect
             .get("_code")
             .and_then(Json::as_str)
@@ -1407,12 +1408,6 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
                 &["providers", provider, "auth", "session_ref"],
                 string(session),
             )?;
-        }
-        if let Err(error) = crate::inputs::authorization_changed(store, provider) {
-            data["_code"] = json!("recovery_required");
-            data["save"] = json!("not_requested");
-            data["authorization_invalidation"] = json!({"state":"failed","code":error.code});
-            return Ok(data);
         }
     }
     candidate = config::parse(&toml::to_string(&root).map_err(|_| error())?)?;

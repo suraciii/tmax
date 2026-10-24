@@ -174,6 +174,15 @@ relay. That route must retain an explicit conditional or unknown support result
 until its client identity, use, and forwarding contract are qualified. A
 successful HTTP request alone is not provider authorization for the relay.
 
+The [official overview](https://www.kimi.com/code/docs/en/index.html#configuring-in-third-party-tools)
+explicitly requires the tool's real User-Agent. It does not publish a universal
+recognized-client string, an exhaustive allowlist, or a required conversation
+header. Native client/version qualification must not be replaced by a fabricated
+approved User-Agent. Identity preservation covers main, tool-result,
+continuation, and auxiliary calls under the
+[shared identity contract](../spec.md#client-and-conversation-identity); it does
+not import Go's special header requirement.
+
 ## Membership quota and renewal
 
 The [membership documentation](https://www.kimi.com/code/docs/en/kimi-code/membership.html)
@@ -269,7 +278,20 @@ The provider and agent references are linked with the claims they support above.
 The Console and Subscription links are user-facing sources, not established
 machine-readable inspection APIs.
 
-No tmax Kimi runtime integration, supported agent-version range, native OAuth
-forwarding route, or single-user local relay has been verified. Qualification
-records must follow the [shared support contract](../spec.md#support-contract)
-and keep provider evidence, agent evidence, and runtime evidence separate.
+One bounded runtime scenario on **2026-10-23** used real pi **1.2.0** through
+the tmax `kimi-coding-plan` China Messages route with exact `kimi-for-coding`.
+The user selected China explicitly before credentialed requests. Native stream
+events, one harmless tool-result round trip, and one same-process continuation
+completed. A documented request-budget hook changed only existing `max_tokens`
+from 32768 to 512; native model capacity and reasoning support remained intact.
+This qualifies neither stock-default generation budgets nor other models,
+regions, transports, or native reasoning controls.
+
+HTTP statuses and terminal upstream request history were not collected because
+the acceptance harness used an incorrect history filter. Native completion is
+not a substitute for that missing evidence. This bounded single-user relay
+result does not establish vendor relay authorization, account identity, plan,
+quota, renewal, or native OAuth forwarding. No quota HTTP read was performed.
+Supported agent-version ranges remain unset. Qualification records must follow
+the [shared support contract](../spec.md#support-contract) and keep provider,
+agent, and runtime evidence separate.

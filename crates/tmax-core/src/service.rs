@@ -116,6 +116,7 @@ struct Resident {
     inference: Option<Surface>,
     web: Option<Surface>,
     loaded: Option<(Config, String)>,
+    loaded_metadata: Option<Arc<crate::catalog::Snapshot>>,
     key_state: String,
     shutdown: Arc<Shutdown>,
 }
@@ -223,7 +224,7 @@ impl Resident {
                             config: loaded.config.clone(),
                             revision: loaded.revision.clone(),
                             key,
-                            metadata,
+                            metadata: metadata.clone(),
                         })
                     })
                 })
@@ -240,6 +241,7 @@ impl Resident {
         *authority = snapshot;
         drop(authority);
         self.loaded = Some((loaded.config, loaded.revision));
+        self.loaded_metadata = metadata;
         let view = self.view();
         let blocked = self.inference.is_some()
             && self
@@ -650,6 +652,11 @@ pub async fn status(store: &Store) -> Result<Value> {
     Ok(value)
 }
 pub async fn loaded(store: &Store) -> Result<Option<crate::config::LoadedFile>> {
+    Ok(loaded_with_metadata(store).await?.map(|(file, _)| file))
+}
+pub(crate) async fn loaded_with_metadata(
+    store: &Store,
+) -> Result<Option<(crate::config::LoadedFile, Option<crate::catalog::Snapshot>)>> {
     let Some(value) = rpc(store, "loaded", None, None).await? else {
         return Ok(None);
     };
@@ -685,12 +692,21 @@ pub async fn loaded(store: &Store) -> Result<Option<crate::config::LoadedFile>> 
                 "Cannot project loaded document",
             )
         })?;
-    Ok(Some(crate::config::LoadedFile {
-        config,
-        exists: revision != "absent",
-        revision,
-        document,
-    }))
+    let metadata = serde_json::from_value(value["metadata"].clone()).map_err(|_| {
+        failure(
+            "resident_identity_unavailable",
+            "Resident loaded metadata is not recognized",
+        )
+    })?;
+    Ok(Some((
+        crate::config::LoadedFile {
+            config,
+            exists: revision != "absent",
+            revision,
+            document,
+        },
+        metadata,
+    )))
 }
 pub async fn activate(store: &Store, _config: &Config, revision: &str) -> Result<Value> {
     match rpc(store, "activate", None, Some(revision.into())).await {
@@ -722,6 +738,22 @@ pub async fn preview_activation(store: &Store, config: &Config) -> Result<Value>
     Ok(
         json!({"state":"not_running","session_source":"persisted","sessions":sessions,"listener":null}),
     )
+}
+
+fn retained_session_arguments(request: &Request) -> Result<(&str, &str, &str)> {
+    let id = request.operands.first().map(String::as_str);
+    let protocol = request
+        .arguments
+        .get("protocol")
+        .and_then(|v| v.first())
+        .map(String::as_str);
+    let session = request
+        .arguments
+        .get("session")
+        .and_then(|v| v.first())
+        .map(String::as_str);
+    id.zip(protocol).zip(session).map(|((id, protocol), session)| (id, protocol, session))
+        .ok_or_else(|| failure("invalid_arguments", "Retained inspection requires a public model ID, protocol and existing proxy session handle"))
 }
 
 pub async fn control(
@@ -808,6 +840,10 @@ pub async fn control(
         rpc_with_unlock(store, "control", Some(request.clone()), None, unlock).await?
     {
         return maybe_browser(value, request);
+    }
+    if group == "model" && action == "explain" {
+        let (id, protocol, session) = retained_session_arguments(request)?;
+        return Runtime::inspect_persisted_session(store, config, id, protocol, session);
     }
     if group == "history" || group == "usage" {
         return Ok(
@@ -1077,6 +1113,7 @@ async fn run_owned(
         inference: None,
         web: None,
         loaded: None,
+        loaded_metadata: None,
         key_state: "absent".into(),
         shutdown: shutdown.clone(),
     }));
@@ -1212,7 +1249,7 @@ async fn serve_control(state: Shared, mut stream: tokio::net::UnixStream) -> Res
         match call.action.as_str() {
             "status" => Ok(resident.view()),
             "loaded" => Ok(
-                json!({"configuration":resident.loaded.as_ref().map(|v|&v.0),"revision":resident.loaded.as_ref().map(|v|&v.1)}),
+                json!({"configuration":resident.loaded.as_ref().map(|v|&v.0),"revision":resident.loaded.as_ref().map(|v|&v.1),"metadata":resident.loaded_metadata.as_deref()}),
             ),
             "activate" => resident.activate(call.revision.as_deref()).await,
             "preview_activation" => (|| -> Result<Value> {
@@ -1400,6 +1437,33 @@ async fn resident_control(
             let value = resident.lifecycle("web", "stopped", None);
             resident.maybe_shutdown();
             Ok(value)
+        }
+        ("model", "explain") => {
+            let (id, protocol, session) = retained_session_arguments(&request)?;
+            let loaded = request
+                .arguments
+                .get("state")
+                .and_then(|v| v.first())
+                .is_some_and(|v| v == "loaded");
+            let saved;
+            let config = if loaded {
+                &resident
+                    .loaded
+                    .as_ref()
+                    .ok_or_else(|| {
+                        failure(
+                            "runtime_unavailable",
+                            "There is no loaded configuration to inspect",
+                        )
+                    })?
+                    .0
+            } else {
+                saved = crate::config::load(&resident.store)?;
+                &saved.config
+            };
+            resident
+                .runtime
+                .inspect_session(config, id, protocol, session, loaded)
         }
         ("history", "clear") => Ok(resident.runtime.history.clear(request.dry_run)),
         ("history", _) => resident.runtime.history.view(&request),
@@ -1891,6 +1955,61 @@ pub async fn run_autostart() -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn loaded_advice_retains_accepted_metadata_without_an_inference_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("state"));
+        store
+            .write_raw(
+                "tmax.toml",
+                toml::to_string(&Config::empty()).unwrap().as_bytes(),
+            )
+            .unwrap();
+        let accepted = crate::catalog::Snapshot {
+            revision: "loaded-metadata".into(),
+            ..Default::default()
+        };
+        store
+            .write_json("catalog/accepted.json", &accepted)
+            .unwrap();
+        let runtime = Runtime::new(store.clone(), "advice".into(), None).unwrap();
+        let mut resident = Resident {
+            store: store.clone(),
+            process: "advice".into(),
+            runtime,
+            inference: None,
+            web: None,
+            loaded: None,
+            loaded_metadata: None,
+            key_state: "absent".into(),
+            shutdown: Arc::new(Shutdown::new()),
+        };
+        resident.activate(None).await.unwrap();
+        assert!(resident.runtime.snapshot.read().unwrap().is_none());
+        assert_eq!(
+            resident.loaded_metadata.as_ref().unwrap().revision,
+            "loaded-metadata"
+        );
+        store
+            .write_json(
+                "catalog/accepted.json",
+                &crate::catalog::Snapshot {
+                    revision: "pending-metadata".into(),
+                    ..accepted
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            resident.loaded_metadata.as_ref().unwrap().revision,
+            "loaded-metadata"
+        );
+        resident.activate(None).await.unwrap();
+        assert_eq!(
+            resident.loaded_metadata.as_ref().unwrap().revision,
+            "pending-metadata"
+        );
+    }
+
     #[test]
     fn listener_addresses_are_explicit_loopback() {
         assert!(address("127.0.0.1:1234", false).is_ok());
@@ -1911,6 +2030,7 @@ mod tests {
             inference: None,
             web: None,
             loaded: None,
+            loaded_metadata: None,
             key_state: "absent".into(),
             shutdown: Arc::new(Shutdown::new()),
         }));
@@ -1980,6 +2100,7 @@ mod tests {
             inference: None,
             web: None,
             loaded: None,
+            loaded_metadata: None,
             key_state: "absent".into(),
             shutdown: Arc::new(Shutdown::new()),
         };

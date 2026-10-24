@@ -1,11 +1,11 @@
 use crate::{
     Error, Request, Result,
-    config::{Config, Model, Provider},
+    config::{Config, Model, ModelOverrides, Provider, ProviderOverrides},
     storage::Store,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +88,239 @@ pub fn merge(base: &mut Value, overrides: &Value) {
         *base = overrides.clone();
     }
 }
+
+fn validate_snapshot(snapshot: &Snapshot) -> Result<()> {
+    if snapshot.providers.is_empty()
+        || snapshot.providers.iter().any(|(id, provider)| {
+            !crate::config::valid_id(id, false)
+                || !provider.is_object()
+                || !provider.get("models").is_some_and(Value::is_object)
+                || provider
+                    .get("id")
+                    .is_some_and(|value| value.as_str() != Some(id))
+        })
+    {
+        return Err(Error::new(
+            "observation_failed",
+            "Catalog provider identities or model maps are invalid",
+        ));
+    }
+    Ok(())
+}
+
+// The typed local schema defines consumed metadata; other directory fields,
+// including endpoint and package guidance, are not adopted settings.
+fn model_metadata_shape() -> Result<Value> {
+    serde_json::to_value(ModelOverrides {
+        limit: Some(crate::config::Limits::default()),
+        modalities: Some(crate::config::Modalities::default()),
+        cost: Some(crate::config::Cost::default()),
+        ..ModelOverrides::default()
+    })
+    .map_err(|_| Error::new("operation_failed", "Cannot project metadata schema"))
+}
+
+fn supported_metadata(value: &Value, shape: &Value) -> Value {
+    match (value.as_object(), shape.as_object()) {
+        (Some(values), Some(fields)) => Value::Object(
+            values
+                .iter()
+                .filter_map(|(key, value)| {
+                    fields
+                        .get(key)
+                        .map(|field| (key.clone(), supported_metadata(value, field)))
+                })
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn metadata_changes(before: &Value, after: &Value, kind: &str, id: &str, path: &str) -> Vec<Value> {
+    let mut changes =
+        crate::operations::diff_values(Some(before), Some(after), path, "catalog_apply");
+    for change in &mut changes {
+        change["resource"] = json!({"kind":kind,"id":id,"scope":null});
+    }
+    changes
+}
+
+fn adoption_impact(
+    config: &Config,
+    accepted: Option<&Snapshot>,
+    proposed: &Snapshot,
+) -> Result<Value> {
+    validate_snapshot(proposed)?;
+    let shape = model_metadata_shape()?;
+    let mut candidate = config.clone();
+    let mut changes = Vec::new();
+    let mut providers = BTreeSet::new();
+    let mut models = BTreeMap::new();
+    for (provider_id, provider) in &config.providers {
+        let before = effective_from_snapshot(accepted, provider, None)?;
+        let after = effective_from_snapshot(Some(proposed), provider, None)?;
+        candidate.providers.get_mut(provider_id).unwrap().overrides =
+            serde_json::from_value::<ProviderOverrides>(after["effective"].clone()).map_err(
+                |_| {
+                    Error::new(
+                        "invalid_configuration",
+                        "Proposed catalog provider metadata has invalid field types",
+                    )
+                    .field(format!("providers.{provider_id}.metadata"))
+                },
+            )?;
+        let provider_changes = metadata_changes(
+            &before["effective"],
+            &after["effective"],
+            "provider",
+            provider_id,
+            &format!("providers.{provider_id}.metadata"),
+        );
+        if !provider_changes.is_empty() {
+            providers.insert(provider_id.clone());
+            changes.extend(provider_changes);
+        }
+        for (model_id, model) in &provider.models {
+            if provider
+                .metadata
+                .as_ref()
+                .and_then(|id| proposed.providers.get(id))
+                .and_then(|entry| entry.get("models"))
+                .and_then(|entries| entries.get(model_id))
+                .is_some_and(|entry| !entry.is_object())
+            {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    "Proposed catalog model metadata must be an object",
+                )
+                .field(format!(
+                    "providers.{provider_id}.models.{model_id}.metadata"
+                )));
+            }
+            let before = effective_from_snapshot(accepted, provider, Some((model_id, model)))?;
+            let after = effective_from_snapshot(Some(proposed), provider, Some((model_id, model)))?;
+            let before = without_nulls(supported_metadata(&before["effective"], &shape));
+            let after = without_nulls(supported_metadata(&after["effective"], &shape));
+            candidate
+                .providers
+                .get_mut(provider_id)
+                .unwrap()
+                .models
+                .get_mut(model_id)
+                .unwrap()
+                .overrides =
+                serde_json::from_value::<ModelOverrides>(after.clone()).map_err(|_| {
+                    Error::new(
+                        "invalid_configuration",
+                        "Proposed catalog model metadata has invalid field types",
+                    )
+                    .field(format!(
+                        "providers.{provider_id}.models.{model_id}.metadata"
+                    ))
+                })?;
+            let qualified = format!("{provider_id}/{model_id}");
+            let model_changes = metadata_changes(
+                &before,
+                &after,
+                "model",
+                &qualified,
+                &format!("providers.{provider_id}.models.{model_id}.metadata"),
+            );
+            if !model_changes.is_empty() {
+                providers.insert(provider_id.clone());
+                changes.extend(model_changes);
+                models.insert(qualified, (before, after));
+            }
+        }
+    }
+    // Reuse explicit-override constraints without persisting this projection.
+    crate::config::validate(&candidate)?;
+    let mut aliases = BTreeMap::new();
+    for alias in &config.model_aliases {
+        let affected: Vec<_> = models
+            .keys()
+            .filter(|name| {
+                if let Some(candidates) = &alias.candidates {
+                    candidates.contains(name)
+                } else {
+                    crate::config::model(config, name)
+                        .is_ok_and(|(_, model)| model.tier == alias.tier)
+                }
+            })
+            .cloned()
+            .collect();
+        if !affected.is_empty() {
+            aliases.insert((alias.id.clone(), alias.protocol.clone()), affected);
+        }
+    }
+    let mut routes = Vec::new();
+    for name in models.keys() {
+        let (provider, _) = crate::config::model(config, name)?;
+        let (_, model_id) = crate::config::qualified(name)?;
+        for protocol in crate::integrations::protocols(provider, model_id)? {
+            routes.push(json!({"kind":"concrete","id":name,"protocol":protocol,"effect":"metadata_changed"}));
+        }
+    }
+    for ((id, protocol), affected) in &aliases {
+        routes.push(json!({"kind":"alias","id":id,"protocol":protocol,"models":affected,"effect":"candidate_metadata_changed"}));
+    }
+    let mut targets = Vec::new();
+    for (target_id, target) in &config.agents {
+        for (entry_id, entry) in &target.providers {
+            let mut selections = Vec::new();
+            let mut native_changes = Vec::new();
+            let mut blockers = Vec::new();
+            for selected in &entry.models {
+                let qualified = entry
+                    .provider
+                    .as_ref()
+                    .map(|provider| format!("{provider}/{}", selected.id));
+                let name = qualified.as_deref().unwrap_or(&selected.id);
+                if let Some((before, after)) = models.get(name) {
+                    let old_native = crate::native::model_metadata(&target.agent, before);
+                    match crate::native::model_metadata(&target.agent, after) {
+                        Ok(new_native) => {
+                            let mut projected = crate::operations::diff_values(
+                                old_native.as_ref().ok(),
+                                Some(&new_native),
+                                &format!("models.{}", selected.id),
+                                "native_write",
+                            );
+                            for change in &mut projected {
+                                change["resource"] =
+                                    json!({"kind":"agent_target","id":target_id,"scope":entry_id});
+                            }
+                            if entry.proxy == Some(true) || !projected.is_empty() {
+                                selections
+                                    .push(json!({"id":selected.id,"protocol":selected.protocol}));
+                                native_changes.extend(projected);
+                            }
+                        }
+                        Err(error) => {
+                            selections.push(json!({"id":selected.id,"protocol":selected.protocol}));
+                            blockers.push(json!({"model":selected.id,"protocol":selected.protocol,"code":error.code,"field":error.field}));
+                        }
+                    }
+                } else if entry.proxy == Some(true)
+                    && aliases.contains_key(&(selected.id.clone(), selected.protocol.clone()))
+                {
+                    selections.push(json!({"id":selected.id,"protocol":selected.protocol}));
+                }
+            }
+            if !selections.is_empty() {
+                targets.push(json!({"target":target_id,"agent":target.agent,"agent_provider":entry_id,"models":selections,"native_application":if !blockers.is_empty(){"blocked"}else if !native_changes.is_empty(){"reapply_required"}else{"unchanged"},"native_changes":native_changes,"blockers":blockers,"route_metadata":if entry.proxy==Some(true){"revalidation_required"}else{"not_applicable"}}));
+            }
+        }
+    }
+    Ok(json!({
+        "catalog_impact":{"accepted_revision_before":accepted.map(|snapshot| &snapshot.revision),"candidate_revision":proposed.revision,"accepted_revision_after":accepted.map(|snapshot| &snapshot.revision),"baseline":"accepted","endpoint_settings":"unchanged"},
+        "metadata_changes":changes,
+        "affected_providers":providers,
+        "affected_models":models.keys().collect::<Vec<_>>(),
+        "affected_routes":routes,
+        "affected_targets":targets
+    }))
+}
 fn argument<'a>(r: &'a Request, key: &str) -> Option<&'a str> {
     r.arguments
         .get(key)
@@ -150,19 +383,6 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
                         "Catalog has an invalid JSON representation",
                     )
                 })?;
-            if providers.is_empty()
-                || providers.iter().any(|(id, p)| {
-                    !crate::config::valid_id(id, false)
-                        || !p.is_object()
-                        || !p.get("models").is_some_and(Value::is_object)
-                        || p.get("id").is_some_and(|i| i.as_str() != Some(id))
-                })
-            {
-                return Err(Error::new(
-                    "observation_failed",
-                    "Catalog provider identities or model maps are invalid",
-                ));
-            }
             let revision = crate::config::revision(&bytes);
             let new = Snapshot {
                 revision: revision.clone(),
@@ -170,6 +390,7 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
                 retrieved_at: chrono::Utc::now().to_rfc3339(),
                 providers,
             };
+            validate_snapshot(&new)?;
             let _guard = store.lock("catalog")?;
             store.write_json("catalog/latest.json", &new)?;
             Ok(
@@ -189,6 +410,11 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
             }
             let wanted = argument(r, "revision")
                 .ok_or_else(|| Error::new("invalid_arguments", "Catalog revision is required"))?;
+            let guard = if r.dry_run {
+                None
+            } else {
+                Some(store.lock("catalog")?)
+            };
             let latest = read(store, "latest")?.ok_or_else(|| {
                 Error::new(
                     "catalog_unavailable",
@@ -201,38 +427,54 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
                     "Requested downloaded catalog revision is not retained",
                 ));
             }
+            let accepted = read(store, "accepted")?;
+            let Value::Object(mut metadata) =
+                adoption_impact(&file.config, accepted.as_ref(), &latest)?
+            else {
+                unreachable!()
+            };
+            let mut impact =
+                crate::operations::impact(store, &file.config, &file.revision, None).await?;
+            let Value::Array(metadata_changes) = metadata.remove("metadata_changes").unwrap()
+            else {
+                unreachable!()
+            };
+            impact["changes"]
+                .as_array_mut()
+                .unwrap()
+                .extend(metadata_changes);
+            impact.as_object_mut().unwrap().extend(metadata);
+            impact["revision"] = json!(wanted);
+            impact["catalog_apply"] = json!("not_executed");
             if r.dry_run {
-                let mut impact =
-                    crate::operations::impact(store, config, &file.revision, None).await?;
-                impact["revision"] = json!(wanted);
-                impact["catalog_apply"] = json!("not_executed");
-                impact["affected_providers"] = json!(config.providers.keys().collect::<Vec<_>>());
                 return Ok(impact);
-            }
-            let guard = store.lock("catalog")?;
-            if read(store, "latest")?
-                .as_ref()
-                .is_none_or(|s| s.revision != wanted)
-            {
-                return Err(Error::new(
-                    "inputs_changed",
-                    "Downloaded catalog changed during application",
-                ));
             }
             let publication = store.lock("routing")?;
             crate::config::guard(store, &file.revision)?;
             store.write_json("catalog/accepted.json", &latest)?;
             drop(publication);
             drop(guard);
-            let activation = crate::service::activate(store, config, &file.revision).await;
-            Ok(match activation {
+            impact["catalog_apply"] = json!("completed");
+            impact["catalog_impact"]["accepted_revision_after"] = json!(wanted);
+            impact["save"] = json!("not_requested");
+            match crate::service::activate(store, &file.config, &file.revision).await {
                 Ok(activation) => {
-                    json!({"revision":wanted,"catalog_apply":"completed","activation":activation,"native_application":"not_requested"})
+                    impact["runtime"] = json!(if activation["activation"] == "not_running" {
+                        "not_running"
+                    } else if activation["activation"] == "active" {
+                        "loaded"
+                    } else {
+                        "not_loaded"
+                    });
+                    impact["activation"] = activation;
                 }
                 Err(error) => {
-                    json!({"_code":"saved_not_active","revision":wanted,"catalog_apply":"completed","activation":{"state":"failed","code":error.code},"native_application":"not_requested"})
+                    impact["_code"] = json!("saved_not_active");
+                    impact["runtime"] = json!("not_loaded");
+                    impact["activation"] = json!({"state":"failed","code":error.code});
                 }
-            })
+            }
+            Ok(impact)
         }
         "providers" | "models" | "inspect" => {
             let Some(s) = read(store, snapshot)? else {
@@ -311,5 +553,311 @@ mod tests {
         assert_eq!(base["temperature"], false);
         assert_eq!(base["modalities"]["input"], json!([]));
         assert_eq!(base["modalities"]["output"], json!(["text"]));
+    }
+
+    fn fixture() -> (Config, Snapshot, Snapshot) {
+        let mut config = crate::config::parse(
+            r#"version = 1
+[providers.account]
+metadata = 'directory'
+integration = 'custom'
+[providers.account.endpoints]
+chat-completions = 'http://127.0.0.1:9999/v1'
+[providers.account.models.a]
+tier = 'L1'
+priority = 0
+[providers.account.models.b]
+tier = 'L1'
+priority = 100
+[proxy]
+listen = '127.0.0.1:19876'
+key_ref = 'synthetic-proxy-reference'
+[[model_aliases]]
+id = 'explicit'
+protocol = 'chat-completions'
+candidates = ['account/a', 'account/b']
+[[model_aliases]]
+id = 'tier'
+protocol = 'chat-completions'
+tier = 'L1'
+[agents.direct]
+agent = 'pi'
+scope = '/synthetic/catalog-direct'
+[agents.direct.providers.upstream]
+provider = 'account'
+models = [{id = 'a', protocol = 'chat-completions'}]
+[agents.aliases]
+agent = 'pi'
+scope = '/synthetic/catalog-aliases'
+[agents.aliases.providers.local]
+proxy = true
+models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'tier', protocol = 'chat-completions'}]
+"#,
+        )
+        .unwrap();
+        let old_model = json!({"limit":{"context":200000,"output":32000},"tool_call":true,"reasoning":true,"modalities":{"input":["text","image"]}});
+        let new_model = json!({"limit":{"context":10000,"output":1000},"tool_call":false,"reasoning":false,"modalities":{"input":["text"]}});
+        let old = Snapshot {
+            revision: "old".into(),
+            source: "synthetic-directory".into(),
+            retrieved_at: "2026-10-24T00:00:00Z".into(),
+            providers: BTreeMap::from([(
+                "directory".into(),
+                json!({"id":"directory","name":"Directory","api":"https://old.example.invalid","models":{"a":old_model,"b":{"limit":{"context":200000,"output":32000}}}}),
+            )]),
+        };
+        let mut new = old.clone();
+        new.revision = "new".into();
+        new.providers.get_mut("directory").unwrap()["models"]["a"] = new_model;
+        new.providers.get_mut("directory").unwrap()["api"] = json!("https://new.example.invalid");
+        new.providers.get_mut("directory").unwrap()["models"]["unregistered"] =
+            json!({"tool_call":true});
+        let mut masked = config.providers["account"].clone();
+        masked.models.get_mut("a").unwrap().overrides =
+            serde_json::from_value(old.providers["directory"]["models"]["a"].clone()).unwrap();
+        config.providers.insert("masked".into(), masked);
+        crate::config::validate(&config).unwrap();
+        (config, old, new)
+    }
+
+    #[test]
+    fn adoption_reports_effective_fields_and_all_alias_dependencies_not_just_the_winner() {
+        let (config, old, new) = fixture();
+        let impact = adoption_impact(&config, Some(&old), &new).unwrap();
+        assert_eq!(impact["affected_providers"], json!(["account"]));
+        assert_eq!(impact["affected_models"], json!(["account/a"]));
+        let changes = impact["metadata_changes"].as_array().unwrap();
+        for (field, before, after) in [
+            ("limit.context", json!(200000), json!(10000)),
+            ("limit.output", json!(32000), json!(1000)),
+            ("tool_call", json!(true), json!(false)),
+            ("reasoning", json!(true), json!(false)),
+            (
+                "modalities.input",
+                json!(["text", "image"]),
+                json!(["text"]),
+            ),
+        ] {
+            let change = changes
+                .iter()
+                .find(|change| {
+                    change["path"] == format!("providers.account.models.a.metadata.{field}")
+                })
+                .unwrap();
+            assert_eq!(change["before"], before);
+            assert_eq!(change["after"], after);
+            assert_eq!(change["resource"]["id"], "account/a");
+        }
+        assert_eq!(changes.len(), 5);
+        for alias in ["explicit", "tier"] {
+            let route = impact["affected_routes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|route| route["kind"] == "alias" && route["id"] == alias)
+                .unwrap();
+            assert_eq!(route["models"], json!(["account/a"]));
+        }
+        let targets = impact["affected_targets"].as_array().unwrap();
+        let direct = targets
+            .iter()
+            .find(|target| target["target"] == "direct")
+            .unwrap();
+        assert_eq!(direct["native_application"], "reapply_required");
+        let context = direct["native_changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|change| change["path"] == "models.a.contextWindow")
+            .unwrap();
+        assert_eq!(context["before"], 200000);
+        assert_eq!(context["after"], 10000);
+        let aliases = targets
+            .iter()
+            .find(|target| target["target"] == "aliases")
+            .unwrap();
+        assert_eq!(aliases["models"].as_array().unwrap().len(), 2);
+        assert_eq!(aliases["native_application"], "unchanged");
+        assert_eq!(aliases["route_metadata"], "revalidation_required");
+    }
+
+    #[test]
+    fn adoption_validates_proposed_effective_metadata_but_honors_masking_overrides() {
+        let (config, old, new) = fixture();
+        for (field, malformed) in [
+            ("tool_call", json!("false")),
+            ("modalities", json!({"input":["text", false]})),
+            ("limit", json!({"context":-1})),
+            ("limit", json!({"context":u64::MAX})),
+            ("cost", json!({"input":-0.5})),
+        ] {
+            let mut invalid = new.clone();
+            invalid.providers.get_mut("directory").unwrap()["models"]["a"][field] = malformed;
+            let error = adoption_impact(&config, Some(&old), &invalid).unwrap_err();
+            assert_eq!(error.code, "invalid_configuration");
+        }
+        let mut masked_only = config.clone();
+        masked_only.providers.retain(|id, _| id == "masked");
+        masked_only.agents.clear();
+        masked_only.model_aliases.clear();
+        let mut invalid_baseline = new;
+        invalid_baseline.providers.get_mut("directory").unwrap()["models"]["a"]["tool_call"] =
+            json!("not a boolean");
+        let impact = adoption_impact(&masked_only, Some(&old), &invalid_baseline).unwrap();
+        assert!(impact["affected_models"].as_array().unwrap().is_empty());
+        assert!(impact["metadata_changes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn endpoint_guidance_and_unregistered_models_do_not_become_adopted_settings() {
+        let (config, old, mut new) = fixture();
+        new.providers.get_mut("directory").unwrap()["models"]["a"] =
+            old.providers["directory"]["models"]["a"].clone();
+        let before = serde_json::to_value(&config).unwrap();
+        let impact = adoption_impact(&config, Some(&old), &new).unwrap();
+        for field in [
+            "metadata_changes",
+            "affected_providers",
+            "affected_models",
+            "affected_targets",
+        ] {
+            assert!(impact[field].as_array().unwrap().is_empty());
+        }
+        assert_eq!(serde_json::to_value(&config).unwrap(), before);
+        assert_eq!(impact["catalog_impact"]["endpoint_settings"], "unchanged");
+    }
+
+    #[test]
+    fn missing_catalog_models_remove_inherited_defaults_not_local_offerings() {
+        let (config, old, mut new) = fixture();
+        new.providers.get_mut("directory").unwrap()["models"] = json!({});
+        let impact = adoption_impact(&config, Some(&old), &new).unwrap();
+        assert!(
+            impact["metadata_changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|change| {
+                    change["resource"]["id"] == "account/a"
+                        && change["path"] == "providers.account.models.a.metadata.limit"
+                        && change["kind"] == "remove"
+                })
+        );
+        assert!(crate::config::model(&config, "account/a").is_ok());
+        assert!(crate::config::model(&config, "account/b").is_ok());
+    }
+
+    #[test]
+    fn unrepresentable_native_metadata_reports_target_blockers_not_invalid_catalog_facts() {
+        let (mut config, old, mut new) = fixture();
+        config.agents.get_mut("direct").unwrap().agent = "hermes".into();
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["limit"]["context"] = json!(0);
+        let impact = adoption_impact(&config, Some(&old), &new).unwrap();
+        let target = impact["affected_targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["target"] == "direct")
+            .unwrap();
+        assert_eq!(target["native_application"], "blocked");
+        assert_eq!(
+            target["blockers"][0]["code"],
+            "native_metadata_unrepresentable"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_retains_the_preview_impact_and_publishes_only_on_execution() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::at(temporary.path().to_path_buf());
+        let (mut config, old, new) = fixture();
+        let native_scope = temporary.path().join("native");
+        std::fs::create_dir(&native_scope).unwrap();
+        let native_file = native_scope.join("models.json");
+        std::fs::write(&native_file, b"unchanged native configuration").unwrap();
+        for target in config.agents.values_mut() {
+            target.scope = native_scope.clone();
+        }
+        let document = toml::to_string(&config).unwrap();
+        store.write_raw("tmax.toml", document.as_bytes()).unwrap();
+        store.write_json("catalog/accepted.json", &old).unwrap();
+        store.write_json("catalog/latest.json", &new).unwrap();
+        let revision = crate::config::load(&store).unwrap().revision;
+        let mut request = Request {
+            command: vec!["catalog".into(), "apply".into()],
+            operands: Vec::new(),
+            arguments: BTreeMap::from([("revision".into(), vec!["new".into()])]),
+            dry_run: true,
+            if_revision: Some(revision.clone()),
+        };
+        let preview = handle(&store, &config, &request).await.unwrap();
+        assert_eq!(preview["catalog_apply"], "not_executed");
+        assert_eq!(read(&store, "accepted").unwrap().unwrap().revision, "old");
+        request.dry_run = false;
+        let applied = handle(&store, &config, &request).await.unwrap();
+        for field in [
+            "affected_providers",
+            "affected_models",
+            "affected_routes",
+            "affected_targets",
+        ] {
+            assert_eq!(applied[field], preview[field]);
+        }
+        assert_eq!(preview["catalog_impact"]["accepted_revision_before"], "old");
+        assert_eq!(preview["catalog_impact"]["accepted_revision_after"], "old");
+        assert_eq!(preview["catalog_impact"]["candidate_revision"], "new");
+        assert_eq!(applied["catalog_impact"]["accepted_revision_before"], "old");
+        assert_eq!(applied["catalog_impact"]["accepted_revision_after"], "new");
+        let metadata_changes = |impact: &Value| {
+            impact["changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|change| change["boundary"] == "catalog_apply")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(metadata_changes(&applied), metadata_changes(&preview));
+        assert!(!metadata_changes(&applied).is_empty());
+        assert_eq!(applied["catalog_apply"], "completed");
+        assert_eq!(applied["activation"]["activation"], "not_running");
+        assert_eq!(applied["runtime"], "not_running");
+        assert_eq!(applied["native_application"], "not_requested");
+        assert!(applied.get("session_impact").is_some());
+        assert_eq!(read(&store, "accepted").unwrap().unwrap().revision, "new");
+        assert_eq!(crate::config::load(&store).unwrap().revision, revision);
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            document.as_bytes()
+        );
+        assert_eq!(
+            std::fs::read(&native_file).unwrap(),
+            b"unchanged native configuration"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_apply_preserves_accepted_snapshot_for_preview_and_execution() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::at(temporary.path().to_path_buf());
+        let (config, old, mut new) = fixture();
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning"] = json!("false");
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        store.write_json("catalog/accepted.json", &old).unwrap();
+        store.write_json("catalog/latest.json", &new).unwrap();
+        for dry_run in [true, false] {
+            let request = Request {
+                command: vec!["catalog".into(), "apply".into()],
+                operands: Vec::new(),
+                arguments: BTreeMap::from([("revision".into(), vec!["new".into()])]),
+                dry_run,
+                if_revision: None,
+            };
+            let error = handle(&store, &config, &request).await.unwrap_err();
+            assert_eq!(error.code, "invalid_configuration");
+            assert_eq!(read(&store, "accepted").unwrap().unwrap().revision, "old");
+        }
     }
 }

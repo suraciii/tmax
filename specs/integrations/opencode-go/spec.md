@@ -157,9 +157,11 @@ consumers through its automatic activation behavior.
 ## Conversation and client identity
 
 Go is documented for coding-agent traffic. The client must identify itself
-truthfully with its own user agent rather than only a generic SDK or HTTP-library
-name. tmax must not impersonate OpenCode, Codex, Hermes, pi, or another validated
-client to obtain access.
+truthfully with its own recognizable coding-agent user agent rather than only a
+generic SDK or HTTP-library name. tmax must preserve that identity, not impersonate
+OpenCode, Codex, Hermes, pi, or another validated client to obtain access. A user
+agent family identifies a mechanism, not an installed version; version and path
+qualification require separate native evidence.
 
 Every Go-bound inference request must carry a stable conversation session ID.
 The recommended header is `x-opencode-session`. Go also recognizes some native
@@ -186,6 +188,19 @@ supported configuration change, or qualified forwarding path fixes that loss.
 A working direct path must not be disabled merely because a proxy path loses the
 header.
 
+The source-qualified stock pi **1.2.0** mechanisms have distinct boundaries:
+
+| Native path | Required identity behavior |
+| --- | --- |
+| Direct built-in OpenCode provider | The native provider wrapper supplies `x-opencode-session` from the actual session. A generic custom provider is not that wrapper. |
+| tmax proxy, Chat Completions | Native session-affinity configuration supplies dynamic `x-session-id` even for the local proxy URL. Forward that exact qualified value as `x-opencode-session`, retaining the native header and unchanged truthful user agent. This does not assert that Go itself recognizes `x-session-id`. |
+| Missing session, unknown client, conflicting session headers, or an unqualified native path | Reject before upstream dispatch. Never repair the request with a static/generated ID, replacement client identity, or a different destination. |
+
+Native tool turns, continuations, and resume preserve the same session; a native
+new conversation supplies its distinct identity. Forwarding must preserve those
+semantics and any native auxiliary-session distinctions. This qualification does
+not extend pi's Chat Completions affinity mechanism to other APIs or versions.
+
 A Go session header is not account authentication, proof of workspace ownership,
 or authorization to select another provider. Proxy session selection must also
 satisfy the
@@ -195,17 +210,55 @@ client header. Fixed destinations and qualified stateless selection do not waive
 Go's own stable-conversation requirement. If the route cannot meet both
 contracts, it must block the affected use and explain the missing identity.
 
+Request history must retain the specific identity or compatibility blocker for a
+fixed offering or candidates sharing one blocker, including
+`native_session_required` when Go's qualified session mechanism is missing.
+Different candidate failures must not be mislabeled as one shared cause. A
+retained destination rejected by client/session checks or configuration activation
+must stay retained and blocked as appropriate; identity forwarding cannot rerank,
+revive, or transfer that conversation.
+
 ## Quota and renewal
 
 Go allowance belongs to the subscribed workspace. Model-dependent usage units
 and quota windows must remain sourced provider data, not fixed tmax constants
 or estimates of remaining requests.
 
-The consulted documentation directs users to [Console](https://opencode.ai/console)
-for current usage; it does not establish a stable public Go quota or renewal API.
-Without a qualified source, show those observations as unknown, provide the
-Console link, and retain optional user-maintained subscription information.
-A monthly plan does not establish a specific workspace's next renewal date.
+The finite quota operation is a bearer-authenticated
+`GET https://opencode.ai/zen/go/v1/usage` for the selected provider's key, with
+truthful tmax client identification and `Accept: application/json`. This standalone
+read requires no inference session header. It has no query, pagination, history,
+alternate path, or inferred `/inference/.../usage` destination. It follows the
+shared finite observation deadline, network policy, dry-run, protected-secret,
+and guarded publication contracts.
+
+The current wire boundary was observed on **2026-10-23**, not published as a
+versioned provider schema:
+
+| Field | Qualified meaning and boundary |
+| --- | --- |
+| `usage.rolling`, `usage.weekly`, `usage.monthly` | All three named allowance windows must be present; no per-model allocation or coverage is inferred. |
+| Each window's `status` | The qualified current value is `ok`. An unknown or historical status is unsupported representation, not an inferred quota denial. |
+| Each window's `percent` | Nonnegative integer, floored percentage consumed. Preserve it without clamping or deriving remaining allowance; zero does not establish exactly zero consumption. |
+| Each window's `resetsAt` | Valid ISO-8601 UTC `Z` instant, retained exactly as a reset announcement, not proof of a completed reset or subscription renewal. |
+
+Only these sourced window fields and their consumption/reset interpretation may
+be retained from the response. Unsupported, missing, malformed, or oversized
+representations fail the observation instead of creating zero or partial quota.
+Transport, HTTP, parsing, or credential failures retain the last good dated fact
+for that exact provider/authorization/source binding and report the latest
+attempt separately. No result may populate a sibling provider or survive a
+changed authorization binding as current evidence.
+
+The response supplies no measurement timestamp, validity interval, raw allowance,
+exact remaining amount, account/workspace identity, entitlement, or renewal date.
+Local retrieval time must remain labeled retrieval time, not provider `asOf`;
+freshness stays unqualified, with no synthesized `asOf`, TTL, or expiry. These
+consumed-only observations supply no priority-rule inputs or routing veto.
+Passing a reset announcement cannot recover quota locally. Unknown quota or
+renewal remains explicit, with a [Console](https://opencode.ai/console) link and
+optional user-maintained subscription information. A monthly plan does not
+establish a workspace's next renewal date.
 
 Console budgets are not Go quota data and are not an integration dependency.
 Do not query or mirror Console credits, budgets, Extra Usage settings, or spending
@@ -253,9 +306,17 @@ Go-specific error codes or undocumented management APIs.
    and stable conversation identity across main, auxiliary, streaming, tool, and
    continuation requests. Missing native session coverage blocks the affected
    path, including fixed or stateless routes that fail Go's requirement.
-6. Provider inspection shows sourced Go quota and renewal, or explicit unknown
-   information with a Console link. It does not mirror Console billing controls;
-   failure to query quota cannot disable otherwise usable inference.
+   Pi's qualified affinity forwarding preserves the genuine session through
+   resume and native new-session changes, rejects conflicting headers and unknown
+   clients before dispatch, and retains the specific blocker in request history.
+   It does not bypass retained-binding or activation safety.
+6. Provider inspection reports the declared Go usage read's consumed percentages,
+   provider status, and reset announcements, or explicit unknown information with
+   a Console link. Malformed/failed refreshes retain the last good binding-scoped
+   fact and a separate failed attempt; sibling providers remain isolated. No
+   exact remaining quota, freshness, identity, renewal, entitlement, or rule input
+   is inferred. Failure to query quota cannot disable otherwise usable inference,
+   and no Console billing controls are mirrored.
 7. Authentication, permission, identity-header, protocol, and scoped upstream
    quota/billing failures have actionable results without silently substituting
    a sibling provider or moving an established conversation.
@@ -267,11 +328,40 @@ evidence, and actual tmax runtime evidence.
 
 ## Sources and evidence status
 
-The following documentation was consulted on **2026-10-23**. No tmax runtime
-integration was exercised. The documented client versions and native setup
-examples are upstream evidence, not verified tmax version ranges. Live workspace
-identity, quota, and renewal remain unknown until supplied by a qualified source
-or explicitly labeled user entry.
+The documentation and upstream-source evidence below were consulted on
+**2026-10-23**. A sanitized credentialed observation on that date qualified the
+exact standalone usage alias with HTTP `200`, truthful `tmax/0.1.0` User-Agent,
+and JSON Accept header, showing the three current windows and fields specified
+[above](#quota-and-renewal). That direct upstream read is not acceptance evidence
+for tmax's quota entrypoint or a versioned provider schema. The historical merged
+handler used different field names and is not the current wire contract.
+Documented client versions and native setup examples are upstream evidence, not
+verified tmax version ranges. Workspace identity and renewal remain unknown
+without independently qualified evidence or explicitly labeled user entry.
+The installed pi 1.2.0 client source was inspected for the mechanisms above;
+source inspection alone does not establish successful Go inference.
+
+On **2026-10-23**, actual tmax 0.1.0 entrypoint acceptance on SHA256
+`f94f1c25367e2f049025f5c8966208f61ae52a113e09ac81ba36fb2b3e1f00f7`
+used two independently supplied keys as separate provider instances. Each
+provider's quota refresh returned HTTP `200` and retained its own usage snapshot.
+Installed **pi 1.2.0 → tmax → Go `deepseek-v4.1-flash`**, using Chat Completions
+and SSE, completed one harmless tool-call/result round trip and one continuation
+per provider: three HTTP `200` requests each, with complete downstream delivery
+and reported usage. Provider, offering, authorization-generation, and quota
+observations remained isolated; workspace ownership was not established and no
+combined allowance was inferred.
+
+The concrete offering inherited accepted models.dev metadata without capability
+overrides. Native inspection matched its context/output capacities, reasoning
+capability, and text/image input. A documented native `before_provider_request`
+hook changed only the existing request-generation budget to at most **512**;
+the model's output capacity remained **384,000**, not 512. Automatic retries and
+compaction were disabled. This qualifies the bounded native requests, not stock
+default budgets, full-capacity or media workloads, all Go models/protocols,
+auxiliary paths, or a general client-version range. Account identity, renewal,
+source freshness, exact remaining quota, and provider-rule inputs remain subject
+to their independent evidence boundaries.
 
 Official OpenCode sources:
 
@@ -294,6 +384,19 @@ Official OpenCode sources:
 - [OpenCode V2 provider accounts](https://opencode.ai/v2/docs/cli/providers/):
   server-owned saved credentials, newest-account activation, and native switching.
 
+Go usage provenance, distinct from a published versioned API contract:
+
+- [Merged usage-route PR #16513](https://github.com/anomalyco/opencode/pull/16513)
+  and its [historical handler](https://github.com/anomalyco/opencode/blob/2b8a5969e932c15083e599c82d34ce0268f81b9e/packages/console/app/src/routes/zen/go/v1/usage.ts):
+  source-backed route/authentication provenance, but an older response schema.
+- [Thin inference-proxy migration PR #54563](https://github.com/anomalyco/opencode/pull/54563):
+  the exact `/zen/go/v1/usage` alias is forwarded after migration; it does not
+  establish a replacement `/inference/.../usage` path.
+- [Production wire report #53701](https://github.com/anomalyco/opencode/issues/53701):
+  community sample of the current windows and issue-thread flooring evidence,
+  not a provider-guaranteed schema, enum, freshness, or permission contract.
+
+
 Agent-project evidence, not additional OpenCode endorsement:
 
 - [omp providers](https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md):
@@ -304,3 +407,11 @@ Agent-project evidence, not additional OpenCode endorsement:
 - [stock pi models](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md):
   key ownership and precedence, native API selection, and retained authentication
   when only a built-in provider's base URL changes.
+- [pi source pinned to the installed 1.2.0 qualification](https://github.com/earendil-works/pi/tree/06a466935536f8c9bcacb2d5efc0fc021be1bdff):
+  `pi-ai`'s `api/openai-completions` supplies dynamic `x-session-id` in
+  OpenRouter affinity mode and uses the truthful native user agent;
+  `providers/opencode-headers` independently supplies `x-opencode-session` for
+  built-in OpenCode providers. The coding agent's session manager generates
+  UUIDv7 for ordinary new conversations and preserves the stored ID on resume.
+  These client-source facts qualify the identity mechanism, not Go's recognition
+  of an untranslated affinity header or a successful tmax inference request.

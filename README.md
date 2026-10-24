@@ -121,6 +121,9 @@ reference checkout, and the license terms that the adapted material inherits.
 - [specs/model-routing/spec.md](specs/model-routing/spec.md) — models.dev metadata, concrete models, model aliases, dynamic priority rules, schedules, and multi-source selection.
 - [specs/model-routing/inputs/spec.md](specs/model-routing/inputs/spec.md) — scoped quota/reset inputs, explicit registration, acquisition, and validity.
 - [specs/integrations/spec.md](specs/integrations/spec.md) — shared agent/provider boundaries and the index of dedicated provider contracts.
+  Its [provider contracts](specs/integrations/spec.md#provider-specific-contracts)
+  include domestic GLM Coding Plan and StepFun Token Plan requirements; a spec
+  does not create a built-in integration or claim verified native/provider support.
 - [specs/cli/spec.md](specs/cli/spec.md) — common CLI rules and capability-specific command contracts.
 - [specs/diagnostics/spec.md](specs/diagnostics/spec.md) — status evidence, request-history coverage, and safe cleanup.
 - [specs/AGENTS.md](specs/AGENTS.md) — how specifications are written and owned.

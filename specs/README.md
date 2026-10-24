@@ -19,6 +19,8 @@ and the invariants it protects.
   - [OpenCode Go](integrations/opencode-go/spec.md) — workspace keys, session identity, model endpoints, and subscription billing.
   - [Kimi Coding Plan](integrations/kimi-coding-plan/spec.md) — membership keys, native login, regional access, and permitted usage.
   - [DeepSeek API](integrations/deepseek/spec.md) — stateless Responses, account balance, limits, and pricing evidence.
+  - [Domestic GLM Coding Plan](integrations/glm-coding-plan/spec.md) — plan-key categories, approved clients, domestic protocol bases, and monitor evidence limits.
+  - [StepFun Token Plan](integrations/stepfun-token-plan/spec.md) — dedicated plan paths, `step-5-preview`, truthful native clients, and Credit/quota boundaries.
 - [CLI](cli/spec.md) — common invocation, help, protected input, and dry runs.
   Command syntax and detailed results live with their owning capability:
   - [Configuration](cli/configuration/spec.md) — saved settings, reload, and invalid-file recovery.

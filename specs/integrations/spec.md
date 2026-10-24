@@ -21,10 +21,10 @@ Compatibility must distinguish:
 - Unknown: available evidence is insufficient; this is not a claim of prohibition.
 - Incompatible: an identified requirement cannot be satisfied by this agent configuration.
 
-No tmax runtime integration has been verified. Shared agent documentation was
-consulted on 2026-10-22; provider evidence and its consultation date belong to
-each provider-specific contract. Documentation evidence is not a verified tmax
-integration. Version ranges remain unset until adapters are tested.
+Shared agent documentation was consulted on 2026-10-22. Provider evidence, its
+consultation date, and any bounded runtime qualification belong to each child
+contract. Documentation, local native-schema checks, and provider-authorized
+runtime evidence must remain distinct. None establishes an untested version range.
 
 ## Agent boundaries
 
@@ -40,6 +40,19 @@ Agent-owned credential stores must be managed through supported agent operations
 or a version-qualified contract. tmax must not assume that changing a database
 row or deleting one auth file removes every credential source. Disabling a model
 in an agent's picker must not be described as preventing all direct calls.
+
+For a concrete offering, native application must preserve known effective
+context/output limits, reasoning support, and input modalities where the
+version-qualified native schema can express them. Unknown metadata must remain
+unknown rather than receive fabricated defaults. This is model-capability
+mapping, not a per-request generation budget or permission to change native
+preferences. The [request-parameter contract](../model-routing/spec.md#request-parameters)
+owns preservation of sampling, reasoning effort, and output-budget settings.
+This rule supplies no alias capability aggregation or current-winner snapshot.
+
+The [versioned native field references](../../docs/agents/README.md#qualification-and-evidence)
+record external model/authentication schemas and evidence for each Agent.
+They do not replace these contracts or establish provider entitlement.
 
 Integration setup and recovery must be reachable through explicit CLI arguments,
 including the native target and authentication owner; callers must not author
@@ -110,6 +123,8 @@ instance; two local instances of the same product use the same contract.
 | OpenCode Go / Go Plus | [OpenCode Go](opencode-go/spec.md) | Console workspace access, model endpoints, client/session identity, and Go billing |
 | Kimi Coding Plan | [Kimi Coding Plan](kimi-coding-plan/spec.md) | Membership versus platform access, regional endpoints, native login, usage restrictions, and shared allowance |
 | Official DeepSeek API | [DeepSeek API](deepseek/spec.md) | Stateless Responses, balance and account-limit semantics, and pricing-calendar evidence |
+| Domestic GLM Coding Plan | [GLM Coding Plan](glm-coding-plan/spec.md) | Domestic plan keys, approved tools, protocol-specific authorization, and unqualified monitor-field semantics |
+| StepFun Step Plan Token Plan | [StepFun Token Plan](stepfun-token-plan/spec.md) | Dedicated plan paths, `step-5-preview` scope, monthly Credit, and unavailable plan-quota API qualification |
 
 Each provider contract must define:
 
@@ -147,6 +162,21 @@ subscription entitlement for platform billing. A documented client setup is
 evidence for qualification, not permission to advertise every model, transport,
 or alias continuation path as verified. Model lists, plan prices, quota
 windows, and reset policies remain sourced provider data, not product constants.
+
+### Client and conversation identity
+
+| Condition | Shared requirement |
+| --- | --- |
+| A service requires a recognized native client or session header. | Its child contract owns the exact requirement and source-qualified versions. Protocol compatibility alone must not admit the route. |
+| Direct native configuration | The actual agent must satisfy the service's identity requirements without tmax on the inference path. |
+| Same-protocol forwarding | Retain the truthful qualified native client identity and genuine session semantics across main requests, tool results, continuations, and auxiliary requests. Preserve native parent/subsession distinctions where present. |
+| Identity is missing, conflicting, or unqualified for a required path. | Block that path with the missing prerequisite and supported recovery. Do not forge a User-Agent, manufacture a supported-client name, or replace a native conversation with a static provider-wide ID. |
+| No special User-Agent value or session header is established by the consulted provider evidence. | State that limit in the child contract. Do not copy another product's requirements or claim that undisclosed runtime restrictions cannot exist. |
+
+Native affinity for tmax routing remains governed by
+[selection and continuity](../model-routing/spec.md#selection-and-continuity).
+An upstream session header is not provider authentication, verified account
+identity, or permission to select another authorization.
 
 ## Endpoint resolution
 
@@ -206,6 +236,15 @@ original binding, provider authorization, and any qualified native
 client/session headers. Discovery and management reads are separate operations,
 not proof of inference or continuation support.
 
+Query selectors are part of an operation's finite declaration, not arbitrary
+passthrough. HTTP Messages creation at `POST /v1/messages` permits no query or
+the sole exact query `beta=true`. A qualified route must preserve that selector
+unchanged. It must reject unknown, duplicate, or conflicting query selectors
+before dispatch. This SDK creation selector does not authorize other beta
+features, batch/counting/resource operations, or every compatible upstream.
+The version-qualified source is Anthropic TypeScript SDK **0.129.0**
+[Messages creation](https://github.com/anthropics/anthropic-sdk-typescript/blob/sdk-v0.129.0/src/resources/beta/messages/messages.ts).
+
 The proxy must reject an undeclared method/path or transport before forwarding.
 A supported protocol does not authorize generic passthrough, arbitrary upstream
 paths, or every operation in that protocol's API. Opaque native request fields
@@ -250,7 +289,7 @@ Its finite creation surface is:
 | --- | --- | --- |
 | `chat-completions` | `POST /chat/completions` | HTTP, with SSE when streaming is qualified |
 | `responses` | `POST /responses` | HTTP, with SSE when streaming is qualified |
-| `messages` | `POST /v1/messages` | HTTP, with SSE when streaming is qualified |
+| `messages` | `POST /v1/messages`, with no query or sole `beta=true` | HTTP, with SSE when streaming is qualified |
 
 Each operation requires its exact configured model and provider authorization,
 plus any client/session requirements established by its qualified adapter.
@@ -260,6 +299,13 @@ This generic declaration supplies no discovery, identity, quota, balance,
 ID-only resource, background, or WebSocket operation. Such capabilities must
 come from a separately qualified integration declaration, not a guessed path or
 an arbitrary extension of `custom`.
+
+Custom setup is a transport boundary, not a separate subscription product. A
+known product's client, entitlement, and billing restrictions still apply when
+its requests use `custom`; generic configuration must not erase them. A child
+contract without a dedicated registry integration declares requirements, not a
+new integration ID or implemented metadata/observation capability. A supplied
+key's permission for one operation never authorizes every public API on that host.
 
 ## Rule input capabilities
 
@@ -310,17 +356,16 @@ The consulted sources establish different kinds of time-dependent charging:
 
 - The [DeepSeek contract](deepseek/spec.md#pricing-calendar) owns its official
   API pricing-calendar evidence and the boundary between tariff data and routing.
-- [GLM Coding Plan](https://docs.bigmodel.cn/cn/coding-plan/overview)
-  documents an off-peak discount on subscription point consumption and a
-  weekday peak window in UTC+8. This is not the same billing product as
-  [GLM API pricing](https://docs.bigmodel.cn/cn/guide/start/pricing), which lists
-  monetary input, output, and cache charges, including model-specific length tiers.
+- The [GLM Coding Plan contract](glm-coding-plan/spec.md#allowance-and-monitor-evidence)
+  owns the distinction between subscription points, time-dependent point
+  consumption, and standard API billing.
+- The [StepFun Token Plan contract](stepfun-token-plan/spec.md#credit-and-quota-evidence)
+  owns monthly Credit and the boundary of account-specific pricing evidence.
 
 These sources explain why the [selection contract](../model-routing/spec.md)
-supports time zones, weekday windows, and date overrides. The GLM comparison is
-pricing evidence for that model, not an additional advertised provider integration;
-supporting GLM Coding Plan would require its own provider contract. Exact prices,
-dates, and permitted clients must be qualified for the actual access product.
+supports time zones, weekday windows, and date overrides. Exact prices, effective
+dates, and account eligibility remain sourced data, not automatic routing policy
+or evidence of an implemented provider integration.
 
 ## Important limits
 

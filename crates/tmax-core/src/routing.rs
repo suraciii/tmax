@@ -764,13 +764,20 @@ pub struct RequestRequirements<'a> {
     pub native: &'a crate::proxy::NativeRequirements,
 }
 
+pub(crate) struct Advice<'a> {
+    pub native: Option<crate::native::compatibility::Context<'a>>,
+    pub tier: Option<&'a str>,
+}
+
 enum SelectionView<'a> {
     Saved {
         body: Option<&'a Value>,
+        context: Option<&'a Advice<'a>>,
     },
     Loaded {
         metadata: Option<&'a crate::catalog::Snapshot>,
         request: Option<RequestRequirements<'a>>,
+        context: Option<&'a Advice<'a>>,
     },
 }
 fn decision(
@@ -782,16 +789,49 @@ fn decision(
     exact_at: &inputs::ExactInstant,
     view: SelectionView<'_>,
 ) -> Result<(Value, Option<Selection>)> {
-    let (snapshot, body, native) = match view {
-        SelectionView::Saved { body } => (Snapshot::capture(store, config), body, None),
-        SelectionView::Loaded { metadata, request } => (
+    let (snapshot, body, native, context) = match view {
+        SelectionView::Saved { body, context } => {
+            (Snapshot::capture(store, config), body, None, context)
+        }
+        SelectionView::Loaded {
+            metadata,
+            request,
+            context,
+        } => (
             Snapshot::capture_loaded(store, config, metadata),
             request.map(|request| request.body),
             request.map(|request| request.native),
+            context,
         ),
     };
-    let (alias, candidates) = candidates(config, id, protocol)?;
+    let (alias, candidates) = if let Some(tier) = context.and_then(|context| context.tier) {
+        (
+            true,
+            config
+                .providers
+                .iter()
+                .flat_map(|(provider, p)| {
+                    p.models
+                        .iter()
+                        .filter(move |(_, model)| model.tier.as_deref() == Some(tier))
+                        .map(move |(model, _)| (provider.clone(), model.clone()))
+                })
+                .collect(),
+        )
+    } else {
+        candidates(config, id, protocol)?
+    };
     let inventory = crate::secrets::inventory(store).ok();
+    let authorization = context
+        .and_then(|context| context.native.as_ref())
+        .filter(|context| {
+            !context.proxy
+                && config
+                    .providers
+                    .values()
+                    .any(|p| matches!(p.auth, Some(config::Auth::Login { .. })))
+        })
+        .map(|_| crate::native::compatibility::AuthorizationSnapshot::capture(store));
     let mut evaluations = Vec::new();
     let mut ranked = Vec::new();
     let mut excluded = Vec::new();
@@ -800,20 +840,42 @@ fn decision(
         let m = &p.models[&name];
         let evaluation = evaluate(config, &snapshot, &provider, &name, at, exact_at)?;
         let identity = snapshot.destination_identity(&provider, &name);
-        let reason = eligibility(
-            p,
-            m,
-            &name,
-            protocol,
-            inventory.as_ref(),
-            identity.as_ref().map(|ids| ids.0.as_str()),
-        )
-        .or_else(|| {
-            body.and_then(|body| {
-                crate::proxy::capability_mismatch(p, &name, m, snapshot.metadata(), body)
+        let native_assessment =
+            context
+                .and_then(|context| context.native.as_ref())
+                .map(|context| -> Result<()> {
+                    context.assess(config, &provider, &name, protocol, id)?;
+                    if !context.proxy
+                        && matches!(p.auth, Some(config::Auth::Login { .. }))
+                        && let Some(authorization) = &authorization
+                    {
+                        authorization
+                            .as_ref()
+                            .map_err(Clone::clone)?
+                            .assess(store, config, context, &provider)?;
+                    }
+                    Ok(())
+                });
+        let reason = native_assessment
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+            .map(|error| error.code.as_str())
+            .or_else(|| {
+                eligibility(
+                    p,
+                    m,
+                    &name,
+                    protocol,
+                    inventory.as_ref(),
+                    identity.as_ref().map(|ids| ids.0.as_str()),
+                )
             })
-        })
-        .or_else(|| native.and_then(|native| crate::proxy::native_mismatch(p, native)));
+            .or_else(|| {
+                body.and_then(|body| {
+                    crate::proxy::capability_mismatch(p, &name, m, snapshot.metadata(), body)
+                })
+            })
+            .or_else(|| native.and_then(|native| crate::proxy::native_mismatch(p, native)));
         let observed_unavailability = if reason.is_none()
             && let Some((incarnation, authorization, _)) = &identity
         {
@@ -835,7 +897,7 @@ fn decision(
             .unwrap_or(m.priority);
         let qualified = format!("{provider}/{name}");
         if let Some(reason) = reason {
-            excluded.push(json!({"qualified_model":qualified,"reason_code":reason}));
+            excluded.push(json!({"qualified_model":qualified,"reason_code":reason,"native_requirement":native_assessment.as_ref().and_then(|result| result.as_ref().err()).map(|error| json!({"code":error.code,"message":error.message}))}));
         } else if let Some((provider_identity, authorization_generation, identity)) = identity {
             ranked.push((
                 priority,
@@ -884,6 +946,16 @@ pub fn explain(
     protocol: &str,
     at: Option<&str>,
 ) -> Result<Value> {
+    explain_native(store, config, id, protocol, at, None)
+}
+pub(crate) fn explain_native(
+    store: &Store,
+    config: &Config,
+    id: &str,
+    protocol: &str,
+    at: Option<&str>,
+    context: Option<&Advice<'_>>,
+) -> Result<Value> {
     let now = Utc::now();
     let text = at
         .map(str::to_owned)
@@ -897,7 +969,10 @@ pub fn explain(
         protocol,
         at,
         &exact_at,
-        SelectionView::Saved { body: None },
+        SelectionView::Saved {
+            body: None,
+            context,
+        },
     )
     .map(|(evidence, _)| evidence)
 }
@@ -915,7 +990,10 @@ pub fn select(
         protocol,
         at,
         &inputs::ExactInstant::from_chrono(at),
-        SelectionView::Saved { body: None },
+        SelectionView::Saved {
+            body: None,
+            context: None,
+        },
     )?;
     selection.ok_or_else(|| {
         Error::new(
@@ -923,6 +1001,27 @@ pub fn select(
             "No configured candidate has applicable identity, authorization, and protocol access",
         )
     })
+}
+fn request_unavailable(evidence: &Value) -> Error {
+    // A fixed offering, or candidates with the same blocker, has a precise
+    // rejection reason. Do not erase it before the proxy records history.
+    // Different blockers cannot truthfully be reduced to one candidate's cause.
+    let common_reason = evidence["excluded_candidates"]
+        .as_array()
+        .and_then(|excluded| {
+            excluded
+                .first()
+                .and_then(|candidate| candidate["reason_code"].as_str())
+                .filter(|reason| {
+                    excluded
+                        .iter()
+                        .all(|candidate| candidate["reason_code"].as_str() == Some(*reason))
+                })
+        });
+    Error::new(
+        common_reason.unwrap_or("model_unavailable"),
+        "No configured candidate satisfies the request's native capability, authorization, and protocol requirements",
+    )
 }
 
 pub fn select_request(
@@ -933,16 +1032,19 @@ pub fn select_request(
     at: DateTime<Utc>,
     body: &Value,
 ) -> Result<Selection> {
-    let (_, selection) = decision(
+    let (evidence, selection) = decision(
         store,
         config,
         id,
         protocol,
         at,
         &inputs::ExactInstant::from_chrono(at),
-        SelectionView::Saved { body: Some(body) },
+        SelectionView::Saved {
+            body: Some(body),
+            context: None,
+        },
     )?;
-    selection.ok_or_else(||Error::new("model_unavailable","No configured candidate satisfies the request's native capability, authorization, and protocol requirements"))
+    selection.ok_or_else(|| request_unavailable(&evidence))
 }
 
 pub fn select_request_loaded(
@@ -954,7 +1056,7 @@ pub fn select_request_loaded(
     request: RequestRequirements<'_>,
     metadata: Option<&crate::catalog::Snapshot>,
 ) -> Result<Selection> {
-    let (_, selection) = decision(
+    let (evidence, selection) = decision(
         store,
         config,
         id,
@@ -964,18 +1066,20 @@ pub fn select_request_loaded(
         SelectionView::Loaded {
             metadata,
             request: Some(request),
+            context: None,
         },
     )?;
-    selection.ok_or_else(||Error::new("model_unavailable","No loaded candidate satisfies the request's native capability, authorization, and protocol requirements"))
+    selection.ok_or_else(|| request_unavailable(&evidence))
 }
 
-pub fn explain_loaded(
+pub(crate) fn explain_loaded(
     store: &Store,
     config: &Config,
     id: &str,
     protocol: &str,
     at: Option<&str>,
     metadata: Option<&crate::catalog::Snapshot>,
+    context: Option<&Advice<'_>>,
 ) -> Result<Value> {
     let now = Utc::now();
     let text = at
@@ -993,6 +1097,7 @@ pub fn explain_loaded(
         SelectionView::Loaded {
             metadata,
             request: None,
+            context,
         },
     )
     .map(|(evidence, _)| evidence)
@@ -1001,6 +1106,155 @@ pub fn explain_loaded(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn loaded_tier_advice_keeps_native_candidates_metadata_and_input_lineage_together() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("state"));
+        let mut loaded = Config::empty();
+        loaded.providers.insert(
+            "old".into(),
+            Provider {
+                integration: Some("custom".into()),
+                metadata: Some("catalog".into()),
+                endpoints: [(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]
+                .into(),
+                auth: Some(config::Auth::ApiKey {
+                    key_ref: "not-resolved".into(),
+                }),
+                models: [(
+                    "m".into(),
+                    Model {
+                        tier: Some("L0".into()),
+                        priority: 7,
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        );
+        store
+            .write_raw("tmax.toml", toml::to_string(&loaded).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(&store, &Config::empty(), &loaded, &[]).unwrap();
+        let loaded_revision = config::raw_revision(&store).unwrap();
+        inputs::activate(&store, &loaded, &loaded_revision).unwrap();
+        let old_metadata = crate::catalog::Snapshot {
+            revision: "loaded-metadata".into(),
+            providers: [(
+                "catalog".into(),
+                json!({"models":{"m":{"reasoning":false}}}),
+            )]
+            .into(),
+            ..Default::default()
+        };
+        let new_metadata = crate::catalog::Snapshot {
+            revision: "saved-metadata".into(),
+            ..old_metadata.clone()
+        };
+        store
+            .write_json("catalog/accepted.json", &new_metadata)
+            .unwrap();
+        let mut saved = loaded.clone();
+        let provider = saved.providers.remove("old").unwrap();
+        saved.providers.insert("new".into(), provider);
+        saved
+            .providers
+            .get_mut("new")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .priority = 99;
+        store
+            .write_raw("tmax.toml", toml::to_string(&saved).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(&store, &loaded, &saved, &[]).unwrap();
+        let context = Advice {
+            native: Some(crate::native::compatibility::Context {
+                agent: "codex",
+                target: Some("old-target"),
+                provider: None,
+                proxy: false,
+            }),
+            tier: Some("L0"),
+        };
+        let evidence = explain_loaded(
+            &store,
+            &loaded,
+            "L0",
+            "chat-completions",
+            None,
+            Some(&old_metadata),
+            Some(&context),
+        )
+        .unwrap();
+        assert_eq!(evidence["metadata_revision"], "loaded-metadata");
+        assert_eq!(evidence["configuration_revision"], loaded_revision);
+        assert_eq!(
+            evidence["excluded_candidates"][0]["qualified_model"],
+            "old/m"
+        );
+        assert_eq!(
+            evidence["excluded_candidates"][0]["reason_code"],
+            "incompatible"
+        );
+        assert_eq!(
+            evidence["priority_evaluations"][0]["priority_evaluation"]["effective_priority"],
+            7
+        );
+        let saved_context = Advice {
+            native: Some(crate::native::compatibility::Context {
+                agent: "pi",
+                target: Some("new-target"),
+                provider: None,
+                proxy: false,
+            }),
+            tier: Some("L0"),
+        };
+        let evidence = explain_native(
+            &store,
+            &saved,
+            "L0",
+            "chat-completions",
+            None,
+            Some(&saved_context),
+        )
+        .unwrap();
+        assert_eq!(evidence["metadata_revision"], "saved-metadata");
+        assert_eq!(
+            evidence["excluded_candidates"][0]["qualified_model"],
+            "new/m"
+        );
+        assert_eq!(
+            evidence["priority_evaluations"][0]["priority_evaluation"]["effective_priority"],
+            99
+        );
+    }
+
+    #[test]
+    fn request_rejection_preserves_shared_blockers_without_mislabeling_mixed_failures() {
+        let fixed = json!({"excluded_candidates":[{"qualified_model":"p/m","reason_code":"native_session_required"}]});
+        assert_eq!(request_unavailable(&fixed).code, "native_session_required");
+        let shared = json!({"excluded_candidates":[
+            {"qualified_model":"p/m","reason_code":"native_session_required"},
+            {"qualified_model":"q/m","reason_code":"native_session_required"}
+        ]});
+        assert_eq!(request_unavailable(&shared).code, "native_session_required");
+        let mixed = json!({"excluded_candidates":[
+            {"qualified_model":"p/m","reason_code":"native_session_required"},
+            {"qualified_model":"q/m","reason_code":"provider_disabled"}
+        ]});
+        assert_eq!(request_unavailable(&mixed).code, "model_unavailable");
+        assert_eq!(
+            request_unavailable(&json!({"excluded_candidates":[]})).code,
+            "model_unavailable"
+        );
+    }
+
     #[test]
     fn nonexistent_calendar_intersections_do_not_overlap_real_instants() {
         let zone: Tz = "America/New_York".parse().unwrap();

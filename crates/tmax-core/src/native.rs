@@ -8,6 +8,7 @@
 //! Native auth inspection projects root namespace presence only, skipping every
 //! credential value without materializing, retaining, or exporting it.
 mod adapters;
+pub(crate) mod compatibility;
 mod document;
 pub use adapters::supported_roles;
 
@@ -30,6 +31,10 @@ use std::{
     time::Duration,
 };
 use zeroize::Zeroize;
+
+pub(crate) fn model_metadata(agent: &str, effective: &Value) -> Result<Value> {
+    adapters::model_metadata(agent, effective)
+}
 
 const INDEX: &str = "native/recovery.json";
 const LOGINS: &str = "native/logins.json";
@@ -383,10 +388,43 @@ async fn version(agent: &str, path: &Path) -> Value {
     let exact = found.as_deref() == Some(adapters::qualified_version(agent));
     json!({"executable":exe,"version":found,"state":if found.is_some(){"detected"}else{"unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
 }
+fn omp_root(store: &Store) -> PathBuf {
+    std::env::var_os("PI_CONFIG_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.components().all(|c| matches!(c, Component::Normal(_))))
+        .map(|p| store.home.join(p))
+        .unwrap_or_else(|| store.home.join(".omp"))
+}
+fn omp_scope(
+    root: &Path,
+    primary: Option<&std::ffi::OsStr>,
+    fallback: Option<&std::ffi::OsStr>,
+    agent_dir: Option<&std::ffi::OsStr>,
+) -> PathBuf {
+    match primary
+        .or(fallback)
+        .filter(|p| !p.is_empty() && *p != "default")
+    {
+        Some(profile) => root.join("profiles").join(profile).join("agent"),
+        None => agent_dir
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("agent")),
+    }
+}
+// OMP loads the canonical spelling first, but updates an existing .yaml in place.
+// Application/recovery capture this resolved path rather than introducing a shadow.
+fn omp_main_settings(path: &Path) -> &'static str {
+    if path.join("config.yml").exists() || !path.join("config.yaml").exists() {
+        "config.yml"
+    } else {
+        "config.yaml"
+    }
+}
 fn default_scope(store: &Store, agent: &str) -> PathBuf {
     let env = match agent {
         "codex" => "CODEX_HOME",
-        "pi" | "omp" => "PI_CODING_AGENT_DIR",
+        "pi" => "PI_CODING_AGENT_DIR",
         "hermes" => "HERMES_HOME",
         "opencode" => "OPENCODE_CONFIG_DIR",
         _ => "",
@@ -397,17 +435,12 @@ fn default_scope(store: &Store, agent: &str) -> PathBuf {
     match agent {
         "codex" => store.home.join(".codex"),
         "pi" => store.home.join(".pi/agent"),
-        "omp" => {
-            let root = std::env::var_os("PI_CONFIG_DIR")
-                .map(PathBuf::from)
-                .filter(|p| p.components().all(|c| matches!(c, Component::Normal(_))))
-                .map(|p| store.home.join(p))
-                .unwrap_or_else(|| store.home.join(".omp"));
-            match std::env::var_os("OMP_PROFILE").filter(|p| !p.is_empty()) {
-                Some(p) => root.join("profiles").join(p).join("agent"),
-                None => root.join("agent"),
-            }
-        }
+        "omp" => omp_scope(
+            &omp_root(store),
+            std::env::var_os("OMP_PROFILE").as_deref(),
+            std::env::var_os("PI_PROFILE").as_deref(),
+            std::env::var_os("PI_CODING_AGENT_DIR").as_deref(),
+        ),
         "opencode" => std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| store.home.join(".config"))
@@ -420,7 +453,13 @@ fn configuration_files(agent: &str, path: &Path) -> Vec<PathBuf> {
     let names: &[&str] = match agent {
         "codex" => &["config.toml"],
         "pi" => &["models.json", "settings.json"],
-        "omp" => &["models.yml", "models.yaml", "models.json", "config.yml"],
+        "omp" => &[
+            "models.yml",
+            "models.yaml",
+            "models.json",
+            "config.yml",
+            "config.yaml",
+        ],
         "opencode" => &["opencode.jsonc", "opencode.json"],
         "hermes" => &["config.yaml"],
         _ => &[],
@@ -436,11 +475,23 @@ fn auth_paths(agent: &str, path: &Path) -> Vec<PathBuf> {
     }
 }
 fn safe_files(agent: &str, path: &Path) -> Vec<Value> {
-    configuration_files(agent,path).into_iter().map(|p| match read_native(&p) { Ok(text) => json!({"path":p,"present":text.is_some(),"revision":revision(text.as_deref()),"content":"not_imported"}), Err(e) => json!({"path":p,"state":"unavailable","reason_code":e.code}) }).collect()
+    configuration_files(agent, path).into_iter().map(|p| {
+        let mut file = match read_native(&p) {
+            Ok(text) => json!({"path":p,"present":text.is_some(),"revision":revision(text.as_deref()),"content":"not_imported"}),
+            Err(e) => json!({"path":p,"state":"unavailable","reason_code":e.code}),
+        };
+        if agent == "omp" && matches!(p.file_name().and_then(|n| n.to_str()), Some("config.yml" | "config.yaml")) {
+            let effective = path.join(omp_main_settings(path));
+            file["main_settings"] = json!(true);
+            file["effective"] = json!(p == effective);
+            file["shadowed_by"] = if p != effective && p.exists() { json!(effective) } else { Value::Null };
+        }
+        file
+    }).collect()
 }
 fn profile_paths(store: &Store, agent: &str) -> Vec<PathBuf> {
     let root = match agent {
-        "omp" => store.home.join(".omp/profiles"),
+        "omp" => omp_root(store).join("profiles"),
         "hermes" => store.home.join(".hermes/profiles"),
         _ => return vec![],
     };
@@ -589,7 +640,12 @@ async fn entries(
 ) -> Result<(Vec<Entry>, Vec<String>)> {
     let mut entries = Vec::new();
     let mut references = Vec::new();
-    let logins: Logins = store.read_json(LOGINS)?;
+    let authorization = compatibility::AuthorizationSnapshot::capture(store)?;
+    let metadata = if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
+        crate::catalog::read(store, "accepted")?
+    } else {
+        None
+    };
     for (name, binding) in &target.providers {
         if binding.models.is_empty() {
             return Err(Error::new(
@@ -608,14 +664,16 @@ async fn entries(
         let protocol = *protocols
             .first()
             .ok_or_else(|| Error::new("target_incomplete", "Select a native protocol"))?;
-        if target.agent == "codex" && protocol != "responses" {
-            return Err(Error::new(
-                "incompatible",
-                "Codex custom providers require the Responses native protocol",
-            ));
-        }
+        let requirements = compatibility::Context {
+            agent: &target.agent,
+            target: Some(id),
+            provider: binding.provider.as_deref(),
+            proxy: binding.proxy == Some(true),
+        };
+        requirements.protocol(protocol)?;
         let mut canonical = None;
         let mut model_routes = BTreeMap::new();
+        let mut model_metadata = BTreeMap::new();
         let (base, key_ref, login_provider) = if let Some(provider_id) = &binding.provider {
             let provider = config.providers.get(provider_id).ok_or_else(|| {
                 Error::new(
@@ -643,45 +701,27 @@ async fn entries(
                         "Native upstream model is disabled",
                     ));
                 }
-                if !crate::integrations::protocols(provider, &selected.id)?
-                    .iter()
-                    .any(|p| p == &selected.protocol)
-                {
-                    return Err(Error::new(
-                        "incompatible",
-                        "Selected upstream model does not declare the native protocol",
-                    ));
-                }
-                if integration == "opencode-go"
-                    && selected.id == "deepseek-v4.1-flash"
-                    && selected.protocol != "chat-completions"
-                {
-                    return Err(Error::new(
-                        "compatibility_unavailable",
-                        "Exact OpenCode Go DeepSeek Flash Responses support is unknown; documented Chat Completions remains available",
-                    ));
-                }
-            }
-            if integration == "opencode-go" {
-                match target.agent.as_str() {
-                    "pi" => canonical = Some("opencode-go".to_owned()),
-                    "hermes" => {}
-                    _ => {
-                        return Err(Error::new(
-                            "compatibility_unavailable",
-                            "This exact native client lacks qualified per-conversation Go header coverage; pi 1.2.0 and Hermes 0.22.1 have separately sourced direct paths",
-                        ));
-                    }
+                requirements.assess(
+                    config,
+                    provider_id,
+                    &selected.id,
+                    &selected.protocol,
+                    &selected.id,
+                )?;
+                if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
+                    let projection = crate::catalog::effective_from_snapshot(
+                        metadata.as_ref(),
+                        provider,
+                        Some((&selected.id, model)),
+                    )?;
+                    model_metadata.insert(
+                        selected.id.clone(),
+                        adapters::model_metadata(&target.agent, &projection["effective"])?,
+                    );
                 }
             }
-            if integration == "kimi-coding-plan"
-                && target.agent == "hermes"
-                && protocol == "messages"
-            {
-                return Err(Error::new(
-                    "incompatible",
-                    "This Hermes Messages path substitutes a Claude Code identity for Kimi; tmax does not configure client impersonation. The documented native Chat Completions path remains available",
-                ));
+            if integration == "opencode-go" && target.agent == "pi" {
+                canonical = Some("opencode-go".to_owned());
             }
             let bases = crate::integrations::resolve(provider)?;
             for selected in &binding.models {
@@ -709,39 +749,11 @@ async fn entries(
             })?;
             match provider.auth.as_ref() {
                 Some(Auth::ApiKey { key_ref }) => (base, Some(key_ref.clone()), None),
-                Some(Auth::Login { via, session_ref }) => {
-                    if via != id {
-                        return Err(Error::new(
-                            "native_login_consumer_unqualified",
-                            "A native-owned session cannot be copied to another target; select its declared owner or a qualified gateway",
-                        ));
-                    }
-                    let native_provider = match (integration, target.agent.as_str()) {
-                        ("codex-subscription", "codex" | "opencode") => "openai",
-                        ("codex-subscription", "pi" | "omp" | "hermes") => "openai-codex",
-                        ("kimi-coding-plan", "omp") => "kimi-code",
-                        _ => {
-                            return Err(Error::new(
-                                "native_login_unqualified",
-                                "This provider does not have a qualified login flow for this native owner",
-                            ));
-                        }
-                    };
-                    let source_revision = login_source_revision(target, path);
-                    let record = logins.entries.iter().find(|l| {
-                        l.provider == *provider_id
-                            && l.target == id
-                            && l.scope == path
-                            && l.source_revision == source_revision
-                            && l.state == "signed_in"
-                            && session_ref.as_deref() == Some(&l.session_ref)
-                    });
-                    if record.is_none() {
-                        return Err(Error::new(
-                            "credential_unavailable",
-                            "Sign in explicitly through the selected native owner; no ambient session is adopted",
-                        ));
-                    }
+                Some(Auth::Login { .. }) => {
+                    let native_provider = requirements
+                        .login_provider(provider)?
+                        .ok_or_else(unavailable)?;
+                    authorization.assess(store, config, &requirements, provider_id)?;
                     (base, None, Some(native_provider.to_owned()))
                 }
                 None => {
@@ -769,24 +781,17 @@ async fn entries(
                 ));
             }
             for m in &binding.models {
-                if let Some(alias) = config
+                requirements.assess_public(config, &m.id, &m.protocol)?;
+                if !config
                     .model_aliases
                     .iter()
-                    .find(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
+                    .any(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
                 {
-                    if alias.continuity.as_deref().unwrap_or("session") == "session"
-                        && !(target.agent == "pi" && m.protocol == "chat-completions")
-                    {
-                        return Err(Error::new(
-                            "compatibility_unavailable",
-                            "This native route lacks a qualified new/resumed session-origin boundary; pi 1.2.0 Chat Completions supports timestamped UUIDv7 affinity, while other routes retain fixed/stateless use",
-                        ));
-                    }
-                } else {
+                    let (_, model_id) = config::qualified(&m.id)?;
                     let (p, model) = config::model(config, &m.id)?;
                     if !p.enabled
                         || !model.enabled
-                        || !crate::integrations::protocols(p, config::qualified(&m.id)?.1)?
+                        || !crate::integrations::protocols(p, model_id)?
                             .iter()
                             .any(|p| p == &m.protocol)
                     {
@@ -794,6 +799,17 @@ async fn entries(
                             "model_unavailable",
                             "Selected public concrete proxy model is not published for this protocol",
                         ));
+                    }
+                    if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
+                        let projection = crate::catalog::effective_from_snapshot(
+                            metadata.as_ref(),
+                            p,
+                            Some((model_id, model)),
+                        )?;
+                        model_metadata.insert(
+                            m.id.clone(),
+                            adapters::model_metadata(&target.agent, &projection["effective"])?,
+                        );
                     }
                 }
             }
@@ -849,6 +865,7 @@ async fn entries(
             proxy: binding.proxy == Some(true),
             models: binding.models.iter().map(|m| m.id.clone()).collect(),
             model_routes,
+            model_metadata,
         });
     }
     if target.default.is_none() || entries.is_empty() {
@@ -878,6 +895,22 @@ fn leaves(value: &Value, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, Val
     } else {
         out.push((path.clone(), value.clone()));
     }
+}
+fn desired_fields(agent: &str, desired: &Value, current: &Value) -> Vec<(Vec<String>, Value)> {
+    let mut fields = Vec::new();
+    leaves(desired, &mut Vec::new(), &mut fields);
+    fields.retain(|(path, value)| {
+        !path.is_empty()
+            && !(agent == "hermes"
+                && path.len() == 4
+                && path[0] == "providers"
+                && path[2] == "models"
+                && value.as_object().is_some_and(|model| model.is_empty())
+                && document::get(current, path)
+                    .and_then(Value::as_object)
+                    .is_some_and(|model| !model.is_empty()))
+    });
+    fields
 }
 fn source_guard(store: &Store) -> Result<String> {
     Ok(config::load(store)?.revision)
@@ -1114,9 +1147,7 @@ async fn apply_inner(
                 }
             }
         }
-        let mut fields = Vec::new();
-        leaves(&file.desired, &mut Vec::new(), &mut fields);
-        fields.retain(|(p, _)| !p.is_empty());
+        let fields = desired_fields(&target.agent, &file.desired, &current);
         if file.format != Format::Credential {
             let old_fields = previous
                 .as_ref()
@@ -1228,9 +1259,7 @@ async fn apply_inner(
             });
             continue;
         }
-        let mut desired = Vec::new();
-        leaves(&file.desired, &mut Vec::new(), &mut desired);
-        desired.retain(|(p, _)| !p.is_empty());
+        let desired = desired_fields(&target.agent, &file.desired, &current);
         let mut after = before.clone().unwrap_or_default();
         let mut fields = Vec::new();
         let mut baseline_values = Vec::new();
@@ -1974,6 +2003,29 @@ pub async fn logout(
 ) -> Result<Value> {
     native_auth(store, config, provider, via, dry_run, true).await
 }
+// No await or owner side effect may separate invalidation from the write-ahead
+// record. Invalidation comes first so an interruption after that record can never
+// leave facts from the old authorization current. Caller holds routing and native.
+fn begin_native_auth(
+    store: &Store,
+    provider: &str,
+    logins: &Logins,
+) -> std::result::Result<(), Value> {
+    crate::inputs::authorization_changed_locked(store, provider).map_err(|error| {
+        json!({"_code":"recovery_required","state":"native_not_attempted",
+            "native_login_attempted":false,"native_authorization_may_have_changed":false,
+            "authorization_invalidation":{"state":"failed","persistence":"unknown","code":error.code},
+            "recovery":"Repair authorization-lineage storage before another explicit native owner operation; no native authorization operation was started"})
+    })?;
+    store.write_json(LOGINS, logins).map_err(|error| {
+        json!({"_code":"recovery_required","state":"native_not_attempted",
+            "native_login_attempted":false,"native_authorization_may_have_changed":false,
+            "authorization_invalidation":{"state":"completed"},
+            "native_record":{"state":"unknown","code":error.code},
+            "recovery":"Inspect native login metadata before another explicit owner operation; authorization facts were invalidated but no native authorization operation was started"})
+    })
+}
+
 async fn native_auth(
     store: &Store,
     config: &Config,
@@ -1985,6 +2037,25 @@ async fn native_auth(
     let target = target(config, via)?;
     let path = scope(store, &target.scope)?;
     let native_provider = login_provider(config, provider, target)?;
+    let _configuration = if dry_run {
+        None
+    } else {
+        Some(store.lock("configuration")?)
+    };
+    let routing = if dry_run {
+        None
+    } else {
+        let saved = config::load(store)?;
+        if serde_json::to_value(&saved.config).map_err(|_| unavailable())?
+            != serde_json::to_value(config).map_err(|_| unavailable())?
+        {
+            return Err(Error::new(
+                "inputs_changed",
+                "The desired configuration changed before native authentication; inspect the current authority",
+            ));
+        }
+        Some(store.lock("routing")?)
+    };
     let _lock = if dry_run {
         None
     } else {
@@ -2111,7 +2182,7 @@ async fn native_auth(
     }
     if target.agent == "omp" {
         let cfg = document::parse(
-            read_native(&path.join("config.yml"))?
+            read_native(&path.join(omp_main_settings(&path)))?
                 .as_deref()
                 .unwrap_or(""),
             Format::Yaml,
@@ -2141,6 +2212,19 @@ async fn native_auth(
         .map(|l| l.session_ref.clone())
         .unwrap_or_else(|| format!("native-session-{}", uuid::Uuid::new_v4()));
     let prior_credential = existing.and_then(|l| l.credential_id.clone());
+    if target.agent == "opencode" {
+        let accounts = opencode_accounts(&path).await?;
+        if accounts.len() > 1
+            || accounts
+                .first()
+                .is_some_and(|id| Some(id) != prior_credential.as_ref())
+        {
+            return Err(Error::new(
+                "native_ambient_login_not_adopted",
+                "Use a fresh independent OpenCode native server database; no discovered saved account is adopted",
+            ));
+        }
+    }
     let mut native_credential_id = prior_credential.clone();
     let mut cmd = native_command(&target.agent, &path)?;
     let interactive_ui = target.agent == "pi" || (target.agent == "omp" && logout);
@@ -2195,14 +2279,28 @@ async fn native_auth(
         state: "native_effect_uncertain".into(),
         source_revision,
     });
-    store.write_json(LOGINS, &logins)?;
+    if let Err(mut failure) = begin_native_auth(store, provider, &logins) {
+        failure["provider"] = json!(provider);
+        failure["via"] = json!(via);
+        failure["agent"] = json!(target.agent);
+        failure["path"] = json!(path);
+        return Ok(failure);
+    }
+    // The durable generations and tombstones now cover every cancellation and
+    // partial return below. Do not acquire routing while holding native.
+    drop(routing);
+    let describe = |mut effect: Value| {
+        effect["authorization_invalidation"] = json!({"state":"completed"});
+        effect["native_authorization_may_have_changed"] = json!(true);
+        effect
+    };
     if target.agent == "hermes" && !logout {
         let mut guard = match native_command("hermes", &path) {
             Ok(cmd) => cmd,
             Err(e) => {
-                return Ok(
+                return Ok(describe(
                     json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","reason_code":e.code,"native_login_attempted":false,"managed_use_blocked":true}),
-                );
+                ));
             }
         };
         guard
@@ -2211,48 +2309,32 @@ async fn native_auth(
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         if !guard.status().await.is_ok_and(|s| s.success()) {
-            return Ok(
+            return Ok(describe(
                 json!({"_code":"partial_native_apply","provider":provider,"via":via,"path":path,"state":"native_effect_uncertain","native_login_attempted":false,"native_settings_guard":"may_have_changed","managed_use_blocked":true,"recovery":"Inspect native auth.adopt_external_logins before independent owner sign-in; no external tokens are adopted"}),
-            );
+            ));
         }
     }
-    if target.agent == "opencode" {
-        let accounts = match opencode_accounts(&path).await {
-            Ok(accounts) => accounts,
+    if target.agent == "opencode"
+        && !logout
+        && let Some(credential) = &prior_credential
+    {
+        let mut remove = match native_command("opencode", &path) {
+            Ok(cmd) => cmd,
             Err(e) => {
-                return Ok(
-                    json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","reason_code":e.code,"native_login_attempted":false,"managed_use_blocked":true}),
-                );
+                return Ok(describe(
+                    json!({"_code":"partial_native_apply","provider":provider,"state":"native_effect_uncertain","reason_code":e.code,"managed_use_blocked":true}),
+                ));
             }
         };
-        if accounts.len() > 1
-            || accounts
-                .first()
-                .is_some_and(|id| Some(id) != prior_credential.as_ref())
-        {
-            return Ok(
-                json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","reason_code":"native_ambient_login_not_adopted","native_login_attempted":false,"managed_use_blocked":true,"recovery":"Use a fresh independent OpenCode native server database; no discovered saved account is adopted"}),
-            );
-        }
-        if !logout && let Some(credential) = &prior_credential {
-            let mut remove = match native_command("opencode", &path) {
-                Ok(cmd) => cmd,
-                Err(e) => {
-                    return Ok(
-                        json!({"_code":"partial_native_apply","provider":provider,"state":"native_effect_uncertain","reason_code":e.code,"managed_use_blocked":true}),
-                    );
-                }
-            };
-            remove
-                .args(["auth", "logout", "openai", credential, "--standalone"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            if !remove.status().await.is_ok_and(|s| s.success()) {
-                return Ok(
-                    json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","managed_use_blocked":true,"recovery":"Complete sign-out of the recorded native account before independent sign-in"}),
-                );
-            }
+        remove
+            .args(["auth", "logout", "openai", credential, "--standalone"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if !remove.status().await.is_ok_and(|s| s.success()) {
+            return Ok(describe(
+                json!({"_code":"partial_native_apply","provider":provider,"via":via,"state":"native_effect_uncertain","managed_use_blocked":true,"recovery":"Complete sign-out of the recorded native account before independent sign-in"}),
+            ));
         }
     }
     cmd.args(&command);
@@ -2324,14 +2406,596 @@ async fn native_auth(
         login.credential_id = native_credential_id;
     }
     let committed = store.write_json(LOGINS, &logins).is_ok();
-    Ok(
+    Ok(describe(
         json!({"_code":if success&&committed{"awaiting_native_reload"}else{"partial_native_apply"},"provider":provider,"via":via,"agent":target.agent,"path":path,"state":if committed{state}else{"native_changed_local_commit_failed"},"session_ref":if success&&!logout&&committed{Some(session_ref)}else{None},"identity":"unknown","native_owner":target.agent,"native_session_imported":false,"native_authorization_may_have_changed":true,"managed_use_blocked":!success||!committed||logout,"native_consumers":"May already be affected outside tmax; unchanged desired configuration is not rollback evidence","recovery":"Reestablish the intended authorization through this exact native owner and scope; do not copy tokens or adopt another ambient login"}),
-    )
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn omp_profile_selection_matches_native_default_and_fallback_without_global_environment() {
+        use std::ffi::OsStr;
+        let root = Path::new("/private/custom-omp");
+        let relocated = OsStr::new("/private/relocated");
+        assert_eq!(omp_scope(root, None, None, None), root.join("agent"));
+        assert_eq!(
+            omp_scope(root, Some(OsStr::new("default")), None, None),
+            root.join("agent")
+        );
+        assert_eq!(
+            omp_scope(root, None, Some(OsStr::new("work")), Some(relocated)),
+            root.join("profiles/work/agent")
+        );
+        assert_eq!(
+            omp_scope(
+                root,
+                Some(OsStr::new("work")),
+                Some(OsStr::new("other")),
+                Some(relocated)
+            ),
+            root.join("profiles/work/agent")
+        );
+        assert_eq!(
+            omp_scope(
+                root,
+                Some(OsStr::new("default")),
+                Some(OsStr::new("work")),
+                Some(relocated)
+            ),
+            PathBuf::from(relocated)
+        );
+        // Presence, not truthiness, controls whether PI_PROFILE is consulted.
+        assert_eq!(
+            omp_scope(root, Some(OsStr::new("")), Some(OsStr::new("work")), None),
+            root.join("agent")
+        );
+    }
+
+    #[test]
+    fn omp_existing_yaml_settings_remain_effective_and_conflicting_spelling_is_disclosed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        assert_eq!(omp_main_settings(path), "config.yml");
+        fs::write(path.join("config.yaml"), "modelRoleStorage: project\n").unwrap();
+        assert_eq!(omp_main_settings(path), "config.yaml");
+        let files = safe_files("omp", path);
+        assert_eq!(
+            files
+                .iter()
+                .find(|f| f["path"] == json!(path.join("config.yaml")))
+                .unwrap()["effective"],
+            true
+        );
+        fs::write(path.join("config.yml"), "modelRoleStorage: global\n").unwrap();
+        assert_eq!(omp_main_settings(path), "config.yml");
+        let files = safe_files("omp", path);
+        let shadowed = files
+            .iter()
+            .find(|f| f["path"] == json!(path.join("config.yaml")))
+            .unwrap();
+        assert_eq!(shadowed["effective"], false);
+        assert_eq!(shadowed["shadowed_by"], json!(path.join("config.yml")));
+    }
+
+    async fn auth_fixture() -> (tempfile::TempDir, Store, Config, Logins) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let mut config = Config::empty();
+        let target = AgentTarget {
+            agent: "codex".into(),
+            scope: directory.path().join("native"),
+            providers: BTreeMap::new(),
+            default: None,
+            roles: BTreeMap::new(),
+        };
+        fs::create_dir(&target.scope).unwrap();
+        let record = LoginRecord {
+            provider: "p".into(),
+            target: "owner".into(),
+            scope: target.scope.clone(),
+            agent: target.agent.clone(),
+            native_provider: "openai".into(),
+            credential_id: None,
+            session_ref: "native-session-test".into(),
+            state: "signed_in".into(),
+            source_revision: login_source_revision(&target, &target.scope),
+        };
+        config.agents.insert("owner".into(), target);
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("codex-subscription".into()),
+                auth: Some(Auth::Login {
+                    via: "owner".into(),
+                    session_ref: Some(record.session_ref.clone()),
+                }),
+                subscription: Some(config::Subscription {
+                    plan: Some("Manual plan".into()),
+                    auto_renew: Some(false),
+                    ..Default::default()
+                }),
+                models: BTreeMap::from([("m".into(), config::Model::default())]),
+                inputs: BTreeMap::from([(
+                    "weekly".into(),
+                    config::InputDeclaration {
+                        kind: "quota".into(),
+                        source: "manual".into(),
+                        scope: "weekly".into(),
+                        models: vec!["m".into()],
+                        max_age_seconds: 3600,
+                        refresh_interval_seconds: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        let now = chrono::Utc::now();
+        let request = Request {
+            command: vec!["provider".into(), "input".into(), "record".into()],
+            operands: vec!["p".into(), "weekly".into()],
+            arguments: BTreeMap::from([
+                (
+                    "observed-at".into(),
+                    vec![(now - chrono::Duration::seconds(1)).to_rfc3339()],
+                ),
+                (
+                    "valid-until".into(),
+                    vec![(now + chrono::Duration::minutes(10)).to_rfc3339()],
+                ),
+                (
+                    "reset-at".into(),
+                    vec![(now + chrono::Duration::hours(1)).to_rfc3339()],
+                ),
+                ("remaining-percent".into(), vec!["75".into()]),
+            ]),
+            dry_run: false,
+            if_revision: None,
+        };
+        crate::inputs::handle(&store, &config, &request)
+            .await
+            .unwrap();
+        crate::inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let logins = Logins {
+            entries: vec![record],
+        };
+        store.write_json(LOGINS, &logins).unwrap();
+        (directory, store, config, logins)
+    }
+
+    #[tokio::test]
+    async fn native_advice_never_treats_retained_session_reference_as_recovered_authorization() {
+        let (_directory, store, config, mut logins) = auth_fixture().await;
+        let advice = crate::routing::Advice {
+            native: Some(compatibility::Context {
+                agent: "codex",
+                target: Some("owner"),
+                provider: Some("p"),
+                proxy: false,
+            }),
+            tier: None,
+        };
+        let before = crate::routing::explain_native(
+            &store,
+            &config,
+            "p/m",
+            "responses",
+            None,
+            Some(&advice),
+        )
+        .unwrap();
+        assert_eq!(before["selection"]["qualified_model"], "p/m");
+        logins.entries[0].state = "native_effect_uncertain".into();
+        {
+            let _configuration = store.lock("configuration").unwrap();
+            let _routing = store.lock("routing").unwrap();
+            let _native = store.lock("native").unwrap();
+            begin_native_auth(&store, "p", &logins).unwrap();
+        }
+        assert!(matches!(
+            &config.providers["p"].auth,
+            Some(Auth::Login {
+                session_ref: Some(_),
+                ..
+            })
+        ));
+        for evidence in [
+            crate::routing::explain_native(
+                &store,
+                &config,
+                "p/m",
+                "responses",
+                None,
+                Some(&advice),
+            )
+            .unwrap(),
+            crate::routing::explain_loaded(
+                &store,
+                &config,
+                "p/m",
+                "responses",
+                None,
+                None,
+                Some(&advice),
+            )
+            .unwrap(),
+        ] {
+            assert!(evidence["selection"].is_null());
+            assert_eq!(
+                evidence["excluded_candidates"][0]["reason_code"],
+                "credential_unavailable"
+            );
+            assert!(
+                evidence["excluded_candidates"][0]["native_requirement"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("uncertain")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_native_owner_future_keeps_saved_and_loaded_facts_invalidated() {
+        let (directory, store, config, mut logins) = auth_fixture().await;
+        let before = crate::inputs::read_runtime(&store).unwrap();
+        let at = crate::inputs::ExactInstant::from_chrono(chrono::Utc::now());
+        let old_head = crate::inputs::Snapshot::capture(&store, &config).input("p", "weekly", &at);
+        assert_eq!(old_head["availability"]["state"], "available");
+        assert_eq!(old_head["remaining_percent"], "75");
+        let original_config = fs::read(store.root.join("tmax.toml")).unwrap();
+        logins.entries[0].state = "native_effect_uncertain".into();
+        let mut operation = Box::pin(async {
+            let _configuration = store.lock("configuration").unwrap();
+            let routing = store.lock("routing").unwrap();
+            let _native = store.lock("native").unwrap();
+            begin_native_auth(&store, "p", &logins).unwrap();
+            drop(routing);
+            // Stand in for the owner awaiting user input: cancellation never
+            // reaches an explicit Err callback or the normal return path.
+            std::future::pending::<()>().await;
+        });
+        assert!(futures_util::poll!(operation.as_mut()).is_pending());
+        drop(operation);
+        let reopened = Store::at(directory.path().to_owned());
+        let after = crate::inputs::read_runtime(&reopened).unwrap();
+        assert_eq!(
+            after.saved.providers["p"].identity,
+            before.saved.providers["p"].identity
+        );
+        assert_ne!(
+            after.saved.providers["p"].authorization,
+            before.saved.providers["p"].authorization
+        );
+        assert_eq!(
+            after.loaded.as_ref().unwrap().providers["p"].authorization,
+            after.saved.providers["p"].authorization
+        );
+        for snapshot in [
+            crate::inputs::Snapshot::capture(&reopened, &config),
+            crate::inputs::Snapshot::capture_loaded(&reopened, &config, None),
+        ] {
+            let head = snapshot.input("p", "weekly", &at);
+            assert_eq!(
+                head["availability"]["reason_code"],
+                "authorization_mismatch"
+            );
+            assert_ne!(head["current_revision"], old_head["current_revision"]);
+            assert!(head.get("remaining_percent").is_none());
+        }
+        assert_eq!(
+            reopened.read_json::<Logins>(LOGINS).unwrap().entries[0].state,
+            "native_effect_uncertain"
+        );
+        assert_eq!(
+            fs::read(reopened.root.join("tmax.toml")).unwrap(),
+            original_config
+        );
+        assert_eq!(
+            serde_json::to_value(&after.saved.config.providers["p"].subscription).unwrap(),
+            serde_json::to_value(&config.providers["p"].subscription).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_lineage_persistence_never_records_or_starts_native_effects() {
+        let (_directory, store, _config, mut logins) = auth_fixture().await;
+        let original_logins = fs::read(store.root.join(LOGINS)).unwrap();
+        // Failure occurs after runtime invalidation, during observation pruning.
+        fs::create_dir_all(store.root.join("observations/heads.json")).unwrap();
+        logins.entries[0].state = "native_effect_uncertain".into();
+        let _configuration = store.lock("configuration").unwrap();
+        let _routing = store.lock("routing").unwrap();
+        let _native = store.lock("native").unwrap();
+        let failure = begin_native_auth(&store, "p", &logins).unwrap_err();
+        assert_eq!(failure["_code"], "recovery_required");
+        assert_eq!(failure["authorization_invalidation"]["state"], "failed");
+        assert_eq!(
+            failure["authorization_invalidation"]["persistence"],
+            "unknown"
+        );
+        assert_eq!(failure["state"], "native_not_attempted");
+        assert_eq!(failure["native_login_attempted"], false);
+        assert_eq!(failure["native_authorization_may_have_changed"], false);
+        assert_eq!(fs::read(store.root.join(LOGINS)).unwrap(), original_logins);
+    }
+
+    #[tokio::test]
+    async fn failed_write_ahead_record_distinguishes_completed_invalidation() {
+        let (_directory, store, _config, mut logins) = auth_fixture().await;
+        let before = crate::inputs::read_runtime(&store).unwrap();
+        fs::remove_file(store.root.join(LOGINS)).unwrap();
+        fs::create_dir(store.root.join(LOGINS)).unwrap();
+        logins.entries[0].state = "native_effect_uncertain".into();
+        let _configuration = store.lock("configuration").unwrap();
+        let _routing = store.lock("routing").unwrap();
+        let _native = store.lock("native").unwrap();
+        let failure = begin_native_auth(&store, "p", &logins).unwrap_err();
+        assert_eq!(failure["authorization_invalidation"]["state"], "completed");
+        assert_eq!(failure["native_record"]["state"], "unknown");
+        assert_eq!(failure["state"], "native_not_attempted");
+        assert_eq!(failure["native_authorization_may_have_changed"], false);
+        assert_ne!(
+            crate::inputs::read_runtime(&store).unwrap().saved.providers["p"].authorization,
+            before.saved.providers["p"].authorization
+        );
+    }
+
+    #[tokio::test]
+    async fn native_auth_preflight_rejection_preserves_authorization_facts() {
+        let (_directory, store, mut config, _logins) = auth_fixture().await;
+        let original = config.clone();
+        config.providers.insert(
+            "other".into(),
+            config::Provider {
+                integration: Some("codex-subscription".into()),
+                auth: Some(Auth::Login {
+                    via: "owner".into(),
+                    session_ref: None,
+                }),
+                ..Default::default()
+            },
+        );
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        crate::inputs::reconcile(&store, &original, &config, &[]).unwrap();
+        let runtime_before = fs::read(store.root.join("routing-state.json")).unwrap();
+        let logins_before = fs::read(store.root.join(LOGINS)).unwrap();
+        for logout in [false, true] {
+            let error = native_auth(&store, &config, "p", "owner", false, logout)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "native_scope_conflict");
+            assert_eq!(
+                fs::read(store.root.join("routing-state.json")).unwrap(),
+                runtime_before
+            );
+            assert_eq!(fs::read(store.root.join(LOGINS)).unwrap(), logins_before);
+            let at = crate::inputs::ExactInstant::from_chrono(chrono::Utc::now());
+            assert_eq!(
+                crate::inputs::Snapshot::capture(&store, &config).input("p", "weekly", &at)["availability"]
+                    ["state"],
+                "available"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn entries_use_accepted_effective_concrete_metadata_without_native_preference_edits() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::at(temporary.path().join("tmax"));
+        let accepted = crate::catalog::Snapshot {
+            revision: "accepted".into(),
+            providers: BTreeMap::from([(
+                "catalog".into(),
+                json!({"models":{"m":{
+                    "limit":{"context":1000000,"output":65536},"reasoning":true,"tool_call":true,
+                    "modalities":{"input":["text","image","video"],"output":["text"]}
+                }}}),
+            )]),
+            ..Default::default()
+        };
+        store
+            .write_json("catalog/accepted.json", &accepted)
+            .unwrap();
+        let mut latest = accepted.clone();
+        latest.revision = "not-accepted".into();
+        latest.providers.get_mut("catalog").unwrap()["models"]["m"]["limit"]["context"] = json!(17);
+        store.write_json("catalog/latest.json", &latest).unwrap();
+        let mut provider = config::Provider {
+            integration: Some("custom".into()),
+            metadata: Some("catalog".into()),
+            auth: Some(Auth::ApiKey {
+                key_ref: "opaque-reference-not-read".into(),
+            }),
+            endpoints: BTreeMap::from([(
+                "chat-completions".into(),
+                "https://example.invalid/v1".into(),
+            )]),
+            ..Default::default()
+        };
+        let mut model = config::Model::default();
+        model.overrides.reasoning = Some(false);
+        model.overrides.tool_call = Some(false);
+        model.overrides.limit = Some(config::Limits {
+            context: None,
+            input: None,
+            output: Some(4096),
+        });
+        model.overrides.modalities = Some(config::Modalities {
+            input: Some(vec!["image".into()]),
+            output: None,
+        });
+        provider.models = BTreeMap::from([
+            ("m".into(), model),
+            ("unknown".into(), config::Model::default()),
+        ]);
+        let mut config = Config::empty();
+        config.providers.insert("p".into(), provider);
+        let target = AgentTarget {
+            agent: "pi".into(),
+            scope: temporary.path().join("native"),
+            providers: BTreeMap::from([(
+                "local".into(),
+                config::NativeProvider {
+                    provider: Some("p".into()),
+                    proxy: None,
+                    models: ["m", "unknown"]
+                        .into_iter()
+                        .map(|id| config::ModelSelection {
+                            id: id.into(),
+                            protocol: "chat-completions".into(),
+                        })
+                        .collect(),
+                },
+            )]),
+            default: Some(config::ModelReference {
+                provider: "local".into(),
+                id: "m".into(),
+                protocol: "chat-completions".into(),
+            }),
+            roles: BTreeMap::new(),
+        };
+        let (entries, _) = entries(
+            &store,
+            &config,
+            "target",
+            &target,
+            &target.scope,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            entries[0].model_metadata["m"],
+            json!({"contextWindow":1000000,"maxTokens":4096,"reasoning":false,"input":["image"]})
+        );
+        assert_eq!(entries[0].model_metadata["unknown"], json!({}));
+        let files = adapters::build(&target, &target.scope, &entries).unwrap();
+        let models = files
+            .iter()
+            .find(|file| file.path == target.scope.join("models.json"))
+            .unwrap();
+        let settings = files
+            .iter()
+            .find(|file| file.path == target.scope.join("settings.json"))
+            .unwrap();
+        assert_eq!(
+            models.desired["providers"]["local"]["models"][0]["maxTokens"],
+            4096
+        );
+        let original = r#"{"defaultThinkingLevel":"high","modelThinkingLevels":{"local/m":"low"},"unrelated":{"samplingParams":{"temperature":0.2},"maxTokens":777}}"#;
+        let mut rewritten = original.to_owned();
+        let mut fields = Vec::new();
+        leaves(&settings.desired, &mut Vec::new(), &mut fields);
+        for (path, value) in fields {
+            rewritten = document::set(&rewritten, Format::Json, &path, Some(&value)).unwrap();
+        }
+        let after = document::parse(&rewritten, Format::Json).unwrap();
+        let before = document::parse(original, Format::Json).unwrap();
+        for field in ["defaultThinkingLevel", "modelThinkingLevels", "unrelated"] {
+            assert_eq!(after[field], before[field]);
+        }
+        for agent in ["opencode", "hermes"] {
+            let mut target = target.clone();
+            target.agent = agent.into();
+            let (prepared, references) = super::entries(
+                &store,
+                &config,
+                "target",
+                &target,
+                &target.scope,
+                true,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(references, ["opaque-reference-not-read"]);
+            let files = adapters::build(&target, &target.scope, &prepared).unwrap();
+            let file = files
+                .iter()
+                .find(|file| file.format != Format::Credential)
+                .unwrap();
+            let native = &file.desired["providers"]["local"]["models"];
+            if agent == "opencode" {
+                assert_eq!(
+                    native["m"]["limit"],
+                    json!({"context":1000000,"output":4096})
+                );
+                assert_eq!(
+                    native["m"]["capabilities"],
+                    json!({"tools":false,"input":["image"],"output":["text"]})
+                );
+                assert!(native["m"].get("reasoning").is_none());
+                assert!(native["unknown"].get("limit").is_none());
+                assert!(native["unknown"].get("capabilities").is_none());
+            } else {
+                assert_eq!(native["m"], json!({"context_length":1000000}));
+                assert_eq!(
+                    file.desired["model_overrides"]["local"]["m"],
+                    json!({
+                        "context_window":1000000,"supports_reasoning":false,"supports_tools":false,"supports_vision":true
+                    })
+                );
+                assert_eq!(native["unknown"], json!({}));
+                assert!(
+                    file.desired["model_overrides"]["local"]
+                        .get("unknown")
+                        .is_none()
+                );
+            }
+            // Exercise the same leaf writer as apply, including nested provider models.
+            // Existing native request bodies/effort/budgets and unrelated models survive.
+            let original = json!({
+                "providers":{"local":{"models":{"m":{
+                    "settings":{"temperature":0.2,"maxTokens":777},
+                    "body":{"max_output_tokens":777,"reasoning":{"effort":"high"}}
+                },"unknown":{"body":{"max_tokens":444},"capabilities":{"supports_vision":true}},
+                "user-model":{"body":{"temperature":0.8}}}}},
+                "agent":{"reasoning_effort":"high"},"reasoning_overrides":{"m":"low"}
+            });
+            let mut rewritten = if file.format == Format::Yaml {
+                serde_yaml::to_string(&original).unwrap()
+            } else {
+                serde_json::to_string(&original).unwrap()
+            };
+            let fields = desired_fields(agent, &file.desired, &original);
+            for (path, value) in fields {
+                rewritten = document::set(&rewritten, file.format, &path, Some(&value)).unwrap();
+            }
+            let after = document::parse(&rewritten, file.format).unwrap();
+            assert_eq!(
+                after["providers"]["local"]["models"]["m"]["body"],
+                original["providers"]["local"]["models"]["m"]["body"]
+            );
+            for field in ["temperature", "maxTokens"] {
+                assert_eq!(
+                    after["providers"]["local"]["models"]["m"]["settings"][field],
+                    original["providers"]["local"]["models"]["m"]["settings"][field]
+                );
+            }
+            assert_eq!(
+                after["providers"]["local"]["models"]["user-model"],
+                original["providers"]["local"]["models"]["user-model"]
+            );
+            for field in ["body", "capabilities"] {
+                assert_eq!(
+                    after["providers"]["local"]["models"]["unknown"][field],
+                    original["providers"]["local"]["models"]["unknown"][field]
+                );
+            }
+            for field in ["agent", "reasoning_overrides"] {
+                assert_eq!(after[field], original[field]);
+            }
+        }
+    }
+
     #[test]
     fn hermes_provenance_resolution_never_executes_repair_capable_launcher() {
         let directory = tempfile::tempdir().unwrap();

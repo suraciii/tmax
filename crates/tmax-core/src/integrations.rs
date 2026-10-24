@@ -186,6 +186,29 @@ pub fn operation_path(protocol: &str) -> Result<&'static str> {
         )),
     }
 }
+fn operation_queries(protocol: &str) -> &'static [Option<&'static str>] {
+    match protocol {
+        // Installed Pi 1.2.0 uses @anthropic-ai/sdk 0.129.0's beta Messages
+        // creation path. The official SDK sends this selector independently
+        // of anthropic-beta feature headers, for streaming and nonstreaming.
+        "messages" => &[None, Some("beta=true")],
+        _ => &[None],
+    }
+}
+pub fn inference_protocol(method: &str, path: &str, query: Option<&str>) -> Option<&'static str> {
+    if method != "POST" {
+        return None;
+    }
+    let protocol = match path {
+        "/chat/completions" | "/v1/chat/completions" => "chat-completions",
+        "/responses" | "/v1/responses" => "responses",
+        "/v1/messages" => "messages",
+        _ => return None,
+    };
+    operation_queries(protocol)
+        .contains(&query)
+        .then_some(protocol)
+}
 pub fn protocols(provider: &Provider, model_id: &str) -> Result<Vec<String>> {
     let mut p: Vec<_> = resolve(provider)?.into_keys().collect();
     if integration_id(provider)? == "opencode-go" && model_id == "deepseek-v4.1-flash" {
@@ -296,9 +319,12 @@ pub fn inspect(id: &str) -> Result<Value> {
             .into_iter()
             .collect()
     };
-    let mut operations:Vec<_>=protocols.iter().map(|p|json!({"protocol":p,"method":"POST","path_template":operation_path(p).expect("registry protocol"),"transport":"http","streaming":"sse","requires_original_binding":false})).collect();
+    let mut operations:Vec<_>=protocols.iter().map(|p|json!({"protocol":p,"method":"POST","path_template":operation_path(p).expect("registry protocol"),"query_variants":operation_queries(p),"transport":"http","streaming":"sse","requires_original_binding":false})).collect();
     if id == "codex-subscription" {
         operations.push(json!({"protocol":"responses","method":"GET","path_template":"/models","transport":"http","requires_original_binding":false,"purpose":"native_model_discovery"}));
+    }
+    if id == "opencode-go" {
+        operations.push(json!({"protocol":null,"method":"GET","path_template":"/zen/go/v1/usage","url":GO_USAGE_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":GO_USAGE_DESTINATION.source,"source_contract":GO_USAGE_DESTINATION.contract}));
     }
     let auth = if id == "codex-subscription" {
         vec!["login"]
@@ -308,7 +334,7 @@ pub fn inspect(id: &str) -> Result<Value> {
         vec!["api-key"]
     };
     Ok(
-        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"regions":r.into_iter().map(|(id,endpoints)|json!({"id":id,"endpoints":endpoints})).collect::<Vec<_>>(),"operations":operations},"login_sources":crate::native::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","deepseek-v4.1-flash Responses remains unqualified","Quota and renewal require Console or explicit manual information"]),"kimi-coding-plan"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),_=>json!([])}}),
+        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"regions":r.into_iter().map(|(id,endpoints)|json!({"id":id,"endpoints":endpoints})).collect::<Vec<_>>(),"operations":operations},"login_sources":crate::native::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","deepseek-v4.1-flash Responses remains unqualified","Quota GET provides consumed-only percentages and reset announcements, with unqualified freshness and no priority-rule inputs; renewal remains unknown (Console or explicit manual information)" ]),"kimi-coding-plan"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),_=>json!([])}}),
     )
 }
 pub async fn refresh(
@@ -324,16 +350,22 @@ pub async fn refresh(
 
 /// The integration owns non-inference destinations; never derive these from a model base.
 #[derive(Clone, Copy, Debug)]
-pub struct ObservationDestination {
+pub struct ObservationDestination<'a> {
     pub source: &'static str,
-    pub url: &'static str,
+    pub url: &'a str,
     pub contract: &'static str,
 }
+
+const GO_USAGE_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    source: "go_usage_api",
+    url: "https://opencode.ai/zen/go/v1/usage",
+    contract: "opencode_go_usage_2026_10_23",
+};
 
 pub fn observation_destination(
     provider: &Provider,
     scope: &str,
-) -> Result<Option<ObservationDestination>> {
+) -> Result<Option<ObservationDestination<'static>>> {
     resolve(provider)?;
     Ok(match (integration_id(provider)?, scope) {
         ("deepseek", "auth" | "quota") => Some(ObservationDestination {
@@ -346,6 +378,7 @@ pub fn observation_destination(
             url: "https://opencode.ai/inference/go/v1/models",
             contract: "opencode_go_models_v1",
         }),
+        ("opencode-go", "quota") => Some(GO_USAGE_DESTINATION),
         _ => None,
     })
 }
@@ -359,7 +392,7 @@ pub(crate) async fn acquire_observation(
     store: &crate::storage::Store,
     config: &Config,
     provider: &Provider,
-    destination: ObservationDestination,
+    destination: ObservationDestination<'_>,
     unlock: Option<&[u8]>,
 ) -> Result<AcquiredObservation> {
     let observation = async {
@@ -379,6 +412,7 @@ pub(crate) async fn acquire_observation(
         let response = client(config)?
             .get(destination.url)
             .bearer_auth(key)
+            .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
             .map_err(|_| Error::new("transport_error", "Provider observation transport failed"))?;
@@ -389,7 +423,12 @@ pub(crate) async fn acquire_observation(
                 "Provider observation was rejected",
             ));
         }
-        let bytes = read_bounded(response, 4 * 1024 * 1024).await?;
+        let limit = if destination.source == GO_USAGE_DESTINATION.source {
+            64 * 1024
+        } else {
+            4 * 1024 * 1024
+        };
+        let bytes = read_bounded(response, limit).await?;
         let body: Value = serde_json::from_slice(&bytes).map_err(|_| {
             Error::new(
                 "source_format_error",
@@ -412,6 +451,9 @@ pub(crate) async fn acquire_observation(
 pub(crate) fn normalize_observation(source: &str, body: &Value) -> Result<Value> {
     if source == "official_balance_api" {
         return normalize_balance(body);
+    }
+    if source == GO_USAGE_DESTINATION.source {
+        return normalize_go_usage(body);
     }
     if source != "official_models_api" {
         return Err(Error::new(
@@ -464,6 +506,50 @@ async fn read_bounded(mut response: reqwest::Response, limit: usize) -> Result<V
     }
     Ok(body)
 }
+fn normalize_go_usage(body: &Value) -> Result<Value> {
+    let invalid = || {
+        Error::new(
+            "source_format_error",
+            "Go usage window representation is unsupported",
+        )
+    };
+    let usage = body
+        .get("usage")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid)?;
+    let mut windows = serde_json::Map::new();
+    for name in ["rolling", "weekly", "monthly"] {
+        let window = usage
+            .get(name)
+            .and_then(Value::as_object)
+            .ok_or_else(invalid)?;
+        // Only this current status is qualified; historical enums are not the
+        // current wire contract. Percentages are consumed, floored integers,
+        // not exact remaining allowance, and no published maximum is assumed.
+        let status = window
+            .get("status")
+            .and_then(Value::as_str)
+            .filter(|s| *s == "ok")
+            .ok_or_else(invalid)?;
+        let percent = window
+            .get("percent")
+            .and_then(Value::as_u64)
+            .ok_or_else(invalid)?;
+        let reset = window
+            .get("resetsAt")
+            .and_then(Value::as_str)
+            .filter(|s| s.len() <= 64 && s.contains('T') && s.ends_with('Z'))
+            .ok_or_else(invalid)?;
+        crate::inputs::ExactInstant::parse(reset).map_err(|_| invalid())?;
+        windows.insert(
+            name.into(),
+            json!({"status":status,"percent":percent,"resetsAt":reset}),
+        );
+    }
+    Ok(
+        json!({"usage":windows,"percent_basis":"consumed","percent_precision":"floored","reset_basis":"announcement"}),
+    )
+}
 fn normalize_balance(body: &Value) -> Result<Value> {
     let available = body
         .get("is_available")
@@ -509,6 +595,56 @@ pub fn dashboard(id: &str) -> &'static str {
 mod tests {
     use super::*;
     #[test]
+    fn inference_operations_allow_only_declared_messages_beta_selector() {
+        for (path, protocol) in [
+            ("/chat/completions", "chat-completions"),
+            ("/v1/chat/completions", "chat-completions"),
+            ("/responses", "responses"),
+            ("/v1/responses", "responses"),
+            ("/v1/messages", "messages"),
+        ] {
+            assert_eq!(inference_protocol("POST", path, None), Some(protocol));
+        }
+        assert_eq!(
+            inference_protocol("POST", "/v1/messages", Some("beta=true")),
+            Some("messages")
+        );
+        for query in [
+            "",
+            "beta",
+            "beta=false",
+            "beta=True",
+            "beta=true&beta=true",
+            "beta=true&beta=false",
+            "beta=true&unknown=1",
+            "unknown=1",
+            "beta=%74rue",
+            "b%65ta=true",
+        ] {
+            assert!(inference_protocol("POST", "/v1/messages", Some(query)).is_none());
+        }
+        for (method, path, query) in [
+            ("GET", "/v1/messages", Some("beta=true")),
+            ("POST", "/v1/messages/count_tokens", Some("beta=true")),
+            ("POST", "/v1/messages/batches", Some("beta=true")),
+            ("POST", "/v1/responses", Some("beta=true")),
+            ("POST", "/v1/chat/completions", Some("beta=true")),
+            ("GET", "/v1/responses/id", None),
+            ("POST", "/v1/responses/id/cancel", None),
+        ] {
+            assert!(inference_protocol(method, path, query).is_none());
+        }
+        let declared = inspect("custom").unwrap();
+        let messages = declared["endpoint_support"]["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|operation| operation["protocol"] == "messages")
+            .unwrap();
+        assert_eq!(messages["query_variants"], json!([null, "beta=true"]));
+    }
+
+    #[test]
     fn map_and_custom_bases() {
         let p = Provider {
             metadata: Some("deepseek".into()),
@@ -541,5 +677,202 @@ mod tests {
         p.endpoints
             .insert("messages".into(), "https://api.kimi.ai/coding/".into());
         assert!(resolve(&p).is_err());
+    }
+    fn go_usage_body() -> Value {
+        json!({"usage":{
+            "rolling":{"status":"ok","percent":0,"resetsAt":"2026-10-23T19:04:44.687Z"},
+            "weekly":{"status":"ok","percent":0,"resetsAt":"2026-10-26T00:00:00.000Z"},
+            "monthly":{"status":"ok","percent":62,"resetsAt":"2026-11-09T03:13:27.000Z"}
+        }})
+    }
+    #[test]
+    fn go_quota_declares_exact_separate_read_without_rule_inputs() {
+        let provider = Provider {
+            integration: Some("opencode-go".into()),
+            ..Default::default()
+        };
+        let quota = observation_destination(&provider, "quota")
+            .unwrap()
+            .unwrap();
+        assert_eq!(quota.url, "https://opencode.ai/zen/go/v1/usage");
+        assert_ne!(
+            quota.url,
+            observation_destination(&provider, "models")
+                .unwrap()
+                .unwrap()
+                .url
+        );
+        let declaration = inspect("opencode-go").unwrap();
+        let operation = declaration["endpoint_support"]["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["purpose"] == "quota")
+            .unwrap();
+        assert_eq!(operation["method"], "GET");
+        assert_eq!(operation["url"], quota.url);
+        assert_eq!(operation["path_template"], "/zen/go/v1/usage");
+        assert_eq!(declaration["provider_input_capabilities"], json!([]));
+    }
+    #[test]
+    fn go_usage_retains_only_qualified_consumed_windows_and_exact_reset_announcements() {
+        let mut body = go_usage_body();
+        body["workspace"] = json!("must-not-retain");
+        body["usage"]["monthly"]["remaining"] = json!(38);
+        body["usage"]["other"] = json!({"identity":"must-not-retain"});
+        let normalized = normalize_observation("go_usage_api", &body).unwrap();
+        assert_eq!(normalized["usage"], go_usage_body()["usage"]);
+        assert_eq!(normalized["percent_basis"], "consumed");
+        assert_eq!(normalized["percent_precision"], "floored");
+        assert_eq!(normalized["reset_basis"], "announcement");
+        assert_eq!(normalized.as_object().unwrap().len(), 4);
+        assert_eq!(
+            normalize_observation("go_usage_api", &normalized).unwrap(),
+            normalized
+        );
+        // There is no published current maximum: do not clamp an overage.
+        body["usage"]["monthly"]["percent"] = json!(101);
+        assert_eq!(
+            normalize_observation("go_usage_api", &body).unwrap()["usage"]["monthly"]["percent"],
+            101
+        );
+    }
+    #[test]
+    fn malformed_or_unqualified_go_window_never_becomes_zero_or_partial_success() {
+        let valid = go_usage_body();
+        let mut cases = vec![
+            Value::Null,
+            json!({}),
+            json!({"usage":[]}),
+            json!({"rollingUsage":{"status":"ok","usagePercent":0,"resetInSec":3600}}),
+        ];
+        for name in ["rolling", "weekly", "monthly"] {
+            for field in ["status", "percent", "resetsAt"] {
+                let mut body = valid.clone();
+                body["usage"][name].as_object_mut().unwrap().remove(field);
+                cases.push(body);
+            }
+            for percent in [json!(-1), json!(0.5), json!("0"), json!(null), json!(true)] {
+                let mut body = valid.clone();
+                body["usage"][name]["percent"] = percent;
+                cases.push(body);
+            }
+            for status in ["rate-limited", "unknown", "", "ok\n"] {
+                let mut body = valid.clone();
+                body["usage"][name]["status"] = json!(status);
+                cases.push(body);
+            }
+            for reset in [
+                "2026-02-30T00:00:00Z",
+                "2026-10-23T00:00:00+00:00",
+                "2026-10-23",
+                "2026-10-23T00:00:00Z\n",
+            ] {
+                let mut body = valid.clone();
+                body["usage"][name]["resetsAt"] = json!(reset);
+                cases.push(body);
+            }
+            let mut body = valid.clone();
+            body["usage"][name]["resetsAt"] =
+                json!(format!("2026-10-23T00:00:00.{}Z", "0".repeat(80)));
+            cases.push(body);
+        }
+        for body in cases {
+            assert_eq!(
+                normalize_observation("go_usage_api", &body)
+                    .unwrap_err()
+                    .code,
+                "source_format_error"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn go_usage_transport_sends_truthful_read_headers_and_bounds_untrusted_responses() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::at(dir.path().into());
+        let owner = crate::secrets::owner_tag(&store, "provider", "go-test").unwrap();
+        let key_ref = crate::secrets::put(
+            &store,
+            &owner,
+            b"synthetic-test-key",
+            Some(b"synthetic-unlock"),
+        )
+        .unwrap();
+        let provider = Provider {
+            integration: Some("opencode-go".into()),
+            auth: Some(crate::config::Auth::ApiKey { key_ref }),
+            ..Default::default()
+        };
+        let mut oversized = go_usage_body();
+        oversized["ignored"] = json!("x".repeat(64 * 1024));
+        for (status, body, expected) in [
+            (200, go_usage_body().to_string(), None),
+            (200, oversized.to_string(), Some("source_format_error")),
+            (
+                403,
+                "private provider error must not escape".into(),
+                Some("upstream_rejection"),
+            ),
+            (302, String::new(), Some("upstream_rejection")),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0 && request.len() + count <= 8192);
+                    request.extend_from_slice(&chunk[..count]);
+                }
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(request.starts_with("get /zen/go/v1/usage http/1.1\r\n"));
+                assert!(request.contains(concat!(
+                    "\r\nuser-agent: tmax/",
+                    env!("CARGO_PKG_VERSION"),
+                    "\r\n"
+                )));
+                assert!(request.contains("\r\naccept: application/json\r\n"));
+                assert!(request.contains("\r\nauthorization: bearer synthetic-test-key\r\n"));
+                for header in ["x-opencode-", "x-session-id:", "x-tmax-", "session_id:"] {
+                    assert!(!request.contains(header));
+                }
+                let response = format!(
+                    "HTTP/1.1 {status} fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nLocation: /must-not-follow\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                // An oversized-response reader may close as soon as its bound
+                // is reached; the fixture need not finish writing those bytes.
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+            let url = format!("http://{address}/zen/go/v1/usage");
+            let destination = ObservationDestination {
+                url: &url,
+                ..GO_USAGE_DESTINATION
+            };
+            let result = acquire_observation(
+                &store,
+                &Config::empty(),
+                &provider,
+                destination,
+                Some(b"synthetic-unlock"),
+            )
+            .await;
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+            match expected {
+                Some(code) => assert_eq!(result.err().unwrap().code, code),
+                None => {
+                    let acquired = result.unwrap();
+                    assert_eq!(acquired.status, 200);
+                    assert_eq!(acquired.data["usage"], go_usage_body()["usage"]);
+                }
+            }
+        }
     }
 }

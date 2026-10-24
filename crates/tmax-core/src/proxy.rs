@@ -127,6 +127,7 @@ struct Choice {
     selection: crate::routing::Selection,
     authorization_generation: String,
     endpoint: String,
+    go_session_header: Option<&'static str>,
 }
 fn load_bindings(store: &Store) -> Result<Bindings> {
     let path = store.root.join("session-bindings.json");
@@ -218,6 +219,48 @@ impl Runtime {
     pub fn binding_summary(&self) -> Value {
         let b = self.bindings.lock().expect("bindings mutex");
         json!({"retained":b.entries.len(),"blocked":b.entries.values().filter(|v|v.blocked.is_some()).count(),"session_qualification":"native session identity must be qualified before dynamic session admission"})
+    }
+    pub(crate) fn inspect_session(
+        &self,
+        config: &Config,
+        public_id: &str,
+        protocol: &str,
+        session: &str,
+        loaded: bool,
+    ) -> Result<Value> {
+        let identities = if loaded {
+            crate::inputs::Snapshot::capture_loaded(&self.store, config, None)
+        } else {
+            crate::inputs::Snapshot::capture(&self.store, config)
+        };
+        let bindings = self.bindings.lock().expect("bindings mutex");
+        retained_explanation(
+            &bindings,
+            config,
+            &identities,
+            public_id,
+            protocol,
+            session,
+            "resident",
+        )
+    }
+    pub(crate) fn inspect_persisted_session(
+        store: &Store,
+        config: &Config,
+        public_id: &str,
+        protocol: &str,
+        session: &str,
+    ) -> Result<Value> {
+        let identities = crate::inputs::Snapshot::capture(store, config);
+        retained_explanation(
+            &load_bindings(store)?,
+            config,
+            &identities,
+            public_id,
+            protocol,
+            session,
+            "persisted",
+        )
     }
     pub fn activate_bindings(&self, config: &Config, dry_run: bool) -> Result<Value> {
         Self::transition_bindings(&self.store, &self.bindings, config, dry_run)
@@ -327,7 +370,7 @@ impl Runtime {
     ) -> Result<Choice> {
         let config = &snapshot.config;
         let context = native_context::identify(headers, body, protocol);
-        let native = NativeRequirements::capture(context.as_ref(), headers);
+        let native = NativeRequirements::capture(context.as_ref());
         if native_context::has_unbound_resources(body) {
             return Err(Error::new(
                 "original_resource_binding_unavailable",
@@ -407,8 +450,8 @@ impl Runtime {
                     "Request requirements are incompatible with the retained offering; no reassignment",
                 ));
             }
-            client_contract(provider, context.as_ref(), headers)?;
-            let evidence = json!({"selection_reason":"retained_destination","original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"offering_identity":binding.offering_identity},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
+            client_contract(provider, &native)?;
+            let evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"offering_identity":binding.offering_identity},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
             return Ok(Choice {
                 selection: crate::routing::Selection {
                     provider: binding.provider.clone(),
@@ -419,6 +462,7 @@ impl Runtime {
                 },
                 authorization_generation: binding.authorization_generation.clone(),
                 endpoint: binding.endpoint.clone(),
+                go_session_header: context.as_ref().and_then(|c| c.go_session_header),
             });
         }
         if retain
@@ -444,7 +488,7 @@ impl Runtime {
             snapshot.metadata.as_deref(),
         )?;
         let provider = &config.providers[&selection.provider];
-        client_contract(provider, context.as_ref(), headers)?;
+        client_contract(provider, &native)?;
         crate::integrations::check_request(provider, &selection.model, protocol, body)?;
         let endpoints = crate::integrations::resolve(provider)?;
         let endpoint = endpoints
@@ -488,6 +532,11 @@ impl Runtime {
             }
         }
         if retain {
+            selection.evidence["scope_handle"] = json!(
+                context
+                    .as_ref()
+                    .and_then(native_context::Context::scope_handle)
+            );
             if bindings.entries.len() >= BINDING_LIMIT {
                 return Err(Error::new(
                     "session_binding_capacity",
@@ -522,9 +571,47 @@ impl Runtime {
             selection,
             authorization_generation,
             endpoint,
+            go_session_header: context.as_ref().and_then(|c| c.go_session_header),
         })
     }
 }
+fn retained_explanation(
+    bindings: &Bindings,
+    config: &Config,
+    identities: &crate::inputs::Snapshot<'_>,
+    public_id: &str,
+    protocol: &str,
+    session: &str,
+    source: &str,
+) -> Result<Value> {
+    let key = native_context::binding_key(session, public_id, protocol);
+    let binding = bindings
+        .entries
+        .get(&key)
+        .filter(|binding| {
+            binding.context_handle == session
+                && binding.public_id == public_id
+                && binding.protocol == protocol
+        })
+        .ok_or_else(|| {
+            Error::new(
+                "original_binding_unavailable",
+                "No retained destination matches this proxy handle, public model ID and protocol",
+            )
+        })?;
+    let blocker = binding
+        .blocked
+        .as_deref()
+        .or_else(|| binding_blocker(config, binding, identities));
+    Ok(json!({
+        "session":session,"session_source":source,"public_id":public_id,"protocol":protocol,
+        "selection_reason":"retained_destination",
+        "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"offering_identity":binding.offering_identity},
+        "continuation":{"state":if blocker.is_some(){"blocked"}else{"retained"},"reason_code":blocker,"stored_blocker":binding.blocked},
+        "original_decision":safe_evidence(&binding.decision),"fresh_ranking":"not_evaluated","authorization":"not_verified"
+    }))
+}
+
 fn binding_blocker(
     config: &Config,
     b: &Binding,
@@ -620,15 +707,14 @@ pub struct NativeRequirements {
     pub go_session: bool,
 }
 impl NativeRequirements {
-    fn capture(context: Option<&native_context::Context>, headers: &HeaderMap) -> Self {
+    fn capture(context: Option<&native_context::Context>) -> Self {
         Self {
             client: match context.map(|c| c.family) {
                 Some("pi") => NativeClient::Pi,
                 Some("hermes") => NativeClient::Hermes,
                 _ => NativeClient::Unknown,
             },
-            go_session: context
-                .is_some_and(|c| c.session.is_some() && headers.contains_key("x-opencode-session")),
+            go_session: context.is_some_and(|c| c.go_session_header.is_some()),
         }
     }
 }
@@ -651,13 +737,8 @@ pub fn native_mismatch(
         Err(_) => Some("integration_unavailable"),
     }
 }
-fn client_contract(
-    provider: &crate::config::Provider,
-    context: Option<&native_context::Context>,
-    headers: &HeaderMap,
-) -> Result<()> {
-    if let Some(reason) = native_mismatch(provider, &NativeRequirements::capture(context, headers))
-    {
+fn client_contract(provider: &crate::config::Provider, native: &NativeRequirements) -> Result<()> {
+    if let Some(reason) = native_mismatch(provider, native) {
         Err(Error::new(reason, safe_message(reason)))
     } else {
         Ok(())
@@ -780,17 +861,6 @@ fn local_key(headers: &HeaderMap) -> Option<&[u8]> {
         .map(str::as_bytes)
         .or_else(|| headers.get("x-api-key").map(|v| v.as_bytes()))
 }
-fn protocol(method: &Method, path: &str) -> Option<&'static str> {
-    if method != Method::POST {
-        return None;
-    }
-    match path {
-        "/chat/completions" | "/v1/chat/completions" => Some("chat-completions"),
-        "/responses" | "/v1/responses" => Some("responses"),
-        "/v1/messages" => Some("messages"),
-        _ => None,
-    }
-}
 async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Request) -> Response {
     let record = runtime.history.begin();
     let id = record.request.clone();
@@ -844,16 +914,17 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
         flight.finish("completed", "model_discovery", None);
         return axum::Json(publication(&snapshot.config)).into_response();
     }
-    if parts.uri.query().is_some() {
+    let Some(protocol) = crate::integrations::inference_protocol(
+        parts.method.as_str(),
+        parts.uri.path(),
+        parts.uri.query(),
+    ) else {
         return flight.reject(
-            StatusCode::BAD_REQUEST,
-            "undeclared_operation",
-            "operation_validation",
-        );
-    }
-    let Some(protocol) = protocol(&parts.method, parts.uri.path()) else {
-        return flight.reject(
-            StatusCode::NOT_FOUND,
+            if parts.uri.query().is_some() {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::NOT_FOUND
+            },
             "undeclared_operation",
             "operation_validation",
         );
@@ -962,10 +1033,20 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
         }
     };
     body["model"] = Value::String(selection.model.clone());
+    let go_session_header =
+        if crate::integrations::integration_id(provider).ok() == Some("opencode-go") {
+            choice.go_session_header
+        } else {
+            None
+        };
+    let upstream_url = match parts.uri.query() {
+        Some(query) => format!("{}{}?{}", endpoint.trim_end_matches('/'), path, query),
+        None => format!("{}{}", endpoint.trim_end_matches('/'), path),
+    };
     let mut outbound = snapshot
         .client
-        .post(format!("{}{}", endpoint.trim_end_matches('/'), path))
-        .headers(upstream_headers(&parts.headers))
+        .post(upstream_url)
+        .headers(upstream_headers(&parts.headers, go_session_header))
         .json(&body);
     if protocol == "messages"
         && crate::integrations::integration_id(provider).ok() != Some("opencode-go")
@@ -1075,7 +1156,7 @@ fn hop_header(name: &str) -> bool {
             | "upgrade"
     )
 }
-fn upstream_headers(headers: &HeaderMap) -> HeaderMap {
+fn upstream_headers(headers: &HeaderMap, go_session_header: Option<&str>) -> HeaderMap {
     let mut out = HeaderMap::new();
     for (name, value) in headers {
         if !hop_header(name.as_str())
@@ -1096,6 +1177,11 @@ fn upstream_headers(headers: &HeaderMap) -> HeaderMap {
         {
             out.insert(name.clone(), value.clone());
         }
+    }
+    if let Some(session) = go_session_header.and_then(|name| headers.get(name)) {
+        // This is the actual qualified native session, not a generated or
+        // provider-wide identity. Preserve the native header and truthful UA.
+        out.insert("x-opencode-session", session.clone());
     }
     out
 }
@@ -1400,12 +1486,6 @@ mod tests {
     use super::native_context::independent as independent_context;
     use super::*;
     #[test]
-    fn operation_surface_is_finite() {
-        assert!(protocol(&Method::POST, "/v1/responses").is_some());
-        assert!(protocol(&Method::GET, "/v1/responses/id").is_none());
-        assert!(protocol(&Method::POST, "/v1/responses/id/cancel").is_none());
-    }
-    #[test]
     fn usage_observer_preserves_terminal_semantics() {
         let mut observer = Observer::new("responses", true, true);
         observer.observe(b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"secret\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"secret\":\"x\"}}}\n\n");
@@ -1561,6 +1641,108 @@ mod tests {
         runtime.activate_bindings(new, false).unwrap();
         *authority = Some(Arc::new(test_snapshot(new, revision)));
     }
+    #[tokio::test]
+    async fn retained_session_explanation_survives_deleted_candidates_and_never_clears_blockers() {
+        let (directory, runtime, config) = fixture();
+        let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+        let choice = runtime
+            .choose(
+                &test_snapshot(&config, "fixture-1"),
+                "dynamic",
+                "chat-completions",
+                &json!({"messages":[{"role":"user","content":"not-retained-body"}]}),
+                &native_headers(at),
+                at + chrono::Duration::milliseconds(1),
+            )
+            .unwrap();
+        let handle = choice.selection.evidence["scope_handle"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(handle.starts_with("native-scope:"));
+        let mut removed = config.clone();
+        removed.providers.remove("p");
+        removed.model_aliases.clear();
+        removed.agents.insert(
+            "changed-client".into(),
+            crate::config::AgentTarget {
+                agent: "codex".into(),
+                scope: directory.path().join("native"),
+                providers: [(
+                    "proxy".into(),
+                    crate::config::NativeProvider {
+                        provider: None,
+                        proxy: Some(true),
+                        models: vec![],
+                    },
+                )]
+                .into(),
+                default: None,
+                roles: Default::default(),
+            },
+        );
+        publish(&runtime, &config, &removed, "removed");
+        runtime
+            .store
+            .write_raw("tmax.toml", toml::to_string(&removed).unwrap().as_bytes())
+            .unwrap();
+        let before = std::fs::read(runtime.store.root.join("session-bindings.json")).unwrap();
+        let request = crate::Request {
+            command: vec!["model".into(), "explain".into()],
+            operands: vec!["dynamic".into()],
+            arguments: [
+                ("protocol".into(), vec!["chat-completions".into()]),
+                ("session".into(), vec![handle.clone()]),
+                ("target".into(), vec!["changed-client".into()]),
+                ("agent-provider".into(), vec!["proxy".into()]),
+            ]
+            .into(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let evidence = crate::operations::explain(&runtime.store, &removed, &request)
+            .await
+            .unwrap();
+        assert_eq!(evidence["selection"]["qualified_model"], "p/m");
+        assert_eq!(evidence["continuation"]["reason_code"], "provider_removed");
+        assert_eq!(
+            evidence["continuation"]["stored_blocker"],
+            "provider_removed"
+        );
+        assert_eq!(evidence["fresh_ranking"], "not_evaluated");
+        assert_eq!(evidence["native_assessment"]["state"], "not_reassessed");
+        assert!(!evidence.to_string().contains("not-retained-body"));
+        assert_eq!(
+            std::fs::read(runtime.store.root.join("session-bindings.json")).unwrap(),
+            before
+        );
+        for (id, protocol, session) in [
+            ("different", "chat-completions", handle.as_str()),
+            ("dynamic", "responses", handle.as_str()),
+            ("dynamic", "chat-completions", "unrelated-handle"),
+        ] {
+            assert_eq!(
+                Runtime::inspect_persisted_session(&runtime.store, &removed, id, protocol, session)
+                    .unwrap_err()
+                    .code,
+                "original_binding_unavailable"
+            );
+        }
+        let restored = Runtime::inspect_persisted_session(
+            &runtime.store,
+            &config,
+            "dynamic",
+            "chat-completions",
+            &handle,
+        )
+        .unwrap();
+        assert_eq!(
+            restored["continuation"]["stored_blocker"],
+            "provider_removed"
+        );
+        assert_eq!(restored["selection"]["qualified_model"], "p/m");
+    }
+
     #[test]
     fn retained_selection_survives_priority_change_history_clear_and_restart() {
         let (_temporary, runtime, config) = fixture();
@@ -1873,13 +2055,16 @@ mod tests {
         let p = go.providers.get_mut("p").unwrap();
         p.integration = Some("opencode-go".into());
         p.endpoints.clear();
-        publish(&runtime, &config, &go, "native-context");
+        let mut stateless = go.clone();
+        stateless.model_aliases[0].continuity = Some("stateless".into());
+        publish(&runtime, &config, &stateless, "native-stateless");
         let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
-        let local = native_headers(at);
+        let mut local = native_headers(at);
+        local.remove("x-session-id");
         let body = json!({"messages":[{"role":"user","content":"x"}]});
         let lower = runtime
             .choose(
-                &test_snapshot(&go, "native-context"),
+                &test_snapshot(&stateless, "native-stateless"),
                 "dynamic",
                 "chat-completions",
                 &body,
@@ -1888,9 +2073,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(lower.selection.provider, "q");
+        publish(&runtime, &stateless, &go, "native-context");
         let mut native = native_headers(at + chrono::Duration::seconds(1));
-        let session = native.remove("x-session-id").unwrap();
-        native.insert("x-opencode-session", session.clone());
+        let session = native["x-session-id"].clone();
         let high = runtime
             .choose(
                 &test_snapshot(&go, "native-context"),
@@ -1902,8 +2087,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(high.selection.provider, "p");
-        native.remove("x-opencode-session");
-        native.insert("x-session-id", session);
+        native.insert("x-opencode-session", session.clone());
+        let retained = runtime
+            .choose(
+                &test_snapshot(&go, "native-context"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &native,
+                at + chrono::Duration::seconds(3),
+            )
+            .unwrap();
+        assert_eq!(retained.selection.provider, "p");
+        assert_eq!(
+            retained.selection.evidence["selection_reason"],
+            "retained_destination"
+        );
+        native.insert("x-opencode-session", "conflicting-session".parse().unwrap());
         let error = runtime
             .choose(
                 &test_snapshot(&go, "native-context"),
@@ -1915,7 +2115,7 @@ mod tests {
             )
             .err()
             .unwrap();
-        assert_eq!(error.code, "native_session_required");
+        assert_eq!(error.code, "session_identity_unavailable");
         let bindings = runtime.bindings.lock().unwrap();
         assert_eq!(
             bindings
@@ -1925,5 +2125,268 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn pi_go_forwarding_preserves_native_identity_across_turns_resume_and_new_sessions() {
+        let (_temporary, runtime, config) = fixture();
+        let mut go = config.clone();
+        let provider = go.providers.get_mut("p").unwrap();
+        provider.integration = Some("opencode-go".into());
+        provider.endpoints.clear();
+        publish(&runtime, &config, &go, "go-affinity");
+        let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+        let headers = native_headers(at);
+        let initial = json!({"messages":[{"role":"user","content":"x"}],"stream":true});
+        let continuation = json!({"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"y"},{"role":"user","content":"z"}],"stream":false});
+        let tool_turn = json!({"messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"test","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call-1","content":"ok"}],"stream":true});
+        let auxiliary = json!({"messages":[{"role":"user","content":"summarize"}],"stream":false});
+        let snapshot = test_snapshot(&go, "go-affinity");
+        for body in [&initial, &continuation, &tool_turn, &auxiliary] {
+            let choice = runtime
+                .choose(&snapshot, "p/m", "chat-completions", body, &headers, at)
+                .unwrap();
+            assert_eq!(choice.selection.provider, "p");
+            assert_eq!(choice.go_session_header, Some("x-session-id"));
+            let forwarded = upstream_headers(&headers, choice.go_session_header);
+            assert_eq!(forwarded["x-opencode-session"], headers["x-session-id"]);
+            assert_eq!(forwarded["x-session-id"], headers["x-session-id"]);
+            assert_eq!(forwarded["user-agent"], headers["user-agent"]);
+        }
+        let store = runtime.store.clone();
+        drop(runtime);
+        let resumed = Runtime::new(store, "go-resume".into(), None).unwrap();
+        let retained = resumed
+            .choose(
+                &snapshot,
+                "p/m",
+                "chat-completions",
+                &continuation,
+                &headers,
+                at,
+            )
+            .unwrap();
+        assert_eq!(
+            retained.selection.evidence["selection_reason"],
+            "retained_destination"
+        );
+        let forwarded = upstream_headers(&headers, retained.go_session_header);
+        assert_eq!(forwarded["x-opencode-session"], headers["x-session-id"]);
+        let fresh = native_headers(at + chrono::Duration::seconds(1));
+        let new = resumed
+            .choose(
+                &snapshot,
+                "p/m",
+                "chat-completions",
+                &initial,
+                &fresh,
+                at + chrono::Duration::seconds(1),
+            )
+            .unwrap();
+        let forwarded_new = upstream_headers(&fresh, new.go_session_header);
+        assert_ne!(
+            forwarded_new["x-opencode-session"],
+            forwarded["x-opencode-session"]
+        );
+        assert_eq!(resumed.bindings.lock().unwrap().entries.len(), 2);
+        let mut disabled = go.clone();
+        disabled.providers.get_mut("p").unwrap().enabled = false;
+        publish(&resumed, &go, &disabled, "go-disabled");
+        publish(&resumed, &disabled, &go, "go-restored");
+        let error = resumed
+            .choose(
+                &snapshot,
+                "p/m",
+                "chat-completions",
+                &continuation,
+                &headers,
+                at,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "provider_disabled");
+        assert_eq!(resumed.bindings.lock().unwrap().entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn go_identity_rejections_retain_exact_history_reason_without_dispatch() {
+        let (_temporary, runtime, config) = fixture();
+        let mut go = config.clone();
+        let provider = go.providers.get_mut("p").unwrap();
+        provider.integration = Some("opencode-go".into());
+        provider.endpoints.clear();
+        provider.models.get_mut("m").unwrap().overrides.tool_call = Some(false);
+        go.model_aliases[0].tier = None;
+        go.model_aliases[0].candidates = Some(vec!["p/m".into()]);
+        go.model_aliases[0].continuity = Some("stateless".into());
+        publish(&runtime, &config, &go, "go-rejections");
+        runtime.open();
+        let at = Utc::now();
+        runtime.bindings.lock().unwrap().epoch = at - chrono::Duration::seconds(1);
+        let qualified = native_headers(at);
+        let mut missing = qualified.clone();
+        missing.remove("x-session-id");
+        let mut unknown = qualified.clone();
+        unknown.insert("user-agent", "generic-client".parse().unwrap());
+        let mut unknown_recommended = unknown.clone();
+        unknown_recommended.insert("x-opencode-session", qualified["x-session-id"].clone());
+        let mut conflict = qualified.clone();
+        conflict.insert("x-opencode-session", "conflicting-session".parse().unwrap());
+        let mut hermes_affinity = qualified.clone();
+        hermes_affinity.insert("user-agent", "HermesAgent/0.22.1".parse().unwrap());
+        hermes_affinity.insert("x-session-id", "native-hermes-session".parse().unwrap());
+        let body = json!({"model":"p/m","messages":[{"role":"user","content":"x"}]});
+        let mut cases = Vec::new();
+        for headers in [
+            HeaderMap::new(),
+            missing.clone(),
+            unknown,
+            unknown_recommended,
+            conflict,
+            hermes_affinity,
+        ] {
+            cases.push((
+                "/v1/chat/completions",
+                body.clone(),
+                headers,
+                "native_session_required",
+            ));
+        }
+        cases.extend([
+            ("/v1/chat/completions", json!({"model":"dynamic","messages":[{"role":"user","content":"x"}]}), missing, "native_session_required"),
+            ("/v1/responses", json!({"model":"p/m","input":[{"role":"user","content":"x"}],"store":false}), qualified.clone(), "native_session_required"),
+            ("/v1/chat/completions", json!({"model":"p/m","messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"test","parameters":{"type":"object"}}}]}), qualified, "tools_incompatible"),
+        ]);
+        let mut expected = Vec::new();
+        for (path, body, headers, reason) in cases {
+            let mut request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+            *request.headers_mut() = headers;
+            request
+                .headers_mut()
+                .insert("authorization", "Bearer test-local-key".parse().unwrap());
+            assert_eq!(
+                forward(State(runtime.clone()), request).await.status(),
+                StatusCode::CONFLICT
+            );
+            expected.push(reason);
+        }
+        let mut query = Request {
+            command: vec!["history".into(), "list".into()],
+            operands: Vec::new(),
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let listed = runtime.history.view(&query).unwrap();
+        let records = listed["records"].as_array().unwrap();
+        assert_eq!(records.len(), expected.len());
+        query.command[1] = "inspect".into();
+        for (row, reason) in records.iter().zip(expected) {
+            query.operands = vec![row["request"].as_str().unwrap().into()];
+            let inspected = runtime.history.view(&query).unwrap();
+            let record = &inspected["record"];
+            assert_eq!(record["reason_code"], reason);
+            assert_eq!(record["outcome"], "rejected");
+            assert_eq!(record["stage"], "selection");
+            assert_eq!(record["execution"], "not_dispatched");
+            assert!(record["upstream_status"].is_null());
+        }
+        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+    }
+    #[tokio::test]
+    async fn messages_beta_selector_reaches_upstream_and_other_queries_never_dispatch() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, mut received) = tokio::sync::mpsc::channel(4);
+        let upstream = Router::new().fallback(move |request: axum::extract::Request| {
+            let sent = sent.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let body = to_bytes(body, 4096).await.unwrap();
+                sent.send((parts.uri.to_string(), parts.headers, serde_json::from_slice::<Value>(&body).unwrap())).await.unwrap();
+                axum::Json(json!({"type":"message","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}))
+            }
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let (_temporary, runtime, config) = fixture();
+        let mut messages = config.clone();
+        let provider = messages.providers.get_mut("p").unwrap();
+        provider.endpoints.clear();
+        provider
+            .endpoints
+            .insert("messages".into(), format!("http://{address}"));
+        publish(&runtime, &config, &messages, "messages-query");
+        runtime.open();
+        *runtime.unlock.write().unwrap() = Some(Zeroizing::new(b"test-unlock".to_vec()));
+        for path in ["/v1/messages", "/v1/messages?beta=true"] {
+            let body = json!({"model":"p/m","messages":[{"role":"user","content":"x"}],"max_tokens":1,"stream":false,"extension":{"enabled":false}});
+            let request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header("authorization", "Bearer test-local-key")
+                .header("user-agent", "pi (linux test; x64)")
+                .header("anthropic-beta", "test-feature")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+            let response = forward(State(runtime.clone()), request).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            to_bytes(response.into_body(), 4096).await.unwrap();
+            let (actual_path, headers, actual_body) = received.recv().await.unwrap();
+            assert_eq!(actual_path, path);
+            assert_eq!(headers["user-agent"], "pi (linux test; x64)");
+            assert_eq!(headers["anthropic-beta"], "test-feature");
+            assert_eq!(headers["x-api-key"], "test-provider-key");
+            assert!(!headers.contains_key("authorization"));
+            let mut expected = body;
+            expected["model"] = json!("m");
+            assert_eq!(actual_body, expected);
+        }
+        let invalid = [
+            "/v1/messages?unknown=true",
+            "/v1/messages?beta=false",
+            "/v1/messages?beta=true&beta=true",
+            "/v1/messages?beta=true&beta=false",
+            "/v1/messages?beta=true&unknown=true",
+            "/v1/messages/count_tokens?beta=true",
+            "/v1/responses?beta=true",
+            "/v1/chat/completions?beta=true",
+        ];
+        for path in invalid {
+            let request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header("authorization", "Bearer test-local-key")
+                .body(Body::from(
+                    r#"{"model":"p/m","messages":[{"role":"user","content":"x"}]}"#,
+                ))
+                .unwrap();
+            assert_eq!(
+                forward(State(runtime.clone()), request).await.status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert!(received.try_recv().is_err());
+        let mut query = Request {
+            command: vec!["history".into(), "list".into()],
+            operands: Vec::new(),
+            arguments: BTreeMap::from([("outcome".into(), vec!["rejected".into()])]),
+            dry_run: false,
+            if_revision: None,
+        };
+        let history = runtime.history.view(&query).unwrap();
+        let rejected = history["records"].as_array().unwrap();
+        assert_eq!(rejected.len(), invalid.len());
+        query.command[1] = "inspect".into();
+        for record in rejected {
+            query.operands = vec![record["request"].as_str().unwrap().into()];
+            let inspected = runtime.history.view(&query).unwrap();
+            assert_eq!(inspected["record"]["reason_code"], "undeclared_operation");
+            assert_eq!(inspected["record"]["stage"], "operation_validation");
+            assert_eq!(inspected["record"]["execution"], "not_dispatched");
+        }
+        server.abort();
     }
 }
