@@ -499,6 +499,16 @@ fn provider_commands() -> Command {
         .subcommand(key)
         .subcommand(auth)
         .subcommand(login)
+        .subcommand(mutation(leaf("login-start", "Start Codex browser sign-in and return a pending attempt.", "Requires a running tmax Web service. Explicit --new-codex creates an independent scope; --via selects a declared or retained private Codex target. Codex owns credentials and refresh. Complete the returned official URL, then use login-status. No tokens are returned. Dry-run starts no process.\nExample: tmax provider login-start codex-main --new-codex")
+            .arg(required_pos(1, "ID", "Local provider ID."))
+            .arg(flag("new-codex", "Create an independent Codex authentication scope.").conflicts_with("via"))
+            .arg(value("via", "TARGET", "Use a declared or retained private Codex target."))
+            .arg(value("method", "METHOD", "Browser callback or device code.").value_parser(["browser", "device"])), true, true))
+        .subcommand(leaf("login-status", "Read a pending or retained Codex sign-in result.", "No network requests, token refresh, or secret reads. A retained result does not verify entitlement.\nExample: tmax provider login-status codex-main")
+            .arg(required_pos(1, "ID", "Local provider ID.")))
+        .subcommand(mutation(leaf("login-cancel", "Cancel the exact pending Codex sign-in attempt.", "Requires the attempt returned by login-start/status. A committed login is not undone. Changed or uncertain native effects are reported.\nExample: tmax provider login-cancel codex-main --attempt ATTEMPT")
+            .arg(required_pos(1, "ID", "Local provider ID."))
+            .arg(value("attempt", "ATTEMPT", "Exact pending attempt ID.").required(true)), true, false))
         .subcommand(logout)
         .subcommand(input)
         .subcommand_required(true))
@@ -1258,6 +1268,38 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{OutputFormat, command};
+
+    #[test]
+    fn browser_login_cancel_exposes_preview_and_attempt_guard() {
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "provider",
+                "login-cancel",
+                "work",
+                "--attempt",
+                "attempt-id",
+                "--dry-run",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert!(request.dry_run);
+        assert_eq!(request.arguments["attempt"], ["attempt-id"]);
+        assert!(
+            command()
+                .try_get_matches_from([
+                    "tmax",
+                    "provider",
+                    "login-cancel",
+                    "work",
+                    "--attempt",
+                    "attempt-id",
+                    "--if-revision",
+                    "revision"
+                ])
+                .is_err()
+        );
+    }
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()

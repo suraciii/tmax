@@ -47,7 +47,7 @@ mod windows_startup;
 #[path = "service/windows_web.rs"]
 mod windows_web;
 
-const MANAGEMENT_PROTOCOL: &str = "tmax-control/3";
+const MANAGEMENT_PROTOCOL: &str = "tmax-control/4";
 const CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
 const CONTROL_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 const WEB_REQUEST_BYTES: usize = 1024 * 1024;
@@ -742,6 +742,20 @@ fn retained_session_arguments(request: &Request) -> Result<(&str, &str, &str)> {
         .ok_or_else(|| failure("invalid_arguments", "Retained inspection requires a public model ID, protocol and existing gateway session handle"))
 }
 
+pub(crate) async fn browser_login(store: &Store, request: &Request) -> Result<Value> {
+    if request.dry_run && request.command.last().is_some_and(|v| v == "login-start") {
+        return crate::native::browser_login::command(store, request);
+    }
+    rpc(store, "browser_login", Some(request.clone()), None)
+        .await?
+        .ok_or_else(|| {
+            failure(
+                "resident_required",
+                "Open tmax Web before starting or inspecting browser sign-in",
+            )
+        })
+}
+
 pub async fn control(store: &Store, config: &Config, request: &Request) -> Result<Value> {
     let group = request.command.first().map(String::as_str).unwrap_or("");
     let action = request.command.get(1).map(String::as_str).unwrap_or("");
@@ -1152,6 +1166,14 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
         ))
     } else {
         match call.action.as_str() {
+            "browser_login" => {
+                let request = call
+                    .request
+                    .as_ref()
+                    .ok_or_else(|| failure("invalid_arguments", "Missing login request"))?;
+                crate::operations::commands::validate(request)?;
+                crate::native::browser_login::command(&resident.store, request)
+            }
             "status" => Ok(resident.view()),
             "loaded" => Ok(
                 json!({"configuration":resident.loaded.as_ref().map(|v|&v.0),"revision":resident.loaded.as_ref().map(|v|&v.1),"metadata":resident.loaded_metadata.as_deref()}),

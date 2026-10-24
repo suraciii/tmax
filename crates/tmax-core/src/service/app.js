@@ -164,6 +164,7 @@ function renderGateway() {
 }
 
 function openDialog(title, body, eyebrow='WORKSPACE') {
+  stopLoginPolling();
   state.dialogGeneration++;
   $('dialog-title').textContent=title; $('dialog-eyebrow').textContent=eyebrow; $('dialog-content').innerHTML=body;
   if (!$('dialog').open) $('dialog').showModal();
@@ -286,9 +287,94 @@ async function providerDetail(id) {
     $('dialog-content').innerHTML=`<div class="actions">${button('编辑信息','provider-edit',id,'primary','settings')}${button('配置授权','provider-auth',id,'','key')}${button('添加模型','model-add',id,'','plus')}</div><div class="detail-facts">${fact('本地 ID',id)}${fact('服务类型',serviceName(p))}${fact('授权',p.auth?'已配置 · 上游未验证':'尚未配置')}${fact('账户身份',data.identity || '未知')}${fact('订阅计划',p.subscription?.plan || '未记录')}${fact('续费日期',dateValue(data.renewal) || '未知')}</div><h3 class="subheading">额度与信息来源</h3>${notice('额度未知不代表额度为零。仅显示已获取的信息，不自动查询服务商。')}${(data.observations?.observations || []).filter(o=>o.scope==='quota').map(o=>`<div class="detail-facts">${fact('来源',o.source)}${fact('新鲜度',stateLabel(o.freshness?.state))}${fact('观测状态',stateLabel(o.state))}</div>`).join('') || '<p class="muted">暂无已知额度观测。</p>'}${inputs?.inputs?.length?detail(inputs,'查看额度输入及新鲜度'):''}<div class="actions">${button('查询上游额度','provider-quota',id,'small')}${button('登记额度输入','provider-input',id,'small')}</div>${detail(data,'查看继承、覆盖值、端点与完整详情')}<h3 class="subheading">更多操作</h3><div class="actions">${button('高级编辑','provider-advanced',id,'small')}${button('移除服务商','provider-remove',id,'small danger')}</div>`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
+let loginPoll;
+function stopLoginPolling() { clearTimeout(loginPoll); loginPoll=null; }
+const loginErrors = {
+  saved_not_active:'登录设置已保存，但运行状态尚未同步。请刷新检查，避免重复创建。',
+  native_not_installed:'未找到 Codex。请安装官方 Codex CLI 后重试。',
+  native_version_unqualified:'此登录流程目前适配 Codex CLI 0.159.2。请检查本机版本。',
+  native_ambient_login_not_adopted:'此工具已有其他登录。请选择独立认证空间，避免覆盖现有授权。',
+  native_scope_conflict:'此认证空间已被其他服务商使用，请选择独立认证空间。',
+  acquisition_in_progress:'另一个授权正在进行，请完成或取消后重试。',
+  identity_mismatch:'登录账号与原账号不同，未替换服务商设置。请为新账号添加服务商；原认证空间需要重新登录恢复。',
+  inputs_changed:'登录期间配置发生了变化，未覆盖新配置。请刷新后重新登录。',
+  login_failed:'Codex 未能完成登录。可重试，或改用设备码登录。',
+  login_expired:'登录已超时，请重新开始。',
+  login_unavailable:'无法连接 Codex 认证进程。请重试并检查本机 Codex 是否可运行。',
+  resident_required:'本地服务已停止，请重新打开 tmax Web。',
+};
+async function codexLogin(id) {
+  stopLoginPolling();
+  const generation=openDialog('登录 Codex', '<div class="loading">正在读取授权状态…</div>', 'CODEX SIGN-IN');
+  const current=()=>generation===state.dialogGeneration && $('dialog').open;
+  const pending=p=>['starting','waiting','cancelling'].includes(p.state);
+  let progress;
+  const sourceOptions=()=>[['@new','独立认证空间（推荐）'],...Object.entries(state.config.agents).filter(([,a])=>a.agent==='codex').map(([key])=>[key,`已有 Codex 配置：${key}`])];
+  const failure=response=>new Error(loginErrors[response.body?.code] || resultMessage(response));
+  const showError=message=>{if(current())$('login-feedback').innerHTML=notice(escapeHtml(message),'error');};
+  const schedule=()=>{stopLoginPolling();if(current() && pending(progress))loginPoll=setTimeout(poll,1500);};
+  async function poll() {
+    if(!current())return;
+    try {
+      const previous=progress?.state;
+      const response=await read('provider login-status',[id]);
+      if(!current())return;
+      const changed=JSON.stringify(progress)!==JSON.stringify(response);
+      progress=response;
+      if(previous!==progress.state && ['succeeded','incomplete'].includes(progress.state))await refresh();
+      if(changed)draw();
+    } catch(error) {showError(error.message);}
+    schedule();
+  }
+  function draw() {
+    if(!current())return;
+    const active=pending(progress);
+    const options=sourceOptions();
+    if(progress.via && progress.path && !options.some(([key])=>key===progress.via))options.push([progress.via,'上次登录的认证空间']);
+    const savedSource=state.config.providers[id]?.auth?.via || progress.via;
+    const initialSource=options.some(([key])=>key===savedSource)?savedSource:'@new';
+    const titles={starting:'正在准备登录',waiting:'等待你完成登录',cancelling:'正在取消',succeeded:'登录已完成',cancelled:'登录已取消',expired:'登录已超时',failed:'登录未完成',incomplete:'登录已保存，需检查运行状态',interrupted:'上次登录被中断',idle:'连接 ChatGPT 账号'};
+    const message=loginErrors[progress.code] || (progress.state==='interrupted'?'请通过原认证空间重新登录，恢复授权。':progress.message);
+    const uncertain=progress.native_authorization_may_have_changed && !active && progress.state!=='succeeded';
+    $('dialog-content').innerHTML=`<div class="login-status" role="status"><h3>${escapeHtml(titles[progress.state] || '授权状态未知')}</h3>${progress.account?.email?`<p>${escapeHtml(progress.account.email)}${progress.account.plan?' · '+escapeHtml(progress.account.plan):''}</p>`:''}</div>`+
+      (message?notice(escapeHtml(message),progress.state==='cancelled'?'':'warning'):'')+
+      (active?`<p class="form-intro">在 OpenAI 登录页面完成授权，完成后这里会自动更新。</p>${progress.user_code?`<div class="login-code"><span>设备码</span><strong>${escapeHtml(progress.user_code)}</strong></div><p class="muted">设备码登录需要账号允许此方式。</p>`:''}<div class="actions">${progress.authorization_url?'<a id="login-link" class="btn primary" target="_blank" rel="noopener noreferrer">打开登录页面</a><button type="button" id="login-copy" class="btn">复制登录链接</button>':''}<button type="button" id="login-cancel" class="btn" ${progress.state==='cancelling'?'disabled':''}>取消登录</button></div><p class="muted">关闭此窗口后登录仍会继续。返回“配置授权”可查看进度。</p>`:
+      `<p class="form-intro">通过 Codex 官方组件登录。认证由 Codex 保存和刷新。</p>${progress.state==='succeeded'?notice('登录结果已保存。模型权限和实际调用尚未验证。')+`<div class="actions">${button('配置模型','navigate','models','soft')}${progress.via?button('查看工具配置','agent-detail',progress.via):''}</div>`:''}${field('login-source','认证空间',initialSource,{options})}<p id="login-scope" class="muted"></p>${field('login-method','登录方式','browser',{options:[['browser','浏览器登录'],['device','设备码登录']]})}<div class="form-actions"><button type="button" id="login-start" class="btn primary">${progress.state==='succeeded'?'重新登录':'开始登录'}</button></div>`)+
+      (uncertain?notice('此次操作可能已改变所选 Codex 空间的认证。若未完成保存，请通过同一空间重新登录恢复。','warning'):'')+
+      (progress.path?`<details><summary>认证空间与状态详情</summary><p class="mono">${escapeHtml(progress.path)}</p><p>认证与刷新：Codex · 工作区身份：未验证</p>${detail(progress,'查看状态详情')}</details>`:'')+'<div id="login-feedback" role="alert"></div>';
+    if(progress.authorization_url) {
+      const url=new URL(progress.authorization_url);
+      if(url.protocol==='https:' && ['auth.openai.com','chatgpt.com'].includes(url.hostname))$('login-link').href=url.href;
+      $('login-copy').onclick=async()=>{try{await navigator.clipboard.writeText(url.href);toast('登录链接已复制');}catch(_){showError('无法复制，请使用“打开登录页面”。');}};
+    }
+    if(active) {
+      $('login-cancel').onclick=async()=>{
+        $('login-cancel').disabled=true;
+        try {const result=await execute('provider login-cancel',[id],{attempt:[progress.attempt]});if(!isSuccess(result))throw failure(result);if(current()){progress=result.body.data;draw();schedule();}}
+        catch(error){showError(error.message);if(current())$('login-cancel').disabled=false;}
+      };
+    } else {
+      const describe=()=>{$('login-scope').textContent=value('login-source')==='@new'?'创建独立 Codex 配置，登录成功后保存为工具配置。现有 Codex 登录不受影响。':`登录将更新此空间及共享它的工具：${state.config.agents[value('login-source')]?.scope || progress.path || ''}`;};
+      $('f-login-source').onchange=describe;describe();
+      $('login-start').onclick=async()=>{
+        const source=value('login-source');const args={method:[value('login-method')],...(source==='@new'?{'new-codex':['true']}:{via:[source]})};
+        $('login-start').disabled=true;
+        try {
+          const result=await execute('provider login-start',[id],args,{revision:state.revision});
+          if(!isSuccess(result))throw failure(result);
+          if(current()){progress=result.body.data;draw();schedule();}
+        }catch(error){showError(error.message);if(current())$('login-start').disabled=false;}
+      };
+    }
+  }
+  try {progress=await read('provider login-status',[id]);if(current()){draw();schedule();}}
+  catch(error){if(current())$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
+}
+
 function providerAuth(id) {
   const p=state.config.providers[id];const integration=state.integrations.find(i=>i.id===p?.integration);
   const keySupported=integration?.authentication_methods.includes('api-key');
+  if(p?.integration==='codex-subscription' || integration?.id==='codex-subscription'){codexLogin(id);return;}
   if(!keySupported){openOperation('provider login',[id]);return;}
   formDialog('配置 '+providerName(id)+' 的授权','密钥提交后保存在本机，由系统用户权限保护。输入框会在提交或关闭后清空。',
     field('key','服务商 API Key','',{type:'password',required:true,placeholder:'输入服务商提供的密钥'})+notice('保存授权不会自动查询上游或启动网关。'),()=>({operation:'provider key set',operands:[id],options:{key:value('key')}}),{success:'授权已保存，仍需按实际使用结果验证。'});
@@ -396,6 +482,7 @@ function collectArguments() {
   return args;
 }
 function openOperation(operation, operands=[], args={}) {
+  if(operation==='provider login' && state.config.providers[operands[0]]?.integration==='codex-subscription'){codexLogin(operands[0]);return;}
   const entry=state.catalog.find(c=>c.operation===operation);
   if(!entry){toast('此版本未提供该操作，请查看高级操作列表。');return;}
   const fields=Array.from({length:entry.operands.max},(_,i)=>field('operand-'+i,operandLabels[entry.operands.labels[i]] || entry.operands.labels[i] || `参数 ${i+1}`,operands[i] || '',{required:i<entry.operands.min})).join('');
@@ -482,12 +569,12 @@ async function dispatch(action,id) {
 document.addEventListener('click',event=>{if(state.busy && event.target.closest('a[data-area],a.brand')){event.preventDefault();toast('正在处理当前操作，请稍候。');return;}const target=event.target.closest('[data-action]');if(target)dispatch(target.dataset.action,target.dataset.id || '').catch(error=>toast(error.message));});
 $('dialog-close').addEventListener('click',()=>{if(!state.busy)$('dialog').close();});
 $('dialog').addEventListener('cancel',event=>{if(state.busy)event.preventDefault();});
-$('dialog').addEventListener('close',()=>{state.dialogGeneration++;$('dialog-content').querySelectorAll('input[type=password]').forEach(i=>{i.value='';});$('dialog-content').replaceChildren();});
+$('dialog').addEventListener('close',()=>{stopLoginPolling();state.dialogGeneration++;$('dialog-content').querySelectorAll('input[type=password]').forEach(i=>{i.value='';});$('dialog-content').replaceChildren();});
 $('refresh').innerHTML=icon('refresh');$('advanced-icon').innerHTML=icon('settings');
 $('refresh').addEventListener('click',()=>{if(!state.busy)refresh();});
 $('advanced').addEventListener('click',()=>{if(!state.busy)advanced();});
 window.addEventListener('hashchange',()=>navigate(location.hash.slice(1)));
-window.addEventListener('pagehide',()=>{clearReveal();document.querySelectorAll('input[type=password]').forEach(i=>{i.value='';});});
+window.addEventListener('pagehide',()=>{stopLoginPolling();clearReveal();document.querySelectorAll('input[type=password]').forEach(i=>{i.value='';});});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearReveal();});
 async function initialize() {
   $('navigation').innerHTML=Object.entries(areas).map(([key,[title]])=>`<a href="#${key}" class="nav-item" data-area="${key}">${icon(key)}${title}</a>`).join('');

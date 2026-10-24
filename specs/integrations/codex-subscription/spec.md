@@ -20,6 +20,9 @@ billing product after a subscription limit or authentication failure.
 Workspace automation tokens, service accounts, and a tmax-owned ChatGPT OAuth
 client are outside this integration.
 
+The [Web sign-in contract](web-login.md) defines the asynchronous browser flow
+and explicit creation of independent Codex scopes.
+
 ## Authentication and evidence boundaries
 
 | Login requirement | Contract |

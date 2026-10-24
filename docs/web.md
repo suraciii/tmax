@@ -41,6 +41,33 @@ reopened after refreshing. Do not retry a create operation that already saved
 successfully. Partial outcomes and activation warnings remain visible, with the
 backend result available in an expandable technical detail view.
 
+## Codex sign-in
+
+In **Providers**, choose **Configure authorization** for a Codex subscription.
+The dialog offers an independent authentication scope by default. Choose
+**Start sign-in**, then open the official login page. tmax shows progress and
+saves the provider reference and coding-tool target after Codex confirms success.
+Closing the dialog keeps the attempt running; reopen it to resume observation,
+or choose **Cancel sign-in** to stop it. Attempts expire after ten minutes.
+
+Use an existing Codex target only when its shared authorization is intended to
+change. A failed attempt can reuse its retained private scope from the selector.
+Configuration changes during sign-in prevent saving over newer edits. If login
+succeeds but saving or runtime activation fails, inspect the reported outcome
+before retrying. An existing unrelated login is never imported automatically.
+
+The official Codex executable is required. Browser authentication is currently
+qualified with Codex CLI 0.159.2; native model configuration has its own version
+qualification. The optional device-code method depends on OpenAI account
+settings and availability. Codex stores and refreshes credentials; tmax stores
+only a reference and account metadata. The independent scope uses Codex's file
+credential store with private local permissions, not encryption.
+
+A saved login does not establish model entitlement, quota, workspace identity,
+or working gateway forwarding. Configure and verify the intended models and
+consumer separately. See the [authentication contract](../specs/integrations/codex-subscription/web-login.md)
+for lifecycle and ownership details.
+
 ## Browser verification
 
 Use the normal Rust gates from [Building and verification](building.md). The Web

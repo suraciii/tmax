@@ -8,6 +8,7 @@
 //! Native auth inspection projects root namespace presence only, skipping every
 //! credential value without materializing, retaining, or exporting it.
 mod adapters;
+pub(crate) mod browser_login;
 pub(crate) mod compatibility;
 mod document;
 pub use adapters::supported_roles;
@@ -99,6 +100,8 @@ struct LoginRecord {
     session_ref: String,
     state: String,
     source_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account: Option<browser_login::Account>,
 }
 struct Inputs {
     file: File,
@@ -224,11 +227,45 @@ fn target<'a>(config: &'a Config, id: &str) -> Result<&'a AgentTarget> {
         .ok_or_else(|| Error::new("unknown_resource", "Agent target is not configured"))
 }
 fn executable(agent: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|p| p.join(agent))
-            .find(|p| p.is_file())
-    })
+    let paths = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&paths) {
+        #[cfg(not(windows))]
+        if directory.join(agent).is_file() {
+            return Some(directory.join(agent));
+        }
+        #[cfg(windows)]
+        {
+            let binary = directory.join(format!("{agent}.exe"));
+            if binary.is_file() {
+                return Some(binary);
+            }
+            // npm's official package includes a native binary. Never execute its
+            // POSIX shim as a Windows executable or interpolate a shell command.
+            if agent == "codex" && directory.join("codex.cmd").is_file() {
+                let (package, triple) = if cfg!(target_arch = "aarch64") {
+                    ("codex-win32-arm64", "aarch64-pc-windows-msvc")
+                } else {
+                    ("codex-win32-x64", "x86_64-pc-windows-msvc")
+                };
+                for prefix in [
+                    directory.join("node_modules/@openai"),
+                    directory.join("node_modules/@openai/codex/node_modules/@openai"),
+                ] {
+                    for suffix in ["bin/codex.exe", "codex/codex.exe"] {
+                        let binary = prefix
+                            .join(package)
+                            .join("vendor")
+                            .join(triple)
+                            .join(suffix);
+                        if binary.is_file() {
+                            return Some(binary);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 fn native_command(agent: &str, scope: &Path) -> Result<tokio::process::Command> {
     let executable = executable(agent).ok_or_else(|| {
@@ -2154,6 +2191,16 @@ async fn native_auth(
     dry_run: bool,
     logout: bool,
 ) -> Result<Value> {
+    let _authentication = if dry_run {
+        None
+    } else {
+        Some(store.try_lock("native-authentication")?.ok_or_else(|| {
+            Error::new(
+                "acquisition_in_progress",
+                "Another native sign-in is in progress",
+            )
+        })?)
+    };
     let target = target(config, via)?;
     let path = scope(store, &target.scope)?;
     let native_provider = login_provider(config, provider, target)?;
@@ -2202,6 +2249,12 @@ async fn native_auth(
             && l.scope == path
             && l.source_revision == source_revision
     });
+    if !logout && existing.is_some_and(|record| record.account.is_some()) {
+        return Err(Error::new(
+            "browser_login_required",
+            "Reauthenticate this account through provider login-start to preserve account comparison",
+        ));
+    }
     if !logout
         && existing.is_none()
         && target.agent != "opencode"
@@ -2400,6 +2453,7 @@ async fn native_auth(
             .stderr(Stdio::from(output.try_clone().map_err(|_| unavailable())?))
             .stdout(Stdio::from(output));
     }
+    let prior_account = existing.and_then(|record| record.account.clone());
     logins
         .entries
         .retain(|l| !(l.provider == provider && l.target == via && l.scope == path));
@@ -2413,6 +2467,7 @@ async fn native_auth(
         session_ref: session_ref.clone(),
         state: "native_effect_uncertain".into(),
         source_revision,
+        account: prior_account,
     });
     if let Err(mut failure) = begin_native_auth(store, provider, &logins) {
         failure["provider"] = json!(provider);
@@ -2866,6 +2921,7 @@ mod tests {
             session_ref: "native-session-test".into(),
             state: "signed_in".into(),
             source_revision: login_source_revision(&target, &target.scope),
+            account: None,
         };
         config.agents.insert("owner".into(), target);
         config.providers.insert(

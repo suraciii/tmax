@@ -77,6 +77,24 @@ reference. `tmax provider key set deepseek --key-stdin --non-interactive` requir
 the explicit stdin operand; help describes supported alternatives without secret
 argv or helper files.
 
+## Asynchronous Codex sign-in
+
+| Command | Behavior |
+| --- | --- |
+| `provider login-start ID --new-codex [--method METHOD]` | Explicitly create an independent Codex scope and start an asynchronous login. Save its target and authorization reference only on success. |
+| `provider login-start ID [--via TARGET] [--method METHOD]` | Use an explicitly selected or saved Codex target. Disclose shared scope and uncertain native effects. |
+| `provider login-status ID` | Read pending or retained status without upstream calls or token reads. |
+| `provider login-cancel ID --attempt ATTEMPT` | Cancel the exact attempt; a stale identifier cannot cancel a later attempt or undo a committed save. |
+
+These commands require a running Web resident, except effect-free start preview.
+Start and cancel support dry-run. Only start accepts the configuration revision
+guard. The [browser sign-in contract](../../../integrations/codex-subscription/web-login.md)
+owns scope creation, phases, cancellation, timeout and identity boundaries. A
+retained result is not a live credential or entitlement check. The terminal-only
+`provider login` remains available for other qualified native owners; an account
+with browser-established identity must reauthenticate through `login-start` so
+identity comparison is preserved.
+
 ## Authorization replacement
 
 Naming the existing provider is sufficient to request credential/reference/source

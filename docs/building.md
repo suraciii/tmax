@@ -74,9 +74,8 @@ If the current CLI reports `resident_incompatible`, use the running service's
 matching older CLI (`tmax proxy stop`, then `tmax web stop` for a pre-Gateway
 binary) or its existing Web
 controls to perform explicit stops before starting the new executable. The new
-CLI does not take over or terminate an incompatible resident. The Gateway naming
-upgrade uses management protocol `tmax-control/3`; a protocol-2 resident must be
-stopped with its matching binary before starting the upgraded executable.
+CLI does not take over or terminate an incompatible resident. Browser sign-in uses management protocol `tmax-control/4`; an older resident
+must be stopped with its matching binary before starting the upgraded executable.
 
 Native credential-file handoff is version-qualified, restricted, and explicitly
 disclosed; it is not an export command or token-import feature. Provider-key

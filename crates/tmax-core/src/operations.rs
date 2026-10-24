@@ -204,6 +204,12 @@ async fn selected(store: &Store, r: &Request) -> Result<Option<config::LoadedFil
 }
 async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     let path = r.command.join(" ");
+    if matches!(
+        path.as_str(),
+        "provider login-start" | "provider login-status" | "provider login-cancel"
+    ) {
+        return crate::service::browser_login(store, r).await;
+    }
     if path == "skill install" {
         return crate::skill::install(store, r);
     }
