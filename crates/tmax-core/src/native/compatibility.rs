@@ -96,6 +96,10 @@ impl Context<'_> {
                 // supplies its separately documented x-opencode-session header.
                 go_session: matches!(self.agent, "hermes" | "opencode")
                     || self.agent == "pi" && protocol == "chat-completions",
+                // Every other client reaches Go through the gateway, which
+                // attributes the request itself.
+                unattributed: !(matches!(self.agent, "hermes" | "opencode")
+                    || self.agent == "pi" && protocol == "chat-completions"),
             };
             if let Some(reason) = crate::gateway::native_mismatch(provider, &native) {
                 return Err(Error::new(

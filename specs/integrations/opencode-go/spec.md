@@ -188,6 +188,30 @@ supported configuration change, or qualified forwarding path fixes that loss.
 A working direct path must not be disabled merely because a gateway path loses
 the header.
 
+A tmax gateway forwarding to Go must attribute every request. Go answers a
+request that names no session with HTTP 400, so a client that supplies no
+session header cannot reach Go at all. When no session header is present, the
+gateway must mint one in OpenCode's own id shape and keep that id stable for
+the conversation. A conversation's turns must then share one session id, and
+distinct conversations must not share one.
+
+A request that names a session but not qualifiably must still be rejected. An
+unrecognized client, or two headers that disagree, named a session and got it
+wrong. Attribution must not paper over that failure.
+
+A value the client did supply is authoritative. The gateway must not replace
+it, whatever its shape, because its exact value is what Go routes by.
+
+The minted id is routing attribution, not a client identity. It must not
+impersonate a validated client, must not alter the truthful user agent, and
+must not be a static per-key, per-provider, or per-process constant. The id
+shape must match the layout OpenCode's own client mints, because Go's free tier
+rejects a malformed id. The seed that keeps one id per conversation must come
+only from headers that name a conversation, and never from message content. A
+per-message id is not a conversation marker and must not seed the map. The
+retained map must be bounded. Where a qualified native session header exists,
+that value must remain the only forwarded identity.
+
 The source-qualified omp **18.12.6** mechanism is a per-request header projection
 in `packages/ai/src/providers/inference-headers.ts`. For providers `opencode-go`
 and `opencode-zen`, `applyInferenceHeaders` sets `x-opencode-session` to the
@@ -226,6 +250,12 @@ A missing reliable session identity cannot be repaired by inventing a supported
 client header. Fixed destinations and qualified stateless selection do not waive
 Go's own stable-conversation requirement. If the route cannot meet both
 contracts, it must block the affected use and explain the missing identity.
+
+The gateway's own attribution is the exception to that rule, and only for a
+direct upstream forward to Go. It supplies a per-conversation id in OpenCode's
+shape so that a client with no session header is not turned away outright. It
+must not be a forged user agent, a static session header, or a substitute for a
+qualified native session where one exists.
 
 Request history must retain the specific identity or compatibility blocker for a
 fixed offering or candidates sharing one blocker, including
@@ -295,7 +325,7 @@ Go-specific error codes or undocumented management APIs.
 | Missing, invalid, revoked, or expired Console key | Block the affected authorization and show the provider's evidence. Console documents HTTP `401` for revoked or expired keys. Expiration requires a new key, not OAuth refresh. Use the workspace-aware replacement rules above; do not borrow another agent's credential. |
 | Key lacks inference permission, or effective workspace access changed | Show the denied capability and the known upstream reason. Console documents HTTP `403` for requests outside key permissions. Ask the user to review Console access or supply an authorized key. A successful catalog read must not hide the inference failure. |
 | Wrong workspace, absent Go entitlement, or an unqualified key kind | Show that Go access is unavailable or unverified with the known scope. Do not infer a Go-specific status code, buy a subscription, switch to pay-as-you-go, or select another workspace key silently. |
-| Missing or incomplete session/client identity | Block the affected setup or request path. Identify the agent version, transport, or auxiliary path that lacks coverage. Offer an upgrade or a qualified native/direct/forwarding configuration, not a forged user agent or static session header. |
+| Missing or incomplete session/client identity | Block the affected setup or request path. Identify the agent version, transport, or auxiliary path that lacks coverage. Offer an upgrade or a qualified native/direct/forwarding configuration, not a forged user agent or static session header. A gateway forward to Go must still mint its own per-conversation attribution id when the client supplied no session header. |
 | Model/protocol mismatch or conflicting endpoint evidence | Keep that combination unavailable or unknown. Identify the exact model and requested protocol. Require a qualified compatible model/path; do not translate requests or silently change the model. |
 | Provider-reported quota or billing denial | Preserve the reported cause, affected model/window, and any supplied reset information; direct the user to Console. Do not infer a different billing cause from HTTP status alone or query Console budgets to explain it. A depleted included allowance is not by itself proof that all Go access is blocked. |
 | Generic rate limit, network failure, or ambiguous upstream rejection | Preserve the scoped failure and any supplied recovery information. Do not mark the subscription depleted, revoked, or expired without supporting evidence. |
@@ -326,7 +356,11 @@ Go-specific error codes or undocumented management APIs.
    Pi's qualified affinity forwarding preserves the genuine session through
    resume and native new-session changes, rejects conflicting headers and unknown
    clients before dispatch, and retains the specific blocker in request history.
-   It does not bypass retained-binding or activation safety.
+   It must not bypass retained-binding or activation safety. A gateway forward
+   to Go attributes a client that supplied no session header with its own
+   per-conversation id in OpenCode's shape, keeps one id per conversation, must
+   not replace a client-supplied value, and must leave the truthful user agent
+   unchanged.
 6. Provider inspection reports the declared Go usage read's consumed percentages,
    provider status, and reset announcements, or explicit unknown information with
    a Console link. Malformed/failed refreshes retain the last good binding-scoped
@@ -357,6 +391,26 @@ verified tmax version ranges. Workspace identity and renewal remain unknown
 without independently qualified evidence or explicitly labeled user entry.
 The installed pi 1.2.0 client source was inspected for the mechanisms above;
 source inspection alone does not establish successful Go inference.
+
+The **2026-10-25** gateway attribution work followed two third-party reference
+implementations, both consulted as evidence rather than endorsement:
+
+- [magpie `dd1e882`](https://github.com/yetone/magpie/blob/dd1e8822d916f8aeb085db4db93fc3d79e2263ed/internal/provider/opencode_client.go),
+  an independent gateway that judges the destination by URL, forwards a
+  client-supplied session unchanged, and otherwise mints one in OpenCode's shape
+  while keeping one id per conversation through a bounded map.
+- [OpenCode `packages/schema/src/identifier.ts`](https://github.com/anomalyco/opencode/blob/fe3f3a41f79ad292cc3c7c629567385a20ec5130/packages/schema/src/identifier.ts),
+  the id layout a minted value must match. A malformed id is rejected by Go's
+  free tier, so shape correctness is a functional requirement, not cosmetic.
+
+Neither reference was copied. tmax judges the destination by URL as magpie does,
+but does not adopt its user-agent replacement: this contract requires a truthful
+client identity, and tmax reports its own agent string unchanged.
+
+The OpenCode reference was inspected at `fe3f3a41` (1.18.32), which is not the
+pinned 2.0.28, so it qualifies the id layout only and is not authority for the
+live contract. Source inspection alone does not establish successful Go
+inference.
 
 On **2026-10-23**, actual tmax 0.1.0 entrypoint acceptance on SHA256
 `f94f1c25367e2f049025f5c8966208f61ae52a113e09ac81ba36fb2b3e1f00f7`
@@ -433,6 +487,9 @@ Agent-project evidence, not additional OpenCode endorsement:
   pinned to Responses, which agrees with this contract's Chat Completions
   scenario for that exact ID. Source inspection does not qualify the Go
   endpoint itself.
+
+Agent-project evidence, not additional OpenCode endorsement:
+
 - [stock pi models](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md):
   key ownership and precedence, native API selection, and retained authentication
   when only a built-in provider's base URL changes.
