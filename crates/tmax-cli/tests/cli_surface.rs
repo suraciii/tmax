@@ -177,6 +177,15 @@ fn repeated_global_options_are_rejected_across_command_levels() {
 }
 
 #[test]
+fn skill_install_rejects_unsupported_destinations_before_effects() {
+    for agent in ["codex", "agents", "unknown"] {
+        let response = json_error(&tmax(&["skill", "install", "--agent", agent]));
+        assert_eq!(response["operation"], "skill install");
+    }
+    json_error(&tmax(&["skill", "install", "--force"]));
+}
+
+#[test]
 fn help_path_and_leaf_help_both_expose_inherited_global_options() {
     for args in [
         vec!["provider", "key", "set", "--help"],

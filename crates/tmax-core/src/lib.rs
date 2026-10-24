@@ -13,6 +13,7 @@ pub mod proxy;
 pub mod routing;
 pub mod secrets;
 pub mod service;
+mod skill;
 pub mod storage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

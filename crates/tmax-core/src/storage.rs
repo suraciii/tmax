@@ -249,6 +249,35 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
+/// Publish fully written bytes only if the destination is absent. Never replace it.
+/// Returns false when another directory entry already occupies the destination.
+pub(crate) fn atomic_create(path: &Path, bytes: &[u8]) -> Result<bool> {
+    let parent = path.parent().ok_or_else(storage_error)?;
+    ensure_directory(parent)?;
+    check_ancestors(path)?;
+    let temporary = parent.join(format!(".tmax-write-{}", uuid::Uuid::new_v4()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    secure_options(&mut options);
+    let mut file = options.open(&temporary).map_err(|_| storage_error())?;
+    let result = (|| {
+        restrict_file(&file, &temporary)?;
+        file.write_all(bytes).map_err(|_| storage_error())?;
+        file.sync_all().map_err(|_| storage_error())?;
+        drop(file);
+        match fs::hard_link(&temporary, path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(_) => Err(storage_error()),
+        }
+    })();
+    let cleanup = fs::remove_file(&temporary).map_err(|_| storage_error());
+    let created = result?;
+    cleanup?;
+    sync_directory(parent)?;
+    Ok(created)
+}
+
 #[cfg(not(windows))]
 fn replace_file(source: &Path, destination: &Path) -> Result<()> {
     fs::rename(source, destination).map_err(|_| storage_error())

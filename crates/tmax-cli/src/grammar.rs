@@ -162,6 +162,7 @@ pub fn command() -> Command {
         .subcommand(catalog_commands())
         .subcommand(model_commands())
         .subcommand(agent_commands())
+        .subcommand(skill_commands())
         .subcommand(network_commands())
         .subcommand(proxy_commands())
         .subcommand(web_commands())
@@ -392,6 +393,24 @@ fn integration_commands() -> Command {
         .subcommand(leaf("list", "List locally supported provider integration IDs and setup summaries.", "Reads the built-in qualified registry only. Does not require a catalog, network, credentials, providers, targets, or valid configuration. The result includes protocol, endpoint setup, and authentication summaries.\n\nExit: 0 when registry discovery completes.\nExample: tmax integration list"))
         .subcommand(leaf("inspect", "Inspect one supported provider integration and its exact capabilities.", "Reports regions/protocol bases, finite operations, protocols/transports, auth methods/login sources, input source/kind/scope/model coverage, noninteractive acquisition, restrictions, and known/unknown qualification. It does not probe an endpoint.\n\nExit: 0 when the registry entry is found; 2 for an unknown integration ID.\nExample: tmax integration inspect deepseek")
             .arg(required_pos(1, "ID", "Stable integration ID from integration list.")))
+        .subcommand_required(true)
+}
+
+fn skill_commands() -> Command {
+    Command::new("skill")
+        .about("Install the bundled tmax entry skill for your calling agent.")
+        .subcommand(mutation(
+            leaf("install", "Install the bundled tmax skill without replacing user content.",
+                concat!(
+                    "Installs to the OS user's ~/.agents/skills/tmax/SKILL.md by default. --agent hermes selects HERMES_HOME/skills/tmax/SKILL.md. Without HERMES_HOME, Hermes defaults to ~/.hermes on Unix or LOCALAPPDATA/hermes (~/AppData/Local/hermes fallback) on Windows, with HERMES_DATA_DIR_SUFFIX appended to the directory name. ",
+                    "HERMES_HOME accepts a literal absolute or cwd-relative path and a leading ~/; expand environment-variable expressions before invoking tmax. Parent traversal and ~other-user forms are rejected. No Hermes profile is inferred.\n\n",
+                    "Identical content succeeds unchanged. Different existing content is preserved and blocks installation; move it aside explicitly before trying again. Symlinks and unsafe paths are rejected. --dry-run reports the resolved destination and whether installation is needed without writing. No configuration, credentials, service, agent process, or network access is required. The skill directs agents to offline CLI help rather than duplicating commands.\n\n",
+                    "Existing-path owner and directory-write checks apply on Unix. Windows new entries receive owner-only ACLs; pre-existing paths use OS access controls and reparse checks, without owner attestation.\n\n",
+                    "Output: skill, agent (agents or hermes), path, state (installed, already_installed, or would_install), and changed.\nExit: 0 when installed, identical, or dry-run ready; 2 for invalid arguments; 3 for conflicting content; 4 for unsafe or unavailable storage.\nExample: tmax skill install --agent hermes"))
+                .arg(value("agent", "AGENT", "Install into Hermes skills instead of ~/.agents/skills.").value_parser(["hermes"])),
+            true,
+            false,
+        ))
         .subcommand_required(true)
 }
 
