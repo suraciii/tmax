@@ -465,6 +465,9 @@ when it is needed as a native login source. Missing setup is an explicit unavail
 state, not a new draft resource. Any declared references must resolve. Native
 application remains blocked until its required selections, credentials, and
 compatibility are established; incomplete targets do not block standalone gateway use.
+For OpenCode, selecting a default is optional: adding provider models preserves
+the native default unless the user explicitly changes it. An unverified tool
+version is advisory under the [integration contract](../integrations/spec.md#support-contract).
 Model addition, removal, and default selection are distinct requested changes;
 tmax must not infer them from a generic request to switch or optimize access.
 

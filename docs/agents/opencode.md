@@ -1,6 +1,6 @@
 # OpenCode V2 2.0.28 native configuration
 
-Installed version: **2.0.28**. Source revision:
+Schema reference version: **2.0.28**. Source revision:
 [`026b106bc5d41b679ffc413264229c340871e4d3`](https://github.com/anomalyco/opencode/tree/026b106bc5d41b679ffc413264229c340871e4d3).
 Consulted 2026-10-23. This reference uses the pinned **V2** source. V1 examples
 with singular `provider`, `npm`, or `options` must not be assumed equivalent.
@@ -139,8 +139,10 @@ A synthetic V2 endpoint fragment; it does not select a default or agent role:
 }
 ```
 
-The tmax protected handoff uses the native `{file:/absolute/private/path}`
-mechanism instead. The referenced key artifact is native-owned plaintext with
+The tmax protected handoff uses the native `{file:tmax-<identity>.key}`
+mechanism instead. The path is relative to the configuration file so native
+variable substitution does not reinterpret Windows backslashes. The referenced
+key artifact is native-owned plaintext with
 private permissions; it is not a tmax OAuth export.
 
 ## Authentication
@@ -185,7 +187,36 @@ file presence alone. Source:
 No native credential import, token copying, or direct SQLite credential edits are
 part of tmax's model apply/restore.
 
+## Applying models and session routing
+
+A default model is optional. Without one, tmax adds the selected provider models
+and leaves OpenCode's current default alone. An unverified version produces a
+warning, not an application gate; OpenCode 1 remains incompatible with this V2
+configuration format.
+
+OpenCode V2 supplies `x-opencode-session` and matching `X-Session-Id` on model
+requests, with `opencode/<channel>/<version>/<name>` as its User-Agent. Children
+share the parent affinity and forks share their source affinity. Sources at
+2.0.19: [model-request.ts](https://github.com/anomalyco/opencode/blob/v2.0.19/packages/core/src/session/model-request.ts),
+[affinity.ts](https://github.com/anomalyco/opencode/blob/v2.0.19/packages/core/src/session/affinity.ts),
+and [app.ts](https://github.com/anomalyco/opencode/blob/v2.0.19/packages/core/src/app.ts).
+tmax forwards the actual header to Go. Session aliases using Chat Completions
+bind on first use with complete history, then retain that destination across
+resume and gateway restart. See the [continuity contract](../../specs/model-routing/spec.md#selection-and-continuity)
+for missing bindings and upstream-owned resource limits.
+
 ## Qualification
+
+Windows acceptance on 2026-10-24 used installed OpenCode **2.0.19**, an isolated
+configuration/database, and a local synthetic Chat Completions server. Application
+without a default preserved the existing native selection. After explicitly
+setting a fixture default, `run --standalone --format json` (without a model
+override) and a subsequent `--session` run both reached the local gateway and
+returned streamed responses. The actual native affinity and User-Agent reached
+the upstream, and restore recovered the original configuration bytes. This does
+not establish hosted-provider authorization or fix Windows protected key input;
+the fixture used a synthetic stored credential reference.
+
 
 Retained installed acceptance observed actual apply, then
 `opencode run --standalone --format json` with **no model override**, using the

@@ -117,7 +117,8 @@ Apply/restore/discard support dry-run; reads do not. Recovery handles are not
 target IDs; reused IDs do not select predecessor records. Exact-handle recovery
 works from the sole home with absent/invalid config without activating it.
 
-Apply rejects incomplete selections/default or unavailable qualification/credentials.
+Apply rejects missing required selections or unavailable credentials and known
+incompatible schemas. OpenCode does not require a default selection.
 Upstream entries use their referenced endpoints/auth and need no running tmax
 gateway or model aliases. Gateway entries use its local URL and the current shared
 key, requiring the matching ready listener and loaded snapshot. Start explicitly
@@ -159,9 +160,14 @@ changes or a credential-reference replacement; otherwise it is null. These are
 unwritten desired deltas. `awaiting_native_reload` is separate: it means written
 native changes await a tool reload/restart, not that those deltas remain pending.
 Installation version evidence distinguishes `not_installed`, `probe_failed`, `version_unknown`,
-and `detected`. Apply reports distinct blockers including
-`native_not_installed`, `native_version_probe_failed`, `native_version_unknown`,
-and `native_version_unqualified`; blocked qualification exits 3 without native writes.
+and `detected`. Missing tools (`native_not_installed`) and known incompatible
+schemas (`native_schema_incompatible`) block application with exit 3 and no
+native writes. Other version uncertainty produces `native_version_unverified`
+in `data.warnings` without blocking application.
+
+Successful apply/restore returns exit 0 and status `success`, including when its
+code is `awaiting_native_reload`. The reload reminder and unverified runtime
+state remain explicit; a completed file write is not a failed application.
 
 Routine mutation results identify `data.target`, `data.provider` when entry-scoped,
 requested changes, and actual saved/loaded or applied/reload outcome. Native

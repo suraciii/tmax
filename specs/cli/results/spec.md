@@ -142,8 +142,8 @@ does not prevent 0; requested registration failure does, including explicit
 same-state repair. Any nonzero post-save outcome is incomplete with the saved
 fact/revision and actual failed/partial boundary, never an effect-free failure.
 
-Native write complete but required reload pending returns
-3/`awaiting_native_reload`; partial writes return 4 with changed/unchanged files
+Completed `agent apply` and `agent restore` writes, including reload pending,
+return success with exit 0 and code `awaiting_native_reload`; partial writes return 4 with changed/unchanged files
 and safe recovery, not effective application. Explicit refresh/probe that cannot
 run reports its blocker/failure even if a later read of retained evidence succeeds.
 [Input results](../providers/inputs/spec.md#input-data-results) and

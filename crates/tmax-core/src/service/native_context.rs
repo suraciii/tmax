@@ -28,13 +28,23 @@ impl Context {
     pub fn binding_key(&self, public_id: &str, protocol: &str) -> Option<String> {
         Some(binding_key(&self.scope_handle()?, public_id, protocol))
     }
-    pub fn trusted_new(
+    pub fn can_start_binding(
         &self,
         body: &Value,
         protocol: &str,
         epoch: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> bool {
+        // OpenCode sends complete Chat Completions history and a stable native
+        // affinity ID on new, resumed, forked and auxiliary requests. Its first
+        // request through this gateway can establish a binding even when the
+        // conversation predates tmax. Never adopt upstream-owned references.
+        if self.family == "opencode" {
+            return protocol == "chat-completions"
+                && self.session.is_some()
+                && self.independent
+                && !has_unbound_resources(body);
+        }
         // UUIDv7's native creation instant prevents a lost binding store from
         // reclassifying an old identifier as new. No clock/TTL releases a binding.
         if self.family != "pi"
@@ -79,6 +89,8 @@ pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Con
     let ua = headers.get("user-agent")?.to_str().ok()?;
     let family = if ua.starts_with("pi (") && ua.ends_with(')') && ua.contains(';') {
         "pi"
+    } else if ua.starts_with("opencode/") {
+        "opencode"
     } else if ua == "HermesAgent/0.22.1" {
         "hermes"
     } else {
@@ -89,6 +101,9 @@ pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Con
         .and_then(|v| v.to_str().ok());
     let affinity = headers.get("x-session-id").and_then(|v| v.to_str().ok());
     if opencode.zip(affinity).is_some_and(|(a, b)| a != b) {
+        return None;
+    }
+    if family == "opencode" && opencode.is_none() {
         return None;
     }
     let session = opencode
@@ -236,15 +251,15 @@ mod tests {
         headers.insert("x-session-id", id.parse().unwrap());
         let body = json!({"messages":[{"role":"user","content":"not inspected"}]});
         let context = identify(&headers, &body, "chat-completions").unwrap();
-        assert!(context.trusted_new(
+        assert!(context.can_start_binding(
             &body,
             "chat-completions",
             now - chrono::Duration::seconds(1),
             now
         ));
-        assert!(!context.trusted_new(&body, "chat-completions", now, now));
+        assert!(!context.can_start_binding(&body, "chat-completions", now, now));
         let resumed = json!({"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"y"},{"role":"user","content":"z"}]});
-        assert!(!context.trusted_new(
+        assert!(!context.can_start_binding(
             &resumed,
             "chat-completions",
             now - chrono::Duration::seconds(1),

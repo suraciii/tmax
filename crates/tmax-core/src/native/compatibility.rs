@@ -78,7 +78,7 @@ impl Context<'_> {
                 alias.id == public_id
                     && alias.protocol == protocol
                     && alias.continuity.as_deref().unwrap_or("session") == "session"
-            }) && !(self.agent == "pi" && protocol == "chat-completions")
+            }) && !(matches!(self.agent, "pi" | "opencode") && protocol == "chat-completions")
             {
                 return Err(Error::new(
                     "compatibility_unavailable",
@@ -89,11 +89,12 @@ impl Context<'_> {
                 client: match self.agent {
                     "pi" => crate::gateway::NativeClient::Pi,
                     "hermes" => crate::gateway::NativeClient::Hermes,
+                    "opencode" => crate::gateway::NativeClient::OpenCode,
                     _ => crate::gateway::NativeClient::Unknown,
                 },
                 // The adapter enables Pi's Chat Completions affinity; Hermes
                 // supplies its separately documented x-opencode-session header.
-                go_session: self.agent == "hermes"
+                go_session: matches!(self.agent, "hermes" | "opencode")
                     || self.agent == "pi" && protocol == "chat-completions",
             };
             if let Some(reason) = crate::gateway::native_mismatch(provider, &native) {
@@ -103,7 +104,7 @@ impl Context<'_> {
                 ));
             }
         } else {
-            if integration == "opencode-go" && !matches!(self.agent, "pi" | "hermes") {
+            if integration == "opencode-go" && !matches!(self.agent, "pi" | "hermes" | "opencode") {
                 return Err(Error::new(
                     "compatibility_unavailable",
                     "This exact native client lacks qualified per-conversation Go header coverage; pi 1.2.0 and Hermes 0.22.1 have separately sourced direct paths",

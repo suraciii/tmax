@@ -34,6 +34,7 @@ fn success_response(operation: &str, dry_run: bool, mut data: Value) -> Response
         .as_deref()
         .unwrap_or(if dry_run { "dry_run_ready" } else { "ok" });
     let exit = match code {
+        "awaiting_native_reload" if matches!(operation, "agent apply" | "agent restore") => 0,
         "awaiting_native_reload"
         | "restart_required"
         | "runtime_blocked"
@@ -49,6 +50,7 @@ fn success_response(operation: &str, dry_run: bool, mut data: Value) -> Response
         | "native_version_probe_failed"
         | "native_version_unknown"
         | "native_version_unqualified"
+        | "native_schema_incompatible"
         | "target_incomplete" => 3,
         "ok" | "dry_run_ready" | "resident_reused" => 0,
         _ => 4,
@@ -998,6 +1000,25 @@ mod tests {
         }
     }
     use super::*;
+    #[test]
+    fn completed_native_writes_are_success_with_a_reload_reminder() {
+        for operation in ["agent apply", "agent restore"] {
+            let response = success_response(
+                operation,
+                false,
+                json!({"_code":"awaiting_native_reload","effective":"not_verified"}),
+            );
+            assert_eq!(response.exit_code, 0);
+            assert_eq!(response.body["status"], "success");
+            assert_eq!(response.body["data"]["effective"], "not_verified");
+        }
+        let login = success_response(
+            "provider login",
+            false,
+            json!({"_code":"awaiting_native_reload"}),
+        );
+        assert_eq!(login.exit_code, 3);
+    }
     fn request(command: &[&str], operands: &[&str], arguments: &[(&str, &[&str])]) -> Request {
         Request {
             command: command.iter().map(|value| (*value).into()).collect(),

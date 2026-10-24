@@ -458,7 +458,7 @@ impl Runtime {
         if retain
             && !context
                 .as_ref()
-                .is_some_and(|c| c.trusted_new(body, protocol, bindings.epoch, now))
+                .is_some_and(|c| c.can_start_binding(body, protocol, bindings.epoch, now))
         {
             return Err(Error::new(
                 "original_binding_unavailable",
@@ -685,6 +685,7 @@ pub enum NativeClient {
     Unknown,
     Pi,
     Hermes,
+    OpenCode,
 }
 pub struct NativeRequirements {
     pub client: NativeClient,
@@ -696,6 +697,7 @@ impl NativeRequirements {
             client: match context.map(|c| c.family) {
                 Some("pi") => NativeClient::Pi,
                 Some("hermes") => NativeClient::Hermes,
+                Some("opencode") => NativeClient::OpenCode,
                 _ => NativeClient::Unknown,
             },
             go_session: context.is_some_and(|c| c.go_session_header.is_some()),
@@ -1538,6 +1540,126 @@ mod tests {
             uuid::Uuid::from_bytes(bytes).to_string().parse().unwrap(),
         );
         headers
+    }
+    #[test]
+    fn opencode_first_use_and_resume_keep_the_selected_destination() {
+        let (_temporary, runtime, config) = fixture();
+        let now = Utc::now();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "user-agent",
+            "opencode/stable/2.0.19/opencode".parse().unwrap(),
+        );
+        headers.insert(
+            "x-opencode-session",
+            "ses_existing_native_conversation".parse().unwrap(),
+        );
+        headers.insert("x-session-id", headers["x-opencode-session"].clone());
+        // A resumed conversation may predate tmax and carry multiple turns.
+        let body = json!({"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"answer"},{"role":"user","content":"continue"}]});
+        let first = runtime
+            .choose(
+                &test_snapshot(&config, "fixture-1"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                now,
+            )
+            .unwrap();
+        assert_eq!(first.selection.provider, "p");
+        assert_eq!(first.go_session_header, Some("x-opencode-session"));
+        let mut preferred = config.clone();
+        preferred
+            .providers
+            .get_mut("q")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .priority = 100;
+        publish(&runtime, &config, &preferred, "priority-change");
+        let restarted = Runtime::new(runtime.store.clone(), "restart".into()).unwrap();
+        let retained = restarted
+            .choose(
+                &test_snapshot(&preferred, "priority-change"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                now,
+            )
+            .unwrap();
+        assert_eq!(retained.selection.provider, "p");
+        headers.insert(
+            "x-opencode-session",
+            "ses_second_native_conversation".parse().unwrap(),
+        );
+        headers.insert("x-session-id", headers["x-opencode-session"].clone());
+        let fresh = restarted
+            .choose(
+                &test_snapshot(&preferred, "priority-change"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                now,
+            )
+            .unwrap();
+        assert_eq!(fresh.selection.provider, "q");
+        headers.insert(
+            "x-opencode-session",
+            "ses_unknown_remote_continuation".parse().unwrap(),
+        );
+        headers.insert("x-session-id", headers["x-opencode-session"].clone());
+        let remote = json!({"messages":[{"role":"user","content":"continue"}],"previous_response_id":"upstream-owned"});
+        assert_eq!(
+            restarted
+                .choose(
+                    &test_snapshot(&preferred, "priority-change"),
+                    "dynamic",
+                    "chat-completions",
+                    &remote,
+                    &headers,
+                    now
+                )
+                .err()
+                .unwrap()
+                .code,
+            "original_binding_unavailable"
+        );
+        let files = json!({"messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"upstream-owned"}}]}]});
+        assert_eq!(
+            restarted
+                .choose(
+                    &test_snapshot(&preferred, "priority-change"),
+                    "dynamic",
+                    "chat-completions",
+                    &files,
+                    &headers,
+                    now
+                )
+                .err()
+                .unwrap()
+                .code,
+            "original_resource_binding_unavailable"
+        );
+        headers.insert("x-session-id", "conflicting".parse().unwrap());
+        assert_eq!(
+            restarted
+                .choose(
+                    &test_snapshot(&preferred, "priority-change"),
+                    "dynamic",
+                    "chat-completions",
+                    &body,
+                    &headers,
+                    now
+                )
+                .err()
+                .unwrap()
+                .code,
+            "session_identity_unavailable"
+        );
     }
     fn fixture() -> (tempfile::TempDir, Arc<Runtime>, Config) {
         let temporary = tempfile::tempdir().unwrap();

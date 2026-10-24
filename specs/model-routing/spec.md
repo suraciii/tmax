@@ -620,9 +620,20 @@ admission, not reassignment or replay of an in-flight request. Upstream
 conversation, response, file, and cache IDs must not cross account or provider
 boundaries.
 
+OpenCode Chat Completions may establish its first gateway binding from its
+native `x-opencode-session` affinity and complete independent conversation
+history, including a conversation started before tmax. No creation-time check or
+manual new-chat step is required. This also permits re-establishing a missing
+binding from full context; the newly selected provider can differ from a lost
+binding. Upstream-owned response, file, and conversation references are excluded.
+Existing retained or blocked bindings always take precedence; a priority change,
+resume, or restart never silently reassigns them. Other adapter paths retain the
+new-session requirements below.
+
 Retain session bindings across normal gateway stop/start and process restart.
 Clearing or evicting request history must not clear those bindings or their blocked
-status. If a binding is lost through runtime-state loss or expiry, do not treat
+status. Except for the full-context OpenCode path above, if a binding is lost
+through runtime-state loss or expiry, do not treat
 the next request as unbound. The adapter's qualified session mechanism must
 distinguish a trusted new session, carrying no prior upstream-owned continuation
 state, from an existing session before a fresh selection is allowed. If it cannot,
@@ -976,7 +987,7 @@ error after execution starts does not replay on a sibling.
     candidate set or ranking; an existing blocked session is not a new one.
 26. Preserve bindings and blocked state across normal stop/start, restart, and
     request-history clearing. When binding state is lost, allow a fresh selection
-    only for a trusted new session distinguished by the qualified adapter from
+    for the full-context OpenCode path above or a trusted new session distinguished by the qualified adapter from
     continuation. Otherwise keep the affected scope blocked until a qualified
     native reset or new identity scope establishes independent context; do not
     promise that a generic new-chat action, invented identity, or configuration

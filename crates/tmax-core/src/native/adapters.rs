@@ -313,15 +313,18 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             .field(format!("roles.{role}")));
         }
     }
-    let default = target.default.as_ref().ok_or_else(|| {
-        Error::new(
-            "native_incomplete",
-            "Select an explicit native default before applying",
-        )
-    })?;
+    let required_default = || {
+        target.default.as_ref().ok_or_else(|| {
+            Error::new(
+                "native_incomplete",
+                "Select an explicit native default before applying",
+            )
+        })
+    };
     let mut providers = serde_json::Map::new();
     let mut files: Vec<File> = match target.agent.as_str() {
         "codex" => {
+            let default = required_default()?;
             for entry in entries {
                 if entry.protocol != "responses" {
                     return Err(Error::new(
@@ -370,6 +373,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             Ok(vec![file(scope, "config.toml", Format::Toml, config)])
         }
         "pi" | "omp" => {
+            let default = required_default()?;
             for entry in entries {
                 let native_name = entry.native_name();
                 if entry.login_provider.is_some() {
@@ -457,9 +461,12 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     }
                     Ok((id.as_str(), model))
                 }).collect::<Result<_>>()?;
-                providers.insert(entry.name.clone(),json!({"name":entry.name,"package":package,"env":[],"settings":{"baseURL":entry.base,"apiKey":format!("{{file:{}}}",credential_path(scope,entry).display())},"models":models}));
+                providers.insert(entry.name.clone(),json!({"name":entry.name,"package":package,"env":[],"settings":{"baseURL":entry.base,"apiKey":format!("{{file:{}}}",credential_path(scope,entry).file_name().expect("credential filename").to_string_lossy())},"models":models}));
             }
-            let mut config = json!({"providers":providers,"model":reference(default,entries)?});
+            let mut config = json!({"providers":providers});
+            if let Some(default) = &target.default {
+                config["model"] = json!(reference(default, entries)?);
+            }
             for (role, r) in &target.roles {
                 config["agents"][role]["model"] = json!(reference(r, entries)?);
             }
@@ -472,6 +479,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             Ok(vec![file(scope, name, Format::Json, config)])
         }
         "hermes" => {
+            let default = required_default()?;
             let mut overrides = serde_json::Map::new();
             for entry in entries {
                 if entry.login_provider.is_some() {
@@ -569,6 +577,35 @@ mod tests {
             }),
             roles: BTreeMap::new(),
         }
+    }
+    #[test]
+    fn opencode_adds_models_without_overriding_the_native_default() {
+        let mut target = target("opencode");
+        target.default = None;
+        let entry = Entry {
+            name: "local".into(),
+            base: "http://127.0.0.1:8317/v1".into(),
+            protocol: "chat-completions".into(),
+            key: None,
+            login_provider: None,
+            canonical: None,
+            gateway: true,
+            models: vec!["m".into()],
+            model_routes: BTreeMap::new(),
+            model_metadata: BTreeMap::new(),
+        };
+        let files = build(&target, Path::new("/explicit/native"), &[entry]).unwrap();
+        assert_eq!(
+            files[0].desired["providers"]["local"]["models"]["m"]["modelID"],
+            "m"
+        );
+        let key = files[0].desired["providers"]["local"]["settings"]["apiKey"]
+            .as_str()
+            .unwrap();
+        assert!(key.starts_with("{file:tmax-"));
+        assert!(!key.contains(['/', '\\']));
+        assert!(files[0].desired.get("model").is_none());
+        assert!(files[0].desired.get("agents").is_none());
     }
     #[test]
     fn omp_roles_update_existing_yaml_without_shadowing_unrelated_settings() {

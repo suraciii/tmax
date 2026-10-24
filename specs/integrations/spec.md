@@ -26,6 +26,12 @@ consultation date, and any bounded runtime qualification belong to each child
 contract. Documentation, local native-schema checks, and provider-authorized
 runtime evidence must remain distinct. None establishes an untested version range.
 
+Configuration application treats an unverified version or unavailable version
+probe as advisory. It may proceed using the supported schema without claiming
+runtime verification. A known incompatible schema (for example OpenCode 1 versus
+2), missing executable, invalid selection, or unavailable credential still blocks
+application with an actionable reason. Authentication qualification is separate.
+
 ## Agent boundaries
 
 | Agent | Documented integration surface | Direct-configuration boundary | Same-protocol gateway boundary |

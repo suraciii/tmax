@@ -103,3 +103,9 @@ scenario controls discovery responses to verify directory selection, duplicate
 targets, missing installations, failures, delayed results, and the handoff to
 model configuration. It creates and removes one uniquely named target declaration;
 it never applies native files. Run it in the same dedicated browser session.
+
+The optional [`scripts/web_agent_apply_smoke.js`](../scripts/web_agent_apply_smoke.js)
+checks OpenCode's optional default, the application form without command/target
+fields, preview isolation, and successful application with non-error reload and
+version reminders. It creates a temporary target declaration and mocks the
+application result; it does not write native files or prove runtime inference.

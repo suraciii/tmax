@@ -32,7 +32,7 @@ const areas = {
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-coding-plan':'Kimi Coding Plan','custom':'自定义服务'};
 const protocolNames = {'chat-completions':'Chat Completions','responses':'Responses','messages':'Messages'};
-const stateLabel = value => ({saved:'已保存',native_reload_and_inference_not_verified:'尚未验证工具加载与实际使用',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
+const stateLabel = value => ({saved:'已保存',native_reload_and_inference_not_verified:'尚未验证工具加载与实际使用',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',restored_reload_pending:'已恢复，重新打开工具后生效',pending_native_changes:'有修改待应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
 const state = {area:'overview', catalog:[], config:null, providers:[], models:[], agents:[], runtime:null, integrations:[], errors:[], revision:null, loaded:false, generation:0, modelKind:'concrete', query:'', busy:false, dialogGeneration:0};
 let toastTimer;
 let revealGeneration=0;
@@ -153,7 +153,7 @@ function renderModelList() {
   $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'服务商'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):state.config.model_aliases.find(a=>a.id===m.id&&a.protocol===m.protocol);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${(m.published_protocols || []).map(p=>badge(protocolNames[p] || p)).join('') || badge('未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td>${button('管理',m.kind==='alias'?'alias-edit':'model-edit',m.kind==='alias'?JSON.stringify([m.id,m.protocol]):m.id,'small')}</td></tr>`;}).join('')}</tbody></table></div>`;
 }
 function renderAgents() {
-  $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',state.config.agents[t.target]?.default?.id || '尚未选择')}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
+  $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',state.config.agents[t.target]?.default?.id || (id==='opencode'?'沿用 OpenCode 当前选择':'尚未选择'))}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
 }
 function clearReveal() { revealGeneration++;const output=$('revealed'); if(output){output.textContent='';output.hidden=true;} }
 function renderGateway() {
@@ -182,17 +182,17 @@ function field(name, label, value='', options={}) {
 const value = name => $('f-'+name)?.value ?? '';
 function resultMessage(response) {
   const body=response.body;
-  const known={unsupported_protected_input:'当前 Windows 版本无法接收受保护输入。配置尚未完成，需要修复运行时后再试。',inputs_changed:'配置已被其他操作更新。请关闭此表单，刷新页面后重新编辑。',target_incomplete:'工具配置尚未完整。请添加来源和模型，并选择默认模型。',credential_unavailable:'授权凭据不可用，请检查服务商授权配置。',saved_not_active:'配置已保存，但未生效。请检查原因后重新加载配置。',awaiting_native_reload:'配置已写入，请重启或重新加载对应编程工具。',unresolved_reference:'还有其他配置引用此项。请先调整相关模型、别名或工具配置。',active_requests:'仍有请求进行中。请等待请求结束后再停止。',restart_required:'配置需要重启网关才能生效。',login_source_required:'请选择负责登录的工具配置。',interactive_required:'此操作需要交互登录，请通过本地命令行完成登录后刷新状态。'};
+  const known={unsupported_protected_input:'当前 Windows 版本无法接收受保护输入。配置尚未完成，需要修复运行时后再试。',inputs_changed:'配置已被其他操作更新。请关闭此表单，刷新页面后重新编辑。',target_incomplete:'请先添加模型来源和模型；需要默认模型的工具还需选择默认模型。',native_schema_incompatible:'当前安装的是 OpenCode 1，请升级到 OpenCode 2 后应用配置。',credential_unavailable:'授权凭据不可用，请检查服务商授权配置。',saved_not_active:'配置已保存，但未生效。请检查原因后重新加载配置。',awaiting_native_reload:'配置已写入，请重启或重新加载对应编程工具。',unresolved_reference:'还有其他配置引用此项。请先调整相关模型、别名或工具配置。',active_requests:'仍有请求进行中。请等待请求结束后再停止。',restart_required:'配置需要重启网关才能生效。',login_source_required:'请选择负责登录的工具配置。',interactive_required:'此操作需要交互登录，请通过本地命令行完成登录后刷新状态。'};
   return known[body.code] || body.blockers?.[0]?.message || (isSuccess(response)?(body.status==='dry_run'?'预览完成，没有执行修改。':'操作已完成。'):'操作未完成，请查看原因。');
 }
 function presentResult(response, container) {
   const body=response.body; const success=isSuccess(response); const warnings=[...(body.warnings || []),...(body.data?.warnings || [])];
   const next=body.next_actions || body.data?.next_actions || [];
   const hasWarning=warnings.length>0 || ['failed','blocked','unavailable'].includes(body.data?.activation?.activation || body.data?.activation?.state);
-  const warningText=w=>({external_availability_unverified:'预览不会读取密钥或验证上游授权。',listener_restart_required:'配置已保存，需要主动重启网关后生效。',saved_not_active:'配置已保存，运行时尚未生效；请检查并重新加载，不要重复创建。'}[w.code] || (typeof w==='string'?w:w.message || w.code));
+  const warningText=w=>({native_version_unverified:'此工具版本尚未验证，配置已应用；请重新打开工具检查。',external_availability_unverified:'预览不会读取密钥或验证上游授权。',listener_restart_required:'配置已保存，需要主动重启网关后生效。',saved_not_active:'配置已保存，运行时尚未生效；请检查并重新加载，不要重复创建。'}[w.code] || (typeof w==='string'?w:w.message || w.code));
   const changes=body.changes || body.data?.changes || [];
   const preview=body.status==='dry_run'&&changes.length?`<p>涉及 ${changes.length} 项变更：</p><ul>${changes.slice(0,8).map(c=>`<li>${escapeHtml(({add:'新增',remove:'移除',replace:'更新'}[c.kind] || '更改')+' · '+(c.path || c.resource?.id || '当前配置'))}</li>`).join('')}</ul>${changes.length>8?'<p>其余变更见完整详情。</p>':''}`:'';
-  container.innerHTML=`<div class="result-box ${!success||hasWarning?'error':''}" role="status"><h3>${body.status==='dry_run'?'变更预览':success?(hasWarning?'已完成，请留意提示':'操作完成'):(body.status==='incomplete'?'部分完成，需要后续操作':'操作未完成')}</h3><p>${escapeHtml(resultMessage(response))}</p>${body.data?.save==='saved'?'<p>设置已保存。原生工具文件是否应用，请以应用结果为准。</p>':''}${preview}${warnings.length?`<ul>${warnings.map(w=>`<li>${escapeHtml(warningText(w))}</li>`).join('')}</ul>`:''}${next.length?`<ul>${next.map(a=>`<li>${escapeHtml(typeof a==='string'?a:a.message || a.operation || a.command || JSON.stringify(a))}</li>`).join('')}</ul>`:''}${detail(response)}</div>`;
+  container.innerHTML=`<div class="result-box ${!success?'error':''}" role="status"><h3>${body.status==='dry_run'?'变更预览':success?(hasWarning?'已完成，请留意提示':'操作完成'):(body.status==='incomplete'?'部分完成，需要后续操作':'操作未完成')}</h3><p>${escapeHtml(resultMessage(response))}</p>${body.data?.save==='saved'?'<p>设置已保存。原生工具文件是否应用，请以应用结果为准。</p>':''}${preview}${warnings.length?`<ul>${warnings.map(w=>`<li>${escapeHtml(warningText(w))}</li>`).join('')}</ul>`:''}${next.length?`<ul>${next.map(a=>`<li>${escapeHtml(typeof a==='string'?a:a.message || a.operation || a.command || JSON.stringify(a))}</li>`).join('')}</ul>`:''}${detail(response)}</div>`;
 }
 function formDialog(title, description, fields, build, options={}) {
   const revision=state.revision;
@@ -430,7 +430,7 @@ function agentForm(agent='') {
       const installation=found.installation || {};
       const candidates=[...(found.scope_state==='available'?[{path:found.path,label:'当前配置目录'}]:[]),...(found.profiles || []).map(path=>({path,label:'其他配置目录'}))].filter((item,index,all)=>all.findIndex(other=>nativePathKey(other.path)===nativePathKey(item.path))===index);
       const version=installation.version?'检测到版本 '+installation.version:'未获取到工具版本';
-      const advice=installation.state==='not_installed'?'未在本机命令路径中找到可运行的工具。可以先登记目录，安装并检查版本后再应用配置。':installation.compatibility==='documented'?'此版本的配置格式已适配；实际使用需在应用后验证。':`当前版本的配置适配尚未验证${installation.qualified_version?'，已验证版本为 '+installation.qualified_version:''}。可以先登记目录，应用前需检查兼容性。`;
+      const advice=installation.state==='not_installed'?'未在本机命令路径中找到可运行的工具。可以先登记目录，安装并检查版本后再应用配置。':installation.compatibility==='documented'?'此版本的配置格式已适配；实际使用需在应用后验证。':`当前版本的配置适配尚未验证${installation.qualified_version?'，参考适配版本为 '+installation.qualified_version:''}。仍可保存并应用配置，使用后可反馈兼容性问题。`;
       $('agent-discovery').innerHTML=`<p class="muted">${escapeHtml(version)}</p><p class="muted">${escapeHtml(advice)}</p>`+
         (candidates.length?candidates.map((item,index)=>{
           const saved=registered(kind,item.path);
@@ -450,7 +450,7 @@ async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
   try {const data=await read('agent inspect',[target]);if(generation!==state.dialogGeneration)return;
     const config=state.config.agents[target];
-    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('已保存状态',stateLabel(data.desired_state))}${fact('应用状态',stateLabel(data.applied_state))}${fact('实际生效状态',stateLabel(data.effective_state))}${fact('默认模型',config.default?.id || '未选择')}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button('选择默认模型','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
+    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',config.default?.id || (config.agent==='opencode'?'沿用 OpenCode 当前选择':'未选择'))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='opencode'?'更改默认模型（可选）':'选择默认模型','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
 function agentSource(target) {
@@ -459,7 +459,7 @@ function agentSource(target) {
 function agentModel(encoded) {
   const [target,name]=JSON.parse(encoded);const source=state.config.agents[target].providers[name];
   const candidates=(state.models || []).filter(m=>source.gateway || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/'))).flatMap(m=>(m.published_protocols || []).map(p=>[JSON.stringify([source.gateway?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p] || p}`]));
-  formDialog('添加可选模型','只添加到此来源的模型列表；默认模型需要另行选择。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates]}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
+  formDialog('添加可选模型',state.config.agents[target].agent==='opencode'?'应用后可在 OpenCode 中选择这些模型，无需更改默认模型。':'添加到此来源的模型列表后，可选择为默认模型。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates]}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
 }
 function agentDefault(target) {
   const config=state.config.agents[target];
@@ -597,7 +597,7 @@ async function dispatch(action,id) {
     case 'agent-source': agentSource(id);break;
     case 'agent-model': agentModel(id);break;
     case 'agent-default': agentDefault(id);break;
-    case 'agent-apply': openOperation('agent apply',[id]);break;
+    case 'agent-apply': formDialog('应用到工具',`将模型配置写入 ${escapeHtml(id)}。完成后重新打开工具即可使用。`,'',()=>({operation:'agent apply',operands:[id]}),{submit:'应用配置',stayOpen:true});break;
     case 'agent-restore': openOperation('agent restore',[id]);break;
     case 'agent-advanced': openOperation('agent inspect',[id]);break;
     case 'gateway-configure': configureGateway();break;

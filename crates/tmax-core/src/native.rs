@@ -450,29 +450,30 @@ async fn version(agent: &str, path: &Path) -> Value {
     let exact = found.as_deref() == Some(adapters::qualified_version(agent));
     json!({"executable":exe,"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
 }
-fn version_blocker(installation: &Value) -> Option<Value> {
-    if installation["compatibility"] == "documented" {
-        return None;
+fn version_blocker(agent: &str, installation: &Value) -> Option<Value> {
+    if installation["state"] == "not_installed" {
+        return Some(
+            json!({"code":"native_not_installed","message":"Install the tool or correct PATH before applying"}),
+        );
     }
-    let (code, message) = match installation["state"].as_str() {
-        Some("not_installed") => (
-            "native_not_installed",
-            "The native executable is not on PATH; install it or correct PATH before applying",
-        ),
-        Some("probe_failed") => (
-            "native_version_probe_failed",
-            "The native version probe could not complete successfully; inspect executable permissions and version-command availability",
-        ),
-        Some("detected") => (
-            "native_version_unqualified",
-            "The detected version differs from the exact researched schema; inspect version evidence before applying. Unknown support is not a prohibition claim",
-        ),
-        _ => (
-            "native_version_unknown",
-            "The native version output did not identify a qualified version; inspect version-command evidence",
-        ),
-    };
-    Some(json!({"code":code,"message":message}))
+    if agent == "opencode"
+        && installation["version"]
+            .as_str()
+            .is_some_and(|version| version.starts_with("1."))
+    {
+        return Some(
+            json!({"code":"native_schema_incompatible","message":"OpenCode 1 uses a different configuration format. Upgrade to OpenCode 2 before applying"}),
+        );
+    }
+    None
+}
+fn version_warnings(installation: &Value) -> Vec<Value> {
+    if installation["compatibility"] == "documented" || installation["state"] == "not_installed" {
+        return Vec::new();
+    }
+    vec![
+        json!({"code":"native_version_unverified","message":"This tool version has not been verified. Configuration can still be applied; reload the tool to check it"}),
+    ]
 }
 fn omp_root(store: &Store) -> PathBuf {
     std::env::var_os("PI_CONFIG_DIR")
@@ -699,7 +700,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     if !available {
         blockers.push(json!({"code":"native_scope_unavailable","path":path,"reason_code":scope_reason,"message":"Select an existing native configuration directory or explicitly create the intended directory before applying"}));
     }
-    if target.default.is_none()
+    if (target.agent != "opencode" && target.default.is_none())
         || target.providers.is_empty()
         || target.providers.values().any(|p| p.models.is_empty())
     {
@@ -729,7 +730,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     } else {
         json!({"state":"not_checked","version":null,"compatibility":"unknown","reason_code":"native_scope_unavailable"})
     };
-    if available && let Some(blocker) = version_blocker(&installed) {
+    if available && let Some(blocker) = version_blocker(&target.agent, &installed) {
         blockers.push(blocker);
     }
     let applied_state = match &pending {
@@ -739,7 +740,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":supported_roles(&target.agent),"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":false,"plaintext_private_native_credential_file":true,"reference":"native command/file helper","secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -981,7 +982,7 @@ async fn entries(
             model_metadata,
         });
     }
-    if target.default.is_none() || entries.is_empty() {
+    if (target.agent != "opencode" && target.default.is_none()) || entries.is_empty() {
         return Err(Error::new(
             "target_incomplete",
             "Explicit native provider selections and default are required before application",
@@ -1330,14 +1331,14 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         );
     }
     let installed = version(&target.agent, &path).await;
-    if let Some(blocker) = version_blocker(&installed) {
+    if let Some(blocker) = version_blocker(&target.agent, &installed) {
         return Ok(
             json!({"_code":blocker["code"],"_status":"blocked","target":id,"agent":target.agent,"path":path,"installation":installed,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false},"qualification":"not_established"}),
         );
     }
     if desired_unchanged {
         return Ok(
-            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
+            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"warnings":version_warnings(&installed),"native_reload":"still_required_or_unknown","effective":"not_verified"}),
         );
     }
     for file in &mut files {
@@ -1614,7 +1615,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         let _ = secrets::remove(store, &old.payload_ref);
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"precedence":adapters::precedence(&target.agent)}),
+        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent)}),
     )
 }
 fn partial(
@@ -2820,19 +2821,21 @@ mod tests {
         );
     }
     #[test]
-    fn installation_blockers_distinguish_absence_probe_and_detected_qualification() {
-        for (state, code) in [
-            ("not_installed", "native_not_installed"),
-            ("probe_failed", "native_version_probe_failed"),
-            ("version_unknown", "native_version_unknown"),
-            ("detected", "native_version_unqualified"),
-        ] {
-            let evidence = json!({"state":state,"version":if state=="detected"{Some("0.0.0")}else{None},"compatibility":"unknown"});
-            assert_eq!(version_blocker(&evidence).unwrap()["code"], code);
+    fn application_versions_are_advisory_except_known_incompatible_schemas() {
+        for state in ["probe_failed", "version_unknown", "detected"] {
+            let evidence = json!({"state":state,"version":"2.0.19","compatibility":"unknown"});
+            assert!(version_blocker("opencode", &evidence).is_none());
+            assert_eq!(version_warnings(&evidence).len(), 1);
         }
-        assert!(
-            version_blocker(&json!({"state":"detected","compatibility":"documented"})).is_none()
+        assert_eq!(
+            version_blocker("opencode", &json!({"version":"1.9.0"})).unwrap()["code"],
+            "native_schema_incompatible"
         );
+        assert_eq!(
+            version_blocker("pi", &json!({"state":"not_installed"})).unwrap()["code"],
+            "native_not_installed"
+        );
+        assert!(version_warnings(&json!({"compatibility":"documented"})).is_empty());
     }
     #[test]
     fn omp_profile_selection_matches_native_default_and_fallback_without_global_environment() {
