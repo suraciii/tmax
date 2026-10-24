@@ -450,23 +450,8 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
             impact["catalog_apply"] = json!("completed");
             impact["catalog_impact"]["accepted_revision_after"] = json!(wanted);
             impact["save"] = json!("not_requested");
-            match crate::service::activate(store, &file.config, &file.revision).await {
-                Ok(activation) => {
-                    impact["runtime"] = json!(if activation["activation"] == "not_running" {
-                        "not_running"
-                    } else if activation["activation"] == "active" {
-                        "loaded"
-                    } else {
-                        "not_loaded"
-                    });
-                    impact["activation"] = activation;
-                }
-                Err(error) => {
-                    impact["_code"] = json!("saved_not_active");
-                    impact["runtime"] = json!("not_loaded");
-                    impact["activation"] = json!({"state":"failed","code":error.code});
-                }
-            }
+            crate::operations::activate_saved(store, &file.config, &file.revision, &mut impact)
+                .await;
             Ok(impact)
         }
         "providers" | "models" | "inspect" => {

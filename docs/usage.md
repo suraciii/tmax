@@ -5,6 +5,27 @@ user-specific. CLI help is offline (`tmax help provider input`, for example); it
 never creates a starter configuration. Management output is JSON by default;
 `--format text` can follow a command when a human-readable view is preferred.
 
+Ordinary provider/model/agent/network edits save desired settings without requiring
+a running service. `provider inspect`, file-state reads, and configuration
+`--dry-run` previews also work without credentials or network. A stopped service
+has no loaded snapshot; an unidentified or inaccessible service is **unavailable**,
+not proof that nothing is running or that no sessions are affected.
+
+After an ordinary edit has saved successfully and completed required safety work,
+exit 0 means the desired change is committed. Background activation may still
+have a failed/unavailable warning. Check `save`, `file_revision`, `runtime`,
+`activation`, and loaded revision fields; do not repeat an already committed
+`provider add` or another create. Inspect `tmax status`, then use explicit
+`tmax config reload` after resolving its blocker, or `tmax proxy restart` for a
+saved listener-address change. Loaded state is not claimed to change until
+activation actually succeeds. Catalog acceptance follows the same distinction.
+
+Explicit reload/start/restart, shared-key revocation, native authorization or
+application, requested autostart, and mandatory safety work retain nonzero failure
+exits. If a save completed first, their incomplete result still identifies that
+saved revision and the actual failed/partial boundary. Validation, persistence,
+and revision conflicts are never converted into successful saves.
+
 ## Add one provider and model
 
 Choose a supported integration with `tmax integration list` and
@@ -211,9 +232,12 @@ tmax proxy status
 ```
 
 Initial `proxy configure` provisions the sole shared local key in protected
-storage; `proxy start` is a separate explicit lifecycle action. On platforms that
-require unlock, use the documented inherited readable descriptor form, e.g.
-`--unlock-fd FD`; `FD` is a descriptor number, never a secret or path. Provision
+storage; `proxy start` is a separate explicit lifecycle action. Ordinary CLI
+operations prompt invisibly for protected values on an attached terminal,
+including the Windows console; Web forms provide separate key and unlock fields.
+Neither path requires a daemon installation or descriptor handling. Automation
+can use the documented qualified inherited-pipe options; their platform-qualified
+integer is never a secret or a file path. Provision
 the shared key to a client only through the protected `proxy key show` delivery
 flow. Ordinary inspection does not reveal it. All current-key holders share the
 same published model list; no client registration is required.
@@ -225,6 +249,16 @@ platform's representation error before launching a resident. Use an OS account
 whose home permits that pathname; tmax does not relocate its store or fall back
 to a shorter endpoint. No listener, credentials, or native configuration are
 changed by this startup blocker.
+
+On Windows, the same commands launch a detached native resident with private
+same-user named-pipe control. `tmax web open` opens the system browser;
+`--no-browser` starts management without opening it. Closing the browser or
+launching terminal does not stop inference. `tmax proxy autostart enable` opts
+into current-user login startup, and `disable` removes only tmax's owned startup
+entry without stopping the proxy. Startup registration does not unlock encrypted
+credentials: a locked login attempt is reported in autostart status, and ordinary
+CLI start or Web protected unlock remains available. No reusable unlock secret
+is stored beside encrypted data.
 
 The proxy accepts same-protocol requests and forwards to the configured provider;
 it does not translate protocols. Configure a real provider credential before
@@ -345,10 +379,11 @@ tmax agent apply "$TARGET"
 
 Application writes only the requested native scope; it does not start tmax
 inference or make a paid probe. `tmax agent apply` uses supported platform
-protection or permitted hidden terminal unlock. Only when explicit unlock is
-required and the launcher has supplied a readable inherited pipe at FD 3, use
-`tmax --unlock-fd 3 agent apply "$TARGET"` instead; never name an FD that is not
-open or pass unlock bytes in argv, environment, or files. `awaiting_native_reload`
+protection or permitted hidden terminal unlock. For Unix automation only, when
+the launcher has supplied a readable inherited pipe at FD 3, use
+`tmax --unlock-fd 3 agent apply "$TARGET"` instead. Other platform-qualified
+operands follow the [protected-input contract](../specs/cli/spec.md); never name
+an unopened channel or pass unlock bytes in argv, environment, or files. `awaiting_native_reload`
 means the native tool must reload/restart before the change is effective.
 
 For qualified Pi and OMP concrete selections, known effective model context/output

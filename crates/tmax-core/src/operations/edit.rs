@@ -1240,11 +1240,16 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     let mut candidate = config::parse(&candidate_text)?;
     if path == "proxy remove" {
         let state = crate::service::status(store).await?;
-        if state
-            .pointer("/resident/inference/state")
-            .and_then(Json::as_str)
-            == Some("running")
-        {
+        if !matches!(
+            state["resident"]["discovery_state"].as_str(),
+            Some("absent" | "compatible")
+        ) {
+            return Err(Error::new(
+                "resident_identity_unavailable",
+                "Establish resident identity before removing proxy settings; unknown runtime state is not a stopped listener",
+            ));
+        }
+        if state["resident"]["inference"]["listen"].is_string() {
             return Err(Error::new(
                 "active_requests",
                 "Stop inference explicitly before removing proxy settings",
@@ -1433,6 +1438,8 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
             }
             data["_code"] = json!("saved_not_active");
             data["save"] = json!("failed");
+            data["save_error"] =
+                json!({"code":error.code,"message":error.message,"field":error.field});
             data["retained_secret_reference"] = json!(created);
             data["native_application"] = json!("not_requested");
             return Ok(data);
@@ -1474,41 +1481,40 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         data["reconciliation"] = json!({"state":"failed","code":e.code,"message":e.message});
         return Ok(data);
     }
-    let activation = crate::service::activate(store, &candidate, &saved).await;
+    data["file_revision"] = json!(saved);
+    data["save"] = json!(if root == before { "unchanged" } else { "saved" });
+    data["native_application"] = json!("not_requested");
+    if matches!(
+        path.as_str(),
+        "provider login" | "provider logout" | "proxy key replace"
+    ) {
+        // These operations request native authorization effects or key revocation,
+        // not only a desired-state edit. Their activation failure remains partial.
+        match crate::service::activate(store, &candidate, &saved).await {
+            Ok(activation) => {
+                data["runtime"] = json!(if activation["activation"] == "not_running" {
+                    "not_running"
+                } else if activation["activation"] == "active" {
+                    "loaded"
+                } else {
+                    "not_loaded"
+                });
+                data["activation"] = activation;
+            }
+            Err(error) => {
+                data["_code"] = json!("saved_not_active");
+                data["runtime"] = json!("not_loaded");
+                data["activation"] = json!({"activation":"failed","error":error});
+            }
+        }
+    } else {
+        super::activate_saved(store, &candidate, &saved, &mut data).await;
+    }
     let autostart = if path.starts_with("proxy autostart ") {
         crate::service::autostart(store, path.ends_with("enable"), false).await
     } else {
         crate::service::reconcile_autostart(store, &candidate, false).await
     };
-    data["file_revision"] = json!(saved);
-    data["save"] = json!(if root == before { "unchanged" } else { "saved" });
-    data["native_application"] = json!("not_requested");
-    match activation {
-        Ok(v) => {
-            let not_running = v["activation"] == "not_running";
-            let failed = v["_code"].as_str().map(str::to_string);
-            data["activation"] = v;
-            data["runtime"] = json!(if not_running {
-                "not_running"
-            } else if failed.is_some() {
-                "not_loaded"
-            } else {
-                "loaded"
-            });
-            if let Some(code) = failed {
-                data["_code"] = json!(code);
-            }
-        }
-        Err(e) => {
-            data["_code"] = json!(if e.code == "restart_required" {
-                "restart_required"
-            } else {
-                "saved_not_active"
-            });
-            data["runtime"] = json!("not_loaded");
-            data["activation_error"] = json!({"code":e.code,"message":e.message});
-        }
-    }
     match autostart {
         Ok(v) => data["autostart"] = v,
         Err(e) => {

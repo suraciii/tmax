@@ -2259,11 +2259,26 @@ async fn native_auth(
         ))
         .stderr(Stdio::from(terminal));
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        cmd.stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+        let (input, mut output) = crate::secrets::native_console_stdio()?;
+        if interactive_ui {
+            let action = if logout {
+                "/logout".to_owned()
+            } else {
+                format!("/login {native_provider}")
+            };
+            crate::secrets::write_console_output(
+                &mut output,
+                &format!(
+                    "tmax selected native scope {}. Complete {action} in the native owner, select only {native_provider}, then exit the native UI. tmax will not import tokens.\r\n",
+                    path.display()
+                ),
+            )?;
+        }
+        cmd.stdin(Stdio::from(input))
+            .stderr(Stdio::from(output.try_clone().map_err(|_| unavailable())?))
+            .stdout(Stdio::from(output));
     }
     logins
         .entries

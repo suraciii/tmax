@@ -934,14 +934,14 @@ pub fn validate(r: &Request) -> Result<()> {
             .arguments
             .get("key-fd")
             .and_then(|v| v.first())
-            .and_then(|s| s.parse::<i32>().ok());
+            .and_then(|s| crate::secrets::parse_descriptor(s));
         let unlock_fd = if r.arguments.contains_key("unlock-stdin") {
             Some(0)
         } else {
             r.arguments
                 .get("unlock-fd")
                 .and_then(|v| v.first())
-                .and_then(|s| s.parse::<i32>().ok())
+                .and_then(|s| crate::secrets::parse_descriptor(s))
         };
         if (key_stdin && r.arguments.contains_key("key-fd"))
             || (r.arguments.contains_key("key-ref") && (key_stdin || key_fd.is_some()))
@@ -955,10 +955,8 @@ pub fn validate(r: &Request) -> Result<()> {
     }
     for key in ["unlock-fd", "key-fd", "output-fd"] {
         if let Some(values) = r.arguments.get(key)
-            && values[0]
-                .parse::<i32>()
-                .ok()
-                .is_none_or(|fd| fd < 0 || (key == "output-fd" && fd < 3))
+            && crate::secrets::parse_descriptor(&values[0])
+                .is_none_or(|fd| key == "output-fd" && fd < 3)
         {
             return Err(Error::new(
                 "invalid_arguments",

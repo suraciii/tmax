@@ -40,6 +40,11 @@ options, or treat a missing value as a default choice.
 | `--unlock-stdin` | Read a protected-store unlock value from stdin only when execution needs it, never for help, ordinary inspection, or dry-run. Explicit `proxy key show` is sensitive retrieval, not inspection. |
 | `--unlock-fd FD` | Platform-qualified unlock input through an inherited readable pipe. `FD` is a nonnegative integer, not a path or secret. |
 
+For qualified pipe operands, `FD` is a genuine descriptor number on Unix and a
+pointer-width inherited native handle value on Windows; zero selects standard
+input. Values must fit that platform's range without truncation. Ordinary
+interactive and Web entry does not require users to supply these values.
+
 Unlock options are mutually exclusive. Without one, use supported platform
 protection or permitted hidden terminal input; otherwise return
 `credential_unavailable` and the required action. Unlock is not management login.
@@ -109,6 +114,12 @@ without importing settings or credentials. State-selecting reads report
 `data.snapshot_state` as `available`, `absent`, or `unavailable`; a missing loaded
 snapshot is not an empty collection. Loaded reads retain the actual loaded view
 even when the saved file is invalid, without activating or repairing it.
+Local desired-state inspection and configuration previews require no resident
+service, credentials, or network. If resident discovery fails, return declared
+local data with loaded/runtime `unavailable` and its reason. Do not turn unknown
+loaded state or affected-session coverage into known absence or an empty complete
+set. Explicit runtime, refresh, revocation, and native effects retain their own
+blockers and failures under [shared outcomes](results/spec.md#outcomes-and-exit-categories).
 Explicit refresh is separate from inspection, sign-in, inference, native import,
 and desired-state edits. Its owning capability defines the permitted effects.
 

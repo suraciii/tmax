@@ -21,6 +21,38 @@ use zeroize::Zeroizing;
 const VERSION: u32 = 1;
 const MAX_INPUT: usize = 1024 * 1024;
 
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::{
+    descriptors_alias, duplicate_fd, open_terminal, qualify_pipe, read_descriptor, read_terminal,
+};
+
+#[cfg(windows)]
+pub(crate) type Descriptor = usize;
+#[cfg(not(windows))]
+pub(crate) type Descriptor = i32;
+
+/// Parse the native protected-channel number without narrowing Windows HANDLEs.
+pub(crate) fn parse_descriptor(text: &str) -> Option<Descriptor> {
+    let descriptor = text.parse::<Descriptor>().ok()?;
+    #[cfg(not(windows))]
+    if descriptor < 0 {
+        return None;
+    }
+    Some(descriptor)
+}
+
+#[cfg(windows)]
+pub(crate) fn native_console_stdio() -> Result<(fs::File, fs::File)> {
+    windows::native_console_stdio()
+}
+
+#[cfg(windows)]
+pub(crate) fn write_console_output(file: &mut fs::File, value: &str) -> Result<()> {
+    windows::write_console_output(file, value)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Owner {
@@ -60,7 +92,7 @@ struct Envelope {
 fn locked() -> Error {
     Error::new(
         "credential_unavailable",
-        "Protected storage is locked or the supplied unlock value is incorrect; supply --unlock-stdin or a separate inherited pipe with --unlock-fd",
+        "Protected storage is locked or the supplied unlock value is incorrect; unlock through ordinary interactive CLI or Web input, or use a qualified separate protected input stream for automation",
     )
 }
 fn unavailable() -> Error {
@@ -118,7 +150,7 @@ pub fn read_protected_input(request: &Request, prefix: &str) -> Result<Vec<u8>> 
 fn has(request: &Request, key: &str) -> bool {
     request.arguments.contains_key(key)
 }
-fn input_selection(request: &Request, prefix: &str) -> Result<Option<i32>> {
+fn input_selection(request: &Request, prefix: &str) -> Result<Option<Descriptor>> {
     let stdin = format!("{prefix}-stdin");
     let fd = format!("{prefix}-fd");
     if has(request, &stdin) && has(request, &fd) {
@@ -139,18 +171,13 @@ fn input_selection(request: &Request, prefix: &str) -> Result<Option<i32>> {
             )
             .field(fd));
         }
-        return values[0]
-            .parse::<i32>()
-            .ok()
-            .filter(|fd| *fd >= 0)
-            .map(Some)
-            .ok_or_else(|| {
-                Error::new(
-                    "invalid_arguments",
-                    "Expected a nonnegative descriptor number",
-                )
-                .field(fd)
-            });
+        return parse_descriptor(&values[0]).map(Some).ok_or_else(|| {
+            Error::new(
+                "invalid_arguments",
+                "Expected a nonnegative descriptor number",
+            )
+            .field(fd)
+        });
     }
     Ok(None)
 }
@@ -183,6 +210,12 @@ pub fn get(store: &Store, reference: &str, unlock: Option<&[u8]>) -> Result<Zero
         .ok_or_else(locked)?;
     let envelope = load(store, "secrets", reference)?;
     decrypt(&envelope, unlock)
+}
+
+/// Check that an encrypted entry can actually benefit from an unlock prompt.
+/// This validates protected metadata without resolving or decrypting its secret.
+pub(crate) fn check_unlock_entry(store: &Store, reference: &str) -> Result<()> {
+    load(store, "secrets", reference).map(|_| ())
 }
 
 pub fn remove(store: &Store, reference: &str) -> Result<()> {
@@ -653,13 +686,13 @@ pub fn detach_owner(store: &Store, kind: &str, id: &str) -> Result<()> {
 pub struct ProtectedOutput {
     file: fs::File,
     terminal: bool,
-    descriptor: Option<i32>,
+    descriptor: Option<Descriptor>,
 }
 impl ProtectedOutput {
     pub fn channel(&self) -> &'static str {
         if self.terminal { "terminal" } else { "pipe" }
     }
-    pub fn descriptor(&self) -> Option<i32> {
+    pub fn descriptor(&self) -> Option<Descriptor> {
         self.descriptor
     }
     pub fn deliver(&mut self, bytes: &[u8]) -> Result<()> {
@@ -671,9 +704,7 @@ pub fn qualify_output(request: &Request) -> Result<ProtectedOutput> {
         if values.len() != 1 {
             return Err(output_error());
         }
-        let fd = values[0]
-            .parse::<i32>()
-            .ok()
+        let fd = parse_descriptor(&values[0])
             .filter(|fd| *fd >= 3)
             .ok_or_else(output_error)?;
         qualify_pipe(fd, false).map_err(|_| output_error())?;
@@ -717,6 +748,10 @@ pub fn deliver(output: &mut ProtectedOutput, bytes: &[u8]) -> Result<()> {
         || bytes.iter().any(|b| *b == b'\n' || *b == b'\r')
     {
         return Err(unavailable());
+    }
+    #[cfg(windows)]
+    if output.terminal {
+        return windows::deliver_terminal(&output.file, bytes);
     }
     output
         .file
@@ -864,6 +899,7 @@ fn read_hidden(file: &mut fs::File) -> Result<Vec<u8>> {
     drop(restore);
     result
 }
+#[cfg(not(windows))]
 fn read_terminal(prompt: &str) -> Result<Vec<u8>> {
     let mut terminal = open_terminal()?;
     terminal
@@ -875,30 +911,30 @@ fn read_terminal(prompt: &str) -> Result<Vec<u8>> {
     result
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn descriptors_alias(_a: i32, _b: i32) -> Result<bool> {
     Err(input_error())
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn qualify_pipe(_fd: i32, _reading: bool) -> Result<()> {
     Err(input_error())
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn duplicate_fd(_fd: i32) -> Result<fs::File> {
     Err(input_error())
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn read_descriptor(_fd: i32, _permit_terminal: bool) -> Result<Vec<u8>> {
     Err(input_error())
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_terminal() -> Result<fs::File> {
     Err(Error::new(
         "interactive_required",
         "This platform requires a supported protected-input channel",
     ))
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn read_hidden(_file: &mut fs::File) -> Result<Vec<u8>> {
     Err(input_error())
 }
@@ -906,7 +942,7 @@ fn read_hidden(_file: &mut fs::File) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn request() -> Request {
+    pub(super) fn request() -> Request {
         Request {
             command: vec![],
             operands: vec![],
@@ -915,6 +951,46 @@ mod tests {
             if_revision: None,
         }
     }
+    #[test]
+    fn descriptor_parser_preserves_native_range() {
+        assert_eq!(parse_descriptor("0"), Some(0));
+        assert_eq!(parse_descriptor("3"), Some(3));
+        assert_eq!(
+            parse_descriptor(&Descriptor::MAX.to_string()),
+            Some(Descriptor::MAX)
+        );
+        for invalid in ["-1", "", "3.0", " 3", "3 ", "18446744073709551616"] {
+            assert_eq!(parse_descriptor(invalid), None);
+        }
+        #[cfg(not(windows))]
+        assert_eq!(parse_descriptor("2147483648"), None);
+        #[cfg(all(windows, target_pointer_width = "64"))]
+        assert_eq!(parse_descriptor("4294967296"), Some(4294967296));
+    }
+
+    #[test]
+    fn invalid_descriptor_selection_keeps_argument_error() {
+        let mut request = request();
+        request.dry_run = true;
+        request
+            .arguments
+            .insert("unlock-fd".into(), vec!["18446744073709551616".into()]);
+        assert_eq!(unlock(&request).unwrap_err().code, "invalid_arguments");
+    }
+
+    #[test]
+    fn output_rejects_reserved_channel_numbers_before_delivery() {
+        for descriptor in ["0", "1", "2", "-1", "18446744073709551616"] {
+            let mut request = request();
+            request
+                .arguments
+                .insert("output-fd".into(), vec![descriptor.into()]);
+            assert!(
+                matches!(qualify_output(&request), Err(error) if error.code == "unsupported_protected_output")
+            );
+        }
+    }
+
     #[test]
     fn protected_input_rejects_ambiguity_without_consumption() {
         let mut request = request();

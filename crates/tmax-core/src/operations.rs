@@ -311,10 +311,19 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             Err(error) => Err(error),
         };
     }
-    let Some(file) = selected(store, r).await? else {
-        return Ok(
-            json!({"state":"loaded","snapshot_state":"absent","reason_code":"no_loaded_snapshot"}),
-        );
+    let file = match selected(store, r).await {
+        Ok(Some(file)) => file,
+        Ok(None) => {
+            return Ok(
+                json!({"state":"loaded","snapshot_state":"absent","reason_code":"no_loaded_snapshot"}),
+            );
+        }
+        Err(error) if arg(r, "state") == Some("loaded") => {
+            return Ok(
+                json!({"state":"loaded","snapshot_state":"unavailable","configuration_revision":null,"reason_code":error.code}),
+            );
+        }
+        Err(error) => return Err(error),
     };
     let config = &file.config;
     if path == "config show" {
@@ -344,7 +353,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             .providers
             .get(id)
             .ok_or_else(|| Error::new("unknown_resource", "Provider is not configured"))?;
-        let loaded = crate::service::loaded(store).await?;
+        let loaded = crate::service::loaded(store).await;
         let endpoint = |c: &Config, revision: &str| -> Value {
             match c.providers.get(id) {
                 Some(p) => {
@@ -355,10 +364,19 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
                 }
             }
         };
+        let loaded_endpoint = match loaded {
+            Ok(Some(loaded)) => endpoint(&loaded.config, &loaded.revision),
+            Ok(None) => {
+                json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"resolution":null,"reason_code":"no_loaded_snapshot"})
+            }
+            Err(error) => {
+                json!({"snapshot_state":"unavailable","configuration_revision":null,"configured":null,"resolution":null,"reason_code":error.code})
+            }
+        };
         let observations = crate::observations::inspect(store, config, id)
             .unwrap_or_else(|error| json!({"state":"unavailable","reason_code":error.code}));
         return Ok(
-            json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded.as_ref().map(|f|endpoint(&f.config,&f.revision)).unwrap_or_else(||json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"resolution":null,"reason_code":"no_loaded_snapshot"}))},"identity":null,"upstream_authentication":"unverified","observations":observations,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
+            json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"identity":null,"upstream_authentication":"unverified","observations":observations,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
         );
     }
     if path == "provider refresh" {
@@ -634,21 +652,140 @@ pub(crate) fn network_view(c: &Config, revision: &str, exists: bool, state: &str
         .and_then(|u| url::Url::parse(u).ok());
     json!({"state":state,"snapshot_state":if exists{"available"}else{"absent"},"policy":{"snapshot_state":if exists{"available"}else{"absent"},"configuration_revision":revision,"configured":n,"effective":{"mode":mode,"proxy_url":u.as_ref().map(url::Url::as_str),"proxy_scheme":u.as_ref().map(url::Url::scheme),"proxy_host":u.as_ref().and_then(url::Url::host_str),"proxy_port":u.as_ref().and_then(|u|u.port().or_else(||match u.scheme(){"http"=>Some(80),"https"=>Some(443),"socks5"=>Some(1080),_=>None}))},"reason_code":if n.is_none(){json!("default_direct")}else{Value::Null}},"future_work_scope":if state=="loaded"{"resident"}else{"independent_cli"}})
 }
+/// Synchronization after a completed desired-state edit is not a second save.
+/// Explicit runtime and revocation operations continue to use strict activation.
+pub(crate) async fn activate_saved(
+    store: &Store,
+    config: &Config,
+    revision: &str,
+    data: &mut Value,
+) {
+    let status = crate::service::status(store).await;
+    let (activation, loaded_revision) = match status {
+        Ok(status) => {
+            let loaded_revision = status["resident"]["identity"]["loaded_revision"].clone();
+            let activation = match status["resident"]["discovery_state"].as_str() {
+                Some("compatible") => crate::service::activate(store, config, revision)
+                    .await
+                    .unwrap_or_else(|error| json!({"activation":"failed","error":error})),
+                Some("absent") => json!({"activation":"not_running","revision":revision}),
+                _ => {
+                    json!({"activation":"unavailable","reason_code":status["resident"]["reason_code"],"discovery_state":status["resident"]["discovery_state"]})
+                }
+            };
+            (activation, loaded_revision)
+        }
+        Err(error) => (
+            json!({"activation":"unavailable","error":error}),
+            Value::Null,
+        ),
+    };
+    project_saved_activation(data, activation, loaded_revision);
+}
+
+fn project_saved_activation(data: &mut Value, mut activation: Value, loaded_revision: Value) {
+    let outcome_code = activation
+        .as_object_mut()
+        .and_then(|object| object.remove("_code"))
+        .filter(|code| code.as_str().is_some_and(|code| !code.is_empty()));
+    if let Some(code) = &outcome_code {
+        activation["code"] = code.clone();
+    }
+    // Discovery/transport failure can occur after the resident accepted the call.
+    // Its previous revision is a before-fact, not proof of the after-state.
+    if matches!(
+        activation["error"]["code"].as_str(),
+        Some(
+            "resident_identity_unavailable"
+                | "resident_incompatible"
+                | "resident_stopping"
+                | "resident_control_path_invalid"
+                | "platform_unavailable"
+        )
+    ) {
+        activation["activation"] = json!("unavailable");
+    }
+    let active = activation["activation"] == "active";
+    let unavailable = activation["activation"] == "unavailable";
+    let not_running = activation["activation"] == "not_running";
+    data["loaded_revision_before"] = loaded_revision;
+    data["loaded_revision_after"] = if active {
+        activation["revision"].clone()
+    } else {
+        // A concurrent activation can replace the sampled before-state even
+        // when this request receives an identified rejection.
+        Value::Null
+    };
+    data["runtime"] = json!(if active {
+        "loaded"
+    } else if not_running {
+        "not_running"
+    } else if unavailable {
+        "unavailable"
+    } else {
+        "not_loaded"
+    });
+    if outcome_code.is_some() || (!active && !not_running) {
+        let reason = activation["error"]["code"]
+            .as_str()
+            .or_else(|| activation["reason_code"].as_str())
+            .or_else(|| outcome_code.as_ref().and_then(Value::as_str))
+            .unwrap_or("saved_not_active");
+        let warning = json!({"code":reason,"message":"Desired changes are committed; background activation did not establish ready runtime use. Do not repeat the edit; inspect runtime state and explicitly reload or restart as required","affected":[]});
+        data.as_object_mut()
+            .unwrap()
+            .entry("warnings")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap()
+            .push(warning);
+        data.as_object_mut().unwrap().entry("boundaries").or_insert_with(|| json!([])).as_array_mut().unwrap().push(json!({"name":"activation","state":if unavailable{"blocked"}else if active{"completed"}else{"failed"},"affected":[],"message":"Desired save completed independently; activation and serving readiness are reported separately"}));
+        if data.get("session_impact").is_none() {
+            data["session_impact"] =
+                json!({"state":"unavailable","reason_code":reason,"sessions":null});
+        }
+        let activation_operation =
+            if matches!(reason, "listener_restart_required" | "restart_required") {
+                "proxy restart"
+            } else {
+                "config reload"
+            };
+        data["next_actions"] = json!([{"code":"inspect_runtime","operation":"status","arguments":[],"message":"Inspect saved and loaded state; do not replay the completed edit"},{"code":"activate_saved","operation":activation_operation,"arguments":[],"message":"After resolving runtime blockers, explicitly activate the current saved configuration"}]);
+    }
+    data["activation"] = activation;
+}
+
 pub(crate) async fn impact(
     store: &Store,
     candidate: &Config,
     file_revision: &str,
     before: Option<&Config>,
 ) -> Result<Value> {
-    let loaded = crate::service::loaded(store).await?;
+    config::validate(candidate)?;
+    let (loaded, loaded_error) = match crate::service::loaded(store).await {
+        Ok(loaded) => (loaded, None),
+        Err(error) => (None, Some(error)),
+    };
     let after = serde_json::to_value(candidate)
         .map_err(|_| Error::new("operation_failed", "Cannot project validated configuration"))?;
     let loaded_value = loaded
         .as_ref()
         .and_then(|f| serde_json::to_value(&f.config).ok());
-    let changes = diff_values(loaded_value.as_ref(), Some(&after), "", "activation");
-    let mut out = json!({"config_impact":{"file_revision_before":file_revision,"file_revision_after":file_revision,"candidate_revision":null,"loaded_revision_before":loaded.as_ref().map(|f|&f.revision),"activation_diff_state":if loaded.is_some(){"complete"}else{"no_loaded_snapshot"},"includes_pending_file_changes":loaded.as_ref().map(|f|f.revision!=file_revision)},"changes":changes,"warnings":[{"code":"external_availability_unverified","message":"Dry-run does not read secrets or verify upstream authorization","affected":[]}],"save":"not_executed","runtime":"not_executed","native_application":"not_requested"});
-    out["session_impact"] = crate::service::preview_activation(store, candidate).await?;
+    let changes = if loaded_error.is_none() {
+        diff_values(loaded_value.as_ref(), Some(&after), "", "activation")
+    } else {
+        vec![]
+    };
+    let mut out = json!({"config_impact":{"file_revision_before":file_revision,"file_revision_after":file_revision,"candidate_revision":null,"loaded_revision_before":loaded.as_ref().map(|f|&f.revision),"activation_diff_state":if loaded_error.is_some(){"unavailable"}else if loaded.is_some(){"complete"}else{"no_loaded_snapshot"},"includes_pending_file_changes":loaded.as_ref().map(|f|f.revision!=file_revision)},"changes":changes,"warnings":[{"code":"external_availability_unverified","message":"Dry-run does not read secrets or verify upstream authorization","affected":[]}],"save":"not_executed","runtime":"not_executed","native_application":"not_requested"});
+    out["session_impact"] = match crate::service::preview_activation(store, candidate).await {
+        Ok(impact) => impact,
+        Err(error) => {
+            json!({"state":"unavailable","reason_code":error.code,"sessions":null,"listener":null})
+        }
+    };
+    if let Some(error) = loaded_error {
+        out["warnings"].as_array_mut().unwrap().push(json!({"code":error.code,"message":"Loaded configuration and complete activation impact are unavailable; local desired changes remain inspectable","affected":[]}));
+    }
     if let Some(before) = before {
         let before = serde_json::to_value(before)
             .map_err(|_| Error::new("operation_failed", "Cannot project prior configuration"))?;
@@ -744,17 +881,19 @@ async fn reset(store: &Store, r: &Request) -> Result<Value> {
     let recovery =
         crate::secrets::protect_recovery(store, &bytes, unlock.as_deref().map(Vec::as_slice))?;
     let document = "version = 1\n".parse().expect("constant TOML");
-    if config::save(store, &expected, &document).is_err() {
-        return Ok(
-            json!({"_code":"saved_not_active","recovery":recovery,"save":"failed","activation":"not_requested"}),
-        );
-    }
+    let revision = match config::save(store, &expected, &document) {
+        Ok(revision) => revision,
+        Err(error) => {
+            return Ok(
+                json!({"_code":"saved_not_active","recovery":recovery,"save":"failed","save_error":error,"activation":"not_requested"}),
+            );
+        }
+    };
     let empty = Config::empty();
-    let revision = config::raw_revision(store)?;
     let activation = crate::service::activate(store, &empty, &revision).await;
     let autostart = crate::service::reconcile_autostart(store, &empty, false).await;
     Ok(
-        json!({"_code":if activation.is_err()||autostart.is_err(){json!("saved_not_active")}else{Value::Null},"recovery":recovery,"save":"saved","file_revision":revision,"activation":activation.ok(),"autostart":autostart.ok(),"native_files":"unchanged","stored_secrets":"retained"}),
+        json!({"_code":if activation.is_err()||autostart.is_err(){json!("saved_not_active")}else{Value::Null},"recovery":recovery,"save":"saved","file_revision":revision,"activation":activation.unwrap_or_else(|error|json!({"activation":"failed","error":error})),"autostart":autostart.unwrap_or_else(|error|json!({"state":"failed","error":error})),"native_files":"unchanged","stored_secrets":"retained"}),
     )
 }
 async fn secret_inventory(store: &Store) -> Result<Value> {
@@ -883,6 +1022,311 @@ mod tests {
         }
     }
     use super::*;
+    fn request(command: &[&str], operands: &[&str], arguments: &[(&str, &[&str])]) -> Request {
+        Request {
+            command: command.iter().map(|value| (*value).into()).collect(),
+            operands: operands.iter().map(|value| (*value).into()).collect(),
+            arguments: arguments
+                .iter()
+                .map(|(key, values)| {
+                    (
+                        (*key).into(),
+                        values.iter().map(|value| (*value).into()).collect(),
+                    )
+                })
+                .collect(),
+            dry_run: false,
+            if_revision: None,
+        }
+    }
+
+    #[test]
+    fn background_failure_preserves_save_success_but_explicit_activation_stays_strict() {
+        let activation = json!({"_code":"saved_not_active","activation":"failed","error":{"code":"listener_restart_required","message":"Explicit restart required"}});
+        let mut saved =
+            json!({"save":"saved","file_revision":"new","native_application":"not_requested"});
+        project_saved_activation(&mut saved, activation.clone(), json!("old"));
+        let response = success_response("provider add", false, saved);
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.body["status"], "success");
+        let data = &response.body["data"];
+        assert_eq!(data["save"], "saved");
+        assert_eq!(data["activation"]["activation"], "failed");
+        assert_eq!(
+            data["activation"]["error"]["code"],
+            "listener_restart_required"
+        );
+        assert_eq!(data["warnings"][0]["code"], "listener_restart_required");
+        assert_eq!(data["loaded_revision_before"], "old");
+        assert!(data["loaded_revision_after"].is_null());
+        assert_eq!(data["boundaries"][0]["state"], "failed");
+        assert!(data["session_impact"]["sessions"].is_null());
+        assert_eq!(data["next_actions"][1]["operation"], "proxy restart");
+        assert_eq!(
+            success_response(
+                "config reload",
+                false,
+                json!({"save":"not_requested","activation":activation.clone()})
+            )
+            .exit_code,
+            4
+        );
+        assert_eq!(
+            success_response(
+                "proxy key replace",
+                false,
+                json!({"save":"saved","activation":activation})
+            )
+            .exit_code,
+            4
+        );
+    }
+
+    #[test]
+    fn background_uncertain_reply_never_claims_the_prior_revision_is_still_loaded() {
+        let mut data = json!({"save":"saved","file_revision":"new"});
+        project_saved_activation(
+            &mut data,
+            json!({"_code":"saved_not_active","activation":"failed","error":{"code":"resident_identity_unavailable"}}),
+            json!("old"),
+        );
+        assert_eq!(data["loaded_revision_before"], "old");
+        assert!(data["loaded_revision_after"].is_null());
+        assert_eq!(data["runtime"], "unavailable");
+        assert_eq!(data["activation"]["activation"], "unavailable");
+        assert_eq!(
+            success_response("provider update", false, data).exit_code,
+            0
+        );
+        let mut stopped = json!({"save":"saved"});
+        project_saved_activation(
+            &mut stopped,
+            json!({"activation":"not_running"}),
+            json!("old"),
+        );
+        assert!(stopped["loaded_revision_after"].is_null());
+        assert_eq!(stopped["runtime"], "not_running");
+    }
+
+    #[test]
+    fn background_concurrent_revision_rejection_reports_no_unproven_after_revision() {
+        // R1 was committed by this edit. Status sampled R0, then another writer
+        // committed and activated R2 before activation of R1 was rejected.
+        let mut saved = json!({"save":"saved","file_revision":"R1"});
+        project_saved_activation(
+            &mut saved,
+            json!({"_code":"saved_not_active","activation":"failed","error":{"code":"inputs_changed"}}),
+            json!("R0"),
+        );
+        let response = success_response("provider update", false, saved);
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.body["status"], "success");
+        assert_eq!(response.body["data"]["file_revision"], "R1");
+        assert_eq!(response.body["data"]["loaded_revision_before"], "R0");
+        assert!(response.body["data"]["loaded_revision_after"].is_null());
+        assert_eq!(
+            response.body["data"]["activation"]["error"]["code"],
+            "inputs_changed"
+        );
+        assert_eq!(
+            response.body["data"]["warnings"][0]["code"],
+            "inputs_changed"
+        );
+    }
+
+    #[test]
+    fn background_confirmed_activation_has_no_failed_runtime_warning_for_edit_or_catalog() {
+        for operation in ["provider update", "catalog apply"] {
+            let mut committed = if operation == "catalog apply" {
+                json!({"catalog_apply":"completed","save":"not_requested"})
+            } else {
+                json!({"save":"saved","file_revision":"R1"})
+            };
+            project_saved_activation(
+                &mut committed,
+                json!({"_code":null,"activation":"active","revision":"R1","serving_state":"stopped"}),
+                json!("R0"),
+            );
+            let response = success_response(operation, false, committed);
+            assert_eq!(response.exit_code, 0);
+            assert_eq!(response.body["code"], "ok");
+            assert_eq!(response.body["status"], "success");
+            let data = &response.body["data"];
+            assert_eq!(data["runtime"], "loaded");
+            assert_eq!(data["activation"]["activation"], "active");
+            assert_eq!(data["loaded_revision_before"], "R0");
+            assert_eq!(data["loaded_revision_after"], "R1");
+            assert!(data.get("warnings").is_none());
+            assert!(data.get("boundaries").is_none());
+            assert!(data.get("session_impact").is_none());
+            assert!(data.get("next_actions").is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn offline_management_saves_and_reads_with_unidentified_runtime_without_false_absence() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        store
+            .write_raw("resident.sock", b"not a resident endpoint")
+            .unwrap();
+        let add = request(
+            &["provider", "add"],
+            &["p"],
+            &[("integration", &["deepseek"])],
+        );
+        let saved = dispatch(&store, &add).await.unwrap();
+        let response = success_response("provider add", false, saved);
+        assert_eq!(response.exit_code, 0);
+        let file = config::load(&store).unwrap();
+        assert!(file.config.providers.contains_key("p"));
+        assert_eq!(response.body["data"]["file_revision"], file.revision);
+        assert_eq!(response.body["data"]["runtime"], "unavailable");
+        assert_eq!(
+            response.body["data"]["activation"]["reason_code"],
+            "resident_identity_unavailable"
+        );
+        assert!(response.body["data"]["loaded_revision_after"].is_null());
+        let bytes = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        let inspect = dispatch(&store, &request(&["provider", "inspect"], &["p"], &[]))
+            .await
+            .unwrap();
+        assert_eq!(inspect["provider"]["integration"], "deepseek");
+        assert_eq!(
+            inspect["endpoints"]["loaded"]["snapshot_state"],
+            "unavailable"
+        );
+        let loaded = dispatch(
+            &store,
+            &request(&["config", "show"], &[], &[("state", &["loaded"])]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(loaded["snapshot_state"], "unavailable");
+        let mut update = request(
+            &["provider", "update"],
+            &["p"],
+            &[("set", &["overrides.name", "local name"])],
+        );
+        update.dry_run = true;
+        let preview = dispatch(&store, &update).await.unwrap();
+        assert_eq!(
+            preview["config_impact"]["activation_diff_state"],
+            "unavailable"
+        );
+        assert!(preview["config_impact"]["includes_pending_file_changes"].is_null());
+        assert!(preview["session_impact"]["sessions"].is_null());
+        assert!(
+            preview["changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|change| change["boundary"] == "file_save")
+        );
+        assert!(!preview["changes"].as_array().unwrap().is_empty());
+        assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), bytes);
+        let reload = dispatch(&store, &request(&["config", "reload"], &[], &[]))
+            .await
+            .unwrap();
+        assert_eq!(
+            success_response("config reload", false, reload).exit_code,
+            4
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("resident.sock")).unwrap(),
+            b"not a resident endpoint"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn offline_management_keeps_security_failures_and_revision_conflicts_explicit() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        store
+            .write_raw("routing-state.json", b"corrupt safety state")
+            .unwrap();
+        let add = request(
+            &["provider", "add"],
+            &["p"],
+            &[("integration", &["deepseek"])],
+        );
+        let data = dispatch(&store, &add).await.unwrap();
+        let response = success_response("provider add", false, data);
+        assert_eq!(response.exit_code, 4);
+        assert_eq!(response.body["status"], "incomplete");
+        assert_eq!(response.body["data"]["save"], "saved");
+        assert_eq!(response.body["data"]["reconciliation"]["state"], "failed");
+        let committed = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        let mut stale = request(
+            &["provider", "update"],
+            &["p"],
+            &[("set", &["enabled", "false"])],
+        );
+        stale.if_revision = Some("stale".into());
+        assert_eq!(
+            dispatch(&store, &stale).await.unwrap_err().code,
+            "inputs_changed"
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            committed
+        );
+        store
+            .write_raw(
+                "tmax.toml",
+                b"version=1\n[proxy]\nlisten='127.0.0.1:12345'\nkey_ref='retained'\n",
+            )
+            .unwrap();
+        store.write_raw("resident.sock", b"unidentified").unwrap();
+        let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        assert_eq!(
+            dispatch(&store, &request(&["proxy", "remove"], &[], &[]))
+                .await
+                .unwrap_err()
+                .code,
+            "resident_identity_unavailable"
+        );
+        assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn offline_management_input_inspection_keeps_declarations_and_runtime_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        store.write_raw("tmax.toml", b"version=1\n[providers.p]\nintegration='deepseek'\n[providers.p.models.m]\n[providers.p.inputs.q]\nkind='quota'\nsource='manual'\nscope='weekly'\nmodels=['m']\nmax_age_seconds=60\n").unwrap();
+        store.write_raw("resident.sock", b"unidentified").unwrap();
+        let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        let inspect = dispatch(
+            &store,
+            &request(&["provider", "input", "inspect"], &["p", "q"], &[]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inspect["input"]["declaration"]["source"], "manual");
+        assert_eq!(inspect["runtime"]["snapshot_state"], "unavailable");
+        assert_eq!(
+            inspect["input"]["current_runtime_use"]["state"],
+            "unavailable"
+        );
+        assert_eq!(inspect["input"]["acquisition"]["state"], "unavailable");
+        let loaded = dispatch(
+            &store,
+            &request(
+                &["provider", "input", "list"],
+                &["p"],
+                &[("state", &["loaded"])],
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(loaded["snapshot_state"], "unavailable");
+        assert!(loaded.get("inputs").is_none());
+        assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), before);
+    }
+
     #[tokio::test]
     async fn incomplete_native_entry_and_alias_advice_exclude_the_same_protocol_that_apply_rejects()
     {

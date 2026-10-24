@@ -155,6 +155,15 @@ another retained loaded incarnation stopped. Use `--state loaded` to inspect it.
 `paused` means automatic acquisition lacks a running service. Due time promises
 neither source freshness nor priority recovery.
 
+Read-only list/inspect results include `runtime = {snapshot_state,
+configuration_revision, reason_code}`. Snapshot state is `available`, `absent`, or
+`unavailable`; unavailable resident discovery is not a stopped service or a known
+missing loaded snapshot. File-state inspection retains its local declaration and
+saved data while qualifying `current_runtime_use` and acquisition as unavailable.
+Loaded-state reads without a retrievable snapshot report absence or unavailability
+explicitly rather than an empty list of declared inputs. Reads never require
+credentials, refresh a source, or start the service.
+
 | Operation | Command-specific `data` |
 | --- | --- |
 | Input list | `provider`, `state`, `snapshot_state`, UTC `at`, `inputs: InputSummary[]`; absent loaded state is explicit, not an empty declared-provider list. |
