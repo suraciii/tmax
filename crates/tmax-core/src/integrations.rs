@@ -323,6 +323,9 @@ pub fn inspect(id: &str) -> Result<Value> {
     if id == "codex-subscription" {
         operations.push(json!({"protocol":"responses","method":"GET","path_template":"/models","transport":"http","requires_original_binding":false,"purpose":"native_model_discovery"}));
     }
+    if id == "deepseek" {
+        operations.push(json!({"protocol":null,"method":"GET","path_template":"/models","url":DEEPSEEK_MODELS_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"model_discovery","source":DEEPSEEK_MODELS_DESTINATION.source,"source_contract":DEEPSEEK_MODELS_DESTINATION.contract}));
+    }
     if id == "opencode-go" {
         operations.push(json!({"protocol":null,"method":"GET","path_template":"/zen/go/v1/usage","url":GO_USAGE_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":GO_USAGE_DESTINATION.source,"source_contract":GO_USAGE_DESTINATION.contract}));
     }
@@ -362,6 +365,12 @@ const GO_USAGE_DESTINATION: ObservationDestination<'static> = ObservationDestina
     contract: "opencode_go_usage_2026_10_23",
 };
 
+const DEEPSEEK_MODELS_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    source: "official_models_api",
+    url: "https://api.deepseek.com/models",
+    contract: "deepseek_models_v1",
+};
+
 pub fn observation_destination(
     provider: &Provider,
     scope: &str,
@@ -373,6 +382,7 @@ pub fn observation_destination(
             url: "https://api.deepseek.com/user/balance",
             contract: "deepseek_balance_v1",
         }),
+        ("deepseek", "models") => Some(DEEPSEEK_MODELS_DESTINATION),
         ("opencode-go", "auth" | "models") => Some(ObservationDestination {
             source: "official_models_api",
             url: "https://opencode.ai/inference/go/v1/models",
@@ -871,6 +881,154 @@ mod tests {
                     let acquired = result.unwrap();
                     assert_eq!(acquired.status, 200);
                     assert_eq!(acquired.data["usage"], go_usage_body()["usage"]);
+                }
+            }
+        }
+    }
+    #[test]
+    fn model_discovery_preserves_exact_ids_and_rejects_invalid_or_excessive_records() {
+        let source = DEEPSEEK_MODELS_DESTINATION.source;
+        let exact = "模型/Exact-ID ";
+        let longest = "m".repeat(512);
+        let normalized = normalize_observation(
+            source,
+            &json!({"data":[{"id":exact,"owned_by":"not-an-account-identity","protocol":"responses"},{"id":longest}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            normalized,
+            json!({"models":[exact,longest],"registered_models":[],"registration":"not_performed"})
+        );
+        assert_eq!(
+            normalize_observation(source, &json!({"data":[]})).unwrap()["models"],
+            json!([])
+        );
+        let mut records = vec![json!({"id":"model"}); 10000];
+        assert_eq!(
+            normalize_observation(source, &json!({"data":records})).unwrap()["models"]
+                .as_array()
+                .unwrap()
+                .len(),
+            10000
+        );
+        records.push(json!({"id":"one-too-many"}));
+        let mut malformed = vec![
+            Value::Null,
+            json!({}),
+            json!({"data":{}}),
+            json!({"data":records}),
+        ];
+        for id in [
+            json!(""),
+            json!("m".repeat(513)),
+            json!("模型".repeat(171)),
+            json!("model\n"),
+            json!("model\u{007f}"),
+            json!(null),
+            json!(42),
+        ] {
+            // One valid record must not turn a malformed list into partial success.
+            malformed.push(json!({"data":[{"id":"valid"},{"id":id}]}));
+        }
+        malformed.push(json!({"data":[{"id":"valid"},{}]}));
+        for body in malformed {
+            assert_eq!(
+                normalize_observation(source, &body).unwrap_err().code,
+                "source_format_error"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_models_transport_authenticates_and_bounds_untrusted_discovery() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::at(dir.path().into());
+        let owner = crate::secrets::owner_tag(&store, "provider", "deepseek-test").unwrap();
+        let key_ref = crate::secrets::put(
+            &store,
+            &owner,
+            b"synthetic-deepseek-key",
+            Some(b"synthetic-unlock"),
+        )
+        .unwrap();
+        let provider = Provider {
+            integration: Some("deepseek".into()),
+            auth: Some(crate::config::Auth::ApiKey { key_ref }),
+            ..Default::default()
+        };
+        let destination = observation_destination(&provider, "models")
+            .unwrap()
+            .unwrap();
+        assert_eq!(destination.url, "https://api.deepseek.com/models");
+        assert_eq!(destination.contract, "deepseek_models_v1");
+        let valid = json!({"data":[{"id":"deepseek-flash","owned_by":"must-not-retain"}]});
+        let mut oversized = valid.clone();
+        oversized["ignored"] = json!("x".repeat(4 * 1024 * 1024));
+        for (status, body, expected) in [
+            (200, valid.to_string(), None),
+            (200, oversized.to_string(), Some("source_format_error")),
+            (200, "not JSON".into(), Some("source_format_error")),
+            (
+                200,
+                json!({"data":[{"id":""}]}).to_string(),
+                Some("source_format_error"),
+            ),
+            (401, "private rejection".into(), Some("upstream_rejection")),
+            (429, "private limit".into(), Some("upstream_rejection")),
+            (302, String::new(), Some("upstream_rejection")),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert!(count > 0 && request.len() + count <= 8192);
+                    request.extend_from_slice(&chunk[..count]);
+                }
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(request.starts_with("get /models http/1.1\r\n"));
+                assert!(request.contains("\r\nauthorization: bearer synthetic-deepseek-key\r\n"));
+                assert!(request.contains("\r\naccept: application/json\r\n"));
+                let response = format!(
+                    "HTTP/1.1 {status} fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nLocation: /must-not-follow\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+            let url = format!("http://{address}/models");
+            let result = acquire_observation(
+                &store,
+                &Config::empty(),
+                &provider,
+                ObservationDestination {
+                    url: &url,
+                    ..destination
+                },
+                Some(b"synthetic-unlock"),
+            )
+            .await;
+            tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+            match expected {
+                Some(code) => {
+                    let error = result.err().unwrap();
+                    assert_eq!(error.code, code);
+                    assert!(!error.to_string().contains("private"));
+                }
+                None => {
+                    let acquired = result.unwrap();
+                    assert_eq!(acquired.status, 200);
+                    assert_eq!(
+                        acquired.data,
+                        json!({"models":["deepseek-flash"],"registered_models":[],"registration":"not_performed"})
+                    );
                 }
             }
         }

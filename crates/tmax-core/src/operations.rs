@@ -88,6 +88,7 @@ fn error_response(operation: &str, error: Error, dry_run: bool) -> Response {
             | "resident_incompatible"
             | "resident_stopping"
             | "resident_identity_unavailable"
+            | "resident_control_path_invalid"
             | "endpoint_occupied"
             | "endpoint_conflict"
             | "active_requests"

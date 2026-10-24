@@ -97,8 +97,9 @@ DeepSeek model identity and billing provenance.
 
 Every declared inference operation requires the selected provider key and exact
 qualified model under the shared native-scope rules. The separate non-inference
-[balance operation](#balance-usage-and-renewal) uses its declared destination,
-not a URL derived from the selected inference base. This contract does not
+[model discovery](#model-discovery) and [balance](#balance-usage-and-renewal)
+operations use their declared destinations, not URLs derived from the selected
+inference base. This contract does not
 declare beta completion, file management, or ID-only response retrieval,
 deletion, or cancellation forwarding. A returned ID or upstream documentation
 for another API does not qualify those operations under
@@ -150,6 +151,25 @@ scope resolve to the selected authorization. A native credential source that
 retains another provider's key must block application until its precedence is
 resolved. A native scope that cannot isolate independently selected providers
 must be reported as shared or blocked, not advertised as per-session isolation.
+
+## Model discovery
+
+A `models` refresh uses the selected provider's bearer API key for
+`GET https://api.deepseek.com/models`. This is a separate non-inference
+destination. Auth and quota refreshes continue to use the official balance
+operation; discovery does not replace either balance observation.
+
+Discovery retains dated, exact model IDs from the response's `data` array.
+Responses are bounded to 4 MiB, 10,000 records, and nonempty IDs of at most
+512 UTF-8 bytes without control characters. Malformed or excessive responses
+fail rather than publish a partial list. Failed refreshes retain the last good
+observation separately from the latest attempt under the shared observation
+lifecycle.
+
+Discovery does not register offerings, mutate the catalog or desired
+configuration, establish account identity or balance, or qualify inference,
+native protocols, agents, or conversation behavior. Authorization replacement
+invalidates observations bound to the previous authorization.
 
 ## Balance, usage, and renewal
 
@@ -224,6 +244,10 @@ success.
 - Setup offers Platform API-key access without a subscription-login choice or a
   fabricated subscription record. Inspection identifies the effective credential
   source and native scope without claiming a refreshable session.
+- Model discovery retains exact IDs without registering offerings or changing
+  catalog metadata. Malformed/excessive responses fail without replacing the
+  last good observation. Auth/quota remain separate balance observations;
+  discovery does not claim model inference, conversation, or account verification.
 - A successful balance query displays separate currency entries and granted,
   topped-up, and total balances without double counting. It shows the observation
   source and time, keeps owner identity unverified, and does not verify a model.
@@ -251,8 +275,12 @@ success.
 ## Official evidence and status
 
 Official documentation was consulted on 2026-10-23. These sources establish
-upstream documentation evidence, not a verified tmax integration. No tmax runtime
-path or supported agent-version range has been verified. Qualification labels
+upstream documentation evidence. On 2026-10-24, provider-authorized non-inference
+model discovery was exercised through the real tmax CLI in an isolated,
+passwd-backed OS account: the official models refresh completed, retained exact
+IDs, and left registered offerings and catalog metadata unchanged. This bounded
+check used no paid inference and establishes no native-agent version range,
+protocol transport, tool, or conversation qualification. Qualification labels
 must follow [the shared support contract](../spec.md#support-contract).
 
 - [First API call](https://api-docs.deepseek.com/) and

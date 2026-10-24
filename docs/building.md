@@ -64,6 +64,16 @@ Safe inventory and recovery metadata remain inspectable while locked. Native
 credential-file handoff is version-qualified, restricted, and explicitly
 disclosed; it is not an export command or token-import feature.
 
+Unix resident unlock and protected Web key/unlock handoff use the standard
+library's owned anonymous pipes, available since Rust 1.87 and within the
+project's Rust 1.88 minimum. Parent pipe ends are close-on-exec; resident launch
+deliberately enables only its FD 3 unlock handoff in the child. Pipe ends are
+closed by their owners, without named plaintext files or secret argv/environment
+values. This follows the standard library's platform guarantees: Linux uses an
+atomic close-on-exec pipe allocation, while the Rust 1.88 macOS implementation
+sets close-on-exec after pipe creation. No stronger atomic-allocation or
+process-wide fork-race guarantee is claimed for that macOS fallback.
+
 Installed native agent versions, effective configuration precedence, and provider
 permission remain independent prerequisites. A successful parser/apply/restore
 check is not a hosted-provider streaming, tool-call, identity, or entitlement
