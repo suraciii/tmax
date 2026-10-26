@@ -411,7 +411,8 @@ prerequisites. One target may contain both upstream-source and gateway-source
 native entries; neither is a target-wide operating mode.
 
 The independent model gateway derives concrete mappings from enabled
-provider/model definitions and their declared supported protocols. The public
+provider/model definitions and the provider's resolved protocol endpoints under
+[endpoint resolution](../integrations/spec.md#endpoint-resolution). The public
 ID is the model's qualified `provider-id/model-id`; requesting it fixes that
 model and its upstream authorization. Do not create a redundant route or
 `gateway.models` resource. Every holder of the current shared gateway key uses this

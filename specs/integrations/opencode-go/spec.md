@@ -75,10 +75,10 @@ separates these bases:
 | Go subscription access | `https://opencode.ai/inference/go` |
 | Console pay-as-you-go | `https://opencode.ai/inference` |
 
-The integration must qualify the exact model, native protocol, endpoint, agent
-version, and transport together. A Go catalog entry does not support every Go
-protocol. The known map under the
-[shared endpoint resolver](../spec.md#endpoint-resolution) is:
+Evidence of support must identify the exact model, native protocol, endpoint,
+agent version, and transport together. This evidence is informational; model
+protocol availability follows [endpoint resolution](../spec.md#endpoint-resolution).
+The known map under that resolver is:
 
 | Region ID | Native protocol | Exact protocol base | Declared inference operation beneath that base |
 | --- | --- | --- | --- |
@@ -94,20 +94,12 @@ tmax agent target or qualify every model for every listed operation.
 
 The model table in the
 [Go documentation](https://opencode.ai/v2/docs/console/go/#endpoints) lists
-`deepseek-v4.1-flash` at
-`https://opencode.ai/inference/go/openai/v1/chat/completions`. This is a
-Chat Completions setup scenario. It must not be advertised as a Codex Responses
-route merely because the model is available on Go.
-
-The harness overview and Codex guide also refer to Responses support for
-“DeepSeek V4.” That family-level statement does not establish the exact
-`deepseek-v4.1-flash` Responses endpoint. The general Inference API description
-and harness guidance also differ on whether a model can accept several APIs.
-Where the exact model/protocol evidence conflicts or remains ambiguous, tmax must
-show that combination as unknown and block unsupported application or dispatch.
-It must not resolve the conflict by guessing paths, translating protocols, or
-broadening one model's qualified API to an entire family. Other independently
-qualified model/protocol combinations must remain available.
+`deepseek-v4.1-flash` at the Chat Completions endpoint. The harness overview and
+Codex guide also describe Responses support for DeepSeek V4. A table listing one
+API does not restrict a model to that API. tmax must not impose a model-specific
+protocol whitelist or turn incomplete qualification evidence into a dispatch or
+native-configuration blocker. Use the selected protocol's resolved endpoint and
+preserve the upstream result without translation or implicit protocol changes.
 
 The separately declared discovery operation is
 `GET https://opencode.ai/inference/go/v1/models` for the selected workspace key.
@@ -326,7 +318,7 @@ Go-specific error codes or undocumented management APIs.
 | Key lacks inference permission, or effective workspace access changed | Show the denied capability and the known upstream reason. Console documents HTTP `403` for requests outside key permissions. Ask the user to review Console access or supply an authorized key. A successful catalog read must not hide the inference failure. |
 | Wrong workspace, absent Go entitlement, or an unqualified key kind | Show that Go access is unavailable or unverified with the known scope. Do not infer a Go-specific status code, buy a subscription, switch to pay-as-you-go, or select another workspace key silently. |
 | Missing or incomplete session/client identity | Block the affected setup or request path. Identify the agent version, transport, or auxiliary path that lacks coverage. Offer an upgrade or a qualified native/direct/forwarding configuration, not a forged user agent or static session header. A gateway forward to Go must still mint its own per-conversation attribution id when the client supplied no session header. |
-| Model/protocol mismatch or conflicting endpoint evidence | Keep that combination unavailable or unknown. Identify the exact model and requested protocol. Require a qualified compatible model/path; do not translate requests or silently change the model. |
+| Provider-reported model/protocol mismatch | Preserve the upstream rejection and identify the requested model and protocol. Incomplete local qualification evidence alone does not block a configured protocol. Do not translate requests or silently change the model. |
 | Provider-reported quota or billing denial | Preserve the reported cause, affected model/window, and any supplied reset information; direct the user to Console. Do not infer a different billing cause from HTTP status alone or query Console budgets to explain it. A depleted included allowance is not by itself proof that all Go access is blocked. |
 | Generic rate limit, network failure, or ambiguous upstream rejection | Preserve the scoped failure and any supplied recovery information. Do not mark the subscription depleted, revoked, or expired without supporting evidence. |
 | Shared native account switch, lost session binding, or changed workspace authorization during continuation | Block unsafe continuation and show the affected target/session. Restore the qualified original selection where possible or require an explicit new conversation under the chosen provider; do not transfer upstream conversation state to another workspace. |
@@ -346,9 +338,10 @@ Go-specific error codes or undocumented management APIs.
    inference base. Undeclared methods, paths, and transports remain unavailable.
    A second OpenCode saved key cannot silently switch existing consumers.
    Shared environment names do not substitute one workspace key for another.
-4. `deepseek-v4.1-flash` retains its documented Chat Completions scenario.
-   Ambiguous Responses claims remain unknown until qualified for that exact model.
-   Codex cannot gain access by translating that Chat Completions endpoint.
+4. `deepseek-v4.1-flash` has no model-specific protocol whitelist. Its registered
+   model may use any resolved provider protocol endpoint without prior tmax
+   qualification. The upstream accepts or rejects the exact combination; Codex
+   still speaks Responses and cannot gain access through Chat translation.
 5. Every advertised direct or gateway path retains truthful client identification
    and stable conversation identity across main, auxiliary, streaming, tool, and
    continuation requests. Missing native session coverage blocks the affected
@@ -483,10 +476,9 @@ Agent-project evidence, not additional OpenCode endorsement:
   successful Go inference.
 - [omp Go route resolution](https://github.com/can1357/oh-my-pi/blob/7414b7c919b59dd14db354a8f6b9164426237dff/packages/catalog/src/provider-models/openai-compat.ts):
   `createOpenCodeApiResolution` defaults to `openai-completions` and applies
-  per-ID pins from the `api-routes` behavior rules. `deepseek-v4.1-flash` is not
-  pinned to Responses, which agrees with this contract's Chat Completions
-  scenario for that exact ID. Source inspection does not qualify the Go
-  endpoint itself.
+  per-ID pins from the `api-routes` behavior rules. That client's default is not
+  an upstream protocol restriction or a tmax model allowlist. Source inspection
+  does not qualify the Go endpoint itself.
 
 Agent-project evidence, not additional OpenCode endorsement:
 

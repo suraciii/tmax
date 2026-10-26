@@ -33,7 +33,6 @@ impl Context<'_> {
         &self,
         config: &Config,
         provider_id: &str,
-        model: &str,
         protocol: &str,
         public_id: &str,
     ) -> Result<()> {
@@ -49,28 +48,10 @@ impl Context<'_> {
         }
         let provider = &config.providers[provider_id];
         let integration = crate::integrations::integration_id(provider)?;
-        if !crate::integrations::protocols(provider, model)?
-            .iter()
-            .any(|p| p == protocol)
-        {
-            return Err(Error::new(
-                "incompatible",
-                "Selected upstream model does not declare the native protocol",
-            ));
-        }
         if !crate::integrations::resolve(provider)?.contains_key(protocol) {
             return Err(Error::new(
                 "incompatible",
                 "The upstream integration has no endpoint for this native protocol",
-            ));
-        }
-        if integration == "opencode-go"
-            && model == "deepseek-v4.1-flash"
-            && protocol != "chat-completions"
-        {
-            return Err(Error::new(
-                "compatibility_unavailable",
-                "Exact OpenCode Go DeepSeek Flash Responses support is unknown; documented Chat Completions remains available",
             ));
         }
         if self.gateway {
@@ -150,9 +131,7 @@ impl Context<'_> {
             .find(|a| a.id == id && a.protocol == protocol && a.enabled)
         {
             let mut failure = None;
-            let mut supports = |provider: &str, model: &str| match self
-                .assess(config, provider, model, protocol, id)
-            {
+            let mut supports = |provider: &str| match self.assess(config, provider, protocol, id) {
                 Ok(()) => true,
                 Err(error) => {
                     failure = Some(error);
@@ -160,8 +139,8 @@ impl Context<'_> {
                 }
             };
             for candidate in &alias.candidates {
-                let (provider, model) = config::qualified(candidate)?;
-                if supports(provider, model) {
+                let (provider, _) = config::qualified(candidate)?;
+                if supports(provider) {
                     return Ok(());
                 }
             }
@@ -172,9 +151,9 @@ impl Context<'_> {
                 )
             }));
         }
-        let (provider, model) = config::qualified(id)?;
+        let (provider, _) = config::qualified(id)?;
         config::model(config, id)?;
-        self.assess(config, provider, model, protocol, id)
+        self.assess(config, provider, protocol, id)
     }
 
     pub(crate) fn login_provider(&self, provider: &Provider) -> Result<Option<&'static str>> {

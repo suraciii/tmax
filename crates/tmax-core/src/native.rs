@@ -950,13 +950,7 @@ async fn entries(
                         "Native upstream model is disabled",
                     ));
                 }
-                requirements.assess(
-                    config,
-                    provider_id,
-                    &selected.id,
-                    &selected.protocol,
-                    &selected.id,
-                )?;
+                requirements.assess(config, provider_id, &selected.protocol, &selected.id)?;
                 if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
                     let projection = crate::catalog::effective_from_snapshot(
                         metadata.as_ref(),
@@ -1062,7 +1056,7 @@ async fn entries(
                     let (p, model) = config::model(config, &m.id)?;
                     if !p.enabled
                         || !model.enabled
-                        || !crate::integrations::protocols(p, model_id)?
+                        || !crate::integrations::protocols(p)?
                             .iter()
                             .any(|p| p == &m.protocol)
                     {

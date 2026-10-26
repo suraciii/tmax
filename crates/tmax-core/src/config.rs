@@ -643,7 +643,7 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
             }
         }
         if let Ok((p, _)) = model(config, &a.id)
-            && crate::integrations::protocols(p, qualified(&a.id)?.1)?.contains(&a.protocol)
+            && crate::integrations::protocols(p)?.contains(&a.protocol)
         {
             return Err(invalid("model_aliases.id"));
         }

@@ -424,7 +424,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         if let Ok((p, m)) = config::model(config, id) {
             let metadata =
                 crate::catalog::effective(store, p, Some((config::qualified(id)?.1, m)))?;
-            let protocols = crate::integrations::protocols(p, config::qualified(id)?.1)?;
+            let protocols = crate::integrations::protocols(p)?;
             let native_projection =
                 crate::native::reasoning_projection(&metadata["effective"], &protocols);
             return Ok(
@@ -518,7 +518,7 @@ fn model_list(config: &Config, r: &Request) -> Result<Value> {
                 continue;
             }
             for (mid, m) in &p.models {
-                let protocols = crate::integrations::protocols(p, mid)?;
+                let protocols = crate::integrations::protocols(p)?;
                 if arg(r, "protocol").is_some_and(|proto| !protocols.iter().any(|p| p == proto)) {
                     continue;
                 }

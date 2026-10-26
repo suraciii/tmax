@@ -209,29 +209,20 @@ pub fn inference_protocol(method: &str, path: &str, query: Option<&str>) -> Opti
         .contains(&query)
         .then_some(protocol)
 }
-pub fn protocols(provider: &Provider, model_id: &str) -> Result<Vec<String>> {
-    let mut p: Vec<_> = resolve(provider)?.into_keys().collect();
-    if integration_id(provider)? == "opencode-go" && model_id == "deepseek-v4.1-flash" {
-        p.retain(|p| p == "chat-completions");
-    }
-    Ok(p)
+pub fn protocols(provider: &Provider) -> Result<Vec<String>> {
+    Ok(resolve(provider)?.into_keys().collect())
 }
-pub fn check_request(
-    provider: &Provider,
-    model_id: &str,
-    protocol: &str,
-    body: &Value,
-) -> Result<()> {
+pub fn check_request(provider: &Provider, protocol: &str, body: &Value) -> Result<()> {
     if protocol == "responses" && body.get("background").and_then(Value::as_bool) == Some(true) {
         return Err(Error::new(
             "capability_incompatible",
             "Background execution is not a declared operation for this integration",
         ));
     }
-    if !protocols(provider, model_id)?.iter().any(|p| p == protocol) {
+    if !resolve(provider)?.contains_key(protocol) {
         return Err(Error::new(
-            "model_unavailable",
-            "This exact model and native protocol combination is not qualified",
+            "endpoint_unavailable",
+            "This provider has no endpoint for the requested native protocol",
         ));
     }
     if integration_id(provider)? == "deepseek"
@@ -337,7 +328,7 @@ pub fn inspect(id: &str) -> Result<Value> {
         vec!["api-key"]
     };
     Ok(
-        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"regions":r.into_iter().map(|(id,endpoints)|json!({"id":id,"endpoints":endpoints})).collect::<Vec<_>>(),"operations":operations},"login_sources":crate::native::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","deepseek-v4.1-flash Responses remains unqualified","Quota GET provides consumed-only percentages and reset announcements, with unqualified freshness and no priority-rule inputs; renewal remains unknown (Console or explicit manual information)" ]),"kimi-coding-plan"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),_=>json!([])}}),
+        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"regions":r.into_iter().map(|(id,endpoints)|json!({"id":id,"endpoints":endpoints})).collect::<Vec<_>>(),"operations":operations},"login_sources":crate::native::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","Quota GET provides consumed-only percentages and reset announcements, with unqualified freshness and no priority-rule inputs; renewal remains unknown (Console or explicit manual information)" ]),"kimi-coding-plan"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),_=>json!([])}}),
     )
 }
 pub async fn refresh(

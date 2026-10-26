@@ -97,6 +97,9 @@ An agent target may contain both upstream provider entries and a tmax gateway en
 where its native capabilities permit. Neither capability requires use of the other.
 The gateway must perform same-protocol forwarding only. It must not translate
 Responses, Chat Completions, or Anthropic Messages into one another.
+Model protocol availability follows configured provider endpoints under
+[endpoint resolution](../integrations/spec.md#endpoint-resolution), not a
+per-model qualification whitelist.
 
 Team administration, remote gateway sharing, subscription purchase/cancellation,
 and payment execution are outside this product scope. Selection must stay within

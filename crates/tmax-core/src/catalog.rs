@@ -250,8 +250,7 @@ fn adoption_impact(
     let mut routes = Vec::new();
     for name in models.keys() {
         let (provider, _) = crate::config::model(config, name)?;
-        let (_, model_id) = crate::config::qualified(name)?;
-        for protocol in crate::integrations::protocols(provider, model_id)? {
+        for protocol in crate::integrations::protocols(provider)? {
             routes.push(json!({"kind":"concrete","id":name,"protocol":protocol,"effect":"metadata_changed"}));
         }
     }
