@@ -85,7 +85,7 @@ Secret handling follows the
 [product authentication contract](../../product/spec.md#providers-and-authentication),
 not the guide's setup script or plaintext-key example.
 
-Stock pi, omp, OpenCode, and Hermes Agent must select one of these native surfaces
+Stock pi, omp, OpenCode, Hermes Agent, and DSH must select one of these native surfaces
 under the [shared agent and qualification boundaries](../spec.md#agent-boundaries).
 
 The [Anthropic compatibility table](https://api-docs.deepseek.com/guides/anthropic_api)

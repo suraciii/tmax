@@ -3456,4 +3456,73 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn omp_chat_history_can_use_stateless_alias_but_not_session_or_remote_state() {
+        let (_temporary, runtime, config) = fixture();
+        let mut stateless = config.clone();
+        stateless.model_aliases[0].continuity = Some("stateless".into());
+        publish(&runtime, &config, &stateless, "omp-stateless");
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "omp/18.12.6".parse().unwrap());
+        let body = json!({"messages":[
+            {"role":"user","content":"first"},
+            {"role":"assistant","content":"answer"},
+            {"role":"user","content":"continue"}
+        ]});
+        let choice = runtime
+            .choose(
+                &test_snapshot(&stateless, "omp-stateless"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(choice.selection.provider, "p");
+        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+        let error = runtime
+            .choose(
+                &test_snapshot(&config, "omp-session"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                Utc::now(),
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "session_identity_unavailable");
+        for rejected in [
+            json!({"messages":[]}),
+            json!({"messages":[{"role":"user","content":"x"}],"previous_response_id":"resp_1"}),
+        ] {
+            let error = runtime
+                .choose(
+                    &test_snapshot(&stateless, "omp-stateless"),
+                    "dynamic",
+                    "chat-completions",
+                    &rejected,
+                    &headers,
+                    Utc::now(),
+                )
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "independent_context_required");
+        }
+        headers.insert("x-session-id", "unqualified-session".parse().unwrap());
+        let error = runtime
+            .choose(
+                &test_snapshot(&stateless, "omp-stateless"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                Utc::now(),
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "independent_context_required");
+    }
 }

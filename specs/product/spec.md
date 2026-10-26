@@ -65,7 +65,7 @@ invariants, executes requested changes, and reports evidence. It must not embed
 an assistant, infer an operation sequence, or require a wizard or approval system.
 
 Native configuration management must support Codex, stock pi, omp, OpenCode,
-and Hermes Agent as distinct Agents. This list does not restrict which
+Hermes Agent, and DeepSeek Harness (DSH) as distinct Agents. This list does not restrict which
 assistant may call tmax. The initial provider scope includes
 [Codex subscription access](../integrations/codex-subscription/spec.md),
 [OpenCode Go](../integrations/opencode-go/spec.md),
@@ -960,7 +960,7 @@ versions and provider-authorized credentials where a provider request is needed:
    Preserve them across same-identity key replacement and sign-out. Show API-billed
    access without a subscription. Multiple targets, routes, or authorizations for
    one upstream identity must not duplicate its quota or inherit another identity's observations.
-3. Configure and restore each of Codex, pi, omp, OpenCode, and Hermes without
+3. Configure and restore each of Codex, pi, omp, OpenCode, Hermes, and DSH without
    overwriting unrelated or concurrently changed configuration.
 4. Use an upstream native entry while tmax is stopped, and a gateway entry while
    the browser is closed. Configure both entries in one supported native target.

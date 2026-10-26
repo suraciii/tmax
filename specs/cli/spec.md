@@ -60,7 +60,7 @@ Uppercase words are operands; brackets mark optional syntax; `...` permits repet
 
 | Operand | Contract |
 | --- | --- |
-| `AGENT` | `codex`, `pi`, `omp`, `opencode`, or `hermes` for native-agent management; skill installation accepts only `hermes`, with omission selecting shared `.agents` skills. This is not a restriction on calling agents. |
+| `AGENT` | `codex`, `pi`, `omp`, `opencode`, `hermes`, or `dsh` for native-agent management; skill installation accepts only `hermes`, with omission selecting shared `.agents` skills. This is not a restriction on calling agents. |
 | `TARGET` | Exact named native installation/profile/configuration scope; context selectors use `--target`. |
 | `P` | `chat-completions`, `responses`, or `messages`. |
 | `STATE` | `file` or `loaded`; default `file`. |

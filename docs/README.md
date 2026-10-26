@@ -8,14 +8,14 @@ Contracts live in [../specs/](../specs/AGENTS.md). Engineering practices live in
 
 ## Guides
 
-- [CLI usage](usage.md) — provider/model setup, manual input and rule previews, gateway-only use, and the explicit Pi apply/restore path.
+- [CLI usage](usage.md) — provider/model setup, manual input and rule previews, gateway-only use, and explicit Pi/DSH apply/restore paths.
 - [Local Web workspace](web.md) — task pages, explicit effects, protected inputs,
   and browser verification.
 - [Building and verification](building.md) — dependencies, build commands, the
   verification gates, and the evidence format.
 - [Native agent configuration references](agents/README.md) — version-qualified
   model fields, native authentication ownership, scopes, and isolated evidence
-  for stock pi, omp, Codex CLI, OpenCode V2, and Hermes Agent.
+  for stock pi, omp, Codex CLI, OpenCode V2, Hermes Agent, and DeepSeek Harness.
 
 ## Evidence
 

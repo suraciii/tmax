@@ -138,6 +138,12 @@ or prove that every current model works with a particular installed version.
 The omp project establishes an agent capability, not OpenCode endorsement or
 inclusion in Go's validated-client list.
 
+DSH's source-qualified generic protocol adapter is not a qualified direct Go
+client: no genuine DSH Go session-header mechanism is established. A configured
+key/base or shared pi-ai dependency cannot substitute for that evidence. DSH
+gateway requests with unknown native context require separate qualification;
+static session IDs and spoofed client User-Agents remain prohibited.
+
 Selecting a tmax provider must select its actual workspace key. Where a native
 provider has one shared active key or account, two local tmax provider IDs do not
 create isolation. The adapter must use supported credential pinning or isolated

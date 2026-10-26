@@ -118,12 +118,14 @@ target IDs; reused IDs do not select predecessor records. Exact-handle recovery
 works from the sole home with absent/invalid config without activating it.
 
 Apply rejects missing required selections or unavailable credentials and known
-incompatible schemas. Pi, OMP, OpenCode, and Hermes do not require a default
-selection: applying model entries alone preserves native defaults and unselected
-roles. Separate settings files are not created or edited without selected
+incompatible schemas. Pi, OMP, OpenCode, Hermes, and DSH do not require a default
+selection: applying model entries alone writes no defaults or unselected roles.
+For DSH, preservation applies to HOME-level settings, not automatic import of
+shadowed profile configuration. Separate settings files are not created or edited without selected
 defaults/roles. Codex requires a default because its review model shares the
-active provider. Each target receives its own credential handoff in its scope;
-no target depends on another tool's credential file. Hermes uses its native
+active provider. Each target receives its own credential handoff in its native
+scope; DSH uses the target home's adjacent `.credentials.yaml`, shared by native
+profiles using that home, not another tool's credential file. Hermes uses its native
 `api_key` field in current-user-restricted `config.yaml`; inspection and preview
 disclose the inline plaintext handoff without returning the value. Apply removes
 competing key commands/environment references only from the selected providers,
@@ -133,6 +135,19 @@ existing entry, changed fields are captured for restore, and unrelated fields
 remain intact. It does not import native settings into desired configuration.
 Conflicting ownership by another tmax target and later edits to owned fields
 remain blockers.
+DSH directly configures its existing home through `cordis.patch.yml`, never
+profile files or launcher-owned `cordis.yml`. Discovery uses nonblank `DSH_HOME`,
+otherwise the OS home directory's `.dsh`; an explicit scope selects the home
+directly. tmax does not enumerate, select, create, or manage DSH profiles or
+inspect bundles. Home entry `config` replaces the complete lower-layer entry
+configuration rather than deep-merging profile routes or defaults. Existing
+HOME-level fields and expressions are preserved. Model-only application writes
+no `agent-default-model` entry or reasoning preferences; an explicit default
+changes provider/model only, retaining existing HOME-level effort settings.
+Credential handoff enables the native credential service in the HOME patch,
+including for headless consumption. Runtime overlays remain outside tmax's
+ownership. See the [DSH home boundary](../../integrations/spec.md#dsh-home-boundary).
+
 Upstream entries use their referenced endpoints/auth and need no running tmax
 gateway or model aliases. Gateway entries use its local URL and the current shared
 key, requiring the matching ready listener and loaded snapshot. Start explicitly

@@ -691,6 +691,18 @@ stateless or fixed-concrete paths may remain usable. An unknown client is not
 qualified merely because `stateless` was requested. The gateway must not infer
 session identity from prompt text or reconstruct conversation history.
 
+OMP 18.12.6 Chat Completions requests with complete message history and no
+session headers may use an explicitly stateless alias. This qualification
+must not establish a session binding or accept upstream-owned continuation
+state. Other OMP versions and protocols remain unqualified for this path.
+
+DSH 0.2.1-rc.2 requests with its qualified native User-Agent, complete independent
+input, and no session headers may use explicitly stateless aliases on Chat
+Completions, Responses, or Messages. Responses additionally requires `store:
+false` and no upstream-owned continuation. This establishes no reusable session
+identity; session-required aliases and provider client/session restrictions
+remain separate requirements. Other DSH versions remain unqualified.
+
 ## Agent model configuration and user experience
 
 Priority metadata must remain visible when configuring native upstream entries.
@@ -725,7 +737,7 @@ effective capabilities, base/effective priority, calendar fallback, and the
 all supported native protocols unless explicitly filtered; inference and agent
 selection still require an explicit protocol. It reports each agent's capability
 projection under `native_projection`, keyed by `pi`, `omp`, `opencode`, `codex`,
-and `hermes`. The `opencode` entry adds a `protocols` map keyed by the model's
+`hermes`, and `dsh`. The `opencode` entry adds a `protocols` map keyed by the model's
 actual published protocols, each with the same projection shape, while its top
 level uses the first published protocol. The
 [agent result contract](../cli/agents/spec.md#agent-result-data)

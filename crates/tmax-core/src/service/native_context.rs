@@ -93,6 +93,11 @@ pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Con
         "opencode"
     } else if ua == "HermesAgent/0.22.1" {
         "hermes"
+    } else if ua == "omp/18.12.6" && protocol == "chat-completions" {
+        "omp"
+    } else if ua == "deepseek-harness/0.2.1-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)"
+    {
+        "dsh"
     } else {
         return None;
     };
@@ -100,6 +105,11 @@ pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Con
         .get("x-opencode-session")
         .and_then(|v| v.to_str().ok());
     let affinity = headers.get("x-session-id").and_then(|v| v.to_str().ok());
+    // Qualified OMP Chat and DSH requests carry complete independent history.
+    // This qualifies stateless context only, not a session-header lifecycle.
+    if matches!(family, "omp" | "dsh") && (opencode.is_some() || affinity.is_some()) {
+        return None;
+    }
     if opencode.zip(affinity).is_some_and(|(a, b)| a != b) {
         return None;
     }
@@ -277,6 +287,42 @@ mod tests {
             "chat-completions",
             now - chrono::Duration::seconds(1),
             now
+        ));
+    }
+    #[test]
+    fn dsh_stateless_context_never_becomes_a_session_binding() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "user-agent",
+            "deepseek-harness/0.2.1-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)"
+                .parse()
+                .unwrap(),
+        );
+        for (protocol, body) in [
+            (
+                "chat-completions",
+                json!({"messages":[{"role":"user","content":"x"}]}),
+            ),
+            (
+                "messages",
+                json!({"messages":[{"role":"user","content":"x"}]}),
+            ),
+            ("responses", json!({"input":"x","store":false})),
+        ] {
+            let context = identify(&headers, &body, protocol).unwrap();
+            assert!(context.session.is_none());
+            assert!(independent(protocol, &body));
+            let mut with_session = headers.clone();
+            with_session.insert("x-session-id", "unqualified".parse().unwrap());
+            assert!(identify(&with_session, &body, protocol).is_none());
+        }
+        assert!(!independent(
+            "responses",
+            &json!({"input":"x","store":true})
+        ));
+        assert!(!independent(
+            "responses",
+            &json!({"input":"x","store":false,"previous_response_id":"remote"})
         ));
     }
     #[test]

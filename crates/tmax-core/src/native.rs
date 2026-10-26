@@ -11,6 +11,7 @@ mod adapters;
 pub(crate) mod browser_login;
 pub(crate) mod compatibility;
 mod document;
+mod dsh_patch;
 pub use adapters::supported_roles;
 
 use crate::{
@@ -27,6 +28,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Write,
     path::{Component, Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -44,7 +46,7 @@ pub(crate) fn reasoning_projection(effective: &Value, protocols: &[String]) -> V
         })
     };
     Value::Object(
-        ["pi", "omp", "opencode", "codex", "hermes"]
+        adapters::AGENTS
             .into_iter()
             .map(|agent| {
                 let mut projection = view(
@@ -401,6 +403,9 @@ fn native_command(agent: &str, scope: &Path) -> Result<tokio::process::Command> 
         "hermes" => {
             cmd.env("HERMES_HOME", scope);
         }
+        "dsh" => {
+            cmd.env("DSH_HOME", scope);
+        }
         _ => return Err(Error::new("unsupported_agent", "Unknown native adapter")),
     }
     Ok(cmd)
@@ -635,8 +640,87 @@ fn default_scope(store: &Store, agent: &str) -> PathBuf {
             .unwrap_or_else(|| store.home.join(".config"))
             .join("opencode"),
         "hermes" => store.home.join(".hermes"),
+        "dsh" => dsh_home(store),
         _ => PathBuf::new(),
     }
+}
+fn dsh_home(store: &Store) -> PathBuf {
+    std::env::var_os("DSH_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| store.home.join(".dsh"))
+}
+struct DshCredentialsLock {
+    path: PathBuf,
+}
+impl DshCredentialsLock {
+    fn acquire(home: &Path) -> Result<Self> {
+        let path = home.join(".credentials.yaml.lock");
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists
+                || fs::symlink_metadata(&path).is_ok()
+            {
+                Error::new(
+                    "native_credentials_busy",
+                    "DSH credentials have an existing writer lock; retry after its owner releases it",
+                )
+            } else {
+                unavailable()
+            }
+        })?;
+        let guard = Self { path };
+        let written = writeln!(file, "{}", std::process::id());
+        drop(file);
+        written.map_err(|_| unavailable())?;
+        Ok(guard)
+    }
+}
+impl Drop for DshCredentialsLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+fn dsh_credential_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    if path.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        if fs::symlink_metadata(path)
+            .map_err(|_| unavailable())?
+            .permissions()
+            .mode()
+            & 0o077
+            != 0
+        {
+            return Err(Error::new(
+                "unsafe_native_file",
+                "DSH credentials require owner-only permissions; no broader credential document was read",
+            ));
+        }
+    }
+    Ok(())
+}
+fn dsh_preflight(home: &Path) -> Result<()> {
+    let credentials = home.join(".credentials.yaml");
+    dsh_credential_permissions(&credentials)?;
+    if let Some(text) = read_native(&credentials)? {
+        let current = document::parse(&text, Format::Yaml)?;
+        if current.as_object().is_some_and(|object| !object.is_empty())
+            && current.get("version") != Some(&json!(1))
+        {
+            return Err(Error::new(
+                "native_schema_incompatible",
+                "DSH credential document must use version 1; migrate it through DSH first",
+            ));
+        }
+    }
+    Ok(())
 }
 fn configuration_files(agent: &str, path: &Path) -> Vec<PathBuf> {
     let names: &[&str] = match agent {
@@ -651,6 +735,7 @@ fn configuration_files(agent: &str, path: &Path) -> Vec<PathBuf> {
         ],
         "opencode" => &["opencode.jsonc", "opencode.json"],
         "hermes" => &["config.yaml"],
+        "dsh" => &["cordis.patch.yml"],
         _ => &[],
     };
     names.iter().map(|n| path.join(n)).collect()
@@ -660,6 +745,7 @@ fn auth_paths(agent: &str, path: &Path) -> Vec<PathBuf> {
         "codex" | "pi" | "hermes" => vec![path.join("auth.json")],
         "omp" => vec![path.join("auth.json"), path.join("agent.db")],
         "opencode" => vec![path.join("opencode.db")],
+        "dsh" => vec![path.join(".credentials.yaml")],
         _ => vec![],
     }
 }
@@ -713,7 +799,7 @@ pub async fn discover(store: &Store, agent: Option<&str>, path: Option<&str>) ->
     if agent.is_some_and(|a| !adapters::AGENTS.contains(&a)) {
         return Err(Error::new(
             "unsupported_agent",
-            "Supported agents are codex, pi, omp, opencode, and hermes",
+            "Supported agents are codex, pi, omp, opencode, hermes, and dsh",
         ));
     }
     let mut installations = Vec::new();
@@ -886,10 +972,16 @@ async fn entries(
     path: &Path,
     _dry_run: bool,
 ) -> Result<(Vec<Entry>, Vec<String>)> {
+    if target.agent == "dsh" {
+        dsh_preflight(path)?;
+    }
     let mut entries = Vec::new();
     let mut references = Vec::new();
     let authorization = compatibility::AuthorizationSnapshot::capture(store)?;
-    let metadata = if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
+    let metadata = if matches!(
+        target.agent.as_str(),
+        "pi" | "omp" | "opencode" | "hermes" | "dsh"
+    ) {
         crate::catalog::read(store, "accepted")?
     } else {
         None
@@ -903,7 +995,7 @@ async fn entries(
         }
         let protocols: BTreeSet<&str> =
             binding.models.iter().map(|m| m.protocol.as_str()).collect();
-        if protocols.len() != 1 && matches!(target.agent.as_str(), "codex" | "hermes") {
+        if protocols.len() != 1 && matches!(target.agent.as_str(), "codex" | "hermes" | "dsh") {
             return Err(Error::new(
                 "incompatible",
                 "This native provider has one effective transport; select separate native entries for different protocols",
@@ -951,7 +1043,10 @@ async fn entries(
                     ));
                 }
                 requirements.assess(config, provider_id, &selected.protocol, &selected.id)?;
-                if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
+                if matches!(
+                    target.agent.as_str(),
+                    "pi" | "omp" | "opencode" | "hermes" | "dsh"
+                ) {
                     let projection = crate::catalog::effective_from_snapshot(
                         metadata.as_ref(),
                         provider,
@@ -1065,7 +1160,10 @@ async fn entries(
                             "Selected public concrete gateway model is not published for this protocol",
                         ));
                     }
-                    if matches!(target.agent.as_str(), "pi" | "omp" | "opencode" | "hermes") {
+                    if matches!(
+                        target.agent.as_str(),
+                        "pi" | "omp" | "opencode" | "hermes" | "dsh"
+                    ) {
                         let projection = crate::catalog::effective_from_snapshot(
                             metadata.as_ref(),
                             p,
@@ -1183,7 +1281,8 @@ fn leaves(value: &Value, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, Val
     }
 }
 fn inline_credential(agent: &str, path: &[String]) -> bool {
-    agent == "hermes" && path.len() == 3 && path[0] == "providers" && path[2] == "api_key"
+    (agent == "hermes" && path.len() == 3 && path[0] == "providers" && path[2] == "api_key")
+        || (agent == "dsh" && path.len() == 2 && path[0] == "refs")
 }
 fn desired_fields(
     agent: &str,
@@ -1207,7 +1306,35 @@ fn desired_fields(
     });
     let mut fields: Vec<_> = fields
         .into_iter()
-        .map(|(path, value)| (path, Some(value)))
+        .map(|(path, mut value)| {
+            if agent == "dsh"
+                && path.len() == 5
+                && path[0] == "llm-pi-ai"
+                && path[1] == "config"
+                && path[2] == "providers"
+                && path[4] == "models"
+                && let Some(existing) = document::get(current, &path).and_then(Value::as_array)
+                && let Some(models) = value.as_array_mut()
+            {
+                // Selection owns membership and projected capabilities, not
+                // native model preferences such as maxTokens or thinking budgets.
+                for model in models {
+                    if let Some(native) = existing
+                        .iter()
+                        .find(|native| native.get("id") == model.get("id"))
+                        .and_then(Value::as_object)
+                    {
+                        let projected = model.as_object_mut().expect("DSH model object");
+                        for (key, value) in native {
+                            projected
+                                .entry(key.clone())
+                                .or_insert_with(|| value.clone());
+                        }
+                    }
+                }
+            }
+            (path, Some(value))
+        })
         .collect();
     if agent == "hermes" {
         // Remove obsolete command references and competing environment keys for
@@ -1395,6 +1522,14 @@ fn resolve_handoff(store: &Store, agent: &str, files: &mut [File]) -> Result<()>
             if let Some(reference) = file.desired.as_str() {
                 file.desired = handoff_key(store, reference)?;
             }
+        } else if agent == "dsh"
+            && let Some(refs) = file.desired.get_mut("refs").and_then(Value::as_object_mut)
+        {
+            for value in refs.values_mut() {
+                if let Some(reference) = value.as_str() {
+                    *value = handoff_key(store, reference)?;
+                }
+            }
         } else if agent == "hermes"
             && let Some(providers) = file
                 .desired
@@ -1453,6 +1588,11 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             "An interrupted native operation has retained recovery; restore its exact record before applying again",
         ));
     }
+    let _credentials_lock = if target.agent == "dsh" && !dry_run {
+        Some(DshCredentialsLock::acquire(&path)?)
+    } else {
+        None
+    };
     let (mut entries, secret_refs) = entries(store, config, id, target, &path, dry_run).await?;
     let files = adapters::build(target, &path, &entries);
     for entry in &mut entries {
@@ -1508,12 +1648,40 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 ));
             }
         }
+        if target.agent == "dsh"
+            && file
+                .path
+                .file_name()
+                .is_some_and(|name| name == ".credentials.yaml")
+        {
+            dsh_credential_permissions(&file.path)?;
+        }
         if dry_run && file.format == Format::Credential {
             previews.push(json!({"path":file.path,"present":file.path.exists(),"credential_handoff":"private native-owned credential file, referenced by the documented native key command/file mechanism","plaintext_native_store":true,"content_revision":"checked_only_on_execution","secret_reads":false}));
             continue;
         }
         let before = read_native(&file.path)?;
         let current = document::parse(before.as_deref().unwrap_or(""), file.format)?;
+        if target.agent == "dsh"
+            && let Some(providers) = file
+                .desired
+                .pointer("/llm-pi-ai/config/providers")
+                .and_then(Value::as_object)
+        {
+            for name in providers.keys() {
+                let route_path = vec![
+                    "llm-pi-ai".into(),
+                    "config".into(),
+                    "providers".into(),
+                    name.clone(),
+                ];
+                if document::get(&current, &route_path)
+                    .is_some_and(|route| route.get("modelOverrides").is_some())
+                {
+                    return Err(Error::new("native_config_incompatible", "DSH does not permit modelOverrides beside an explicit models list; migrate this route with DSH or choose a separate native provider entry before applying").field("modelOverrides"));
+                }
+            }
+        }
         if let Some(old) = previous
             .as_ref()
             .and_then(|r| r.files.iter().find(|f| f.path == file.path))
@@ -1553,7 +1721,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 }
             }
         }
-        previews.push(json!({"existing_provider_entries":existing_entries,"path":file.path,"revision":revision(before.as_deref()),"owned_fields":fields.iter().map(|(p,_)|p).collect::<Vec<_>>(),"credential_handoff":if target.agent == "hermes" {"plaintext API key in current-user-restricted config.yaml; no token import"} else {"native command/file reference to a private native-owned credential artifact; no inline config secret or token import"}}));
+        previews.push(json!({"existing_provider_entries":existing_entries,"path":file.path,"revision":revision(before.as_deref()),"owned_fields":fields.iter().map(|(p,_)|p).collect::<Vec<_>>(),"credential_handoff":match target.agent.as_str() { "hermes" => "plaintext API key in current-user-restricted config.yaml; no token import", "dsh" => "plaintext API key in current-user-restricted DSH .credentials.yaml; home patch contains a native credential reference; no token import", _ => "native command/file reference to a private native-owned credential artifact; no inline config secret or token import" }}));
         observed_inputs.push((file.path.clone(), before));
     }
     if dry_run {
@@ -1973,6 +2141,11 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
     if record.state == "restored" {
         return Ok(json!({"recovery":selected,"state":"already_restored","native_writes":false}));
     }
+    let _credentials_lock = if record.agent == "dsh" && !dry_run {
+        Some(DshCredentialsLock::acquire(&record.scope)?)
+    } else {
+        None
+    };
     let payload = if dry_run {
         secrets::check_recovery(store, &record.payload_ref, &record.owner)?;
         None
@@ -2941,6 +3114,315 @@ mod tests {
             }),
             roles: BTreeMap::new(),
         }
+    }
+    #[test]
+    fn dsh_selected_models_preserve_native_fields_by_identity() {
+        let current = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
+            {"id":"second","maxTokens":2048,"name":"Native second"},
+            {"id":"first","maxTokens":1234,"contextWindow":4096,"thinkingBudgets":{"high":512}},
+            {"id":"removed","maxTokens":99}
+        ]}}}}});
+        let desired = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
+            {"id":"first","contextWindow":8192},
+            {"id":"second"},
+            {"id":"new"}
+        ]}}}}});
+        let fields = desired_fields("dsh", &desired, &current);
+        let path: Vec<String> = vec![
+            "llm-pi-ai".into(),
+            "config".into(),
+            "providers".into(),
+            "local".into(),
+            "models".into(),
+        ];
+        assert_eq!(
+            fields.iter().find(|(p, _)| p == &path).unwrap().1,
+            Some(json!([
+                {"id":"first","maxTokens":1234,"contextWindow":8192,"thinkingBudgets":{"high":512}},
+                {"id":"second","maxTokens":2048,"name":"Native second"},
+                {"id":"new"}
+            ]))
+        );
+    }
+    #[test]
+    fn dsh_credentials_lock_records_owner_and_releases_on_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".credentials.yaml.lock");
+        let result: Result<()> = (|| {
+            let _guard = DshCredentialsLock::acquire(directory.path())?;
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                format!("{}\n", std::process::id())
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+            assert_eq!(
+                DshCredentialsLock::acquire(directory.path())
+                    .err()
+                    .unwrap()
+                    .code,
+                "native_credentials_busy"
+            );
+            assert!(path.exists());
+            Err(unavailable())
+        })();
+        assert!(result.is_err());
+        assert!(!path.exists());
+        let guard = DshCredentialsLock::acquire(directory.path()).unwrap();
+        assert!(path.exists());
+        drop(guard);
+        assert!(!path.exists());
+    }
+    #[tokio::test]
+    async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("authority"));
+        let home = directory.path().join("dsh");
+        let path = home.clone();
+        fs::create_dir_all(&path).unwrap();
+        let native_profile = home.join("profiles/custom");
+        fs::create_dir_all(&native_profile).unwrap();
+        fs::write(
+            native_profile.join("package.json"),
+            "native-owned opaque manifest",
+        )
+        .unwrap();
+        let profile_patch = "- id: llm-pi-ai\n  config: !!js process.env.NATIVE_PROVIDERS\n";
+        fs::write(native_profile.join("cordis.patch.yml"), profile_patch).unwrap();
+        let original = "# native policy\n- id: agent-default-model\n  config:\n    provider: existing\n    model: unchanged\n    reasoningEffort: low\n- id: user-owned\n  config: !!js process.env.NATIVE_POLICY\n";
+        fs::write(path.join("cordis.patch.yml"), original).unwrap();
+        let credentials = home.join(".credentials.yaml");
+        storage::atomic_write(
+            &credentials,
+            b"version: 1\nrefs:\n  EXISTING: synthetic-existing\nrecords: {}\n",
+        )
+        .unwrap();
+        let reference = secrets::put(&store, "provider:p", b"synthetic-managed").unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "dsh".into();
+        target.default = None;
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let before_credentials = fs::read(&credentials).unwrap();
+        let credentials_lock = home.join(".credentials.yaml.lock");
+        assert!(!credentials_lock.exists());
+        let override_patch = format!(
+            "{original}- id: llm-pi-ai\n  config:\n    providers:\n      local:\n        modelOverrides:\n          first:\n            contextWindow: 4096\n"
+        );
+        fs::write(path.join("cordis.patch.yml"), &override_patch).unwrap();
+        for dry_run in [true, false] {
+            assert_eq!(
+                apply(&store, &config, "managed", dry_run)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "native_config_incompatible"
+            );
+            assert!(!credentials_lock.exists());
+            assert_eq!(
+                fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+                override_patch
+            );
+            assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
+        }
+        fs::write(path.join("cordis.patch.yml"), original).unwrap();
+        let preview = apply(&store, &config, "managed", true).await.unwrap();
+        assert!(!preview.to_string().contains("synthetic-managed"));
+        assert_eq!(
+            fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+            original
+        );
+        assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
+        assert!(!credentials_lock.exists());
+        let external_lock = format!("{}\n", std::process::id());
+        storage::atomic_write(&credentials_lock, external_lock.as_bytes()).unwrap();
+        apply(&store, &config, "managed", true).await.unwrap();
+        assert_eq!(
+            apply(&store, &config, "managed", false)
+                .await
+                .unwrap_err()
+                .code,
+            "native_credentials_busy"
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+            original
+        );
+        assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
+        assert_eq!(
+            fs::read_to_string(&credentials_lock).unwrap(),
+            external_lock
+        );
+        fs::remove_file(&credentials_lock).unwrap();
+        apply(&store, &config, "managed", false).await.unwrap();
+        assert!(!credentials_lock.exists());
+        let applied = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+        assert!(applied.starts_with(original));
+        assert!(!applied.contains("synthetic-managed"));
+        assert_eq!(
+            dsh_patch::parse(&applied).unwrap()["credentials"]["disabled"],
+            false
+        );
+        let native_credentials =
+            document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap();
+        assert_eq!(native_credentials["refs"]["EXISTING"], "synthetic-existing");
+        assert!(
+            native_credentials["refs"]
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|v| v == "synthetic-managed")
+        );
+        fs::write(
+            path.join("cordis.patch.yml"),
+            format!("{applied}- id: later\n  disabled: true\n"),
+        )
+        .unwrap();
+        let index: Index = store.read_json(INDEX).unwrap();
+        let before_restore_patch = fs::read(path.join("cordis.patch.yml")).unwrap();
+        let before_restore_credentials = fs::read(&credentials).unwrap();
+        restore(&store, &index.records[0].id, true).await.unwrap();
+        assert!(!credentials_lock.exists());
+        storage::atomic_write(&credentials_lock, external_lock.as_bytes()).unwrap();
+        restore(&store, &index.records[0].id, true).await.unwrap();
+        assert_eq!(
+            restore(&store, &index.records[0].id, false)
+                .await
+                .unwrap_err()
+                .code,
+            "native_credentials_busy"
+        );
+        assert_eq!(
+            fs::read(path.join("cordis.patch.yml")).unwrap(),
+            before_restore_patch
+        );
+        assert_eq!(fs::read(&credentials).unwrap(), before_restore_credentials);
+        assert_eq!(
+            fs::read_to_string(&credentials_lock).unwrap(),
+            external_lock
+        );
+        fs::remove_file(&credentials_lock).unwrap();
+        restore(&store, &index.records[0].id, false).await.unwrap();
+        assert!(!credentials_lock.exists());
+        assert_eq!(
+            fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+            format!("{original}- id: later\n  disabled: true\n")
+        );
+        assert_eq!(
+            document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap(),
+            json!({"version":1,"refs":{"EXISTING":"synthetic-existing"},"records":{}})
+        );
+        assert_eq!(
+            fs::read_to_string(native_profile.join("cordis.patch.yml")).unwrap(),
+            profile_patch
+        );
+        assert_eq!(
+            fs::read_to_string(native_profile.join("package.json")).unwrap(),
+            "native-owned opaque manifest"
+        );
+        for empty in ["", "# empty native credential store\n", "{}\n"] {
+            storage::atomic_write(&credentials, empty.as_bytes()).unwrap();
+            apply(&store, &config, "managed", false).await.unwrap();
+            assert!(!credentials_lock.exists());
+            let stamped =
+                document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap();
+            assert_eq!(stamped["version"], 1);
+            assert_eq!(stamped["refs"].as_object().unwrap().len(), 1);
+            let index: Index = store.read_json(INDEX).unwrap();
+            restore(&store, &index.records.last().unwrap().id, false)
+                .await
+                .unwrap();
+            assert!(!credentials_lock.exists());
+            assert_eq!(
+                document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap(),
+                json!({})
+            );
+            assert_eq!(
+                fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+                format!("{original}- id: later\n  disabled: true\n")
+            );
+        }
+        for incompatible in ["refs: {}\n", "version: 2\n"] {
+            storage::atomic_write(&credentials, incompatible.as_bytes()).unwrap();
+            let before_patch = fs::read(path.join("cordis.patch.yml")).unwrap();
+            assert_eq!(
+                apply(&store, &config, "managed", false)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "native_schema_incompatible"
+            );
+            assert!(!credentials_lock.exists());
+            assert_eq!(
+                fs::read(path.join("cordis.patch.yml")).unwrap(),
+                before_patch
+            );
+            assert_eq!(fs::read_to_string(&credentials).unwrap(), incompatible);
+        }
+        storage::atomic_write(&credentials, &before_credentials).unwrap();
+        apply(&store, &config, "managed", false).await.unwrap();
+        let owned = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+        let modified = dsh_patch::set(
+            &owned,
+            &[
+                "llm-pi-ai".into(),
+                "config".into(),
+                "providers".into(),
+                "local".into(),
+                "api".into(),
+            ],
+            Some(&json!("anthropic-messages")),
+        )
+        .unwrap();
+        fs::write(path.join("cordis.patch.yml"), &modified).unwrap();
+        assert_eq!(
+            apply(&store, &config, "managed", false)
+                .await
+                .unwrap_err()
+                .code,
+            "native_conflict"
+        );
+        assert!(!credentials_lock.exists());
+        let before_failed_restore_credentials = fs::read(&credentials).unwrap();
+        let index: Index = store.read_json(INDEX).unwrap();
+        assert_eq!(
+            restore(&store, &index.records.last().unwrap().id, false)
+                .await
+                .unwrap_err()
+                .code,
+            "native_conflict"
+        );
+        assert!(!credentials_lock.exists());
+        assert_eq!(
+            fs::read(&credentials).unwrap(),
+            before_failed_restore_credentials
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+            modified
+        );
     }
     #[tokio::test]
     async fn model_only_application_preserves_defaults_roles_and_uses_its_own_scope() {

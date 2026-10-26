@@ -8,7 +8,7 @@ fn protocol_value(id: &'static str, help: &'static str) -> Arg {
 }
 
 fn agent_value(id: &'static str, help: &'static str) -> Arg {
-    value(id, "AGENT", help).value_parser(["codex", "pi", "omp", "opencode", "hermes"])
+    value(id, "AGENT", help).value_parser(["codex", "pi", "omp", "opencode", "hermes", "dsh"])
 }
 
 fn weekdays(id: &'static str, help: &'static str) -> Arg {
@@ -935,8 +935,8 @@ fn model_alias_commands() -> Command {
 }
 fn agent_commands() -> Command {
     let agent_update = mutation(leaf("update", "Change explicit structural fields of one declared native target.", "At least one of --agent AGENT or --path PATH is required. Does not restore old files, import credentials, or write native configuration. Relative path operands resolve under ~/.tmax.\n\nExit: 0 when saved; 2 for invalid target/path; 4 for persistence or required safety/startup failure.\nExample: tmax agent update pi-main --path /home/user/.pi/agent")
-        .arg(agent_value("agent", "codex, pi, omp, opencode, or hermes."))
-        .arg(value("path", "PATH", "Native configuration scope; relative paths resolve under ~/.tmax."))
+        .arg(agent_value("agent", "codex, pi, omp, opencode, hermes, or dsh."))
+        .arg(value("path", "PATH", "Native configuration scope; DSH requires an existing DSH_HOME root directory (DSH_HOME environment variable, otherwise the OS user's ~/.dsh). Relative paths resolve under ~/.tmax."))
         .arg(required_pos(1, "TARGET", "Exact declared target ID."))
         .group(ArgGroup::new("scope_fields").args(["agent", "path"]).required(true).multiple(true)), true, true);
     let model = Command::new("model")
@@ -1003,17 +1003,17 @@ fn agent_commands() -> Command {
             .arg(required_pos(1, "RECORD", "Returned native-recovery handle.")), true, false));
     let inspect = leaf("inspect", "Inspect a declared target or an explicit undeclared native scope without importing it.", "Declared inspection reports native entries/sources, precedence, supported roles/requirements, effective auth/model use, desired/applied/effective differences, blockers, and recovery. Undeclared scope requires --agent and --path together and never registers/imports configuration. Inspection is not proof of paid inference.\n\nExit: 0 when inspect completes, including unknown evidence; 2 for invalid scope syntax.\nExample: tmax agent inspect pi-main")
         .arg(agent_value("agent", "Agent for an explicit undeclared native scope.").requires("path").conflicts_with("__operand_1"))
-        .arg(value("path", "PATH", "Native scope path for undeclared inspection.").requires("agent").conflicts_with("__operand_1"))
+        .arg(value("path", "PATH", "Native scope path for undeclared inspection; DSH requires the existing DSH_HOME root, not a profile directory.").requires("agent").conflicts_with("__operand_1"))
         .arg(positional(1, "TARGET", "Declared target ID; alternatively supply --agent and --path.").conflicts_with_all(["agent", "path"]))
         .group(ArgGroup::new("scope").args(["__operand_1", "agent"]).required(true).multiple(true));
     family("agent", "Declare targets, edit native provider/model settings, apply changes, and restore owned state.", Command::new("agent")
         .subcommand(leaf("list", "List declared targets and desired/applied/effective readiness summaries.", "Compact state read; does not inspect/install/import external configuration.\n\nExit: 0 when read completes.\nExample: tmax agent list"))
-        .subcommand(leaf("discover", "Discover supported Agent installations, scopes, versions, and profiles.", "Read-only local discovery; does not register targets or import settings/credentials.\n\nExit: 0 when discovery completes; unsupported/unavailable installations remain explicit.\nExample: tmax agent discover --agent pi")
-            .arg(agent_value("agent", "Optional filter: codex, pi, omp, opencode, or hermes.")))
+        .subcommand(leaf("discover", "Discover supported Agent installations, scopes, versions, and profiles.", "Read-only local discovery; does not register targets or import settings/credentials. DSH discovers only DSH_HOME (environment variable, otherwise the OS user's ~/.dsh); it does not scan profiles.\n\nExit: 0 when discovery completes; unsupported/unavailable installations remain explicit.\nExample: tmax agent discover --agent pi")
+            .arg(agent_value("agent", "Optional filter: codex, pi, omp, opencode, hermes, or dsh.")))
         .subcommand(inspect)
         .subcommand(mutation(leaf("add", "Declare a native target without provider entries, defaults, or roles.", "Requires --agent and --path. Does not provision a gateway key, start a service, or write native files. Relative paths resolve against ~/.tmax.\n\nExit: 0 when saved; 2 for invalid/duplicate target; 4 for persistence or required safety/startup failure.\nExample: tmax agent add pi-main --agent pi --path /home/user/.pi/agent")
-            .arg(agent_value("agent", "codex, pi, omp, opencode, or hermes.").required(true))
-            .arg(value("path", "PATH", "Native configuration scope.").required(true))
+            .arg(agent_value("agent", "codex, pi, omp, opencode, hermes, or dsh.").required(true))
+            .arg(value("path", "PATH", "Native configuration scope; DSH requires an existing DSH_HOME root directory (DSH_HOME environment variable, otherwise the OS user's ~/.dsh).").required(true))
             .arg(required_pos(1, "TARGET", "New unique target ID.")), true, true))
         .subcommand(agent_update)
         .subcommand(mutation(leaf("rename", "Rename a target and dependent login-source references.", "Retains ownership/recovery identity; no alias is left. Existing native paths/credentials are not moved.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax agent rename pi-main pi-work")
@@ -1025,7 +1025,7 @@ fn agent_commands() -> Command {
         .subcommand(model)
         .subcommand(default)
         .subcommand(role)
-        .subcommand(mutation(leaf("apply", "Apply the target's complete current desired configuration to native files.", "Checks current native inputs/ownership and credential handoff. Pi, OMP, OpenCode, and Hermes can apply model entries without a default; existing native defaults and unselected roles are preserved. Codex requires a default. Gateway entries require the ready matching listener/shared key; upstream entries do not require tmax gateway. Reports changed/unchanged files and recovery. Written files are not proof of runtime reload. No force overwrite or automatic apply.\n\nDry-run performs no native writes, sign-in, key resolution, or launch.\nExit: 0 when configuration is written, with a reload reminder; 3 for missing prerequisites or incompatible configuration; 4 for partial/uncertain writes; 5 only for cancellation before effects.\nExample: tmax agent apply pi-main --dry-run")
+        .subcommand(mutation(leaf("apply", "Apply the target's complete current desired configuration to native files.", "Checks current native inputs/ownership and credential handoff. Pi, OMP, OpenCode, Hermes, and DSH can apply model entries without a default; existing native defaults and unselected roles are preserved. Codex requires a default. DSH edits DSH_HOME/cordis.patch.yml and hands credentials to the adjacent .credentials.yaml, enabling the home credentials service for headless use; it never manages profiles or edits cordis.yml. The home patch applies after profile layers and replaces each managed entry's whole config, shadowing lower-layer settings rather than merging them. Existing unrelated home fields and expressions are preserved. Model-only DSH apply does not write agent-default-model; explicit default changes update provider/model while preserving existing home-level effort. Gateway entries require the ready matching listener/shared key; upstream entries do not require tmax gateway. Reports changed/unchanged files and recovery. Written files are not proof of runtime reload. No force overwrite or automatic apply.\n\nDry-run performs no native writes, sign-in, key resolution, or launch.\nExit: 0 when configuration is written, with a reload reminder; 3 for missing prerequisites or incompatible configuration; 4 for partial/uncertain writes; 5 only for cancellation before effects.\nExample: tmax agent apply pi-main --dry-run")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, false))
         .subcommand(mutation(leaf("restore", "Restore owned native changes while preserving later user edits.", "Supply TARGET or --recovery RECORD, not both. Exact recovery handles remain usable after target removal. Ownership conflicts block rather than force overwrite. Does not recreate a target or delete credentials.\n\nDry-run writes nothing.\nExit: 0 when restored; 3 for conflict/action required; 4 for partial or failed native restoration.\nExample: tmax agent restore pi-main --dry-run")
             .arg(value("recovery", "RECORD", "Exact retained recovery handle; alternative to TARGET."))
@@ -1268,6 +1268,41 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{OutputFormat, command};
+
+    #[test]
+    fn dsh_is_a_native_agent_but_not_a_skill_install_target() {
+        for args in [
+            vec!["tmax", "agent", "discover", "--agent", "dsh"],
+            vec![
+                "tmax",
+                "agent",
+                "add",
+                "dsh-main",
+                "--agent",
+                "dsh",
+                "--path",
+                "/native/dsh-home",
+            ],
+            vec![
+                "tmax",
+                "agent",
+                "inspect",
+                "--agent",
+                "dsh",
+                "--path",
+                "/native/dsh-home",
+            ],
+        ] {
+            let matches = command().try_get_matches_from(args).unwrap();
+            let request = super::request(&command(), &matches);
+            assert_eq!(request.arguments["agent"], ["dsh"]);
+        }
+        assert!(
+            command()
+                .try_get_matches_from(["tmax", "skill", "install", "--agent", "dsh"])
+                .is_err()
+        );
+    }
 
     #[test]
     fn browser_login_cancel_exposes_preview_and_attempt_guard() {

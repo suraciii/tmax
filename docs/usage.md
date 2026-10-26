@@ -1,4 +1,4 @@
-# CLI usage: providers, routing, and Pi
+# CLI usage: providers, routing, and native agents
 
 This guide uses supported command grammar, but credentials and upstream calls are
 user-specific. CLI help is offline (`tmax help provider input`, for example); it
@@ -502,3 +502,48 @@ For the complete contract, see [CLI specs](../specs/cli/spec.md),
 [provider input specs](../specs/cli/providers/inputs/spec.md),
 [model routing](../specs/model-routing/spec.md), and
 [Pi/agent target specs](../specs/cli/agents/spec.md).
+
+## DSH target: home-wide native application
+
+DeepSeek Harness uses the same target/provider/model operations as the Pi example,
+with `--agent dsh` and the existing DSH home as its scope. Discovery uses nonblank
+`DSH_HOME`, otherwise the OS home directory's `.dsh`. tmax edits the home's
+`cordis.patch.yml`, not any profile or launcher-owned `cordis.yml`. It preserves
+unrelated HOME-level provider fields and expressions without enumerating,
+selecting, creating, or managing profiles. Home entry `config` replaces the
+complete lower-layer configuration; profile routes and defaults are not merged
+or automatically copied into the home configuration. Runtime overlays remain
+outside tmax's ownership.
+
+```sh
+DSH_SCOPE="${DSH_HOME:-$HOME/.dsh}"
+tmax agent discover --agent dsh
+tmax agent add dsh-main --agent dsh --path "$DSH_SCOPE"
+tmax agent provider add dsh-main upstream --provider "$PROVIDER_ID"
+tmax agent model add dsh-main upstream "$MODEL_ID" --protocol chat-completions
+tmax agent apply dsh-main --dry-run
+tmax agent apply dsh-main
+tmax agent inspect dsh-main
+tmax agent restore dsh-main --dry-run
+```
+
+Model-only application requires no default and writes no `agent-default-model`
+entry or thinking preferences. An explicit default changes provider/model only,
+preserving existing HOME-level effort settings rather than importing profile
+defaults. Native route APIs support all three protocols; incompatible
+protocol/base selections cannot share one provider entry. Executed apply hands
+the key to the target home's private native `.credentials.yaml` `refs` map and
+uses a stable `TMAX_...` reference in the adjacent home patch. It enables the
+native credential service in the HOME patch for headless consumption without
+bundle inspection, exported secrets, or a tmax launcher. Preview and inspect
+never resolve or return key values.
+Output capability is intentionally not projected because DSH's explicit
+`maxTokens` would also change a per-request default.
+
+Reload DSH instances using that home after apply/restore. File writes are not
+runtime or provider-access evidence; historical profile-path qualification does
+not establish home-wide, multi-profile behavior. DSH has no qualified native
+login or Go session mechanism. See the [DSH guide](agents/dsh.md) for the source
+revision, credential ownership, exact reasoning-effort mapping, gateway
+limitations, and the explicit restore command. Skill installation remains
+shared `.agents` or Hermes-only.
