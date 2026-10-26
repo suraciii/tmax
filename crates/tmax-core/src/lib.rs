@@ -1,15 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub mod agent_integration;
 pub mod catalog;
 pub mod config;
 pub mod diagnostics;
 pub mod gateway;
 pub mod inputs;
-pub mod integrations;
-pub mod native;
 pub mod observations;
 pub mod operations;
+pub mod provider_integration;
 mod reasoning;
 pub mod routing;
 pub mod secrets;

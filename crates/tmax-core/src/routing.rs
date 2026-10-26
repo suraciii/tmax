@@ -703,7 +703,7 @@ fn eligibility(
     if !model.enabled {
         return Some("model_disabled");
     }
-    if !crate::integrations::resolve(provider)
+    if !crate::provider_integration::resolve(provider)
         .ok()
         .is_some_and(|endpoints| endpoints.contains_key(protocol))
     {
@@ -743,7 +743,7 @@ pub struct RequestRequirements<'a> {
 }
 
 pub(crate) struct Advice<'a> {
-    pub native: Option<crate::native::compatibility::Context<'a>>,
+    pub native: Option<crate::agent_integration::compatibility::Context<'a>>,
 }
 
 enum SelectionView<'a> {
@@ -792,7 +792,7 @@ fn decision(
                     .values()
                     .any(|p| matches!(p.auth, Some(config::Auth::Login { .. })))
         })
-        .map(|_| crate::native::compatibility::AuthorizationSnapshot::capture(store));
+        .map(|_| crate::agent_integration::compatibility::AuthorizationSnapshot::capture(store));
     let mut evaluations = Vec::new();
     let mut ranked = Vec::new();
     let mut excluded = Vec::new();
@@ -1152,7 +1152,7 @@ mod tests {
             .unwrap();
         inputs::reconcile(&store, &loaded, &saved, &[]).unwrap();
         let context = Advice {
-            native: Some(crate::native::compatibility::Context {
+            native: Some(crate::agent_integration::compatibility::Context {
                 agent: "codex",
                 target: Some("old-target"),
                 provider: None,
@@ -1184,7 +1184,7 @@ mod tests {
             7
         );
         let saved_context = Advice {
-            native: Some(crate::native::compatibility::Context {
+            native: Some(crate::agent_integration::compatibility::Context {
                 agent: "pi",
                 target: Some("new-target"),
                 provider: None,

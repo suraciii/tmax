@@ -5,12 +5,13 @@ index of provider-specific contracts under the [product specification](../produc
 Each child contract owns its service product's exceptional behavior and evidence.
 These contracts do not claim that integrations have been implemented or exercised.
 
-An Integration is a qualified behavior definition/type, not a managed upstream
-access instance or universal service identity. A Provider selects it; multiple
-Providers may select the same Integration while retaining independent endpoints,
-authentication configuration, optional account/subscription facts, and Models.
-The `custom` Integration can carry unrelated explicitly configured services; its
-shared type neither identifies those services nor qualifies their behavior.
+A Provider integration is a qualified behavior definition/type, not a managed
+upstream access instance or universal service identity. A Provider selects it;
+multiple Providers may select the same Provider integration while retaining
+independent endpoints, authentication configuration, optional account/subscription
+facts, and Models. The `custom` Provider integration can carry unrelated explicitly
+configured services; its shared type neither identifies those services nor
+qualifies their behavior.
 
 ## Support contract
 

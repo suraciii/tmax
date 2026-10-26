@@ -1,4 +1,5 @@
 //! Browser orchestration of Codex-owned authentication. No token export/import.
+use super::installation::native_command;
 use super::*;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -106,7 +107,7 @@ fn prepare(store: &Store, request: &Request) -> Result<Plan> {
         .providers
         .get(&provider)
         .ok_or_else(|| err("unknown_resource"))?;
-    if crate::integrations::integration_id(p)? != "codex-subscription" {
+    if crate::provider_integration::integration_id(p)? != "codex-subscription" {
         return Err(err("unsupported_authentication"));
     }
     let method = crate::operations::arg(request, "method").unwrap_or("browser");

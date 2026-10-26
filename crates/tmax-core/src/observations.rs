@@ -2,7 +2,7 @@ use crate::{
     Error, Result,
     config::{self, Config},
     inputs::{self, Runtime},
-    integrations::{self, AcquiredObservation},
+    provider_integration::{self, AcquiredObservation},
     storage::Store,
 };
 use chrono::{DateTime, Utc};
@@ -75,12 +75,12 @@ fn binding_with_scope(
         .providers
         .get(provider)
         .ok_or_else(|| Error::new("unknown_resource", "Provider is not configured"))?;
-    let destination = integrations::observation_destination(p, scope)?;
+    let destination = provider_integration::observation_destination(p, scope)?;
     Ok(Binding {
         provider_identity: identity.0,
         authorization_generation: identity.1,
-        integration: integrations::integration_id(p)?.into(),
-        endpoint_contract: signature(&integrations::resolve(p)?),
+        integration: provider_integration::integration_id(p)?.into(),
+        endpoint_contract: signature(&provider_integration::resolve(p)?),
         source: destination.map(|d| d.source.into()),
         source_contract: destination.map(|d| d.contract.into()),
         scope: scope.into(),
@@ -108,17 +108,17 @@ fn invalid_record() -> Error {
 fn valid_data(source: Option<&str>, data: &Value) -> bool {
     match source {
         Some("official_balance_api") => {
-            integrations::normalize_observation("official_balance_api", data)
+            provider_integration::normalize_observation("official_balance_api", data)
                 .is_ok_and(|normalized| normalized == *data)
         }
-        Some("go_usage_api") => integrations::normalize_observation("go_usage_api", data)
+        Some("go_usage_api") => provider_integration::normalize_observation("go_usage_api", data)
             .is_ok_and(|normalized| normalized == *data),
         Some("official_models_api") => {
             let Some(models) = data.get("models").and_then(Value::as_array) else {
                 return false;
             };
             let body = json!({"data":models.iter().map(|id|json!({"id":id})).collect::<Vec<_>>()});
-            integrations::normalize_observation("official_models_api", &body)
+            provider_integration::normalize_observation("official_models_api", &body)
                 .is_ok_and(|normalized| normalized == *data)
         }
         _ => false,
@@ -351,7 +351,7 @@ pub async fn refresh(
     };
     let mut checks = Vec::with_capacity(scopes.len());
     for scope in scopes {
-        let destination = integrations::observation_destination(provider, scope)?;
+        let destination = provider_integration::observation_destination(provider, scope)?;
         if dry_run {
             checks.push(
                 json!({"scope":scope,"input_name":null,"outcome":"not_executed",
@@ -364,7 +364,8 @@ pub async fn refresh(
         // No publication/configuration lock is held during credential or source I/O.
         let acquired = match destination {
             Some(destination) => {
-                integrations::acquire_observation(store, config, provider, destination).await
+                provider_integration::acquire_observation(store, config, provider, destination)
+                    .await
             }
             None => Err(Error::new(
                 "unsupported_source",
@@ -375,7 +376,7 @@ pub async fn refresh(
             Ok(attempt) => checks.push(json!({"scope":scope,"input_name":null,
                 "outcome":attempt.outcome,"reason_code":attempt.reason_code,"attempt":attempt,
                 "published":attempt.outcome=="completed","attempt_recorded":true,
-                "dashboard":integrations::dashboard(integrations::integration_id(provider)?)})),
+                "dashboard":provider_integration::dashboard(provider_integration::integration_id(provider)?)})),
             Err(error) => checks.push(json!({"scope":scope,"input_name":null,"outcome":"failed",
                 "reason_code":error.code,"attempt":null,"published":false,"attempt_recorded":false})),
         }
@@ -497,13 +498,13 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
     };
     Ok(
         json!({"provider":provider,"account_identity":null,"observations":scopes,
-        "billing":{"kind":if integrations::integration_id(p)?=="deepseek"{"api_balance"}else if integrations::integration_id(p)?=="opencode-go"{"go_allowance"}else{"unknown"},
+        "billing":{"kind":if provider_integration::integration_id(p)?=="deepseek"{"api_balance"}else if provider_integration::integration_id(p)?=="opencode-go"{"go_allowance"}else{"unknown"},
             "state":if billing_fact.is_some(){"observed"}else{"unknown"},"observation":billing_fact,
             "freshness":temporal_applicability(billing_fact,Some(billing_source),&at),
             "subscription":p.subscription,"account_identity":null,
             "shared_upstream_limits":"unknown; providers may share upstream account limits",
             "aggregation":"not_performed","renewal":"unknown","reset":if go_usage.is_some(){"announced"}else{"unknown"},
-            "dashboard":integrations::dashboard(integrations::integration_id(p)?)}}),
+            "dashboard":provider_integration::dashboard(provider_integration::integration_id(p)?)}}),
     )
 }
 
@@ -965,7 +966,7 @@ mod tests {
     fn deepseek_models() -> AcquiredObservation {
         AcquiredObservation {
             status: 200,
-            data: integrations::normalize_observation(
+            data: provider_integration::normalize_observation(
                 "official_models_api",
                 &json!({"data":[{"id":"deepseek-flash","owned_by":"not-account-identity"},{"id":"deepseek-v4-pro"}]}),
             )
@@ -1072,7 +1073,7 @@ mod tests {
         ] {
             let captured = capture(&store, &config, "original", "models").unwrap();
             let acquired = if reason == "source_format_error" {
-                integrations::normalize_observation(
+                provider_integration::normalize_observation(
                     "official_models_api",
                     &json!({"data":[{"id":"valid"},{"id":"bad\n"}]}),
                 )
@@ -1164,7 +1165,7 @@ mod tests {
     fn go_usage() -> AcquiredObservation {
         AcquiredObservation {
             status: 200,
-            data: integrations::normalize_observation(
+            data: provider_integration::normalize_observation(
                 "go_usage_api",
                 &json!({"usage":{
                     "rolling":{"status":"ok","percent":0,"resetsAt":"2026-10-23T19:04:44.687Z"},
@@ -1277,7 +1278,7 @@ mod tests {
         let old = inspect(&store, &config, "go-a").unwrap()["billing"]["observation"].clone();
         let mut malformed = go_usage().data;
         malformed["usage"]["weekly"]["percent"] = json!("not-a-number");
-        let acquired = integrations::normalize_observation("go_usage_api", &malformed)
+        let acquired = provider_integration::normalize_observation("go_usage_api", &malformed)
             .map(|data| AcquiredObservation { data, status: 200 });
         let captured = capture(&store, &config, "go-a", "quota").unwrap();
         commit(&store, &captured, acquired).unwrap();

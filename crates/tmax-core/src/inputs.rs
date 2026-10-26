@@ -407,8 +407,8 @@ fn source_definition(provider: &Provider, declaration: &InputDeclaration) -> Str
     models.sort();
     signature(
         &json!({"kind":declaration.kind,"source":declaration.source,"scope":declaration.scope,"models":models,
-        "max_age_seconds":declaration.max_age_seconds,"integration":crate::integrations::integration_id(provider).ok(),
-        "endpoints":crate::integrations::resolve(provider).ok()}),
+        "max_age_seconds":declaration.max_age_seconds,"integration":crate::provider_integration::integration_id(provider).ok(),
+        "endpoints":crate::provider_integration::resolve(provider).ok()}),
     )
 }
 fn auth_definition(config: &Config, provider: &Provider) -> Value {
@@ -1600,7 +1600,7 @@ fn capability(provider: &Provider, declaration: &InputDeclaration) -> bool {
     declaration.source == "codex-resets"
         && declaration.kind == "reset"
         && declaration.scope == "codex"
-        && crate::integrations::integration_id(provider).ok() == Some("codex-subscription")
+        && crate::provider_integration::integration_id(provider).ok() == Some("codex-subscription")
 }
 fn use_projection(
     runtime: &Runtime,
@@ -2265,7 +2265,7 @@ fn parse_markdown(text: &str) -> Result<Forecast> {
 }
 async fn fetch_forecast(config: &Config) -> Result<Forecast> {
     use futures_util::StreamExt;
-    let client = crate::integrations::client(config).map_err(|_| {
+    let client = crate::provider_integration::client(config).map_err(|_| {
         Error::new(
             "transport_error",
             "Cannot initialize the configured input transport",

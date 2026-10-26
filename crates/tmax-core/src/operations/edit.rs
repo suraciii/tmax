@@ -1002,7 +1002,7 @@ fn mutate(root: &mut Value, r: &Request, store: &Store) -> Result<(Json, Vec<(St
             let agent = get(root, &["agents", target, "agent"])?
                 .as_str()
                 .ok_or_else(error)?;
-            if !crate::native::supported_roles(agent).contains(&role) {
+            if !crate::agent_integration::supported_roles(agent).contains(&role) {
                 return Err(Error::new(
                     "invalid_arguments",
                     "This native Agent does not declare that model role",
@@ -1343,7 +1343,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
                     .and_then(|p| p.auth.as_ref())
             };
             if let Some(config::Auth::Login { via, .. }) = source {
-                impact["credential"] = crate::native::login(
+                impact["credential"] = crate::agent_integration::login(
                     store,
                     old.as_ref().unwrap_or(&candidate),
                     operand(r, 0)?,
@@ -1437,9 +1437,9 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
             return Err(error());
         };
         let effect = if path == "provider login" {
-            crate::native::login(store, original, provider, via, false).await?
+            crate::agent_integration::login(store, original, provider, via, false).await?
         } else {
-            crate::native::logout(store, original, provider, via, false).await?
+            crate::agent_integration::logout(store, original, provider, via, false).await?
         };
         data["authorization_invalidation"] = effect["authorization_invalidation"].clone();
         if let Some(code) = effect
@@ -1528,10 +1528,10 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
                 pair.get(1).and_then(Json::as_str),
             )
         {
-            crate::native::rename_target(store, old, new)?;
+            crate::agent_integration::rename_target(store, old, new)?;
         }
         if path == "agent remove" {
-            crate::native::remove_target(store, operand(r, 0)?)?;
+            crate::agent_integration::remove_target(store, operand(r, 0)?)?;
         }
         if path == "provider remove" {
             crate::secrets::detach_owner(store, "provider", operand(r, 0)?)?;

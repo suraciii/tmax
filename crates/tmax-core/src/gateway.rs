@@ -609,8 +609,8 @@ impl Runtime {
         )?;
         let provider = &config.providers[&selection.provider];
         client_contract(provider, &native)?;
-        crate::integrations::check_request(provider, protocol, body)?;
-        let endpoints = crate::integrations::resolve(provider)?;
+        crate::provider_integration::check_request(provider, protocol, body)?;
+        let endpoints = crate::provider_integration::resolve(provider)?;
         let endpoint = endpoints
             .get(protocol)
             .cloned()
@@ -750,7 +750,7 @@ fn binding_blocker(
     if !m.enabled {
         return Some("model_disabled");
     }
-    let Ok(endpoints) = crate::integrations::resolve(p) else {
+    let Ok(endpoints) = crate::provider_integration::resolve(p) else {
         return Some("endpoint_unavailable");
     };
     if endpoints.get(&b.protocol) != Some(&b.endpoint) {
@@ -847,7 +847,7 @@ impl NativeRequirements {
     /// meaningless to any other upstream.
     fn gateway_attribution(&self, provider: &crate::config::Provider) -> bool {
         self.unattributed
-            && crate::integrations::resolve(provider)
+            && crate::provider_integration::resolve(provider)
                 .is_ok_and(|bases| bases.values().any(|b| opencode_gateway_url(b)))
     }
 }
@@ -855,7 +855,7 @@ pub fn native_mismatch(
     provider: &crate::config::Provider,
     native: &NativeRequirements,
 ) -> Option<&'static str> {
-    match crate::integrations::integration_id(provider) {
+    match crate::provider_integration::integration_id(provider) {
         Ok("codex-subscription") => Some("gateway_identity_prerequisite"),
         Ok("kimi-coding-plan") if matches!(provider.auth, Some(Auth::Login { .. })) => {
             Some("native_authorization_unqualified")
@@ -1052,7 +1052,7 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
         flight.finish("completed", "model_discovery", None);
         return axum::Json(publication(&snapshot.config)).into_response();
     }
-    let Some(protocol) = crate::integrations::inference_protocol(
+    let Some(protocol) = crate::provider_integration::inference_protocol(
         parts.method.as_str(),
         parts.uri.path(),
         parts.uri.query(),
@@ -1141,11 +1141,11 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
     {
         return flight.reject(StatusCode::BAD_REQUEST, &error.code, "model_validation");
     }
-    if let Err(e) = crate::integrations::check_request(provider, protocol, &body) {
+    if let Err(e) = crate::provider_integration::check_request(provider, protocol, &body) {
         return flight.reject(StatusCode::BAD_REQUEST, &e.code, "model_validation");
     }
     let endpoint = choice.endpoint;
-    let path = match crate::integrations::operation_path(protocol) {
+    let path = match crate::provider_integration::operation_path(protocol) {
         Ok(v) => v,
         Err(e) => return flight.reject(StatusCode::BAD_REQUEST, &e.code, "operation_validation"),
     };
@@ -1179,7 +1179,7 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
     };
     body["model"] = Value::String(selection.model.clone());
     let go_session_header =
-        if crate::integrations::integration_id(provider).ok() == Some("opencode-go") {
+        if crate::provider_integration::integration_id(provider).ok() == Some("opencode-go") {
             choice.go_session_header
         } else {
             None
@@ -1198,7 +1198,7 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
         ))
         .json(&body);
     if protocol == "messages"
-        && crate::integrations::integration_id(provider).ok() != Some("opencode-go")
+        && crate::provider_integration::integration_id(provider).ok() != Some("opencode-go")
     {
         outbound = outbound.header("x-api-key", key);
     } else {
@@ -1568,7 +1568,7 @@ pub fn publication(config: &Config) -> Value {
             if !m.enabled {
                 continue;
             }
-            if let Ok(protocols) = crate::integrations::protocols(p) {
+            if let Ok(protocols) = crate::provider_integration::protocols(p) {
                 data.push(json!({"id":format!("{provider_id}/{model_id}"),"object":"model","owned_by":provider_id,"protocols":protocols}));
             }
         }
@@ -1609,7 +1609,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
     if !provider.enabled || !model.enabled {
         return Err(Error::new("model_unavailable", "Model is disabled"));
     }
-    let integration = crate::integrations::integration_id(provider)?;
+    let integration = crate::provider_integration::integration_id(provider)?;
     if matches!(
         integration,
         "codex-subscription" | "opencode-go" | "kimi-coding-plan"
@@ -1631,12 +1631,12 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
         }
         _ => return Err(Error::new("protocol_unavailable", "Unknown protocol")),
     };
-    crate::integrations::check_request(provider, protocol, &body)?;
-    let endpoints = crate::integrations::resolve(provider)?;
+    crate::provider_integration::check_request(provider, protocol, &body)?;
+    let endpoints = crate::provider_integration::resolve(provider)?;
     let endpoint = endpoints
         .get(protocol)
         .ok_or_else(|| Error::new("protocol_unavailable", "Protocol endpoint unavailable"))?;
-    let path = crate::integrations::operation_path(protocol)?;
+    let path = crate::provider_integration::operation_path(protocol)?;
     if request.dry_run {
         return Ok(
             json!({"dry_run":true,"qualified_model":id,"provider":provider_id,"protocol":protocol,"transport":transport,"cost_risk":"May consume quota or incur unknown charges","request_shape":{"prompt":"fixed short diagnostic","output_token_limit":8},"inference_dispatched":false}),
@@ -1655,7 +1655,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
             "Credential is not a supported header value",
         )
     })?;
-    let client = crate::integrations::client(config)?;
+    let client = crate::provider_integration::client(config)?;
     let started = Instant::now();
     let at = Utc::now();
     let mut outbound = client
@@ -1959,7 +1959,7 @@ mod tests {
             config: config.clone(),
             revision: revision.into(),
             key: Zeroizing::new(b"test-local-key".to_vec()),
-            client: crate::integrations::client(config).unwrap(),
+            client: crate::provider_integration::client(config).unwrap(),
             metadata: None,
         }
     }
