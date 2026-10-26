@@ -1,6 +1,6 @@
 # Provider and integration commands
 
-This child owns integration discovery, provider settings, refresh, and endpoint
+This child owns provider integration discovery, provider settings, refresh, and endpoint
 results. [Integrations](../../integrations/spec.md) owns qualification;
 [Configuration](../../configuration/spec.md) owns saved fields. Use
 [common CLI rules](../spec.md), [configuration changes](../configuration/spec.md),
@@ -18,7 +18,7 @@ own command contracts.
 | `provider inspect ID` | File/loaded endpoints, configured/inherited/overridden/effective metadata and provenance, authentication `via`/known-or-unknown identity, model access, subscription/balance facts, input readiness, retained secret references, and file/loaded differences. |
 | `provider refresh ID --scope SCOPE` | Explicit qualified non-inference checks. `SCOPE` is `auth`, `models`, `quota`, or `all`; return each check/channel separately. Model discovery registers nothing. |
 
-Integration discovery reads the built-in qualified registry without catalog,
+Provider integration discovery reads the built-in qualified registry without catalog,
 network, credentials, providers, targets, or valid config. Returned IDs are the
 provider-setup operands, not instance/catalog IDs or editable plugin definitions.
 Unknown IDs are errors. Discovery neither invents endpoints nor proves a client's

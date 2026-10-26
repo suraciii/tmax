@@ -47,8 +47,8 @@ impl Context<'_> {
             ));
         }
         let provider = &config.providers[provider_id];
-        let integration = crate::integrations::integration_id(provider)?;
-        if !crate::integrations::resolve(provider)?.contains_key(protocol) {
+        let integration = crate::provider_integration::integration_id(provider)?;
+        if !crate::provider_integration::resolve(provider)?.contains_key(protocol) {
             return Err(Error::new(
                 "incompatible",
                 "The upstream integration has no endpoint for this native protocol",
@@ -166,7 +166,10 @@ impl Context<'_> {
                 "A native-owned session cannot be copied to another target; select its declared owner or a qualified gateway",
             ));
         }
-        match (crate::integrations::integration_id(provider)?, self.agent) {
+        match (
+            crate::provider_integration::integration_id(provider)?,
+            self.agent,
+        ) {
             ("codex-subscription", "codex" | "opencode") => Ok(Some("openai")),
             ("codex-subscription", "pi" | "omp" | "hermes") => Ok(Some("openai-codex")),
             ("kimi-coding-plan", "omp") => Ok(Some("kimi-code")),

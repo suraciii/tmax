@@ -17,11 +17,11 @@ metadata. Several local providers may share it while retaining independent
 metadata overrides, authorization, and billing.
 _Avoid_: Local provider ID, credential, model developer
 
-**Integration**:
+**Provider integration**:
 A supported definition of upstream protocols, authentication methods, endpoint
 rules, and operations. It describes how tmax accesses an upstream, not a user
 account or a universal service identity.
-_Avoid_: Provider instance, subscription, catalog provider
+_Avoid_: Integration as a standalone name, provider instance, subscription, catalog provider, Agent integration
 
 **Account identity**:
 The upstream user or workspace associated with a provider's authorization and
@@ -96,6 +96,12 @@ _Avoid_: Desired priority, universal balance, verified entitlement
 A local coding tool such as Codex, pi, omp, OpenCode, Hermes Agent, or DeepSeek
 Harness (DSH), distinct from a particular installation or configuration of that tool.
 _Avoid_: Family, configuration target, provider account
+
+**Agent integration**:
+Version-qualified support for an Agent's configuration, authentication ownership,
+and safe restoration of tmax-managed changes. It is a tool-support capability,
+not an Agent target, upstream access instance, or independently managed resource.
+_Avoid_: Native as a standalone name, agent runtime, provider integration
 
 **Agent target**:
 One local agent installation, profile, or supported configuration scope that

@@ -158,8 +158,9 @@ plugins, processes, a Web framework, or a database schema.
 
 A provider is one configured access instance, not a vendor registry entry or an
 account pool. Its custom local ID, display label, selected provider metadata, and
-integration type have distinct roles. Integration type selects qualified behavior;
-metadata supplies overridable defaults; the local ID qualifies model names.
+provider integration type have distinct roles. Provider integration type selects
+qualified behavior; metadata supplies overridable defaults; the local ID qualifies
+model names.
 
 deepseek and deepseek-2 may both reference the models.dev deepseek entry while
 using different authorizations and billing scopes. Another OpenCode Go subscription

@@ -22,16 +22,20 @@ finite editable-field definitions also drive Web controls.
 - `tmax-core/src/config.rs` owns typed desired configuration, validation, content
   revisions, and comment-preserving save constraints.
 - `operations/` owns finite resource mutations and effect/result boundaries.
-- `integrations.rs` owns endpoint/operation declarations and explicit outbound
-  transport; `catalog.rs` owns downloaded versus accepted metadata.
+- `provider_integration.rs` owns upstream endpoint/operation declarations and
+  explicit outbound transport; `catalog.rs` owns downloaded versus accepted metadata.
 - `routing.rs` and `inputs.rs` own exact priority evaluation, scoped facts,
   coherent revisions, and guarded publication.
 - `observations.rs` owns bounded retained provider facts and separate latest
   attempts, guarded by provider incarnation, authorization, endpoint/source
   contract, and captured publication revision. Renames preserve the identity;
   removal/recreation and authorization changes cannot revive old results.
-- `native/` owns five distinct native schemas, credential handoff, supported
-  login owners, conflict detection, and protected three-way restoration.
+- `agent_integration.rs` and `agent_integration/` own Agent-specific configuration
+  schemas, credential handoff, supported login owners, conflict detection, and
+  protected three-way restoration. The private `agent_integration/installation.rs`
+  module owns executable resolution, scoped command construction, and version
+  evidence, including safe Hermes provenance probing. Application, authentication,
+  and recovery keep their existing policy and persistence ownership.
 - `storage.rs` and `secrets.rs` own OS-home resolution, current-user-restricted
   plaintext secret/recovery files, safe inventory, and protected channels.
 - `service/`, `gateway.rs`, and `diagnostics.rs` own resident identity/lifecycle,
