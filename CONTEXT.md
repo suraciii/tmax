@@ -6,10 +6,10 @@ and the use of that access by local coding agents.
 ## Language
 
 **Provider**:
-A user-configured upstream access instance with a custom model namespace, one
-authorization configuration, and optional subscription information. Multiple
-accounts for the same service are represented by separate providers.
-_Avoid_: Vendor, catalog provider, account pool
+A user-managed upstream access instance containing one authentication configuration,
+its models, and optional subscription information. Separate providers can access
+the same service or upstream account without implying separate allowances.
+_Avoid_: Vendor, catalog provider, connection resource, account pool
 
 **Catalog provider**:
 A selectable external directory entry supplying default provider and model
@@ -17,10 +17,22 @@ metadata. Several local providers may share it while retaining independent
 metadata overrides, authorization, and billing.
 _Avoid_: Local provider ID, credential, model developer
 
+**Integration**:
+A supported definition of upstream protocols, authentication methods, endpoint
+rules, and operations. It describes how tmax accesses an upstream, not a user
+account or a universal service identity.
+_Avoid_: Provider instance, subscription, catalog provider
+
 **Account identity**:
 The upstream user or workspace associated with a provider's authorization and
 billing when known, not a separately managed resource inside tmax.
 _Avoid_: Local provider ID, credential count, global user account
+
+**Authentication configuration**:
+A provider's API-key reference or declared login source and session reference,
+not a separately managed credential resource. Credential material is distinct
+from the configuration that refers to it.
+_Avoid_: Account identity, subscription, credential pool
 
 **Login authentication**:
 Authentication established through a provider's interactive sign-in flow,
@@ -33,8 +45,9 @@ in to the provider's website to create that key.
 _Avoid_: Subscription authentication
 
 **Subscription**:
-Optional plan, allowance, and renewal information within a provider, not a
-separately managed resource. An API-billed provider has no subscription.
+Optional plan, allowance, and renewal information associated with a provider,
+not a separately managed resource. Missing subscription information does not
+establish a provider's billing state or entitlement.
 _Avoid_: API key, prepaid balance
 
 **Quota window**:
@@ -42,29 +55,35 @@ A provider-defined allowance measured over a period with a provider-defined
 reset condition. Its unit and coverage are part of its meaning.
 _Avoid_: Balance, local token count
 
+**Quota observation**:
+A source-attributed allowance fact with an observation time and explicit coverage
+and window scope. Several providers may observe the same upstream allowance.
+_Avoid_: Local balance, observed request usage, independent allowance per key
+
 **Reset announcement**:
 A source's statement that an allowance reset is planned for a specified time.
 It is not evidence that the reset occurred or an individual account recovered quota.
 _Avoid_: Confirmed quota, renewal date
 
-**Model offering**:
-A concrete model exposed under one provider instance's upstream model ID, with
-supported native protocols and capabilities. The same upstream model through
-different providers is a distinct offering.
-_Avoid_: Model alias, universal model ID, protocol-specific duplicate
+**Model**:
+A named child of one provider, registered under its exact upstream model ID with
+protocols, capabilities, and local settings. The same upstream model under another
+provider is a distinct local model, not evidence of different model weights.
+_Avoid_: Model offering, global model entity, protocol-specific duplicate
 
-**Qualified model name**:
-The exact `provider-id/model-id` reference to a local provider instance and its
-model offering, independent of wire protocol. It is not a catalog ID, gateway alias, or upstream URL.
+**Model reference**:
+The exact qualified name `provider-id/model-id` identifying an existing model
+under its provider, independent of wire protocol. It is a reference value, not
+another model, a catalog ID, a gateway alias, or an upstream URL.
 _Avoid_: Display label, catalog model ID, gateway model ID
 
 **Effective priority**:
-A model offering's preference score at a particular instant, after applying
+A model's preference score at a particular instant, after applying
 evaluable user-defined priority rules. Higher scores rank eligible candidates first.
 _Avoid_: Routing weight, measured price
 
 **Priority rule**:
-A user-defined condition and replacement preference score for one model offering.
+A user-defined condition and replacement preference score within one model.
 It changes preference, not candidate membership, entitlement, or task demand.
 _Avoid_: Task planner, quota reservation, inferred optimization
 
@@ -107,15 +126,20 @@ native configuration.
 _Avoid_: Proxy, model proxy, agent operating mode, permission-management service
 
 **Model alias**:
-A user-defined request model ID within a native protocol, mapped explicitly to
-one or more concrete offerings. Names such as L0 and L1 have no built-in meaning;
-an alias names access through the gateway, not a new model or identical weights.
-_Avoid_: Virtual model, provider alias, separately managed account pool
+A named configuration within one native protocol that gives explicit references
+to existing models a shared gateway request ID. It does not create a model,
+establish identical weights, or define an independently managed account pool.
+_Avoid_: Virtual model, provider alias, model entity
 
-**Alias candidate**:
-One concrete model offering explicitly included in a particular model alias.
-Its alias-local reasoning choice may differ from the same offering in another alias.
-_Avoid_: Provider pool, route-wide model default
+**Alias candidate configuration**:
+A model reference and optional alias-local settings within one model alias.
+It has no independent identity or lifecycle, and does not copy the referenced model.
+_Avoid_: Candidate model entity, provider pool, shared model default
+
+**Session binding**:
+Runtime state retaining a conversation's selected provider, model, destination,
+and authorization continuity. It is not a user-managed configuration resource.
+_Avoid_: Shared account session, model selection configuration
 
 **Observed usage**:
 Usage measured from requests that passed through tmax. It is not a provider's

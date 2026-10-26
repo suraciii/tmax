@@ -147,8 +147,8 @@ fn is_negative_number(value: &str) -> bool {
 pub fn command() -> Command {
     Command::new("tmax")
         .version(env!("CARGO_PKG_VERSION"))
-        .about("Manage your model-provider access, coding-agent settings, and local model gateway.")
-        .long_about("tmax manages provider access, subscriptions, model choices, native coding-agent configuration, and a local model gateway. It is CLI-first: compose explicit operations from offline help; no assistant, wizard, or configuration document is required. The supplementary local Web interface uses the same operations. Ordinary desired-state saves succeed after persistence and required safety work; background activation failures remain explicit warnings, not failed saves. Explicit reload, lifecycle, revocation, native and requested startup failures remain nonzero.")
+        .about("Manage upstream access instances, coding-agent settings, and a local model gateway.")
+        .long_about("tmax manages providers (independent upstream access instances), subscriptions, model choices, native coding-agent configuration, and a local model gateway. Models belong to providers and are referenced by provider-id/model-id. Model aliases are named configurations referencing existing models with alias-local candidate settings. It is CLI-first: compose explicit operations from offline help; no assistant, wizard, or configuration document is required. The supplementary local Web interface uses the same operations. Ordinary desired-state saves succeed after persistence and required safety work; background activation failures remain explicit warnings, not failed saves. Explicit reload, lifecycle, revocation, native and requested startup failures remain nonzero.")
         .subcommand_required(true)
         .disable_help_subcommand(true)
         .arg(global_value("format", "FORMAT", "Output format: json (default) or text.").value_parser(["json", "text"]))
@@ -428,8 +428,8 @@ fn provider_commands() -> Command {
         edit_args(
             leaf_with_fields(
                 "add",
-                "Create one independently managed provider instance.",
-                "Select catalog metadata or an explicit supported integration. Provider creation may remain incomplete and unauthenticated. --metadata, --integration, --region and repeated --endpoint are explicit selectors; do not set the same field through --set.\n\nExit: 0 when saved; 2 for invalid schema/duplicate ID; 3 for action-required qualification; 4 for persistence or required safety/startup failure.\nExample: tmax provider add custom-gateway --integration custom --endpoint chat-completions https://gateway.example/openai/v1",
+                "Create one independently managed provider access instance.",
+                "Select catalog metadata or an explicit supported integration. A provider is an independent upstream access instance; it may remain incomplete and unauthenticated. --metadata, --integration, --region and repeated --endpoint are explicit selectors; do not set the same field through --set.\n\nExit: 0 when saved; 2 for invalid schema/duplicate ID; 3 for action-required qualification; 4 for persistence or required safety/startup failure.\nExample: tmax provider add custom-gateway --integration custom --endpoint chat-completions https://gateway.example/openai/v1",
                 add_fields,
             ),
             add_fields,
@@ -484,7 +484,7 @@ fn provider_commands() -> Command {
         .arg(value("scope", "SCOPE", "auth, models, quota, or all.").value_parser(["auth", "models", "quota", "all"]).required(true))
         .arg(required_pos(1, "ID", "Local provider ID.")), true, false);
     let input = provider_input_commands();
-    family("provider", "Create, inspect, authenticate, refresh, and remove provider instances.", Command::new("provider")
+    family("provider", "Create, inspect, authenticate, refresh, and remove provider access instances.", Command::new("provider")
         .subcommand(leaf("list", "List provider IDs, names, enabled/authentication state, quota freshness, and affected-target counts.", "Compact retained-state read. It does not resolve secrets, refresh remotely, or verify upstream authorization.\n\nExit: 0 when the read completes.\nExample: tmax provider list"))
         .subcommand(leaf("inspect", "Inspect a provider's configuration, inherited/effective metadata, access, inputs, and references.", "File and loaded projections, endpoint resolution, auth source/known-or-unknown identity, models, subscription/balance facts, input readiness, retained secret references, and file/loaded differences are distinct. No secret resolution or remote refresh.\n\nExit: 0 when inspection completes; unknown IDs are invalid input.\nExample: tmax provider inspect deepseek")
             .arg(required_pos(1, "ID", "Local provider ID.")))
@@ -634,18 +634,18 @@ fn model_commands() -> Command {
         .subcommand(mutation(leaf("clear", "Write an explicit empty local reasoning-options array.", "This differs from clearing overrides.reasoning_options, which restores catalog inheritance.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax model reasoning clear deepseek/deepseek-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
     let schedule = Command::new("schedule")
-        .about("Manage calendar priority schedules on concrete offerings.")
+        .about("Manage calendar priority schedules on concrete models.")
         .subcommand(schedule_rule("add", false))
         .subcommand(schedule_rule("replace", true))
         .subcommand(mutation(leaf("remove", "Remove one schedule entry at its required file revision.", "INDEX is a zero-based local position; guard is required and must match the current file. A later write requires a fresh revision.\n\nExit: 0 when saved; 2 for invalid index; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule remove deepseek/deepseek-flash 0 --if-revision REVISION")
             .arg(value("if-revision", "REVISION", "Required exact current file revision.").required(true))
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "INDEX", "Zero-based schedule position.")), true, false))
-        .subcommand(mutation(leaf("clear", "Remove the offering's schedule, not its base priority.", "An empty schedule permits clearing the timezone when no other time gate needs it.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule clear deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("clear", "Remove the model's schedule, not its base priority.", "An empty schedule permits clearing the timezone when no other time gate needs it.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule clear deepseek/deepseek-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
     let rule = model_rule_commands();
     let alias = model_alias_commands();
-    let explain = leaf("explain", "Explain no-inference model selection or one retained session destination.", "Requires a model ID and explicit --protocol. Use a public qualified concrete or alias ID, except with an upstream-source native entry: its ID is the exact upstream model ID under that entry's provider, including any slashes. Optional --at uses retained facts valid then; it never fetches or predicts. Assess native compatibility with --target TARGET, optionally --agent-provider NAME for an existing entry, or --agent AGENT --path PATH for an undeclared scope. Every context assesses only the requested offering or explicit alias candidates. --session inspects an existing gateway session and cannot use an upstream-source entry.\n\nReturns candidates/exclusions, rules, priorities, selection provenance, compatibility and unknown evidence. Does not write settings/native files, resolve secrets, refresh login, start inference, reserve a session, or probe. Rejects --dry-run.\n\nExit: 0 when explanation completes, including blocked/unknown availability; 2 for invalid operand combinations.\nExample: tmax model explain L0 --protocol chat-completions")
+    let explain = leaf("explain", "Explain no-inference model selection or one retained session destination.", "Requires a model ID and explicit --protocol. Use a public qualified concrete or alias ID, except with an upstream-source native entry: its ID is the exact upstream model ID under that entry's provider, including any slashes. Optional --at uses retained facts valid then; it never fetches or predicts. Assess native compatibility with --target TARGET, optionally --agent-provider NAME for an existing entry, or --agent AGENT --path PATH for an undeclared scope. Every context assesses only the requested model or explicit alias candidates. --session inspects an existing gateway session and cannot use an upstream-source entry.\n\nReturns candidates/exclusions, rules, priorities, selection provenance, compatibility and unknown evidence. Does not write settings/native files, resolve secrets, refresh login, start inference, reserve a session, or probe. Rejects --dry-run.\n\nExit: 0 when explanation completes, including blocked/unknown availability; 2 for invalid operand combinations.\nExample: tmax model explain L0 --protocol chat-completions")
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
         .arg(value("target", "TARGET", "Declared target for native assessment.").conflicts_with_all(["agent", "path"]))
         .arg(value("agent-provider", "NAME", "Existing target-local provider entry.").requires("target"))
@@ -655,7 +655,7 @@ fn model_commands() -> Command {
         .arg(value("session", "SESSION", "Existing retained gateway session handle."))
         .arg(value("state", "STATE", "file (default) or loaded.").value_parser(["file", "loaded"]))
         .arg(required_pos(1, "ID", "Public concrete/alias ID, or exact upstream ID with an upstream-source native entry."));
-    let probe = mutation(leaf("probe", "Run one explicitly requested bounded potentially paid inference check.", "Requires a concrete QUALIFIED offering, protocol, and an integration-qualified transport. A probe may use paid quota/credit; inspect dry-run/capability help for known price and unknown charges. No alias fan-out, retries, or replay. This is not a non-inference health check.\n\nDry-run contacts no upstream and reads no credentials.\nExit: 0 when the requested probe completes; 3 when qualification/credential is required; 4 for request/transport/upstream failure.\nExample: tmax model probe deepseek/deepseek-flash --protocol chat-completions --transport http --dry-run")
+    let probe = mutation(leaf("probe", "Run one explicitly requested bounded potentially paid inference check.", "Requires a concrete QUALIFIED model, protocol, and an integration-qualified transport. A probe may use paid quota/credit; inspect dry-run/capability help for known price and unknown charges. No alias fan-out, retries, or replay. This is not a non-inference health check.\n\nDry-run contacts no upstream and reads no credentials.\nExit: 0 when the requested probe completes; 3 when qualification/credential is required; 4 for request/transport/upstream failure.\nExample: tmax model probe deepseek/deepseek-flash --protocol chat-completions --transport http --dry-run")
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
         .arg(value("transport", "TRANSPORT", "Exact integration-qualified transport; see integration inspect.").required(true))
         .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name, not an alias.")), true, false);
@@ -668,17 +668,17 @@ fn model_commands() -> Command {
                 .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
                 .arg(required_pos(2, "FIELD", "overrides.modalities.input or overrides.modalities.output.")), true, true)))
         ;
-    family("model", "Inspect and manage concrete offerings, aliases, priorities, schedules, and explicit probes.", Command::new("model")
+    family("model", "Inspect and manage concrete models, aliases, priorities, schedules, and explicit probes.", Command::new("model")
         .subcommand(leaf("list", "List concrete models and aliases with protocol/publication/availability summaries.", "Optional filters are --provider ID, --protocol P, and --kind concrete|alias. Native selections do not publish gateway models. Publication is not proof of upstream success.\n\nExit: 0 when read completes.\nExample: tmax model list --kind concrete")
             .arg(value("provider", "ID", "Filter by local provider ID."))
             .arg(protocol_value("protocol", "Filter by native protocol."))
             .arg(value("kind", "KIND", "concrete or alias.").value_parser(["concrete", "alias"])))
-        .subcommand(leaf("inspect", "Inspect one qualified concrete offering or unambiguous alias ID.", "Concrete qualified names identify an offering independent of protocol; --protocol filters details only. Alias identity is protocol plus ID; ambiguous bare IDs require --protocol. Includes effective metadata/provenance, local overrides, revision-scoped local indices, capabilities, priorities/rules, and file/loaded differences.\n\nExit: 0 when read completes; 2 for unknown/ambiguous identity.\nExample: tmax model inspect deepseek/deepseek-flash")
+        .subcommand(leaf("inspect", "Inspect one qualified concrete model or unambiguous alias ID.", "Concrete qualified names identify a model independent of protocol; --protocol filters details only. Alias identity is protocol plus ID; ambiguous bare IDs require --protocol. Includes effective metadata/provenance, local overrides, revision-scoped local indices, capabilities, priorities/rules, and file/loaded differences.\n\nExit: 0 when read completes; 2 for unknown/ambiguous identity.\nExample: tmax model inspect deepseek/deepseek-flash")
             .arg(protocol_value("protocol", "Optional protocol filter; required for ambiguous alias IDs."))
             .arg(required_pos(1, "QUALIFIED-OR-ID", "Qualified concrete name or alias ID.")))
         .subcommand(edit_args(
             mutation(
-                leaf_with_fields("add", "Register one exact upstream model offering under an existing provider.", "Registration is explicit and does not require catalog metadata to list the model.", model_fields)
+                leaf_with_fields("add", "Register one exact upstream model under an existing provider.", "Registration is explicit and does not require catalog metadata to list the model.", model_fields)
                     .arg(required_pos(1, "QUALIFIED", "provider-id/model-id.")),
                 true,
                 true,
@@ -687,17 +687,17 @@ fn model_commands() -> Command {
         ))
         .subcommand(edit_args(
             mutation(
-                leaf_with_fields("update", "Edit supported scalar metadata and priority fields for one offering.", "At least one edit is required. Clearing an optional override restores documented inheritance/default. Structured lists and reasoning options use dedicated operations.", model_fields)
+                leaf_with_fields("update", "Edit supported scalar metadata and priority fields for one model.", "At least one edit is required. Clearing an optional override restores documented inheritance/default. Structured lists and reasoning options use dedicated operations.", model_fields)
                     .arg(required_pos(1, "QUALIFIED", "provider-id/model-id.")),
                 true,
                 true,
             ),
             model_fields,
         ))
-        .subcommand(mutation(leaf("rename", "Rename an upstream model-ID component and migrate dependent references.", "The provider component cannot change. Preserve internal offering identity; reject collisions and leave no aliases.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax model rename deepseek/deepseek-flash deepseek-v4.1-flash")
+        .subcommand(mutation(leaf("rename", "Rename an upstream model-ID component and migrate dependent references.", "The provider component cannot change. Preserve internal model identity; reject collisions and leave no aliases.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax model rename deepseek/deepseek-flash deepseek-v4.1-flash")
             .arg(required_pos(1, "QUALIFIED", "Current provider-id/model-id."))
             .arg(required_pos(2, "NEW-MODEL-ID", "New upstream model-ID component.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove one model registration after reference and input-coverage checks.", "Does not delete catalog metadata or another provider's offering. Resolve references explicitly; do not cascade or choose a replacement.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax model remove deepseek/deepseek-flash")
+        .subcommand(mutation(leaf("remove", "Remove one model registration after reference and input-coverage checks.", "Does not delete catalog metadata or another provider's model. Resolve references explicitly; do not cascade or choose a replacement.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax model remove deepseek/deepseek-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true))
         .subcommand(override_commands)
         .subcommand(reasoning)
@@ -754,7 +754,7 @@ fn model_rule_commands() -> Command {
         let about = if replace {
             "Replace one complete signal rule, retaining its ID and position."
         } else {
-            "Append a new immutable offering-local signal-rule ID."
+            "Append a new immutable model-local signal-rule ID."
         };
         let detail = "Requires --input INPUT --priority INTEGER --reset-within DURATION. Quota inputs also require --remaining-at-least-percent DECIMAL; reset inputs forbid it. Optional --enabled BOOLEAN defaults true. The input must belong to this provider and cover the upstream model; kind is derived from the same declaration snapshot. Optional time gates require a complete date/weekday selector and complete --all-day or --start/--end window, and use the model timezone. DURATION is a positive integer and one lowercase s/m/h/d unit.\n\nReplace requires the complete required definition; omitted optional gate clears it and omitted enabled restores true. Missing/stale input keeps a valid rule unknown, never zero quota.\n\nExit: 0 when saved; 2 for invalid reference/definition; 3 for required current action; 4 for persistence or required safety/startup failure.\nExample: tmax model rule add opencode-go/deepseek-v4.1-flash use-weekly --input weekly-allowance --priority 120 --reset-within 6h --remaining-at-least-percent 75.0";
         mutation(
@@ -827,11 +827,7 @@ fn model_rule_commands() -> Command {
                     "QUALIFIED",
                     "Qualified concrete model name.",
                 ))
-                .arg(required_pos(
-                    2,
-                    "RULE-ID",
-                    "Offering-local immutable rule ID.",
-                ))
+                .arg(required_pos(2, "RULE-ID", "Model-local immutable rule ID."))
                 .group(
                     ArgGroup::new("selector")
                         .args(["weekday", "date"])
@@ -847,10 +843,10 @@ fn model_rule_commands() -> Command {
         )
     };
     Command::new("rule")
-        .about("Manage offering-local input-driven priority rules.")
+        .about("Manage model-local input-driven priority rules.")
         .subcommand(state_arg(leaf("list", "List ordered signal rules and their current outcomes.", "Read-only retained-fact evaluation at one coherent current instant. Does not refresh data or resolve secrets.\n\nExit: 0 even when inputs are unknown/unavailable.\nExample: tmax model rule list opencode-go/deepseek-v4.1-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))))
-        .subcommand(state_arg(leaf("inspect", "Inspect one rule in the offering's ordered evaluation context.", "Use optional --at RFC3339 explicit-offset instant with retained facts only. No refresh or credential resolution.\n\nExit: 0 even for false/unknown/shadowed rule outcomes.\nExample: tmax model rule inspect opencode-go/deepseek-v4.1-flash use-weekly --at 2026-10-23T10:00:00Z")
+        .subcommand(state_arg(leaf("inspect", "Inspect one rule in the model's ordered evaluation context.", "Use optional --at RFC3339 explicit-offset instant with retained facts only. No refresh or credential resolution.\n\nExit: 0 even for false/unknown/shadowed rule outcomes.\nExample: tmax model rule inspect opencode-go/deepseek-v4.1-flash use-weekly --at 2026-10-23T10:00:00Z")
             .arg(value("at", "INSTANT", "RFC 3339 explicit-offset evaluation instant."))
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
             .arg(required_pos(2, "RULE-ID", "Exact immutable rule ID."))))
@@ -877,16 +873,16 @@ fn model_rule_commands() -> Command {
 }
 
 fn model_alias_commands() -> Command {
-    let alias_edit = "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session), and per-candidate reasoning effort. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set an existing candidate's effort; repeat --clear-candidate-reasoning-effort QUALIFIED to remove an override. A candidate may be changed or cleared once per request, never both. Values must be nonempty and listed in that concrete candidate's effective positive reasoning_options metadata; reasoning=true alone is not enough. Only Chat Completions and Responses support overrides; Messages does not. No arbitrary request parameters, reasoning toggles, or budgets are accepted. Candidate lists contain only registered qualified concrete offerings, not aliases or bare providers; preserve order and reject duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.";
+    let alias_edit = "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session), and per-candidate reasoning effort. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set an existing candidate's effort; repeat --clear-candidate-reasoning-effort QUALIFIED to remove an override. A candidate may be changed or cleared once per request, never both. Values must be nonempty and listed in that concrete candidate's effective positive reasoning_options metadata; reasoning=true alone is not enough. Only Chat Completions and Responses support overrides; Messages does not. No arbitrary request parameters, reasoning toggles, or budgets are accepted. Each candidate is a reference to an existing registered qualified model plus alias-local settings, not a separate model. Candidate lists cannot contain aliases or bare providers; preserve order and reject duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.";
     let add = mutation(
         leaf_with_fields(
             "add",
-            "Create one protocol-qualified model alias backed by explicit candidates.",
+            "Create one protocol-qualified named configuration referencing existing models.",
             "Requires one-or-more --candidate QUALIFIED. Candidates form the complete ordered list. Set per-candidate effort with --candidate-reasoning-effort QUALIFIED=EFFORT; no effort override is inferred.\n\nExit: 0 when saved; 2 for invalid ID/candidates/effort; 4 for persistence or required safety/startup failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate provider/model --candidate-reasoning-effort provider/model=effort",
             alias_edit,
         )
         .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
-        .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete offering; repeat in order.").required(true))
+        .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete model; repeat in order.").required(true))
         .arg(repeated("candidate-reasoning-effort", "QUALIFIED=EFFORT", "Set an existing candidate's supported reasoning effort; repeat for distinct candidates.").long_help(alias_edit))
         .arg(repeated("clear-candidate-reasoning-effort", "QUALIFIED", "Clear one candidate's effort override; repeat for distinct candidates.").long_help(alias_edit))
         .arg(pair("set", "FIELD", "VALUE", "Set enabled or continuity.").long_help(alias_edit))
@@ -924,7 +920,7 @@ fn model_alias_commands() -> Command {
             .arg(repeated("candidate", "QUALIFIED", "Exact existing candidate to remove; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true));
     Command::new("alias")
-        .about("Manage public model aliases, explicit candidates, continuity, and per-candidate reasoning effort.")
+        .about("Manage named model configurations, existing-model references, continuity, and alias-local reasoning effort.")
         .subcommand(add)
         .subcommand(update)
         .subcommand(candidates)

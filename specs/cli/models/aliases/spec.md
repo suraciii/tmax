@@ -1,13 +1,17 @@
 # Model alias commands
 
 This child owns model-alias grammar and results. The
-[model contract](../../../model-routing/spec.md) owns candidate eligibility,
-identity, selection, and continuity. Use [common CLI rules](../../spec.md),
+[model contract](../../../model-routing/spec.md) owns Model identity, candidate
+eligibility, selection, and continuity. Use [common CLI rules](../../spec.md),
 [configuration changes](../../configuration/spec.md), and
 [shared results](../../results/spec.md). [Model inspect](../spec.md#model-inspection)
 owns concrete/alias inspection syntax.
 
 ## Model aliases and candidate membership
+
+These commands edit named ModelAlias configuration. A candidate is an existing
+Model reference with alias-local settings, not an independently managed Model or
+candidate entity; membership commands do not create or remove the referenced Model.
 
 | Command | Requested change |
 | --- | --- |
@@ -30,7 +34,7 @@ requires client/upstream qualification; it cannot bypass conversation rules.
 
 | Candidate or identity condition | Observable contract |
 | --- | --- |
-| Explicit `--candidate` operands | Preserve order; accept only registered qualified concrete offerings. Reject alias candidates, recursive aliases, bare providers, duplicates, and an empty list. |
+| Explicit `--candidate` operands | Preserve order; accept only registered qualified concrete models. Reject alias candidates, recursive aliases, bare providers, duplicates, and an empty list. |
 | `model alias update --candidate` | Replace the complete list with the repeated operands; never append implicitly. |
 | Update omits `--candidate` | Preserve the existing list; never guess a membership change or add a provider. |
 | Alias ID | Arbitrary user-defined name; `L0`, `L1`, and `coding` have no built-in candidate membership or ranking. |
@@ -93,5 +97,5 @@ tmax model alias update coding --protocol chat-completions \
   --clear-candidate-reasoning-effort provider-a/model-a
 ```
 
-Replace the generic candidate names with registered offerings and each effort
+Replace the generic candidate names with registered models and each effort
 placeholder with a value supported by that candidate's effective metadata.

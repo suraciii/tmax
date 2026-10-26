@@ -5,6 +5,13 @@ index of provider-specific contracts under the [product specification](../produc
 Each child contract owns its service product's exceptional behavior and evidence.
 These contracts do not claim that integrations have been implemented or exercised.
 
+An Integration is a qualified behavior definition/type, not a managed upstream
+access instance or universal service identity. A Provider selects it; multiple
+Providers may select the same Integration while retaining independent endpoints,
+authentication configuration, optional account/subscription facts, and Models.
+The `custom` Integration can carry unrelated explicitly configured services; its
+shared type neither identifies those services nor qualifies their behavior.
+
 ## Support contract
 
 Codex CLI, stock pi, omp, OpenCode, and NousResearch Hermes Agent are separate
@@ -47,7 +54,7 @@ or a version-qualified contract. tmax must not assume that changing a database
 row or deleting one auth file removes every credential source. Disabling a model
 in an agent's picker must not be described as preventing all direct calls.
 
-For a concrete offering, native application must preserve known effective
+For a concrete model, native application must preserve known effective
 context/output limits, reasoning support, and input modalities where the
 version-qualified native schema can express them. Unknown metadata must remain
 unknown rather than receive fabricated defaults. This is model-capability

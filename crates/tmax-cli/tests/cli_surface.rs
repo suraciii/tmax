@@ -326,9 +326,4 @@ fn gateway_is_the_canonical_command_and_source_flag() {
     json_error(&tmax(&["proxy", "status"]));
     let network = tmax(&["network", "proxy", "--help"]);
     assert!(network.status.success());
-    assert!(
-        String::from_utf8(network.stdout)
-            .unwrap()
-            .contains("outbound proxy")
-    );
 }

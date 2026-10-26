@@ -47,7 +47,7 @@ mod windows_startup;
 #[path = "service/windows_web.rs"]
 mod windows_web;
 
-const MANAGEMENT_PROTOCOL: &str = "tmax-control/4";
+const MANAGEMENT_PROTOCOL: &str = "tmax-control/5";
 const CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
 const CONTROL_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 const WEB_REQUEST_BYTES: usize = 1024 * 1024;

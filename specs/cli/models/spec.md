@@ -13,20 +13,20 @@ saved fields. Use [common CLI rules](../spec.md),
 | Command | Result |
 | --- | --- |
 | `model list [--provider ID] [--protocol P] [--kind KIND]` | Compact concrete/alias identities, declared protocol support, shared publication, and availability. `KIND` is `concrete` or `alias`; omission includes both. |
-| `model inspect QUALIFIED [--protocol P]` | Concrete offering details across all supported protocols; optional protocol filters the details. Include effective metadata/provenance, local overrides, revision-scoped local array indices, capabilities, priority/rules, and file/loaded differences. |
+| `model inspect QUALIFIED [--protocol P]` | Concrete model details across all supported protocols; optional protocol filters the details. Include effective metadata/provenance, local overrides, revision-scoped local array indices, capabilities, priority/rules, and file/loaded differences. |
 | `model inspect ID [--protocol P]` | Inspect a model alias's definition, candidates, shared continuity, and availability. Without protocol, infer only one uniquely configured alias ID. Ambiguous IDs require `--protocol`. |
 
 | Inspection fact | Contract |
 | --- | --- |
-| Concrete identity | A qualified name identifies an offering independently of protocol; inspect requires no protocol operand. Filtering cannot manufacture protocol support or upstream access. |
+| Concrete identity | A qualified name identifies a model independently of protocol; inspect requires no protocol operand. Filtering cannot manufacture protocol support or upstream access. |
 | Alias identity | `(protocol, id)`; inference, agent model/default/role operations, and explanation still require explicit protocol. |
 | List `kind` | `concrete` or `alias`. |
-| List `published_protocols` | Derived only from enabled existing provider/offering/alias definitions and declared supported protocols, never native Agent selections. Publication is not proof of upstream success. |
+| List `published_protocols` | Derived only from enabled existing provider/model/alias definitions and declared supported protocols, never native Agent selections. Publication is not proof of upstream success. |
 | Availability | Disabled/unavailable/unsupported conditions follow the model contract. |
 | Shared publication | Every shared-key holder sees the same list; no gateway-model CRUD, publishing/permission table, or automatic catalog enrollment. |
 | Compact list | Do not repeat metadata, full evaluations, or inspect argv per row. |
-| Detailed concrete read | Expose [priority evaluations](rules/spec.md#priority-evaluation-data) once per offering, not per protocol. |
-| Native reasoning projection | Concrete inspection includes `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the offering's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). This is desired capability mapping, not a default or evidence of native application. |
+| Detailed concrete read | Expose [priority evaluations](rules/spec.md#priority-evaluation-data) once per model, not per protocol. |
+| Native reasoning projection | Concrete inspection includes `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the model's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). This is desired capability mapping, not a default or evidence of native application. |
 
 Examples: `tmax model list --kind concrete`, `tmax model list --kind alias`,
 `tmax model inspect deepseek/deepseek-flash`,
@@ -37,9 +37,9 @@ Examples: `tmax model list --kind concrete`, `tmax model list --kind alias`,
 
 | Command | Requested change |
 | --- | --- |
-| `model add QUALIFIED [EDIT]` | Register exactly that upstream offering under an existing provider, even if absent from catalog metadata. |
+| `model add QUALIFIED [EDIT]` | Register exactly that upstream model under an existing provider, even if absent from catalog metadata. |
 | `model update QUALIFIED [EDIT]` | Edit the scalar fields below; at least one edit is required. |
-| `model rename QUALIFIED NEW-MODEL-ID` | Change the upstream-ID component within the same provider, update references, and preserve internal offering identity. Never move providers. |
+| `model rename QUALIFIED NEW-MODEL-ID` | Change the upstream-ID component within the same provider, update references, and preserve internal model identity. Never move providers. |
 | `model remove QUALIFIED` | Remove only that registration after reference/input-coverage checks, not catalog data or other instances. |
 | `model override list replace QUALIFIED FIELD [--value STRING]...` | Replace `overrides.modalities.input` or `overrides.modalities.output`. No values writes an explicit empty array. |
 | `model reasoning add QUALIFIED --type STRING [--value STRING]... [--empty-values]` | Append one local reasoning-option table; an absent override starts empty, not copied from catalog. |
@@ -102,13 +102,13 @@ needed file revision, and saved/loaded outcome; full metadata remains in inspect
 | Native entry assessment | Assess native support, supplier restrictions, and credential handoff, not permission or a private model list. Incomplete target selections/default do not block explanation. Never infer context from a shared key or similar entry name. |
 | Undeclared native scope | `--agent AGENT --path PATH` assesses the public qualified concrete or alias ID with the same qualified inspection as `agent inspect --agent AGENT --path PATH`; do not register or import the scope. |
 | Context selectors | Omit all selectors, choose `--target` with optional `--agent-provider`, or choose both `--agent` and `--path`. Reject mixed or incomplete selectors. |
-| Candidate scope | Use only the explicit alias candidates or the requested concrete offering, not native imports. A tool name/readable native login is not proof of supplier compatibility or access. |
+| Candidate scope | Use only the explicit alias candidates or the requested concrete model, not native imports. A tool name/readable native login is not proof of supplier compatibility or access. |
 
 | Explanation evidence or boundary | Contract |
 | --- | --- |
 | No `--at` | Use one coherent observation/admission instant with config, accepted metadata, and input revisions captured together. |
 | `--at INSTANT` | Use retained facts valid then; do not fetch, predict, or rebuild missing history. |
-| Candidate evidence | Return selected/excluded offerings, reasons/ties, effective priority, ordered signal-rule explanations, calendar fallback, zone/UTC offset, next boundary, and provenance/freshness under the [priority result contract](rules/spec.md#priority-evaluation-data). |
+| Candidate evidence | Return selected/excluded models, reasons/ties, effective priority, ordered signal-rule explanations, calendar fallback, zone/UTC offset, next boundary, and provenance/freshness under the [priority result contract](rules/spec.md#priority-evaluation-data). |
 | Candidate effort | Show the alias-local configured choice under [Request parameters](../../model-routing/spec.md#request-parameters), independently of capability declarations. Do not present an omitted override as an upstream default. |
 | Support/access | Distinguish documented, verified, incompatible, and unknown support; missing qualification/credentials remain blocked/unknown, not fabricated access. |
 | Alias continuity | Shared by every caller of the definition; native selections/defaults/roles do not override it. |
@@ -135,6 +135,9 @@ All context fields other than `kind` are strings or null.
 | `data.source` | Present only for `kind = agent_provider`; exactly `{provider: string}` or `{gateway: true}`. |
 | `data.requested` | Exactly `{id, protocol}`; both are required strings. |
 | `data.continuity` | `session` or `stateless` for alias gateway explanations; otherwise null. |
+| `data.selection.model_identity` | Stable local identity of the selected provider-owned Model; independent of provider/model display names and explicit ID renames. |
+| `data.selection.qualified_model` | Exact selected `provider-id/model-id`; distinct from the requested public alias ID. |
+| Selection tie-break reason | `stable_model_identity` when equal effective priorities are resolved by stable local Model identity. |
 | `data.priority_evaluations[].candidate_reasoning_effort` | Exact configured string for that evaluated candidate, or null for no configured override. |
 | `data.selection.candidate_reasoning_effort` | Exact configured string for the selected destination, or null. A retained-session read uses the current configuration view and preserves its separate original decision. |
 | Selection/session evidence | Follow the model contract and retain captured revisions; no authorization or target-permission result. |

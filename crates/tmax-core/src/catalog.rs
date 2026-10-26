@@ -706,7 +706,7 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
     }
 
     #[test]
-    fn missing_catalog_models_remove_inherited_defaults_not_local_offerings() {
+    fn missing_catalog_models_remove_inherited_defaults_not_local_models() {
         let (config, old, mut new) = fixture();
         new.providers.get_mut("directory").unwrap()["models"] = json!({});
         let impact = adoption_impact(&config, Some(&old), &new).unwrap();

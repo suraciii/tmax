@@ -87,7 +87,7 @@ text input, context 128000, output 16384. These are native fallbacks, not verifi
 provider capabilities. Explicit `false` and `[]` are distinct from omitted values.
 Explicit zero context/output is invalid, not a request to use a fallback.
 
-For a concrete tmax offering, the qualified capability mapping is effective
+For a concrete tmax model, the qualified capability mapping is effective
 `limit.context` → `contextWindow`, `limit.output` → `maxTokens`, `reasoning` →
 `reasoning`, and supported `modalities.input` → `input` (intersection with native
 text/image). Unknown metadata is omitted; an unrepresentable known zero blocks
@@ -181,7 +181,7 @@ startup defaults. Existing sessions can retain their selections.
 Independent post-repair qualification used release SHA-256
 `7f205cd16aa8c9063f99c9f4ee0883e6ef2cd4e06b1ff05201f4d86a04a19136`.
 Actual apply wrote context 1000000, output 65536, reasoning true, and text/image
-input from a concrete offering; unsupported audio metadata was filtered. The
+input from a concrete model; unsupported audio metadata was filtered. The
 installed parser consumed those values. Separate parser checks accepted explicit
 reasoning false and empty input. Restore preserved a later unowned field and
 original settings bytes and removed the private key artifact. A known zero

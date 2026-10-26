@@ -23,8 +23,8 @@ an assistant or an approval/workflow system.
 | Saving desired settings differs from changing running agents | Watch every file or maintain per-field pending layers | Reload and executed management edits activate the whole valid file, including pending manual changes; native application remains separate |
 | Provider setup should not reconstruct another tool's state | Import providers and credentials from existing agents | Create providers from selected metadata or explicit custom settings; inspect agents only to configure them safely |
 | Agent configuration and inference forwarding are independent | Give each target a direct/gateway mode | Native provider entries refer to upstream access or the tmax gateway; one target can contain both, and the gateway needs no managed target |
-| Consumers need fixed or multi-offering model access | Require a route for every concrete model or add a separate account pool | Concrete offerings map directly; model aliases list explicit qualified offerings selected with existing priority rules |
-| Multiple agents need predictable model choices | Infer candidate groups from alias names or add per-agent priority overrides | Share offering priorities and protocol-qualified model aliases; each user-defined alias explicitly names its candidates |
+| Consumers need fixed or multi-model access | Require a route for every concrete model or add a separate account pool | Concrete models map directly; model aliases list explicit qualified models selected with existing priority rules |
+| Multiple agents need predictable model choices | Infer candidate groups from alias names or add per-agent priority overrides | Share model priorities and protocol-qualified model aliases; each user-defined alias explicitly names its candidates |
 | Equal-priority subscriptions should have predictable use | Rotate or balance every new request | Deterministic primary/standby selection; new sessions may use another eligible candidate without moving established ones |
 | Peak pricing should change future selections | Cron jobs rewrite agent configuration or interrupt sessions | Evaluate schedules when selecting a new destination; retain established conversation selections |
 | Existing configuration belongs to the user | Regenerate whole agent config from tmax state | Track owned changes and compare against inputs captured within execution; unrelated settings and concurrent edits must survive |
@@ -66,18 +66,17 @@ an assistant or an approval/workflow system.
 
 ## Product structure
 
-The management plane owns provider instances, concrete model settings, model
-aliases, agent configuration, and change application. Authentication and billing
-belong to each upstream provider. CLI and Web share operations and validation.
-Agent configuration and gateway forwarding work independently or together.
+Provider and AgentTarget are the principal independently managed objects. CLI
+and Web share their operations and validation. Agent configuration and gateway
+forwarding work independently or together.
 
 ```mermaid
 flowchart TB
     Catalog["models.dev metadata"]
-    Provider["Upstream provider<br/>Credentials and optional subscription"]
-    Model["Concrete models<br/>Priority and rules"]
-    Alias["Model aliases<br/>Candidates and continuity"]
-    Agent["Agent target<br/>Named native provider entries"]
+    Provider["Provider access instance<br/>Authentication and optional subscription information"]
+    Model["Provider-owned Models<br/>Priority and rules"]
+    Alias["ModelAlias configuration<br/>Model references, local effort, and continuity"]
+    Agent["AgentTarget native scope<br/>Named native provider entries"]
     Gateway["Local model gateway<br/>Shared key and derived model list"]
     Client["Independently configured client"]
     Provider -.->|Metadata defaults| Catalog
@@ -90,12 +89,16 @@ flowchart TB
     Gateway -->|Selected destination| Alias
 ```
 
+Alias candidates are model references with optional alias-local settings, not
+independently managed objects. Account and subscription facts belong to providers;
+session bindings and observations are runtime state, not desired resources.
+
 An agent's native provider entries and model choices are its configuration,
 not upstream accounts or permission grants. Preview, apply, conflict detection,
 and restoration act on that configuration. Removing a managed target does not
 remove the gateway or revoke its shared key.
 
-Base priorities, time schedules, and signal rules belong to concrete offerings,
+Base priorities, time schedules, and signal rules belong to concrete models,
 not separate policy resources. Each model alias has a nonempty list of unique,
 registered qualified candidates. IDs such as L0, L1, or coding carry no selection
 semantics; only the explicit list defines membership. Concrete configuration and
@@ -134,8 +137,11 @@ expose capabilities, conditions, and observable results to the user's assistant
 without requiring it to reconstruct the product through a UI. It does not require
 an embedded agent, a new discovery protocol, or a certification claim.
 
-A provider integration owns service identity, authorized authentication flows,
-endpoint/protocol declarations, model capabilities, and supported usage queries.
+A provider integration defines qualified authentication flows, endpoint/protocol
+behavior, capability mapping, and supported usage queries. It is an integration
+definition/type, not the identity of an arbitrary upstream service, account, or
+local Provider. In particular, `custom` can serve unrelated services only through
+their explicitly configured, independently qualified provider instances.
 An agent integration owns version detection, configuration precedence, native
 credential handoff, model selection, and change restoration. Neither owns the
 other's schema. pi and omp must have separate agent integrations.
@@ -166,15 +172,17 @@ ownership. Secure storage may separate secret bytes from ordinary settings witho
 creating an independent API-key product. Upstream user/workspace identity is optional
 metadata. Different credentials or local IDs do not prove independent billing scopes.
 
-Subscription information is optional provider data. Several agents and routes may
-use one provider without copying its subscription. Authentication can be missing
-or expired while the plan remains visible. Grouping instances by service is a UI
-view, not a parent object with credentials or an active-account pointer.
+Subscription information is optional provider data, not a separately managed
+resource. Several agents and routes may use one provider without copying its
+subscription. Authentication can be missing or expired while the plan remains
+visible. Absence of subscription information proves no billing state. Grouping
+instances by service is a UI view, not a parent object with credentials or an
+active-account pointer.
 
-A model offering is identified by the local provider and exact upstream model ID.
-Two accounts therefore expose distinct qualified offerings even when their catalog
-metadata is identical. Their priorities and schedules can differ. Supported
-protocols are capabilities of one offering, not extra model identities.
+A Model is a provider-owned child identified by the local provider and exact
+upstream model ID. Two providers expose distinct qualified models even when the
+account or catalog metadata matches. Their priorities and schedules can differ.
+Supported protocols are capabilities of one Model, not extra model identities.
 
 The selected models.dev provider metadata is a baseline, not merely a lookup label.
 Effective supported fields combine that baseline with instance-local provider and
@@ -195,9 +203,9 @@ to copy its configuration schema or assume all Agents use the same syntax.
 
 ## Provider selection
 
-Concrete agent settings select a qualified offering and therefore one provider
-instance. Gateway access can use that same fixed offering through a derived mapping,
-or a model alias that selects among qualified offerings. There is no later account
+Concrete agent settings select a qualified model and therefore one provider
+instance. Gateway access can use that same fixed model through a derived mapping,
+or a model alias that selects among qualified models. There is no later account
 selector. To group two OpenCode Go subscriptions and official DeepSeek under one
 alias ID, explicitly list each provider/model pair; matching names are not enough.
 Equal-priority selection remains deterministic, not round-robin or implicitly
@@ -315,7 +323,7 @@ Native configuration and forwarding consume the same resolved base. Neither a
 transport adapter nor the router maintains a competing endpoint table. Request
 dispatch uses declared operations, not unrestricted path concatenation.
 
-The router derives fixed concrete mappings from enabled offerings, with no
+The router derives fixed concrete mappings from enabled models, with no
 client-permission filter or separate publication list. Model aliases supply a
 public ID, protocol, explicit candidate list, and continuity policy.
 The [selection contract](../model-routing/spec.md) resolves alias candidates and

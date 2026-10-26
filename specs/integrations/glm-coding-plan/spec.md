@@ -74,7 +74,7 @@ identifies `glm-5.3` and `glm-5.3-flash`. The
 [overview](https://docs.bigmodel.cn/cn/coding-plan/overview) says older model names
 can be rerouted to these models. A configured historical alias is not evidence
 of an unchanged model. The Claude-specific `[1m]` context suffix must not become
-a new API model offering. Models, context, reasoning, tools, and input/output
+a new API model. Models, context, reasoning, tools, and input/output
 capabilities require qualification for the selected client and protocol.
 
 ## Approved tools and native identity

@@ -9,7 +9,7 @@ retention, outcomes, and bounded historical detail. Use
 
 | Command | Result or requested boundary |
 | --- | --- |
-| `model probe QUALIFIED --protocol P --transport TRANSPORT` | One explicit bounded potentially paid inference check against that concrete offering/qualified transport. No separate approval operand. |
+| `model probe QUALIFIED --protocol P --transport TRANSPORT` | One explicit bounded potentially paid inference check against that concrete model/qualified transport. No separate approval operand. |
 | `history list [--since INSTANT] [--until INSTANT] [--provider ID] [--model ID --protocol P] [--outcome OUTCOME] [--target TARGET]` | Compact retained request metadata with process/history scope, requested/retained range, and material coverage gaps once per result. |
 | `history inspect REQUEST` | Redacted detail and historical evidence for that request, or explicit no-longer-retained state. |
 | `history clear` | Clear locally terminal records at the current serialized boundary, never in-progress or subsequently terminal/arriving records. |
@@ -19,6 +19,8 @@ not inferred from protocol. Probe help/dry-run disclose bounded request shape,
 transport, known reference pricing, unknown charges, and possible paid quota/credit
 use. Actual result reports observed usage or honest unknowns. No alias ID,
 candidate fan-out, automatic retry, or replay after upstream execution is allowed.
+Probe data identifies the tested model as `qualified_model`; request-history data
+uses the same field for a destination only after actual selection.
 A probe is not a non-inference health check. Direct execution needs no preview.
 Timing follows [transport deadlines](../../../product/spec.md#transport-deadlines),
 not an invented generation/first-token deadline. Dry-run neither reads credentials
@@ -39,10 +41,12 @@ Native provider/model selections are not a gateway access filter.
 | --- | --- |
 | List row | Stable request handle, useful identity/time/outcome summaries, and relevant failure reasons; no full evidence or derivable inspect argv. |
 | Requested model | Retain public model ID, protocol, and recognized kind `concrete` or `alias`; preserve unknown/unrecognized/malformed distinctions under [Diagnostics](../../../diagnostics/spec.md). |
+| Selected model | Nullable `qualified_model`, the selected concrete `provider-id/model-id`; null before selection, never inferred from the requested alias. |
 | Native context | Nullable `target` and `agent_provider` require independently established attribution; unknown remains null after shared-key authentication. The selected upstream provider/authorization is distinct from the native provider name. |
 | Inspect attribution | Qualified evidence or explicit unknown, never guessed caller identity. Historical names/evidence survive entry/target changes or removal without relabeling, access revocation, or session-binding deletion. |
 | Result coverage | Process/reset scope and material limits/gaps. |
 | Detailed history/status | Retain process start/clear time, actual limits/counts, eviction/capture evidence, and historical rule/input snapshots as specified by Diagnostics. Never use current config to relabel historical derived rule kind or reconstruct omitted candidates/rules. |
+| Canonical selection codes | Stable identity tie-breaking is `stable_model_identity`; permanent model removal/disablement blockers are `model_removed` and `model_disabled`. New results expose only canonical names. Historical binding normalization follows [Configuration](../../../configuration/spec.md#format-and-authority) without resetting tokens or blockers. |
 | Upstream-source native traffic | Outside gateway coverage even if the same target also has gateway entries; missing records prove neither inactivity, bypass, nor successful access. |
 
 Clear includes terminal rejected/failed/cancelled/interrupted/unknown records as

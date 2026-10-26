@@ -100,7 +100,7 @@ this adapter. `models.dev` supplies native catalog data; probe, custom metadata,
 `model.context_length`, and `model_overrides` resolve at different stages. Source:
 [`agent/model_metadata.py`](https://github.com/NousResearch/hermes-agent/blob/848fc0a/agent/model_metadata.py#L2144-L2235).
 
-For selected concrete offerings, tmax writes accepted effective context to
+For selected concrete models, tmax writes accepted effective context to
 `providers.<name>.models.<id>.context_length` for route-context resolution and
 `model_overrides.<name>.<id>.context_window` for catalog-capability resolution.
 It maps known `reasoning` and `tool_call` booleans to the exact model override's

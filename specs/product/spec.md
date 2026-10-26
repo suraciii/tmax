@@ -82,6 +82,16 @@ candidates. Alias IDs such as L0, L1, coding, or deepseek-v4.1-flash are arbitra
 user-defined names with no built-in meaning. [Model selection](../model-routing/spec.md)
 owns candidate validation, selection, and time-based schedules.
 
+Provider and AgentTarget are the principal independently managed objects. A Model
+is a provider-owned child, referenced by `provider-id/model-id`, not an independent
+service or cross-provider catalog entity. A ModelAlias is named configuration
+referencing existing models; each alias candidate is a model reference plus
+alias-local settings, with no independent identity or lifecycle. Account identity
+is optional observed information, subscription information is optional provider
+data, and authentication is provider configuration with separately protected
+credentials. Session bindings and observations are runtime state. The
+[design boundaries](design.md#product-structure) state their ownership.
+
 Agent provider configuration and model gateway forwarding are independent capabilities.
 An agent target may contain both upstream provider entries and a tmax gateway entry
 where its native capabilities permit. Neither capability requires use of the other.
@@ -176,9 +186,11 @@ replay requests, or overwrite current native settings as a side effect of startu
 
 A user must be able to add, name, inspect, disable, reauthenticate, and remove a
 provider. Each provider represents one independently managed upstream access
-instance, with one authorization configuration, service integration, region/endpoints,
-native protocols, and model settings. A second account or subscription for the
-same service is another provider, not a nested account or a second credential resource.
+instance, with one authorization configuration, an integration type, region/endpoints,
+native protocols, and provider-owned models. Separate access instances may use
+the same service or account; distinct local IDs or credentials do not establish
+separate accounts, subscriptions, or allowances. A different account requires
+another provider, not a nested account or a second credential resource.
 
 Each provider must have a unique user-editable local ID and a separate display
 name. The local ID qualifies model references and is independent of the optional
@@ -287,7 +299,7 @@ an upstream key, and cancelling a subscription are distinct operations. tmax mus
 not silently perform one as a side effect of another.
 
 Removal must be rejected while the resulting configuration contains references
-to the removed provider, offering, model alias, or login-source target. Show
+to the removed provider, model, model alias, or login-source target. Show
 those references and let the user explicitly remove or replace them before
 retrying; do not cascade-delete dependents or select replacements automatically.
 Removing a provider leaves native agent files and stored credentials untouched.
@@ -415,7 +427,7 @@ Routing follows admission evidence, not a model of the supplier's billing contro
 
 Users must be able to declare scoped rule inputs and create, replace, order,
 enable, disable, inspect, and remove finite priority rules through the CLI.
-Rules belong to concrete model offerings, not another account pool or a model
+Rules belong to concrete models, not another account pool or a model
 alias's private override hierarchy. [Model selection](../model-routing/spec.md)
 owns predicates, ordering, calendar fallback, and continuity.
 
@@ -496,7 +508,7 @@ of running-agent use; missing gateway traffic is not proof of bypass.
 
 Support is scoped to an agent version, target, provider entry, authentication
 method, protocol, and model capability. Explain unavailable combinations before
-changing files. Requests must use the configured concrete offering or an eligible
+changing files. Requests must use the configured concrete model or an eligible
 candidate of the selected model alias; failure must not select an unconfigured
 model, provider, credential, or billing product.
 
@@ -544,7 +556,7 @@ not desired configuration.
 
 The gateway serves compatible local clients independently of native agent
 configuration management. No registered agent target or client record is required.
-It exposes one shared model list derived from enabled provider offerings and
+It exposes one shared model list derived from enabled provider models and
 alias definitions under their declared protocols, not another publication or
 permission list. An agent's native model picker can show a subset without
 restricting requests to the gateway. Runtime requests do not create configuration.
@@ -577,13 +589,16 @@ Conversation bindings follow the
 
 Concrete gateway mappings must be derived from enabled, authorized provider/model
 configuration, using qualified `provider-id/model-id` public names. They do not
-require another route resource. Concrete requests pin that offering; unknown or
+require another route resource. Concrete requests pin that model; unknown or
 unavailable models must not cause registration, fuzzy lookup, or implicit fallback.
 
-A model alias maps a user-defined request model ID and native protocol to a
-required nonempty list of unique, registered qualified `provider-id/model-id`
-candidates under [Model selection](../model-routing/spec.md#model-aliases).
-It is not a new model, account pool, route resource, or protocol converter.
+A model alias is named configuration mapping a user-defined request model ID and
+native protocol to a required nonempty list of unique, registered qualified
+`provider-id/model-id` references under
+[Model selection](../model-routing/spec.md#model-aliases). Candidate-local settings
+belong to that alias, not to independent candidate objects or a second model
+lifecycle. The alias is not a new model, account pool, route resource, or protocol
+converter.
 The [multi-source example](../model-routing/spec.md#multi-source-model-alias-example)
 shows different upstream IDs behind one request ID. Concrete gateway access still
 needs no alias definition.
@@ -788,7 +803,7 @@ The supplementary Web interface must have these task-oriented areas:
 | --- | --- |
 | Overview | Provider-instance problems grouped by service, agent configuration state, gateway health, stale quota information, upcoming known renewal dates |
 | Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota and freshness |
-| Models | Concrete qualified offerings with metadata overrides, capabilities, priorities and schedules; model aliases with public names, explicit candidate lists, and selection previews |
+| Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases with public names, explicit candidate lists, and selection previews |
 | Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
 | Gateway | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
 
@@ -867,11 +882,11 @@ agent chooses operations from help and current state.
    Cancelled or failed actions retain saved definitions for subsequent operations;
    native effects follow the authentication failure boundary. Unknown quota or
    renewal must not block otherwise qualified access.
-4. Register concrete offerings and add the target's native provider entries and
+4. Register concrete models and add the target's native provider entries and
    selected models, default, and native roles through CLI operations. Inspect a
    requested concrete model or alias for the target before choosing its default;
    do not infer a selection from the Agent or model name. Upstream entries need
-   no gateway or model alias. Gateway entries can use a single concrete offering;
+   no gateway or model alias. Gateway entries can use a single concrete model;
    schedules and model aliases are optional.
 5. For gateway use, explicitly configure, start, and validate the listener. Apply the target's
    desired configuration as a separate operation, optionally preceded by its
@@ -983,12 +998,12 @@ credentials; do not claim readiness or add a fallback.
     its complete definition. Override provider and individual-model fields in one
     instance, restore inheritance by removing overrides, and leave the other
     instance's settings, credentials, subscription, and routing preferences unchanged.
-15. Map a concrete offering directly into each supported agent configuration without
+15. Map a concrete model directly into each supported agent configuration without
     requiring a model alias. Expose concrete gateway access from existing settings
     without storing redundant same-name routes or importing agent state.
 16. Configure a scenario model alias with explicit candidates from two OpenCode
     Go instances and official DeepSeek. Require a nonempty, unique list of
-    registered qualified offerings; arbitrary alias names confer no membership.
+    registered qualified models; arbitrary alias names confer no membership.
     Keep the agent-visible choice stable while new selections use eligible
     candidates and their exact upstream IDs. Model availability must precede
     native selection; no selection callback may be assumed.

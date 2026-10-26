@@ -23,7 +23,7 @@ predicates, fallback, and continuity. Use [common CLI rules](../../spec.md),
 All-day writes true; false is not shorthand. Optional `--effective-from DATE` and
 `--effective-until DATE` bound local dates with an exclusive upper bound.
 
-Set the offering's `timezone` before adding a schedule; an empty schedule permits
+Set the model's `timezone` before adding a schedule; an empty schedule permits
 that setup. All rules use that zone. Times, unequal timed endpoints, overnight
 spillover, clipping, overlap rejection, precedence, and DST follow
 [Time rules](../../../model-routing/spec.md#time-rules), without extra fields or
@@ -39,7 +39,7 @@ tmax model update deepseek/deepseek-flash --clear timezone
 ```
 
 Each indexed example needs the revision current to its own invocation, not a
-stale token reused across writes. Results identify the offering, changed local
+stale token reused across writes. Results identify the model, changed local
 position, current file revision, and saved/loaded outcome; inspect returns the
 complete local schedule and revision-scoped indices.
 
@@ -48,8 +48,8 @@ complete local schedule and revision-scoped indices.
 | Command | Result or requested change |
 | --- | --- |
 | `model rule list QUALIFIED [--state STATE]` | Compact ordered IDs/positions, definitions, readiness, and current outcomes. |
-| `model rule inspect QUALIFIED RULE-ID [--state STATE] [--at INSTANT]` | Complete definition and explanation in the offering's ordered context. |
-| `model rule add QUALIFIED RULE-ID SIGNAL-RULE` | Append a new immutable offering-local ID; reject duplicates, including disabled rules. |
+| `model rule inspect QUALIFIED RULE-ID [--state STATE] [--at INSTANT]` | Complete definition and explanation in the model's ordered context. |
+| `model rule add QUALIFIED RULE-ID SIGNAL-RULE` | Append a new immutable model-local ID; reject duplicates, including disabled rules. |
 | `model rule replace QUALIFIED RULE-ID SIGNAL-RULE` | Replace the entire definition, retaining ID/position and clearing omitted optional fields. |
 | `model rule remove QUALIFIED RULE-ID` | Remove only the rule, not inputs, schedule, or base priority. |
 | `model rule move QUALIFIED RULE-ID (--before OTHER-RULE-ID \| --last)` | Move before a distinct existing rule or to the end; no indices or priority sort. |
@@ -74,7 +74,7 @@ removes an omitted gate; it is not partial update.
 An optional finite time gate reuses schedule selectors/windows/bounds. No gate
 operands means no `time_window`; any gate operand requires a complete selector
 and window, with optional bounds. They set only `time_window`; priority remains
-the outer rule's score. Set the offering's timezone first. Cross-midnight windows,
+the outer rule's score. Set the model's timezone first. Cross-midnight windows,
 local dates, and DST use the same Time rules, not a new expression language.
 
 Reads do not refresh or resolve secrets. List uses the common current instant;
