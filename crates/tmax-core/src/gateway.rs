@@ -609,7 +609,7 @@ impl Runtime {
         )?;
         let provider = &config.providers[&selection.provider];
         client_contract(provider, &native)?;
-        crate::integrations::check_request(provider, &selection.model, protocol, body)?;
+        crate::integrations::check_request(provider, protocol, body)?;
         let endpoints = crate::integrations::resolve(provider)?;
         let endpoint = endpoints
             .get(protocol)
@@ -1141,8 +1141,7 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
     {
         return flight.reject(StatusCode::BAD_REQUEST, &error.code, "model_validation");
     }
-    if let Err(e) = crate::integrations::check_request(provider, &selection.model, protocol, &body)
-    {
+    if let Err(e) = crate::integrations::check_request(provider, protocol, &body) {
         return flight.reject(StatusCode::BAD_REQUEST, &e.code, "model_validation");
     }
     let endpoint = choice.endpoint;
@@ -1569,7 +1568,7 @@ pub fn publication(config: &Config) -> Value {
             if !m.enabled {
                 continue;
             }
-            if let Ok(protocols) = crate::integrations::protocols(p, model_id) {
+            if let Ok(protocols) = crate::integrations::protocols(p) {
                 data.push(json!({"id":format!("{provider_id}/{model_id}"),"object":"model","owned_by":provider_id,"protocols":protocols}));
             }
         }
@@ -1632,7 +1631,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
         }
         _ => return Err(Error::new("protocol_unavailable", "Unknown protocol")),
     };
-    crate::integrations::check_request(provider, model_id, protocol, &body)?;
+    crate::integrations::check_request(provider, protocol, &body)?;
     let endpoints = crate::integrations::resolve(provider)?;
     let endpoint = endpoints
         .get(protocol)
@@ -1970,6 +1969,67 @@ mod tests {
         crate::inputs::activate(&runtime.store, new, revision).unwrap();
         runtime.activate_bindings(new, false).unwrap();
         *authority = Some(Arc::new(test_snapshot(new, revision)));
+    }
+
+    #[test]
+    fn protocol_eligibility_uses_provider_endpoints_not_model_identity() {
+        let (_temporary, runtime, config) = fixture();
+        let mut go = config.clone();
+        let provider = go.providers.get_mut("p").unwrap();
+        provider.integration = Some("opencode-go".into());
+        provider.endpoints.clear();
+        provider.models = [
+            (
+                "deepseek-v4.1-flash".into(),
+                crate::config::Model::default(),
+            ),
+            ("unverified-model".into(), crate::config::Model::default()),
+        ]
+        .into();
+        go.model_aliases[0].protocol = "responses".into();
+        go.model_aliases[0].continuity = Some("stateless".into());
+        go.model_aliases[0].candidates = vec!["p/deepseek-v4.1-flash".into()];
+        publish(&runtime, &config, &go, "provider-protocols");
+        let body = json!({"input":"x","store":false});
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "pi (test; test)".parse().unwrap());
+        for id in ["p/deepseek-v4.1-flash", "p/unverified-model", "dynamic"] {
+            let choice = runtime
+                .choose(
+                    &test_snapshot(&go, "provider-protocols"),
+                    id,
+                    "responses",
+                    &body,
+                    &headers,
+                    Utc::now(),
+                )
+                .unwrap();
+            assert_eq!(choice.selection.provider, "p");
+            assert_eq!(
+                choice.endpoint,
+                "https://opencode.ai/inference/go/openai/v1"
+            );
+        }
+        let mut chat_only = go.clone();
+        chat_only.providers.get_mut("p").unwrap().integration = Some("custom".into());
+        chat_only.providers.get_mut("p").unwrap().endpoints =
+            [("chat-completions".into(), "http://127.0.0.1:9/v1".into())].into();
+        publish(&runtime, &go, &chat_only, "chat-only");
+        assert!(
+            runtime
+                .choose(
+                    &test_snapshot(&chat_only, "chat-only"),
+                    "p/deepseek-v4.1-flash",
+                    "responses",
+                    &body,
+                    &headers,
+                    Utc::now(),
+                )
+                .err()
+                .unwrap()
+                .code
+                == "endpoint_unavailable"
+        );
     }
     #[test]
     fn alias_ties_report_the_retained_model_identity_used_for_ranking() {

@@ -244,6 +244,12 @@ The local gateway is independent of managed Pi/Codex targets. Direct clients do 
 need an `agent` declaration or native apply. A concrete qualified model can be
 used directly; aliases are optional.
 
+Available model protocols follow the provider's resolved endpoints, not a
+per-model approval list. An endpoint declaration is not proof of upstream model
+support: tmax forwards the selected native protocol and returns the upstream
+result. It does not translate protocols, switch models, or retry another
+destination when the upstream rejects a combination.
+
 The default public ID can be the concrete model:
 
 ```sh

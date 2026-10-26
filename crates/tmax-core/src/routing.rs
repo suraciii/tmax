@@ -693,7 +693,6 @@ fn candidates(config: &Config, id: &str, protocol: &str) -> Result<(bool, Vec<(S
 fn eligibility(
     provider: &Provider,
     model: &Model,
-    name: &str,
     protocol: &str,
     inventory: Option<&Value>,
     provider_identity: Option<&str>,
@@ -703,12 +702,6 @@ fn eligibility(
     }
     if !model.enabled {
         return Some("model_disabled");
-    }
-    if !crate::integrations::protocols(provider, name)
-        .ok()
-        .is_some_and(|protocols| protocols.iter().any(|p| p == protocol))
-    {
-        return Some("unsupported_protocol");
     }
     if !crate::integrations::resolve(provider)
         .ok()
@@ -814,7 +807,7 @@ fn decision(
             context
                 .and_then(|context| context.native.as_ref())
                 .map(|context| -> Result<()> {
-                    context.assess(config, &provider, &name, protocol, id)?;
+                    context.assess(config, &provider, protocol, id)?;
                     if !context.gateway
                         && matches!(p.auth, Some(config::Auth::Login { .. }))
                         && let Some(authorization) = &authorization
@@ -834,7 +827,6 @@ fn decision(
                 eligibility(
                     p,
                     m,
-                    &name,
                     protocol,
                     inventory.as_ref(),
                     identity.as_ref().map(|ids| ids.0.as_str()),

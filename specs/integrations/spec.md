@@ -251,6 +251,15 @@ not permission to repair the supplied base. The
 [configuration endpoint schema](../configuration/spec.md#provider-endpoints)
 owns persisted `region` and `endpoints` fields.
 
+Model protocol availability follows the provider's resolved endpoints, not a
+per-model approval list. An unverified model/protocol combination must not block
+publication, native configuration, selection, or dispatch solely because tmax
+lacks upstream qualification evidence. Such evidence remains informational, not
+proof of support. The upstream decides whether the exact model accepts a request;
+tmax preserves its response without protocol conversion, implicit model changes,
+or fallback retries. Agent wire-format requirements, declared operation/transport
+boundaries, and original session/authorization bindings still apply.
+
 Every endpoint consumer must use this resolution: direct configuration, gateway
 dispatch, model compatibility checks, and provider discovery. Qualified
 provider-specific discovery, identity, quota, and balance operations must use
