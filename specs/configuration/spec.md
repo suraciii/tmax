@@ -571,7 +571,7 @@ configuration, not an inference client registration or gateway permission bounda
 
 | Field | Type and meaning |
 | --- | --- |
-| `agent` | Required string `codex`, `pi`, `omp`, `opencode`, or `hermes`; the coding tool identity, not this target's ID |
+| `agent` | Required string `codex`, `pi`, `omp`, `opencode`, `hermes`, or `dsh`; the coding tool identity, not this target's ID |
 | `scope` | Required path to the native configuration directory/scope recognized by the selected Agent adapter; CLI `--path` writes this field |
 | `providers` | Table of agent-local native provider entries, default empty |
 | `default` | Optional `{ provider, id, protocol }` reference to a selected model in the named native provider entry |
@@ -583,6 +583,16 @@ protocol)` pair in that entry. These references contain no continuity override.
 Protocol selection is explicit; it does not establish compatibility or conversion.
 A scope must resolve unambiguously before application; tmax must not write into
 an arbitrary directory on the assumption that an agent lives there.
+
+For `dsh`, the scope is the existing DSH home directory itself. Discovery uses
+nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`; an explicit path
+selects that home directly, not a profile or an inferred parent. tmax edits the
+home `cordis.patch.yml` and adjacent `.credentials.yaml` without enumerating,
+selecting, creating, or managing profiles or inspecting bundles. The common
+home entry `config` replaces the whole lower-layer entry configuration; profile
+routes and defaults are not automatically copied or deep-merged. Existing
+HOME-level fields and expressions remain preserved under the
+[DSH home boundary](../integrations/spec.md#dsh-home-boundary).
 
 A target add operation saves an empty `providers` table and omits `default`.
 Later native-provider, model-selection, and default operations complete the same

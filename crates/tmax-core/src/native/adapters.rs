@@ -1,4 +1,4 @@
-//! Five independent, version-specific native configuration mappings.
+//! Independent, version-specific native configuration mappings.
 //! Evidence is pinned to the concrete installations below, not a version range.
 use super::document::Format;
 use crate::{
@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) const AGENTS: [&str; 5] = ["codex", "pi", "omp", "opencode", "hermes"];
+pub(super) const AGENTS: [&str; 6] = ["codex", "pi", "omp", "opencode", "hermes", "dsh"];
 pub fn supported_roles(agent: &str) -> &'static [&'static str] {
     match agent {
         "codex" => &["review"],
@@ -60,6 +60,7 @@ pub(super) fn qualified_version(agent: &str) -> &'static str {
         "omp" => "18.12.6",
         "opencode" => "2.0.28",
         "hermes" => "0.22.1+683.g848fc0a",
+        "dsh" => "0.2.1-rc.2",
         _ => "",
     }
 }
@@ -74,6 +75,9 @@ pub(super) fn source(agent: &str) -> &'static str {
             "https://github.com/anomalyco/opencode/tree/026b106bc5d41b679ffc413264229c340871e4d3"
         }
         "hermes" => "https://github.com/NousResearch/hermes-agent/tree/848fc0a",
+        "dsh" => {
+            "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317"
+        }
         _ => "",
     }
 }
@@ -93,6 +97,9 @@ pub(super) fn precedence(agent: &str) -> Value {
         }
         "hermes" => {
             json!({"scope":"explicit HERMES_HOME, including an explicitly selected profile", "order":["managed scope", "CLI/environment model overrides", "selected profile config.yaml"], "credentials":"native pools and external login adoption can affect built-in providers; custom entries use the selected literal key", "launch_environment":"HERMES_HOME", "native_reload":"Restart Hermes in the selected HERMES_HOME; active sessions may retain model settings"})
+        }
+        "dsh" => {
+            json!({"scope":"DSH_HOME common configuration", "order":["CLI --patch overlays and flag-derived patches", "DSH_HOME/cordis.patch.yml", "native profile and bundle patches"], "credentials":"native DSH_HOME/.credentials.yaml refs precede environment fallback for the selected apiKeyEnv reference", "launch_environment":"DSH_HOME; profile selection remains DSH-owned", "native_reload":"Restart DSH consumers of this home; active sessions may retain their selections"})
         }
         _ => Value::Null,
     }
@@ -121,6 +128,9 @@ impl Entry {
 }
 const PI_THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const OMP_EFFORT_LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+// DSH 0.2.1-rc.2 catalog.ts THINKING_LEVEL_GATE and resolveModelReasoning;
+// independently qualified from Pi's thinkingLevelMap carrier.
+const DSH_EFFORT_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // Reasoning options are capability declarations. They are projected into the
 // native agent's own selector vocabulary; they never choose a default level or
@@ -236,6 +246,40 @@ fn project_reasoning(
                 omitted,
             })
         }
+        "dsh" => {
+            let mut efforts = serde_json::Map::new();
+            for level in DSH_EFFORT_LEVELS {
+                if values.iter().any(|value| value == level) {
+                    efforts.insert(level.to_owned(), json!(level));
+                }
+            }
+            if !efforts.keys().any(|level| level != "off") {
+                return Err(Error::new(
+                    "native_metadata_unrepresentable",
+                    "This model's declared reasoning efforts cannot be represented by DSH's reasoningEfforts; declare an exact supported level beyond off or leave native reasoning metadata unmanaged",
+                )
+                .field("reasoning_options"));
+            }
+            let omitted = values
+                .iter()
+                .filter(|value| !DSH_EFFORT_LEVELS.contains(&value.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            Ok(ReasoningProjection {
+                state: if omitted.is_empty() {
+                    "projected"
+                } else {
+                    "partial"
+                },
+                reason_code: if omitted.is_empty() {
+                    None
+                } else {
+                    Some("native_reasoning_options_partial")
+                },
+                fields: json!({"reasoningEfforts": efforts}),
+                omitted,
+            })
+        }
         "opencode" => {
             let setting = match protocol {
                 "chat-completions" | "responses" => "reasoningEffort",
@@ -289,14 +333,19 @@ pub(super) fn projection_view(agent: &str, protocol: &str, effective: &Value) ->
     }))
 }
 
-fn pi_omp_model_metadata(effective: &Value) -> Result<Value> {
+fn catalog_model_metadata(agent: &str, effective: &Value) -> Result<Value> {
     let mut metadata = json!({});
     for (source, native) in [("context", "contextWindow"), ("output", "maxTokens")] {
+        // DSH catalog.ts PiAiModelProfile.maxTokens also chooses a per-request
+        // default. Leave output capacity unmanaged rather than change requests.
+        if agent == "dsh" && source == "output" {
+            continue;
+        }
         if let Some(value) = effective.get("limit").and_then(|limit| limit.get(source))
             && !value.is_null()
         {
-            // Independently qualified Pi 1.2.0 and OMP 18.12.6 custom schemas
-            // reject nonpositive limits. JS numbers must retain the exact integer.
+            // Qualified Pi, OMP, and DSH schemas reject nonpositive limits.
+            // JS numbers must retain the exact integer.
             let count = value.as_u64().filter(|count| *count > 0 && *count <= 9_007_199_254_740_991)
                 .ok_or_else(|| Error::new(
                     "native_metadata_unrepresentable",
@@ -312,8 +361,8 @@ fn pi_omp_model_metadata(effective: &Value) -> Result<Value> {
         .pointer("/modalities/input")
         .and_then(Value::as_array)
     {
-        // Both qualified native schemas support only text and image, not the
-        // provider's entire modality vocabulary. An explicit empty list stays empty.
+        // Qualified native schemas support only text and image, not the
+        // provider's entire modality vocabulary.
         metadata["input"] = json!(
             input
                 .iter()
@@ -327,11 +376,34 @@ fn pi_omp_model_metadata(effective: &Value) -> Result<Value> {
 // Hermes consumes route context and catalog capability patches separately.
 // `model_overrides` here is an intermediate projection, never a provider-model key.
 pub(super) fn model_metadata(agent: &str, protocol: &str, effective: &Value) -> Result<Value> {
-    let mut metadata = if matches!(agent, "pi" | "omp") {
-        pi_omp_model_metadata(effective)?
+    let mut metadata = if matches!(agent, "pi" | "omp" | "dsh") {
+        catalog_model_metadata(agent, effective)?
     } else {
         json!({})
     };
+    if agent == "dsh" {
+        // DSH accepts the same positive integer capacities and text/image
+        // modalities, but represents reasoning capability only through efforts.
+        metadata
+            .as_object_mut()
+            .expect("native model metadata object")
+            .remove("reasoning");
+        if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
+            metadata["reasoningEfforts"] = json!(false);
+        }
+        // Unlike Pi/OMP, DSH treats [] as inheritance, not an explicit empty
+        // capability. Refuse rather than silently acquire native modalities.
+        if metadata
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        {
+            return Err(Error::new(
+                "native_metadata_unrepresentable",
+                "DSH treats an empty input list as native inheritance; this declared input capability cannot be represented",
+            ).field("modalities.input"));
+        }
+    }
     if agent == "opencode" {
         for field in ["context", "input", "output"] {
             if let Some(value) = effective.get("limit").and_then(|limit| limit.get(field))
@@ -388,7 +460,7 @@ pub(super) fn model_metadata(agent: &str, protocol: &str, effective: &Value) -> 
             );
         }
     }
-    if matches!(agent, "pi" | "omp" | "opencode")
+    if matches!(agent, "pi" | "omp" | "opencode" | "dsh")
         && let Some(values) = effort_values(effective)
     {
         let projection = project_reasoning(agent, protocol, &values)?;
@@ -459,6 +531,18 @@ fn package(protocol: &str) -> Result<&'static str> {
         )),
     }
 }
+
+pub(super) fn dsh_credential_ref(scope: &Path, entry: &Entry) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(scope.as_os_str().as_encoded_bytes());
+    digest.update(b"\0");
+    digest.update(entry.name.as_bytes());
+    digest.update(b"\0");
+    digest.update(entry.protocol.as_bytes());
+    format!("TMAX_{:X}", digest.finalize())
+}
+
 fn credential_path(scope: &Path, entry: &Entry) -> PathBuf {
     use sha2::{Digest, Sha256};
     scope.join(format!(
@@ -649,6 +733,74 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 Ok(files)
             }
         }
+        "dsh" => {
+            let mut refs = serde_json::Map::new();
+            for entry in entries {
+                if entry.login_provider.is_some() {
+                    return Err(Error::new(
+                        "incompatible",
+                        "DSH native login authentication is not qualified; select an API-key provider",
+                    ));
+                }
+                let models = entry.models.iter().map(|id| {
+                    if let Some((protocol, base)) = entry.model_routes.get(id)
+                        && (protocol != &entry.protocol || base != &entry.base)
+                    {
+                        // Qualified modelFields has no api or baseURL; the
+                        // provider route owns one protocol and endpoint.
+                        return Err(Error::new(
+                            "incompatible",
+                            "DSH requires one protocol and endpoint per native provider entry; split mixed model routes into separate entries",
+                        ));
+                    }
+                    let mut model = json!({"id":id});
+                    if let Some(metadata) = entry.model_metadata.get(id).and_then(Value::as_object) {
+                        model.as_object_mut().expect("native model object").extend(metadata.clone());
+                    }
+                    Ok(model)
+                }).collect::<Result<Vec<_>>>()?;
+                let credential_ref = dsh_credential_ref(scope, entry);
+                providers.insert(
+                    entry.native_name().into(),
+                    json!({
+                        "apiKeyEnv":credential_ref,
+                        "api":api(&entry.protocol)?,
+                        "baseURL":entry.base,
+                        "models":models,
+                    }),
+                );
+                if let Some(key) = &entry.key {
+                    refs.insert(credential_ref, json!(key));
+                }
+            }
+            let mut patch =
+                json!({"llm-pi-ai":{"disabled":false,"config":{"providers":providers}}});
+            if let Some(default) = &target.default {
+                let active = entries
+                    .iter()
+                    .find(|entry| entry.name == default.provider)
+                    .ok_or_else(|| {
+                        Error::new("unresolved_reference", "Native default does not resolve")
+                    })?;
+                patch["agent-default-model"] = json!({"config":{
+                    "provider":active.native_name(),
+                    "model":default.id,
+                }});
+            }
+            let mut files = Vec::new();
+            if !refs.is_empty() {
+                patch["credentials"] =
+                    json!({"disabled":false,"config":{"path":scope.join(".credentials.yaml")}});
+                files.push(file(
+                    scope,
+                    ".credentials.yaml",
+                    Format::Yaml,
+                    json!({"version":1,"refs":refs}),
+                ));
+            }
+            files.push(file(scope, "cordis.patch.yml", Format::DshPatch, patch));
+            Ok(files)
+        }
         "opencode" => {
             for entry in entries {
                 if entry.login_provider.is_some() {
@@ -745,11 +897,11 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
         }
         _ => Err(Error::new(
             "unsupported_agent",
-            "Supported agents are codex, pi, omp, opencode, and hermes",
+            "Supported agents are codex, pi, omp, opencode, hermes, and dsh",
         )),
     }?;
     for entry in entries {
-        if target.agent != "hermes"
+        if !matches!(target.agent.as_str(), "hermes" | "dsh")
             && let Some(key) = &entry.key
         {
             files.insert(
@@ -982,32 +1134,35 @@ mod tests {
     }
     #[test]
     fn pi_metadata_preserves_false_empty_and_unknown_without_invalid_limit_defaults() {
-        let native = pi_omp_model_metadata(&json!({
-            "limit":{"context":1000000,"output":65536},
-            "reasoning":false,
-            "modalities":{"input":["text","image","video","audio"]},
-            "cost":{"input":0},
-            "samplingParams":{"temperature":0.7},
-        }))
+        let native = catalog_model_metadata(
+            "pi",
+            &json!({
+                "limit":{"context":1000000,"output":65536},
+                "reasoning":false,
+                "modalities":{"input":["text","image","video","audio"]},
+                "cost":{"input":0},
+                "samplingParams":{"temperature":0.7},
+            }),
+        )
         .unwrap();
         assert_eq!(
             native,
             json!({"contextWindow":1000000,"maxTokens":65536,"reasoning":false,"input":["text","image"]})
         );
-        assert_eq!(pi_omp_model_metadata(&json!({})).unwrap(), json!({}));
+        assert_eq!(catalog_model_metadata("pi", &json!({})).unwrap(), json!({}));
         assert_eq!(
-            pi_omp_model_metadata(&json!({"modalities":{"input":[]}})).unwrap(),
+            catalog_model_metadata("pi", &json!({"modalities":{"input":[]}})).unwrap(),
             json!({"input":[]})
         );
         assert_eq!(
-            pi_omp_model_metadata(&json!({"modalities":{"input":["video"]}})).unwrap(),
+            catalog_model_metadata("pi", &json!({"modalities":{"input":["video"]}})).unwrap(),
             json!({"input":[]})
         );
         for field in ["context", "output"] {
             for value in [json!(0), json!(9_007_199_254_740_992u64)] {
                 let mut metadata = json!({"limit":{}});
                 metadata["limit"][field] = value;
-                let error = pi_omp_model_metadata(&metadata).unwrap_err();
+                let error = catalog_model_metadata("pi", &metadata).unwrap_err();
                 assert_eq!(error.code, "native_metadata_unrepresentable");
                 assert_eq!(error.field, Some(format!("limit.{field}")));
             }
@@ -1027,7 +1182,7 @@ mod tests {
             gateway: true,
             models: vec!["m".into(), "dynamic".into()],
             model_routes: BTreeMap::new(),
-            model_metadata: BTreeMap::from([("m".into(), pi_omp_model_metadata(&json!({
+            model_metadata: BTreeMap::from([("m".into(), catalog_model_metadata("pi", &json!({
                 "limit":{"context":1000000,"output":65536},"reasoning":true,"modalities":{"input":["text","image","video"]}
             })).unwrap())]),
             model_projection: BTreeMap::new(),
@@ -1273,6 +1428,140 @@ mod tests {
             }
             assert!(config.get("agent").is_none());
             assert!(config.get("reasoning_overrides").is_none());
+        }
+    }
+
+    fn dsh_entry(protocol: &str) -> Entry {
+        Entry {
+            name: "local".into(),
+            base: "https://example.invalid/v1".into(),
+            protocol: protocol.into(),
+            key: Some("protected-key-reference".into()),
+            login_provider: None,
+            canonical: None,
+            gateway: false,
+            models: vec!["m".into()],
+            model_routes: BTreeMap::new(),
+            model_metadata: BTreeMap::new(),
+            model_projection: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn dsh_model_only_handoff_keeps_secrets_and_native_preferences_out_of_patch() {
+        let scope = Path::new("/explicit/dsh");
+        let mut target = target("dsh");
+        target.default = None;
+        for (protocol, expected_api) in [
+            ("chat-completions", "openai-completions"),
+            ("responses", "openai-responses"),
+            ("messages", "anthropic-messages"),
+        ] {
+            let entry = dsh_entry(protocol);
+            let credential_ref = dsh_credential_ref(scope, &entry);
+            let files = build(&target, scope, &[entry]).unwrap();
+            assert_eq!(files.len(), 2);
+            assert_eq!(files[0].path, Path::new("/explicit/dsh/.credentials.yaml"));
+            assert_eq!(files[0].desired["version"], 1);
+            assert_eq!(
+                files[0].desired["refs"][&credential_ref],
+                "protected-key-reference"
+            );
+            assert_eq!(files[1].path, scope.join("cordis.patch.yml"));
+            assert!(matches!(files[1].format, Format::DshPatch));
+            let patch = &files[1].desired;
+            let provider = &patch["llm-pi-ai"]["config"]["providers"]["local"];
+            assert_eq!(provider["api"], expected_api);
+            assert_eq!(provider["apiKeyEnv"], credential_ref);
+            assert_eq!(provider["models"], json!([{"id":"m"}]));
+            assert!(patch.get("agent-default-model").is_none());
+            assert!(provider.get("reasoning").is_none());
+            assert!(provider.get("headers").is_none());
+            assert!(!patch.to_string().contains("protected-key-reference"));
+        }
+        let entry = dsh_entry("responses");
+        assert_ne!(
+            dsh_credential_ref(scope, &entry),
+            dsh_credential_ref(Path::new("/another/dsh"), &entry)
+        );
+    }
+
+    #[test]
+    fn dsh_rejects_unrepresentable_model_routes_instead_of_changing_protocols() {
+        let scope = Path::new("/explicit/dsh");
+        for route in [
+            ("responses", "https://example.invalid/v1"),
+            ("chat-completions", "https://other.invalid/v1"),
+        ] {
+            let mut entry = dsh_entry("chat-completions");
+            entry
+                .model_routes
+                .insert("m".into(), (route.0.into(), route.1.into()));
+            assert_eq!(
+                build(&target("dsh"), scope, &[entry]).unwrap_err().code,
+                "incompatible"
+            );
+        }
+        let files = build(&target("dsh"), scope, &[dsh_entry("chat-completions")]).unwrap();
+        assert_eq!(
+            files[1].desired["agent-default-model"],
+            json!({"config":{"provider":"local","model":"m"}})
+        );
+    }
+
+    #[test]
+    fn dsh_capabilities_do_not_select_thinking_or_output_request_defaults() {
+        let effective = json!({
+            "limit":{"context":128000,"output":8192},
+            "reasoning":true,
+            "reasoning_options":[{"type":"effort","values":["off","low","max","ultra"]}],
+            "modalities":{"input":["text","image","video"]},
+        });
+        for protocol in ["chat-completions", "responses", "messages"] {
+            let metadata = model_metadata("dsh", protocol, &effective).unwrap();
+            assert_eq!(
+                metadata,
+                json!({
+                    "contextWindow":128000,
+                    "input":["text","image"],
+                    "reasoningEfforts":{"off":"off","low":"low","max":"max"},
+                })
+            );
+            let projection = projection_view("dsh", protocol, &effective).unwrap();
+            assert_eq!(projection["state"], "partial");
+            assert_eq!(projection["omitted"], json!(["ultra"]));
+            assert_eq!(
+                projection["fields"],
+                json!({"reasoningEfforts":{"off":"off","low":"low","max":"max"}})
+            );
+        }
+        assert_eq!(
+            model_metadata("dsh", "responses", &json!({"reasoning":true})).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            model_metadata("dsh", "responses", &json!({"reasoning":false})).unwrap(),
+            json!({"reasoningEfforts":false})
+        );
+        for input in [json!([]), json!(["video"])] {
+            assert_eq!(
+                model_metadata("dsh", "responses", &json!({"modalities":{"input":input}}))
+                    .unwrap_err()
+                    .code,
+                "native_metadata_unrepresentable"
+            );
+        }
+        for values in [json!(["off"]), json!(["ultra"])] {
+            assert_eq!(
+                projection_view(
+                    "dsh",
+                    "responses",
+                    &json!({"reasoning_options":[{"type":"effort","values":values}]})
+                )
+                .unwrap_err()
+                .code,
+                "native_metadata_unrepresentable"
+            );
         }
     }
 }

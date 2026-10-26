@@ -28,19 +28,31 @@ page makes no external font, image, or script requests.
   explicit empty string remains different from an absent override.
   Concrete **Details** shows effective reasoning declarations, catalog/override
   provenance, and each tool's desired selector mapping, including protocol-specific
-  OpenCode fields. Missing declarations are not inferred from reasoning support.
-- **Coding tools** keeps Codex, pi, omp, OpenCode, and Hermes separate. Adding a
+  OpenCode fields and DSH `reasoningEfforts`. Missing declarations are not inferred
+  from reasoning support.
+- **Coding tools** keeps Codex, pi, omp, OpenCode, Hermes, and DeepSeek Harness separate. Adding a
   configuration checks local directories and tool versions for the selected tool.
   Select a found directory or enter a path manually; registered directories link
   to their existing configuration. Discovery failure does not block manual entry.
   Discovery does not import settings or credentials, and installation detection
   does not establish compatibility. Saving opens the configuration details.
   Add an upstream or gateway provider entry, select its models, then
-  choose its default. Saving these declarations does not write native files.
+  optionally choose its default (required for Codex). Saving these declarations does not write native files.
   Apply and restore remain separate explicit actions with optional previews.
   Details also show desired per-model reasoning selectors, omitted names, and
   blockers. These are not evidence of native reload or inference; default effort
   remains tool-owned.
+  DSH requires an existing home directory (`DSH_HOME`, otherwise the OS home's
+  `.dsh`); application edits its common `cordis.patch.yml` and hands keys to the
+  adjacent native `.credentials.yaml`, enabling the credential service in the
+  HOME patch for headless consumption without bundle inspection. It does not
+  enumerate, select, create, or manage profiles. Whole home entry configurations
+  shadow lower profile configurations rather than deep-merging their routes or
+  defaults. Model-only application writes no `agent-default-model` entry; an
+  explicit default changes provider/model while preserving existing HOME-level
+  effort. Runtime overlays remain outside tmax's ownership. See the
+  [DSH reference](agents/dsh.md) for evidence limits; historical profile-path
+  checks do not establish current home-wide, multi-profile behavior.
 - **Gateway** shows the listener, shared-key state, and current-process request
   history. Configure, start, stop, and change login startup explicitly. Revealed
   keys disappear on hide, navigation, page exit, or switching away from the tab.

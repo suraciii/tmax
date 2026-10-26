@@ -29,7 +29,7 @@ const areas = {
   agents:['编程工具','CONNECTED TOOLS','为编程工具选择模型，并应用到本地配置。'],
   gateway:['网关','LOCAL MODEL GATEWAY','配置网关地址、管理运行状态和查看请求记录。'],
 };
-const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber']];
+const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber'],['dsh','DeepSeek Harness','D','blue']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-coding-plan':'Kimi Coding Plan','custom':'自定义集成'};
 const protocolNames = {'chat-completions':'Chat Completions','responses':'Responses','messages':'Messages'};
 const stateLabel = value => ({saved:'已保存',native_reload_and_inference_not_verified:'尚未验证工具加载与实际使用',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',restored_reload_pending:'已恢复，重新打开工具后生效',pending_native_changes:'有修改待应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
@@ -427,7 +427,7 @@ function agentForm(agent='') {
   const generation=formDialog('添加工具配置','选择编程工具和配置目录，保存后继续选择模型。此处只登记配置；应用到工具时才会修改文件。',
     field('agent','编程工具',agent || 'codex',{required:true,options:agentTypes.map(a=>[a[0],a[1]])})+
     '<section class="tool-discovery" aria-label="本地配置检测"><div class="actions"><h3 class="grow">本地配置目录</h3><button type="button" class="btn text small" id="agent-rescan">重新检测</button></div><div id="agent-discovery" aria-live="polite"></div></section>'+
-    field('path','配置目录','',{required:true,placeholder:'选择检测结果，或直接填写配置目录',help:'使用其他目录时可直接填写。相对路径以 tmax 配置目录为基准。'})+
+    field('path','配置目录','',{required:true,placeholder:'选择检测结果，或直接填写配置目录',help:'DSH 须选择已有的 DSH_HOME 根目录（默认使用环境变量 DSH_HOME，否则为系统用户的 ~/.dsh），无需选择 profile。应用时只修改根目录的 cordis.patch.yml 和相邻的 .credentials.yaml，不管理 profile。其他目录可直接填写；相对路径以 tmax 配置目录为基准。'})+
     field('target','配置名称','',{required:true,placeholder:'例如：codex-main',help:'用于区分同一个工具的不同配置，可自行修改。'}),()=>{
       const duplicate=registered(value('agent'),value('path').trim());
       if(duplicate)throw Error('此目录已添加为“'+duplicate.target+'”，请打开已有配置。');
@@ -445,7 +445,7 @@ function agentForm(agent='') {
       const found=result.installations?.find(item=>item.agent===kind);
       if(!found)throw Error('未收到此工具的检测结果。');
       const installation=found.installation || {};
-      const candidates=[...(found.scope_state==='available'?[{path:found.path,label:'当前配置目录'}]:[]),...(found.profiles || []).map(path=>({path,label:'其他配置目录'}))].filter((item,index,all)=>all.findIndex(other=>nativePathKey(other.path)===nativePathKey(item.path))===index);
+      const candidates=[...(found.scope_state==='available'?[{path:found.path,label:kind==='dsh'?'DSH 主目录':'当前配置目录'}]:[]),...(kind==='dsh'?[]:found.profiles || []).map(path=>({path,label:'其他配置目录'}))].filter((item,index,all)=>all.findIndex(other=>nativePathKey(other.path)===nativePathKey(item.path))===index);
       const version=installation.version?'检测到版本 '+installation.version:'未获取到工具版本';
       const advice=installation.state==='not_installed'?'未在本机命令路径中找到可运行的工具。可以先登记目录，安装并检查版本后再应用配置。':installation.compatibility==='documented'?'此版本的配置格式已适配；实际使用需在应用后验证。':`当前版本的配置适配尚未验证${installation.qualified_version?'，参考适配版本为 '+installation.qualified_version:''}。仍可保存并应用配置，使用后可反馈兼容性问题。`;
       $('agent-discovery').innerHTML=`<p class="muted">${escapeHtml(version)}</p><p class="muted">${escapeHtml(advice)}</p>`+
@@ -470,9 +470,10 @@ const projectionReasons={native_reasoning_options_partial:'部分声明值不在
 function projectionLevels(fields) {
   const rows=[];
   if(fields?.thinkingLevelMap && typeof fields.thinkingLevelMap==='object')for(const [level,target] of Object.entries(fields.thinkingLevelMap))rows.push([level,target==null?'不支持（null）':String(target)]);
+  if(fields?.reasoningEfforts && typeof fields.reasoningEfforts==='object')for(const [level,target] of Object.entries(fields.reasoningEfforts))rows.push([`reasoningEfforts · ${level}`,target===false?'不支持（false）':String(target)]);
   if(fields?.thinking && typeof fields.thinking==='object')rows.push([`thinking · ${fields.thinking.mode ?? '未知模式'}`,(fields.thinking.efforts||[]).join('、')||'未列出']);
   if(Array.isArray(fields?.variants))rows.push(['variants',fields.variants.map(v=>v?.id ?? JSON.stringify(v)).join('、')||'未列出']);
-  for(const key of Object.keys(fields||{}))if(!['thinkingLevelMap','thinking','variants'].includes(key))rows.push([key,JSON.stringify(fields[key])]);
+  for(const key of Object.keys(fields||{}))if(!['thinkingLevelMap','reasoningEfforts','thinking','variants'].includes(key))rows.push([key,JSON.stringify(fields[key])]);
   return rows.length?`<div class="detail-facts">${rows.map(([label,value])=>fact(label,value)).join('')}</div>`:'';
 }
 function projectionBlock(projection) {

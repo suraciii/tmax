@@ -654,7 +654,7 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
             || id == "tmax"
             || !matches!(
                 t.agent.as_str(),
-                "codex" | "pi" | "omp" | "opencode" | "hermes"
+                "codex" | "pi" | "omp" | "opencode" | "hermes" | "dsh"
             )
             || t.scope.as_os_str().is_empty()
         {
@@ -756,6 +756,18 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dsh_target_accepts_model_only_incremental_configuration() {
+        let config =
+            parse("version=1\n[agents.dsh-main]\nagent='dsh'\nscope='/native/dsh-home'\n").unwrap();
+        let target = &config.agents["dsh-main"];
+        assert_eq!(target.agent, "dsh");
+        assert!(target.providers.is_empty());
+        assert!(target.default.is_none());
+        assert!(target.roles.is_empty());
+    }
+
     #[test]
     fn legacy_gateway_names_read_without_writes_and_save_canonically() {
         let dir = tempfile::tempdir().unwrap();

@@ -12,6 +12,7 @@ precedence, or runtime behavior.
 | [Codex CLI](codex.md) | 0.162.1 | `config.toml`, adjacent profile configuration | Native file/keyring/automatic credential store |
 | [OpenCode V2](opencode.md) | 2.0.28 | `opencode.jsonc` / `opencode.json` | Server-scoped SQLite accounts; legacy file migration is separate |
 | [Hermes Agent](hermes.md) | 0.22.1+683.g848fc0a | Profile `config.yaml` | Native `auth.json`, credential pools, `.env`, provider key sources |
+| [DeepSeek Harness (DSH)](dsh.md) | 0.2.1-rc.2 | HOME `cordis.patch.yml`, common to profiles; launcher-owned `cordis.yml` is never edited | Adjacent home `.credentials.yaml` reference store; no native login qualification |
 
 The [shared integration contract](../../specs/integrations/spec.md#agent-boundaries)
 owns observable behavior. The [routing request-parameter contract](../../specs/model-routing/spec.md#request-parameters)
@@ -21,7 +22,7 @@ These pages do not redefine those contracts or authorize new provider routes.
 
 ## Qualification and evidence
 
-Consulted on 2026-10-23. Each page identifies the exact source revision and the
+Each page records its consultation date, exact source revision, and the
 installed behavior that was actually exercised. No supported version range is
 inferred from one installation. Source-qualified means that a parser or consumer
 implements a field; it does not mean that a provider accepted a request, a login
@@ -42,6 +43,13 @@ does not prove metadata fidelity. Provider-authorized runtime evidence belongs
 in the [provider contracts](../../specs/integrations/spec.md#provider-specific-contracts),
 not in this field reference. In particular, a temporary Pi request-budget hook
 in a GLM check is not native metadata or five-agent provider qualification.
+
+DSH has separate source qualification and 2026-10-26 home-target acceptance at
+the revision in its [reference](dsh.md). Two independently authored profiles
+consumed the same home configuration and credentials through all three protocols
+against synthetic loopback endpoints. Apply/restore preserved profile files and
+unrelated home state. DSH is not part of the earlier five-agent acceptance, and
+local runtime success does not establish hosted-provider entitlement.
 
 ## Safe scope and credential boundaries
 
@@ -73,6 +81,12 @@ mechanism. Hermes receives its API key in its current-user-restricted
 `config.yaml`, because installed versions may ignore `key_cmd`. Preview and
 inspection disclose this inline handoff without exposing the key. New tmax recovery records also contain plaintext and are restricted
 to the current OS account.
+
+DSH receives key values in the target home's native `.credentials.yaml` `refs`
+map; its adjacent home `cordis.patch.yml` stores only `apiKeyEnv`. Both are common
+to profiles using that home. Credential-service enablement is an explicit
+managed HOME patch change, not a launch wrapper or secret environment
+requirement. tmax does not enumerate, select, create, or manage DSH profiles.
 
 Native recovery operations accept only supported storage formats. Unsupported
 recovery records remain unchanged and are unavailable to current recovery

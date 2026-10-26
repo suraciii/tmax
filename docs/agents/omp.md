@@ -250,6 +250,24 @@ user agent unchanged. Any session value the client did supply is forwarded
 verbatim and must not be replaced. See the contract's
 [gateway attribution clause](../../specs/integrations/opencode-go/spec.md#conversation-and-client-identity).
 
+### Gateway model names
+
+An OMP selector combines its native provider entry and the gateway's public
+model ID. For example, entry `tmax` and alias `deepseek-v4.1-flash` produce
+`tmax/deepseek-v4.1-flash`. The alias can select the concrete model
+`opencode-go/deepseek-v4.1-flash` without exposing that provider prefix in OMP.
+
+Use an explicitly stateless alias for the qualified OMP 18.12.6 Chat Completions
+path. Its context and continuation limits are owned by the
+[routing contract](../../specs/model-routing/spec.md#selection-and-continuity).
+Add the exact OMP selector to `enabledModels` when that allow-list is nonempty.
+
+An installed OMP 18.12.6 invocation with retries and model fallback disabled
+completed through this short alias to OpenCode Go. OMP returned `OK`, and tmax
+retained an alias request with provider `opencode-go` and outcome `completed`.
+This qualifies that Chat Completions request, not session-stable alias routing
+or other OMP versions and protocols.
+
 ## Qualification
 
 Retained installed evidence observed actual tmax apply, installed

@@ -9,11 +9,15 @@ pub(super) enum Format {
     Json,
     Yaml,
     Toml,
+    DshPatch,
     Credential,
 }
 
 pub(super) fn parse(text: &str, format: Format) -> Result<Value> {
     if text.trim().is_empty() {
+        if format == Format::DshPatch {
+            return super::dsh_patch::parse(text);
+        }
         return Ok(serde_json::json!({}));
     }
     if format == Format::Yaml
@@ -24,6 +28,7 @@ pub(super) fn parse(text: &str, format: Format) -> Result<Value> {
         return Ok(serde_json::json!({}));
     }
     let value = match format {
+        Format::DshPatch => return super::dsh_patch::parse(text),
         Format::Credential => {
             serde_json::json!({"$credential": crate::config::revision(text.as_bytes())})
         }
@@ -280,7 +285,7 @@ fn json_edit(text: &str, path: &[String], value: Option<&Value>) -> Result<Strin
 // YAML edits are restricted to block mappings, or JSON-compatible flow values.
 // Anchors and merge keys on an edited branch fail closed: modifying an alias's
 // definition could otherwise change an unrelated native setting.
-fn yaml_edit(text: &str, path: &[String], value: Option<&Value>) -> Result<String> {
+pub(super) fn yaml_edit(text: &str, path: &[String], value: Option<&Value>) -> Result<String> {
     if text.trim_start().starts_with('{') {
         return json_edit(text, path, value);
     }
@@ -294,7 +299,14 @@ fn yaml_edit(text: &str, path: &[String], value: Option<&Value>) -> Result<Strin
         .collect();
     let mut lo = 0;
     let mut hi = lines.len();
-    let mut indent = 0;
+    let mut indent = lines
+        .iter()
+        .find_map(|(_, line)| {
+            let trimmed = line.trim_start_matches(' ');
+            (!trimmed.trim().is_empty() && !trimmed.starts_with('#'))
+                .then_some(line.len() - trimmed.len())
+        })
+        .unwrap_or(0);
     for (depth, wanted) in path.iter().enumerate() {
         let mut found = None;
         for (i, (_, source_line)) in lines.iter().enumerate().take(hi).skip(lo) {
@@ -445,7 +457,7 @@ fn yaml_colon(s: &str) -> Option<usize> {
     }
     None
 }
-fn yaml_comment(s: &str) -> Option<usize> {
+pub(super) fn yaml_comment(s: &str) -> Option<usize> {
     let mut quote = None;
     let mut escape = false;
     for (i, c) in s.char_indices() {
@@ -541,6 +553,7 @@ pub(super) fn set(
     let output = match format {
         Format::Json => json_edit(text, path, value)?,
         Format::Yaml => yaml_edit(text, path, value)?,
+        Format::DshPatch => super::dsh_patch::set(text, path, value)?,
         Format::Toml => toml_edit(text, path, value)?,
         Format::Credential => return Err(invalid()),
     };

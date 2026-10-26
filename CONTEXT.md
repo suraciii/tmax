@@ -93,14 +93,14 @@ priority rules, with explicit model coverage and validity.
 _Avoid_: Desired priority, universal balance, verified entitlement
 
 **Agent**:
-A local coding tool such as Codex, pi, omp, OpenCode, or Hermes Agent, distinct
-from a particular installation or configuration of that tool.
+A local coding tool such as Codex, pi, omp, OpenCode, Hermes Agent, or DeepSeek
+Harness (DSH), distinct from a particular installation or configuration of that tool.
 _Avoid_: Family, configuration target, provider account
 
 **Agent target**:
 One local agent installation, profile, or supported configuration scope that
 can be managed independently. It identifies which Agent and which native scope
-are being configured.
+are being configured. DSH uses one home-wide scope, not separate profile targets.
 _Avoid_: Agent type, provider account, calling agent
 
 **Calling agent**:
