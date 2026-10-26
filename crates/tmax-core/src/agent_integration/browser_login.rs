@@ -1,7 +1,25 @@
 //! Browser orchestration of Codex-owned authentication. No token export/import.
-use super::installation::native_command;
-use super::*;
-use std::sync::{Arc, Mutex, OnceLock};
+use super::{
+    authentication::{
+        Account, LOGINS, LoginRecord, Logins, begin_native_auth, login_source_revision,
+    },
+    installation::native_command,
+    scope::{auth_paths, scope},
+};
+use crate::{
+    Error, Request, Result,
+    config::{self, AgentTarget, Auth, Config},
+    storage::{self, Store},
+};
+use serde::Serialize;
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::watch;
@@ -10,11 +28,6 @@ const ATTEMPT_SECONDS: u64 = 600;
 const RPC_SECONDS: u64 = 20;
 const MESSAGE_BYTES: u64 = 256 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub(crate) struct Account {
-    pub email: Option<String>,
-    pub plan: Option<String>,
-}
 impl Account {
     fn read(value: &Value) -> Result<Option<Self>> {
         let account = &value["account"];

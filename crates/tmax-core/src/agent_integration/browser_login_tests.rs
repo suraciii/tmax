@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::fs;
 
 fn fixture() -> (tempfile::TempDir, Store, Plan, Arc<Flow>) {
     let directory = tempfile::tempdir().unwrap();
