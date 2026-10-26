@@ -38,9 +38,26 @@ finite editable-field definitions also drive Web controls.
   and recovery keep their existing policy and persistence ownership.
 - `storage.rs` and `secrets.rs` own OS-home resolution, current-user-restricted
   plaintext secret/recovery files, safe inventory, and protected channels.
-- `service/`, `gateway.rs`, and `diagnostics.rs` own resident identity/lifecycle,
-  browser protections, same-protocol bounded forwarding, persistent continuity,
-  and bounded in-memory request evidence.
+- `service.rs` and `service/` own resident identity/lifecycle and browser protections.
+- `gateway.rs` is the stable public gateway facade and owns the shared runtime
+  budget declarations. Private feature owners under `gateway/` separate:
+  - `runtime.rs`: loaded snapshots, credential acquisition, bounded admission,
+    cancellation, and request lifecycle.
+  - `bindings.rs`: destination selection, retained session continuity, explanation,
+    and guarded activation. `bindings/store.rs` alone owns the persisted binding
+    representation, historical normalization, bounded IO, and initialization.
+  - `forwarding.rs`: request authentication, same-protocol HTTP forwarding, streamed
+    delivery, and model publication. `errors.rs` owns finite safe error responses.
+  - `client_identity.rs`, `native_context.rs`, and `opencode_session.rs`: qualified
+    native context, header handoff, and bounded conversation attribution.
+  - `capabilities.rs`: finite request/model capability checks.
+  - `probe.rs`: explicit fixed-destination diagnostics without resident startup.
+  - `response_observer.rs`: bounded JSON/SSE inspection and history evidence
+    finalization. Probes reuse inspection while retaining their distinct result
+    and usage-state projection.
+  Feature tests live with their owners; `test_support.rs` supplies shared fixtures
+  only and is compiled only for tests.
+- `diagnostics.rs` owns bounded in-memory request evidence and history retention.
 
 Configuration save, service activation, OS startup registration, and native
 application remain separate observable failure boundaries. No module introduces
