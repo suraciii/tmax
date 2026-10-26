@@ -3179,8 +3179,33 @@ mod tests {
         drop(guard);
         assert!(!path.exists());
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials() {
+        const CHILD: &str = "TMAX_DSH_LIFECYCLE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("dsh");
+            fs::write(
+                &executable,
+                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '0.2.1-rc.2\\n'\n",
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "native::tests::dsh_apply_restore_preserves_native_preferences_and_shared_credentials", "--nocapture"])
+                .env(CHILD, "1")
+                .env("PATH", directory.path())
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "isolated DSH lifecycle failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().join("authority"));
         let home = directory.path().join("dsh");
