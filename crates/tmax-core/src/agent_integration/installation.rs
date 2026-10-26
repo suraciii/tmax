@@ -1,5 +1,5 @@
 //! Native executable resolution, scoped commands, and installation qualification.
-use super::{adapters, read_native};
+use super::{adapters, scope::read_native};
 use crate::{Error, Result};
 use serde_json::{Value, json};
 #[cfg(windows)]

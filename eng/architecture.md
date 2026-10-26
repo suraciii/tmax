@@ -30,12 +30,31 @@ finite editable-field definitions also drive Web controls.
   attempts, guarded by provider incarnation, authorization, endpoint/source
   contract, and captured publication revision. Renames preserve the identity;
   removal/recreation and authorization changes cannot revive old results.
-- `agent_integration.rs` and `agent_integration/` own Agent-specific configuration
-  schemas, credential handoff, supported login owners, conflict detection, and
-  protected three-way restoration. The private `agent_integration/installation.rs`
-  module owns executable resolution, scoped command construction, and version
-  evidence, including safe Hermes provenance probing. Application, authentication,
-  and recovery keep their existing policy and persistence ownership.
+- `agent_integration.rs` is the stable Agent integration facade. Private feature
+  owners under `agent_integration/` separate:
+  - `scope.rs` and `discovery.rs`: native-path safety, bounded file reads, scope
+    selection, shared DSH credential locking, and read-only installation inventory.
+  - `planning.rs`: desired native entries, metadata/reasoning projections, configured
+    inspection, and pending owned-field comparisons without credential resolution.
+  - `application.rs`: execution-only credential resolution and guarded native
+    application. Protected capture precedes the write-ahead record; each external
+    write is guarded and recorded before terminal state and old-payload cleanup.
+  - `recovery.rs`: the sole retained capture schema, ownership and drift checks,
+    protected payload verification, three-way restore, discard, and secret
+    dependency tombstones. Durable recovery paths and formats remain unchanged.
+  - `authentication.rs`: retained login/account metadata, namespace-only credential
+    presence, native login/logout, and authorization snapshots. Authorization
+    invalidation remains synchronous and precedes the uncertain-login write-ahead
+    record. `browser_login.rs` owns the bounded Codex process/protocol workflow;
+    `compatibility.rs` owns effect-free selection/application eligibility.
+  - `adapters.rs` and `adapters/`: finite schema dispatch, shared exact capability
+    projection and credential artifacts, and concrete Codex, Pi/OMP, OpenCode,
+    Hermes, and DSH format/preservation rules. No plugin registry or second desired
+    state is introduced. `document.rs` and `dsh_patch.rs` own lossless editing.
+  - `installation.rs`: executable resolution, scoped command construction, and
+    version evidence, including safe Hermes provenance probing.
+  Tests live with their semantic owners. The DSH cross-owner lifecycle has a
+  dedicated test module; shared test support contains fixtures only.
 - `storage.rs` and `secrets.rs` own OS-home resolution, current-user-restricted
   plaintext secret/recovery files, safe inventory, and protected channels.
 - `service.rs` and `service/` own resident identity/lifecycle and browser protections.
