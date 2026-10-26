@@ -376,7 +376,7 @@ pub(crate) struct ProviderIdentity {
     pub identity: String,
     pub authorization: String,
     auth_definition: Value,
-    pub offerings: BTreeMap<String, String>,
+    pub models: BTreeMap<String, String>,
     declarations: BTreeMap<String, DeclarationIdentity>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -430,7 +430,7 @@ fn project_view(old: &View, config: &Config) -> View {
         if ids.auth_definition != auth_definition(config, p) {
             ids.authorization.clear();
         }
-        ids.offerings.retain(|m, _| p.models.contains_key(m));
+        ids.models.retain(|m, _| p.models.contains_key(m));
         ids.declarations
             .retain(|input, _| p.inputs.contains_key(input));
         for (input, d) in &p.inputs {
@@ -476,9 +476,9 @@ fn make_view(
         } else if let (Ok((p, m)), Ok((np, nm))) = (config::qualified(from), config::qualified(to))
             && p == np
             && let Some(identity) = previous.get_mut(p)
-            && let Some(id) = identity.offerings.remove(m)
+            && let Some(id) = identity.models.remove(m)
         {
-            identity.offerings.insert(nm.into(), id);
+            identity.models.insert(nm.into(), id);
         }
     }
     let mut providers = BTreeMap::new();
@@ -499,10 +499,10 @@ fn make_view(
         runtime
             .authorization
             .insert(ids.identity.clone(), ids.authorization.clone());
-        ids.offerings
+        ids.models
             .retain(|name, _| provider.models.contains_key(name));
         for model in provider.models.keys() {
-            ids.offerings.entry(model.clone()).or_insert_with(token);
+            ids.models.entry(model.clone()).or_insert_with(token);
         }
         ids.declarations
             .retain(|name, _| provider.inputs.contains_key(name));
@@ -634,7 +634,7 @@ fn state_schema_error() -> Error {
 
 // Stored-data cutover only: never accept these fields in desired configuration.
 // Membership comes exclusively from this historical snapshot, including disabled
-// offerings and empty memberships. Reads do not rewrite the retained file.
+// models and empty memberships. Reads do not rewrite the retained file.
 fn normalize_historical_snapshot(snapshot: &mut Value) -> Result<bool> {
     let snapshot = snapshot.as_object_mut().ok_or_else(state_schema_error)?;
     let mut membership: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -704,10 +704,33 @@ fn normalize_historical_snapshot(snapshot: &mut Value) -> Result<bool> {
     Ok(changed)
 }
 
+fn normalize_historical_view(view: &mut Value) -> Result<bool> {
+    let view = view.as_object_mut().ok_or_else(state_schema_error)?;
+    let mut changed =
+        normalize_historical_snapshot(view.get_mut("config").ok_or_else(state_schema_error)?)?;
+    if let Some(providers) = view.get_mut("providers") {
+        for provider in providers
+            .as_object_mut()
+            .ok_or_else(state_schema_error)?
+            .values_mut()
+        {
+            let provider = provider.as_object_mut().ok_or_else(state_schema_error)?;
+            if let Some(models) = provider.remove("offerings") {
+                if provider.contains_key("models") {
+                    return Err(state_schema_error());
+                }
+                provider.insert("models".into(), models);
+                changed = true;
+            }
+        }
+    }
+    Ok(changed)
+}
+
 // Keep serde's duplicate-struct-field rejection when the historical fallback
 // materializes JSON values. This validation leaves arbitrary-precision number
 // parsing to serde_json and uses its normal recursion bound.
-fn check_historical_field_uniqueness(bytes: &[u8]) -> Result<()> {
+pub(crate) fn check_historical_field_uniqueness(bytes: &[u8]) -> Result<()> {
     struct Fields;
     impl<'de> serde::de::DeserializeSeed<'de> for Fields {
         type Value = ();
@@ -774,17 +797,11 @@ fn decode_runtime(bytes: &[u8]) -> Result<Runtime> {
     }
     check_historical_field_uniqueness(bytes)?;
     let mut document: Value = serde_json::from_slice(bytes).map_err(|_| state_schema_error())?;
-    let saved = normalize_historical_snapshot(
-        document
-            .get_mut("saved")
-            .and_then(|view| view.get_mut("config"))
-            .ok_or_else(state_schema_error)?,
-    )?;
+    let saved =
+        normalize_historical_view(document.get_mut("saved").ok_or_else(state_schema_error)?)?;
     let loaded = match document.get_mut("loaded") {
         None | Some(Value::Null) => false,
-        Some(view) => {
-            normalize_historical_snapshot(view.get_mut("config").ok_or_else(state_schema_error)?)?
-        }
+        Some(view) => normalize_historical_view(view)?,
     };
     if !saved && !loaded {
         return Err(state_schema_error());
@@ -1103,14 +1120,14 @@ impl<'a> Snapshot<'a> {
     ) -> Option<(String, String, String)> {
         let (identity, authorization) =
             provider_scope_binding_in_view(&self.runtime, self.view.as_ref()?, provider)?;
-        let offering = self
+        let model_identity = self
             .view
             .as_ref()?
             .providers
             .get(provider)?
-            .offerings
+            .models
             .get(model)?;
-        Some((identity, authorization, offering.clone()))
+        Some((identity, authorization, model_identity.clone()))
     }
     pub(crate) fn input(&self, provider: &str, input: &str, at: &ExactInstant) -> Value {
         let Some(view) = &self.view else {
@@ -2692,6 +2709,71 @@ mod tests {
             alias["tier"] = Value::Null;
         }
         snapshot
+    }
+
+    #[test]
+    fn historical_model_identity_maps_preserve_both_views_and_retained_facts() {
+        let (_directory, store, config) = fixture();
+        retain_value(&store, &config);
+        activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let before = read_runtime(&store).unwrap();
+        let expected = serde_json::to_value(&before).unwrap();
+        let identity = Snapshot::capture_loaded(&store, &config, None)
+            .destination_identity("p", "m")
+            .unwrap();
+        let mut historical = expected.clone();
+        for view in ["saved", "loaded"] {
+            let provider = historical[view]["providers"]["p"].as_object_mut().unwrap();
+            let models = provider.remove("models").unwrap();
+            provider.insert("offerings".into(), models);
+        }
+        store.write_json(STATE, &historical).unwrap();
+        let bytes = std::fs::read(store.path(STATE).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(read_runtime(&store).unwrap()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            Snapshot::capture_loaded(&store, &config, None).destination_identity("p", "m"),
+            Some(identity.clone())
+        );
+        let at = ExactInstant::parse("2026-10-23T10:30:00Z").unwrap();
+        assert_eq!(
+            Snapshot::capture_loaded(&store, &config, None).input("p", "i", &at)["availability"]["state"],
+            "available"
+        );
+        assert_eq!(std::fs::read(store.path(STATE).unwrap()).unwrap(), bytes);
+        reconcile(&store, &config, &config, &[]).unwrap();
+        assert_eq!(store.read_json::<Value>(STATE).unwrap(), expected);
+        assert_eq!(
+            Snapshot::capture_loaded(&store, &config, None).destination_identity("p", "m"),
+            Some(identity)
+        );
+    }
+
+    #[test]
+    fn historical_model_identity_map_rejects_ambiguous_and_duplicate_keys() {
+        let (_directory, store, _config) = fixture();
+        let current = serde_json::to_value(read_runtime(&store).unwrap()).unwrap();
+        let mut ambiguous = current.clone();
+        ambiguous["saved"]["providers"]["p"]["offerings"] =
+            ambiguous["saved"]["providers"]["p"]["models"].clone();
+        assert!(decode_runtime(&serde_json::to_vec(&ambiguous).unwrap()).is_err());
+        let mut historical = current;
+        let provider = historical["saved"]["providers"]["p"]
+            .as_object_mut()
+            .unwrap();
+        let models = provider.remove("models").unwrap();
+        provider.insert("offerings".into(), models);
+        provider.insert("unexpected".into(), Value::Null);
+        assert!(decode_runtime(&serde_json::to_vec(&historical).unwrap()).is_err());
+        historical["saved"]["providers"]["p"]
+            .as_object_mut()
+            .unwrap()
+            .remove("unexpected");
+        let encoded = serde_json::to_string(&historical).unwrap();
+        let duplicate = encoded.replacen("\"offerings\":", "\"offerings\":{},\"offerings\":", 1);
+        assert!(decode_runtime(duplicate.as_bytes()).is_err());
     }
 
     #[test]

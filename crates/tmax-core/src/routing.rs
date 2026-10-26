@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Selection {
     pub provider: String,
     pub model: String,
-    pub offering_identity: String,
+    pub model_identity: String,
     pub priority: i64,
     pub evidence: Value,
 }
@@ -439,7 +439,7 @@ pub fn validate_model(model: &Model, provider: &Provider) -> Result<()> {
         }
     }
     let mut ids = BTreeSet::new();
-    // The parent validates offering coverage with its map key; this validates all remaining rule semantics.
+    // The parent validates model coverage with its map key; this validates all remaining rule semantics.
     for rule in &model.priority_rules {
         if !config::valid_id(&rule.id, false) || !ids.insert(&rule.id) {
             return Err(Error::new(
@@ -892,14 +892,14 @@ fn decision(
         evaluations.push(json!({"qualified_model":qualified,"candidate_reasoning_effort":effort,"priority_used_for_ranking":alias,"priority_evaluation":evaluation}));
     }
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    let selected=ranked.first().map(|(priority,identity,p,m,provider_identity,authorization_generation)|json!({"provider":p,"model":m,"qualified_model":format!("{p}/{m}"),"provider_identity":provider_identity,"authorization_generation":authorization_generation,"offering_identity":identity,"priority":priority,"candidate_reasoning_effort":config.candidate_effort(id, protocol, p, m)}));
+    let selected=ranked.first().map(|(priority,identity,p,m,provider_identity,authorization_generation)|json!({"provider":p,"model":m,"qualified_model":format!("{p}/{m}"),"provider_identity":provider_identity,"authorization_generation":authorization_generation,"model_identity":identity,"priority":priority,"candidate_reasoning_effort":config.candidate_effort(id, protocol, p, m)}));
     let reason = if !alias {
         "fixed_concrete"
     } else if ranked
         .get(1)
         .is_some_and(|next| Some(next.0) == ranked.first().map(|r| r.0))
     {
-        "stable_offering_identity"
+        "stable_model_identity"
     } else {
         "highest_effective_priority"
     };
@@ -911,7 +911,7 @@ fn decision(
         .map(|(priority, identity, provider, model, _, _)| Selection {
             provider,
             model,
-            offering_identity: identity,
+            model_identity: identity,
             priority,
             evidence: evidence.clone(),
         });
@@ -981,7 +981,7 @@ pub fn select(
     })
 }
 fn request_unavailable(evidence: &Value) -> Error {
-    // A fixed offering, or candidates with the same blocker, has a precise
+    // A fixed model, or candidates with the same blocker, has a precise
     // rejection reason. Do not erase it before the gateway records history.
     // Different blockers cannot truthfully be reduced to one candidate's cause.
     let common_reason = evidence["excluded_candidates"]

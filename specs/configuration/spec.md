@@ -115,22 +115,34 @@ Optional direct file inspection/editing and explicit reload remain an advanced
 escape hatch, never the required setup or repair path for supported fields.
 Manual edits activate through explicit reload or a subsequent executed management
 edit that activates the whole valid file, not through a hidden watcher.
-Secrets, native sessions, catalog snapshots, stable internal offering identities,
+Secrets, native sessions, catalog snapshots, stable internal model identities,
 usage observations, input values, and active/applied-state records are not copied into this
 file. The accepted metadata snapshot is retained under `~/.tmax`; an inaccessible
 snapshot must not be replaced by newly downloaded defaults without explicit
 catalog application. Declaration validation must not launch sign-in, start a gateway,
 or apply native configuration.
 
-Historical operational snapshots are not desired authority. Supported legacy
-records may normalize removed fields in memory without read-time writes.
+Historical operational snapshots are not desired authority. Explicit normalization
+of supported legacy identity fields and blocker codes occurs in memory without
+read-time writes; desired configuration does not accept legacy aliases.
 Explicit candidates remain unchanged; former tier-backed membership comes only
-from the same historical snapshot, including disabled offerings. Historical empty
+from the same historical snapshot, including disabled models. Historical empty
 membership stays unavailable internally, not valid desired configuration.
-Corrupt records fail closed. Normalization must preserve provider, offering,
-authorization, input/head, and session identities and permanent blockers.
-Canonical snapshots may persist only through existing guarded mutations.
-Users must not need to edit or delete operational routing/session JSON.
+Corrupt records, duplicate fields, or conflicting legacy/canonical fields fail
+closed, including historical evidence nested inside a canonical session binding.
+Normalization must preserve provider, model, authorization, input/head, session,
+and resource identities, continuity tokens, retained evidence, and permanent blockers.
+Canonical snapshots may persist only through existing guarded mutations. Neither
+normalization nor an unknown format authorizes clearing state or resetting a
+binding. Users must not need to edit or delete operational routing/session JSON.
+
+Historical provider child-identity maps normalize to `models`, selected/bound
+Model identities to `model_identity`, and captured selected names to
+`qualified_model`. Model removal/disablement blockers normalize to `model_removed`
+and `model_disabled`; identity tie-break reasons normalize to
+`stable_model_identity`. Only known routing/evidence envelopes are normalized;
+arbitrary metadata and exact upstream model-ID maps are not rewritten. New
+operational writes and results use canonical names only.
 
 ### Invalid-authority recovery
 
@@ -185,7 +197,16 @@ explicit reload, not by resetting the now-valid file again.
 ## Provider instances
 
 `[providers.<id>]` is a local access instance. Its table key is its configurable
-provider ID. It supports the following fields:
+provider ID.
+
+Provider and AgentTarget are the principal managed objects under the
+[product ownership contract](../product/spec.md#purpose-and-scope). The `providers`
+and `agents` keys keep their existing syntax. Models are provider-owned children;
+account facts, authentication configuration, and optional subscription information
+do not introduce account, credential, or subscription resources. Integration
+selects qualified behavior, not a universal upstream-service identity.
+
+Supported provider fields:
 
 | Field | Type and meaning |
 | --- | --- |
@@ -197,7 +218,7 @@ provider ID. It supports the following fields:
 | `overrides` | Provider metadata differences: optional string fields `name` and `doc`; never endpoint authority |
 | `auth` | Optional authentication table described below; omission means authentication not configured |
 | `subscription` | Optional user-maintained subscription information |
-| `models` | Table of explicitly registered concrete offerings keyed by exact upstream model ID |
+| `models` | Table of explicitly registered concrete models keyed by exact upstream model ID |
 | `inputs` | Optional table of named provider-local input declarations; omission means empty |
 
 Integration selection uses tmax's qualified registry, not execution of the
@@ -364,11 +385,11 @@ new declaration, not an alias or implicit identity transfer.
 | `refresh_interval_seconds` | Optional positive TOML integer, permitted only for nonmanual sources; absence means no automatic acquisition |
 
 Register the covered concrete models before declaring an input. References must
-resolve even for disabled offerings, inputs that are unavailable, and disabled
+resolve even for disabled models, inputs that are unavailable, and disabled
 priority rules. Removing a covered model rejects unresolved input references;
 changing coverage or kind must leave every dependent rule valid.
 Provider removal may remove its contained inputs and rules together, but must
-first resolve all external provider/offering references. An explicit provider-ID
+first resolve all external provider/model references. An explicit provider-ID
 rename preserves channel identity; an explicit model-ID rename updates `models`
 coverage and dependent qualified references atomically without guessing that a
 different upstream ID has the same source coverage.
@@ -405,11 +426,12 @@ and late-result rejection belong to the input lifecycle, not configuration loadi
 
 ## Concrete model settings
 
-`[providers.<id>.models."<upstream-id>"]` supports:
+`[providers.<id>.models."<upstream-id>"]` declares one child of its provider,
+referenced elsewhere by the exact `provider-id/model-id` name. It supports:
 
 | Field | Type and meaning |
 | --- | --- |
-| `enabled` | Boolean, default true for an explicitly declared offering |
+| `enabled` | Boolean, default true for an explicitly declared model |
 | `priority` | Signed TOML integer, default zero |
 | `overrides` | Model metadata differences, not inference request parameters |
 | `timezone` | IANA zone, required when `schedule` is nonempty or any signal rule has `time_window` |
@@ -449,7 +471,7 @@ It also requires either `all_day = true`, or both `start` and `end` strings in
 24-hour `HH:MM` format, with unequal values. `all_day = false` is not a shorthand
 for a timed rule. Optional `effective_from` and `effective_until` are local dates;
 the latter is exclusive and must be later than the former when both are present.
-All rules use the offering's saved `timezone`. Multiple rules express multiple
+All rules use the model's saved `timezone`. Multiple rules express multiple
 windows. Precedence, overnight spillover, clipping, overlap rejection, and DST
 behavior are defined once in [Time rules](../model-routing/spec.md#time-rules).
 
@@ -460,7 +482,7 @@ finite fields, independently of `schedule`:
 
 | Field | Type and constraint |
 | --- | --- |
-| `id` | Required immutable offering-local unique nonempty string without `/`, whitespace, or control characters; disabled entries still occupy their IDs |
+| `id` | Required immutable model-local unique nonempty string without `/`, whitespace, or control characters; disabled entries still occupy their IDs |
 | `input` | Required exact name from this provider's `inputs` map |
 | `priority` | Required signed TOML integer replacing the effective score |
 | `enabled` | Optional boolean, default true |
@@ -470,10 +492,10 @@ finite fields, independently of `schedule`:
 
 The rule derives its kind from the referenced input declaration; it has no
 persisted `kind` field. The input's `models` must explicitly include this
-offering's exact upstream ID. Validate the derived kind's required and forbidden
+model's exact upstream ID. Validate the derived kind's required and forbidden
 fields and coverage even when the rule is disabled. A missing declaration or an
 incompatible rule definition is invalid configuration; an unavailable current
-value is not. Removing a referenced input rejects and reports the offering and
+value is not. Removing a referenced input rejects and reports the model and
 rule IDs. Complete replacement retains the rule's ID and position; add appends,
 and explicit move changes order. Remove and add expresses new intent, not a rename.
 
@@ -481,7 +503,7 @@ and explicit move changes order. Remove and add expresses new intent, not a rena
 bounds of [Time-rule fields](#time-rule-fields): `weekdays` or `dates`,
 `all_day = true` or `start`/`end`, and optional `effective_from`/`effective_until`.
 It contains no `priority`; the surrounding signal rule supplies the replacement.
-The offering's `timezone` is required. An omitted table is ungated, not an
+The model's `timezone` is required. An omitted table is ungated, not an
 inferred daily window. Window interpretation uses the existing
 [Time rules](../model-routing/spec.md#time-rules), not a second calendar language;
 ordered signal gates may overlap because first-match order resolves them.
@@ -506,7 +528,12 @@ the fixed destination of an existing session.
 
 ## Model aliases
 
-`[[model_aliases]]` defines one public request ID within a native protocol.
+`[[model_aliases]]` is named configuration defining one public request ID within
+a native protocol and referencing already registered provider-owned Models.
+Each candidate is a model reference plus alias-local settings, not an independent
+Model or candidate resource with its own identity or lifecycle. The existing
+`candidates` array and `candidate_reasoning_effort` map encode that configuration;
+this ownership distinction adds no new syntax.
 
 | Field | Type and constraint |
 | --- | --- |
@@ -539,8 +566,8 @@ instance is not implicitly added to an explicit candidate list.
 
 ## Agent targets
 
-`[agents.<id>]` selects an independently managed native scope, not an inference
-client registration or a gateway permission boundary:
+`[agents.<id>]` is the independently managed AgentTarget native scope and its
+configuration, not an inference client registration or gateway permission boundary:
 
 | Field | Type and meaning |
 | --- | --- |
@@ -630,7 +657,7 @@ but is also valid with no Agent targets:
 | `autostart` | Optional boolean, default false |
 
 Non-loopback addresses are invalid. The public model list is derived directly
-from enabled provider/offerings and enabled alias definitions, within their
+from enabled provider-owned models and enabled alias definitions, within their
 declared supported protocols. Missing availability or compatibility evidence
 remains visible under the model-support and eligibility rules. There is no
 `gateway.models` table, separate publication resource, client registry, or private

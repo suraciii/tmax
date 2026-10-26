@@ -92,7 +92,7 @@ The [Anthropic compatibility table](https://api-docs.deepseek.com/guides/anthrop
 is not a promise of full Anthropic feature parity. Required content blocks,
 reasoning behavior, tools, and ignored request controls must be checked against
 that table. tmax must not infer Claude entitlement from a name that upstream accepts
-and maps to a DeepSeek model. The configured offering must retain its explicit
+and maps to a DeepSeek model. The configured model must retain its explicit
 DeepSeek model identity and billing provenance.
 
 Every declared inference operation requires the selected provider key and exact
@@ -166,7 +166,7 @@ fail rather than publish a partial list. Failed refreshes retain the last good
 observation separately from the latest attempt under the shared observation
 lifecycle.
 
-Discovery does not register offerings, mutate the catalog or desired
+Discovery does not register models, mutate the catalog or desired
 configuration, establish account identity or balance, or qualify inference,
 native protocols, agents, or conversation behavior. Authorization replacement
 invalidates observations bound to the previous authorization.
@@ -244,7 +244,7 @@ success.
 - Setup offers Platform API-key access without a subscription-login choice or a
   fabricated subscription record. Inspection identifies the effective credential
   source and native scope without claiming a refreshable session.
-- Model discovery retains exact IDs without registering offerings or changing
+- Model discovery retains exact IDs without registering models or changing
   catalog metadata. Malformed/excessive responses fail without replacing the
   last good observation. Auth/quota remain separate balance observations;
   discovery does not claim model inference, conversation, or account verification.
@@ -278,7 +278,7 @@ Official documentation was consulted on 2026-10-23. These sources establish
 upstream documentation evidence. On 2026-10-24, provider-authorized non-inference
 model discovery was exercised through the real tmax CLI in an isolated,
 passwd-backed OS account: the official models refresh completed, retained exact
-IDs, and left registered offerings and catalog metadata unchanged. This bounded
+IDs, and left registered models and catalog metadata unchanged. This bounded
 check used no paid inference and establishes no native-agent version range,
 protocol transport, tool, or conversation qualification. Qualification labels
 must follow [the shared support contract](../spec.md#support-contract).

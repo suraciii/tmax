@@ -836,23 +836,23 @@ fn operand_labels(path: &str) -> &'static [&'static str] {
             }
         }
         p if p.starts_with("provider ") => &["Provider ID"],
-        "model rename" => &["Qualified offering", "New exact upstream model ID"],
+        "model rename" => &["Qualified model", "New exact upstream model ID"],
         p if p.starts_with("model rule ") => {
             if p.ends_with("list") || p.ends_with("clear") {
-                &["Qualified offering"]
+                &["Qualified model"]
             } else {
-                &["Qualified offering", "Rule ID"]
+                &["Qualified model", "Rule ID"]
             }
         }
         "model reasoning replace"
         | "model reasoning remove"
         | "model schedule replace"
-        | "model schedule remove" => &["Qualified offering", "Local index"],
-        "model override list replace" => &["Qualified offering", "Metadata list field"],
+        | "model schedule remove" => &["Qualified model", "Local index"],
+        "model override list replace" => &["Qualified model", "Metadata list field"],
         "model alias rename" => &["Existing alias ID", "New alias ID"],
         p if p.starts_with("model alias ") => &["Alias ID"],
         "model explain" => &["Public model ID"],
-        p if p.starts_with("model ") => &["Qualified offering"],
+        p if p.starts_with("model ") => &["Qualified model"],
         "agent rename" => &["Existing target ID", "New target ID"],
         "agent role set" => &[
             "Target ID",

@@ -11,6 +11,18 @@ a running service. `provider inspect`, file-state reads, and configuration
 has no loaded snapshot; an unidentified or inaccessible service is **unavailable**,
 not proof that nothing is running or that no sessions are affected.
 
+A provider is an independent upstream access instance; multiple providers can use
+the same service or account without proving separate allowances. Each concrete
+model belongs to one provider and is referenced as `provider-id/model-id`. An
+agent target is an independently managed native scope. A model alias is named
+configuration referencing existing models, with optional alias-local reasoning
+effort per candidate; candidates have no independent identity or lifecycle.
+Account identity and subscription information are optional facts, authentication
+is provider configuration, and conversation bindings are runtime state. An
+integration selects qualified behavior, not a universal service identity.
+See the [domain vocabulary](../CONTEXT.md) and
+[ownership contract](../specs/product/design.md#product-structure).
+
 After an ordinary edit has saved successfully and completed required safety work,
 exit 0 means the desired change is committed. Background activation may still
 have a failed/unavailable warning. Check `save`, `file_revision`, `runtime`,
@@ -67,7 +79,7 @@ that authority. If you choose to update it manually, remove each per-model `tier
 alias's `tier` field with a nonempty `candidates` list of exact, already registered
 `provider-id/model-id` names that you choose. Keep the alias ID and protocol.
 Names such as `L0`, `L1`, and `coding` have no built-in meaning or membership.
-Keep offering priorities, time schedules, and ordered rules unchanged. Distinct
+Keep model priorities, time schedules, and ordered rules unchanged. Distinct
 native/vendor service tiers, pricing/context tiers, and subscription-plan metadata
 are not removed fields.
 
@@ -87,7 +99,7 @@ tmax provider inspect personal
 ```
 
 This authenticated operation reads `https://api.deepseek.com/models` and retains
-exact upstream IDs as an observation. It does not register offerings, download or
+exact upstream IDs as an observation. It does not register models, download or
 apply catalog metadata, verify inference, or incur a tmax paid probe. Register
 only the desired exact IDs separately with `model add`. A failed refresh retains
 the last good list separately from its failed attempt. Auth and quota refreshes
@@ -232,7 +244,7 @@ The local gateway is independent of managed Pi/Codex targets. Direct clients do 
 need an `agent` declaration or native apply. A concrete qualified model can be
 used directly; aliases are optional.
 
-The default public ID can be the concrete offering:
+The default public ID can be the concrete model:
 
 ```sh
 PUBLIC_ID="$PROVIDER_ID/$MODEL_ID"
@@ -346,7 +358,7 @@ Manual input requires no credentials, but it remains user-provided evidence—no
 verified provider usage. `provider input inspect` distinguishes current data,
 freshness, unavailable/cleared state, dependencies, and last attempt.
 
-Rules are offering-local, append in explicit order, and compare retained exact
+Rules are model-local, append in explicit order, and compare retained exact
 facts; priority values do not sort rule order. One third is at least 33.33%, but
 below 33.34%:
 
@@ -390,7 +402,7 @@ reservation or proof of upstream authorization.
 
 ## Calendar edits and revision guards
 
-Calendar schedules are local-time rules; set the offering timezone first. For an
+Calendar schedules are local-time rules; set the model timezone first. For an
 indexed replace/remove, read the current revision from `model inspect`, use the
 shown zero-based index, and re-read after every successful intervening write:
 

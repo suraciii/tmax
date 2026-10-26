@@ -15,7 +15,7 @@ page makes no external font, image, or script requests.
   integration registry supplies protocols, regional choices, and endpoint defaults.
   Configure authentication separately. Provider details expose subscriptions,
   observations, inherited metadata, overrides, and explicit upstream refresh.
-- **Models** separates concrete offerings from aliases. Concrete forms edit names,
+- **Models** separates concrete models from aliases. Concrete forms edit names,
   enabled state, and base priority. Alias forms select exact concrete candidates
   and a native protocol, with an optional reasoning-effort input for each
   candidate. Leave it blank when creating an alias to preserve caller effort;

@@ -70,12 +70,28 @@ Unsupported storage-format records return `storage_version_unsupported` or
 `provider key set` or replace the shared key with `gateway key replace`. Recovery
 contents in unsupported formats are unavailable to current recovery operations.
 
-If the current CLI reports `resident_incompatible`, use the running service's
-matching older CLI (`tmax proxy stop`, then `tmax web stop` for a pre-Gateway
-binary) or its existing Web
-controls to perform explicit stops before starting the new executable. The new
-CLI does not take over or terminate an incompatible resident. Browser sign-in uses management protocol `tmax-control/4`; an older resident
-must be stopped with its matching binary before starting the upgraded executable.
+Replacing the executable does not upgrade a running resident. This executable
+uses management protocol `tmax-control/5`; the Model identity and selected-model
+result cutover is incompatible with an older `tmax-control/4` resident. If the
+current CLI reports `resident_incompatible`, use
+the running service's matching older executable to stop it explicitly:
+
+```sh
+/path/to/previous/tmax gateway stop
+/path/to/previous/tmax web stop
+/path/to/current/tmax web open --no-browser
+```
+
+Use the previous executable's `proxy stop` instead of `gateway stop` only for a
+pre-Gateway binary. Its existing Web stop controls are another supported option.
+Normal active-request stop protections still apply; resolve their reported
+blockers rather than assuming an executable replacement stopped inference.
+Start the upgraded gateway explicitly when wanted, using `tmax gateway start`.
+The new CLI does not take over, terminate, automatically restart, or send
+unsupported state-changing commands to an incompatible resident. Do not delete
+or edit routing/session JSON to upgrade: supported historical operational records
+normalize internally while preserving identity tokens, retained evidence, and
+continuation blockers.
 
 Native credential-file handoff is version-qualified, restricted, and explicitly
 disclosed; it is not an export command or token-import feature. Provider-key

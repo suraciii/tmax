@@ -26,7 +26,7 @@ pub struct Record {
     pub model_kind: String,
     pub protocol: Option<String>,
     pub provider: Option<String>,
-    pub offering: Option<String>,
+    pub qualified_model: Option<String>,
     pub authorization_generation: Option<String>,
     pub configuration_revision: Option<String>,
     pub decision: Value,
@@ -85,7 +85,7 @@ impl History {
             model_kind: "unknown".into(),
             protocol: None,
             provider: None,
-            offering: None,
+            qualified_model: None,
             authorization_generation: None,
             configuration_revision: None,
             decision: Value::Null,
@@ -123,7 +123,7 @@ impl History {
             &mut record.model,
             &mut record.protocol,
             &mut record.provider,
-            &mut record.offering,
+            &mut record.qualified_model,
             &mut record.authorization_generation,
             &mut record.configuration_revision,
             &mut record.reason_code,
@@ -371,7 +371,7 @@ fn record_memory(record: &Record) -> usize {
             Some(&record.model_kind),
             record.protocol.as_ref(),
             record.provider.as_ref(),
-            record.offering.as_ref(),
+            record.qualified_model.as_ref(),
             record.authorization_generation.as_ref(),
             record.configuration_revision.as_ref(),
             Some(&record.outcome),
@@ -402,8 +402,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "metadata_revision"
                 | "provider"
                 | "model"
-                | "offering"
-                | "offering_identity"
+                | "model_identity"
                 | "provider_identity"
                 | "authorization_generation"
                 | "input"
@@ -625,6 +624,43 @@ fn decision_summary(value: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_model_and_identity_survive_history_projection() {
+        let history = History::new("models".into());
+        let mut record = history.begin();
+        record.model = Some("public-alias".into());
+        record.qualified_model = Some("upstream/model".into());
+        record.decision = json!({
+            "selection_reason":"stable_model_identity",
+            "selection":{"provider":"upstream","model":"model","qualified_model":"upstream/model","model_identity":"stable-token"}
+        });
+        record.outcome = "completed".into();
+        let request = Request {
+            command: vec!["history".into(), "inspect".into()],
+            operands: vec![record.request.clone()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        history.update(record);
+        let projected = history.view(&request).unwrap();
+        assert_eq!(projected["record"]["model"], "public-alias");
+        assert_eq!(projected["record"]["qualified_model"], "upstream/model");
+        assert_eq!(
+            projected["record"]["decision"]["selection"]["model_identity"],
+            "stable-token"
+        );
+        assert_eq!(
+            projected["record"]["decision"]["selection"]["qualified_model"],
+            "upstream/model"
+        );
+        assert_eq!(
+            projected["record"]["decision"]["selection_reason"],
+            "stable_model_identity"
+        );
+        assert_eq!(projected["record"]["evidence_gap"], false);
+    }
+
     #[test]
     fn clear_preserves_active_and_terminal_is_immutable() {
         let h = History::new("p".into());

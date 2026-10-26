@@ -110,7 +110,7 @@ impl Default for Bindings {
 struct Binding {
     context_handle: String,
     provider_identity: String,
-    offering_identity: String,
+    model_identity: String,
     provider: String,
     model: String,
     protocol: String,
@@ -127,6 +127,116 @@ struct Choice {
     endpoint: String,
     go_session_header: Option<&'static str>,
 }
+fn binding_schema_error() -> Error {
+    Error::new(
+        "storage_unavailable",
+        "Stored session bindings are malformed; preserve them and repair the affected store",
+    )
+}
+
+// Only retained operational data accepts historical names. Normalize before
+// projection so saved blockers and original routing evidence remain authoritative.
+fn normalize_binding_evidence(value: &mut Value) -> Result<()> {
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
+    for (old, new) in [
+        ("offering_identity", "model_identity"),
+        ("offering", "qualified_model"),
+    ] {
+        if let Some(value) = object.remove(old) {
+            if object.contains_key(new) {
+                return Err(binding_schema_error());
+            }
+            object.insert(new.into(), value);
+        }
+    }
+    for key in ["reason_code", "selection_reason", "tie_break"] {
+        if let Some(value) = object.get_mut(key) {
+            normalize_binding_code(value);
+        }
+    }
+    // Traverse known routing records only, never maps keyed by model IDs,
+    // metadata, user configuration, or arbitrary source payloads.
+    for key in [
+        "selection",
+        "selected",
+        "original_decision",
+        "decision",
+        "selected_evaluation",
+    ] {
+        if let Some(value) = object.get_mut(key) {
+            normalize_binding_evidence(value)?;
+        }
+    }
+    for key in [
+        "priority_evaluations",
+        "excluded_candidates",
+        "evaluations",
+        "excluded",
+        "candidates",
+    ] {
+        if let Some(values) = object.get_mut(key).and_then(Value::as_array_mut) {
+            for value in values {
+                normalize_binding_evidence(value)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_binding_code(value: &mut Value) {
+    let replacement = match value.as_str() {
+        Some("offering_removed") => Some("model_removed"),
+        Some("offering_disabled") => Some("model_disabled"),
+        Some("stable_offering_identity") => Some("stable_model_identity"),
+        _ => None,
+    };
+    if let Some(replacement) = replacement {
+        *value = Value::String(replacement.into());
+    }
+}
+
+fn decode_bindings(bytes: &[u8]) -> Result<Bindings> {
+    // Validate before Value deserialization can discard duplicate evidence fields,
+    // including historical evidence inside an otherwise canonical binding.
+    crate::inputs::check_historical_field_uniqueness(bytes).map_err(|_| binding_schema_error())?;
+    if let Ok(mut bindings) = serde_json::from_slice::<Bindings>(bytes) {
+        for binding in bindings.entries.values_mut() {
+            normalize_binding_evidence(&mut binding.decision)?;
+            if let Some(blocker) = &mut binding.blocked {
+                match blocker.as_str() {
+                    "offering_removed" => *blocker = "model_removed".into(),
+                    "offering_disabled" => *blocker = "model_disabled".into(),
+                    _ => {}
+                }
+            }
+        }
+        return Ok(bindings);
+    }
+    let mut document: Value = serde_json::from_slice(bytes).map_err(|_| binding_schema_error())?;
+    let entries = document
+        .get_mut("entries")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(binding_schema_error)?;
+    for entry in entries.values_mut() {
+        let entry = entry.as_object_mut().ok_or_else(binding_schema_error)?;
+        if let Some(identity) = entry.remove("offering_identity") {
+            if entry.contains_key("model_identity") {
+                return Err(binding_schema_error());
+            }
+            entry.insert("model_identity".into(), identity);
+        }
+        if let Some(blocker) = entry.get_mut("blocked") {
+            normalize_binding_code(blocker);
+        }
+        if let Some(decision) = entry.get_mut("decision") {
+            normalize_binding_evidence(decision)?;
+        }
+    }
+    serde_json::from_value(document).map_err(|_| binding_schema_error())
+}
+
 fn load_bindings(store: &Store) -> Result<Bindings> {
     let path = store.root.join("session-bindings.json");
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > BINDING_FILE_BYTES) {
@@ -135,7 +245,10 @@ fn load_bindings(store: &Store) -> Result<Bindings> {
             "Session binding store exceeds its bounded size; preserve it and inspect recovery",
         ));
     }
-    let bindings: Bindings = store.read_json("session-bindings.json")?;
+    let bindings = match crate::storage::read_optional(&path)? {
+        Some(bytes) => decode_bindings(&bytes)?,
+        None => Bindings::default(),
+    };
     if bindings.entries.len() > BINDING_LIMIT {
         return Err(Error::new(
             "binding_store_unavailable",
@@ -276,10 +389,13 @@ impl Runtime {
         let mut names = BTreeMap::new();
         for (provider_id, provider) in &config.providers {
             for model in provider.models.keys() {
-                if let Some((identity, _, offering)) =
+                if let Some((identity, _, model_identity)) =
                     identities.destination_identity(provider_id, model)
                 {
-                    names.insert(offering, (provider_id.as_str(), model.as_str(), identity));
+                    names.insert(
+                        model_identity,
+                        (provider_id.as_str(), model.as_str(), identity),
+                    );
                 }
             }
         }
@@ -295,7 +411,7 @@ impl Runtime {
             }
             let rename =
                 names
-                    .get(&binding.offering_identity)
+                    .get(&binding.model_identity)
                     .filter(|(provider, model, identity)| {
                         *provider != binding.provider
                             && *model == binding.model
@@ -446,16 +562,16 @@ impl Runtime {
             ) {
                 return Err(Error::new(
                     reason,
-                    "Request requirements are incompatible with the retained offering; no reassignment",
+                    "Request requirements are incompatible with the retained model; no reassignment",
                 ));
             }
             client_contract(provider, &native)?;
-            let evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"offering_identity":binding.offering_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
+            let evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
             return Ok(Choice {
                 selection: crate::routing::Selection {
                     provider: binding.provider.clone(),
                     model: binding.model.clone(),
-                    offering_identity: binding.offering_identity.clone(),
+                    model_identity: binding.model_identity.clone(),
                     priority: 0,
                     evidence,
                 },
@@ -518,7 +634,7 @@ impl Runtime {
                 )
             })?
             .to_owned();
-        let offering_identity = selection.offering_identity.clone();
+        let model_identity = selection.model_identity.clone();
         if let Some(selected) = selection.evidence.get("selection") {
             let name = selected.get("qualified_model");
             let selected_evaluation = selection
@@ -554,7 +670,7 @@ impl Runtime {
                     .and_then(native_context::Context::scope_handle)
                     .expect("qualified native scope"),
                 provider_identity,
-                offering_identity,
+                model_identity,
                 provider: selection.provider.clone(),
                 model: selection.model.clone(),
                 protocol: protocol.into(),
@@ -611,7 +727,7 @@ fn retained_explanation(
     Ok(json!({
         "session":session,"session_source":source,"public_id":public_id,"protocol":protocol,
         "selection_reason":"retained_destination",
-        "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"offering_identity":binding.offering_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
+        "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
         "continuation":{"state":if blocker.is_some(){"blocked"}else{"retained"},"reason_code":blocker,"stored_blocker":binding.blocked},
         "original_decision":safe_evidence(&binding.decision),"fresh_ranking":"not_evaluated","authorization":"not_verified"
     }))
@@ -629,10 +745,10 @@ fn binding_blocker(
         return Some("provider_disabled");
     }
     let Some(m) = p.models.get(&b.model) else {
-        return Some("offering_removed");
+        return Some("model_removed");
     };
     if !m.enabled {
-        return Some("offering_disabled");
+        return Some("model_disabled");
     }
     let Ok(endpoints) = crate::integrations::resolve(p) else {
         return Some("endpoint_unavailable");
@@ -640,12 +756,12 @@ fn binding_blocker(
     if endpoints.get(&b.protocol) != Some(&b.endpoint) {
         return Some("endpoint_changed");
     }
-    let Some((identity, generation, offering)) =
+    let Some((identity, generation, model_identity)) =
         identities.destination_identity(&b.provider, &b.model)
     else {
         return Some("destination_identity_unavailable");
     };
-    if identity != b.provider_identity || offering != b.offering_identity {
+    if identity != b.provider_identity || model_identity != b.model_identity {
         return Some("destination_replaced");
     }
     if generation != b.authorization_generation {
@@ -1037,7 +1153,7 @@ async fn forward(State(runtime): State<Arc<Runtime>>, request: axum::extract::Re
     flight.record.admitted_at = Some(now);
     flight.record.configuration_revision = Some(snapshot.revision.clone());
     flight.record.provider = Some(selection.provider.clone());
-    flight.record.offering = Some(format!("{}/{}", selection.provider, selection.model));
+    flight.record.qualified_model = Some(format!("{}/{}", selection.provider, selection.model));
     flight.record.authorization_generation = Some(choice.authorization_generation);
     flight.record.decision = safe_evidence(&selection.evidence);
     flight.record.stage = "credential_acquisition".into();
@@ -1471,7 +1587,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
     let id = request
         .operands
         .first()
-        .ok_or_else(|| Error::new("missing_operand", "Qualified offering required"))?;
+        .ok_or_else(|| Error::new("missing_operand", "Qualified model required"))?;
     let arg = |name: &str| {
         request
             .arguments
@@ -1492,7 +1608,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
     let (provider_id, model_id) = crate::config::qualified(id)?;
     let (provider, model) = crate::config::model(config, id)?;
     if !provider.enabled || !model.enabled {
-        return Err(Error::new("model_unavailable", "Offering is disabled"));
+        return Err(Error::new("model_unavailable", "Model is disabled"));
     }
     let integration = crate::integrations::integration_id(provider)?;
     if matches!(
@@ -1524,7 +1640,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
     let path = crate::integrations::operation_path(protocol)?;
     if request.dry_run {
         return Ok(
-            json!({"dry_run":true,"offering":id,"provider":provider_id,"protocol":protocol,"transport":transport,"cost_risk":"May consume quota or incur unknown charges","request_shape":{"prompt":"fixed short diagnostic","output_token_limit":8},"inference_dispatched":false}),
+            json!({"dry_run":true,"qualified_model":id,"provider":provider_id,"protocol":protocol,"transport":transport,"cost_risk":"May consume quota or incur unknown charges","request_shape":{"prompt":"fixed short diagnostic","output_token_limit":8},"inference_dispatched":false}),
         );
     }
     let Some(Auth::ApiKey { key_ref }) = &provider.auth else {
@@ -1574,7 +1690,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
         observer.value(&value);
     }
     Ok(
-        json!({"offering":id,"provider":provider_id,"protocol":protocol,"transport":transport,"observed_at":at,"source":"explicit_inference_probe","upstream_status":status,"result":if observer.success&&observer.complete{"completed"}else if !observer.success{"failed"}else{"unknown"},"duration_ms":started.elapsed().as_millis(),"usage":observer.usage,"usage_state":if observer.partial{"partial"}else if observer.usage.is_empty(){"unknown"}else{"reported"},"cost_risk":"May consume quota or incur unknown charges","account_identity":"unverified","quota":"unknown"}),
+        json!({"qualified_model":id,"provider":provider_id,"protocol":protocol,"transport":transport,"observed_at":at,"source":"explicit_inference_probe","upstream_status":status,"result":if observer.success&&observer.complete{"completed"}else if !observer.success{"failed"}else{"unknown"},"duration_ms":started.elapsed().as_millis(),"usage":observer.usage,"usage_state":if observer.partial{"partial"}else if observer.usage.is_empty(){"unknown"}else{"reported"},"cost_risk":"May consume quota or incur unknown charges","account_identity":"unverified","quota":"unknown"}),
     )
 }
 
@@ -1855,6 +1971,259 @@ mod tests {
         runtime.activate_bindings(new, false).unwrap();
         *authority = Some(Arc::new(test_snapshot(new, revision)));
     }
+    #[test]
+    fn alias_ties_report_the_retained_model_identity_used_for_ranking() {
+        let (_temporary, runtime, mut config) = fixture();
+        let previous = config.clone();
+        config
+            .providers
+            .get_mut("q")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .priority = 10;
+        publish(&runtime, &previous, &config, "tied");
+        let identities = crate::inputs::Snapshot::capture_loaded(&runtime.store, &config, None);
+        let p = identities.destination_identity("p", "m").unwrap().2;
+        let q = identities.destination_identity("q", "m").unwrap().2;
+        let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+        let choice = runtime
+            .choose(
+                &test_snapshot(&config, "tied"),
+                "dynamic",
+                "chat-completions",
+                &json!({"messages":[{"role":"user","content":"x"}]}),
+                &native_headers(at),
+                at + chrono::Duration::milliseconds(1),
+            )
+            .unwrap();
+        assert_eq!(choice.selection.model_identity, p.min(q));
+        assert_eq!(
+            choice.selection.evidence["selection_reason"],
+            "stable_model_identity"
+        );
+        assert_eq!(
+            choice.selection.evidence["selection"]["model_identity"],
+            choice.selection.model_identity
+        );
+        assert_eq!(
+            choice.selection.evidence["selection"]["qualified_model"],
+            format!("{}/{}", choice.selection.provider, choice.selection.model)
+        );
+    }
+
+    #[test]
+    fn historical_names_preserve_session_identity_evidence_and_permanent_blockers() {
+        for blocker in [None, Some("offering_removed"), Some("offering_disabled")] {
+            let (_temporary, runtime, config) = fixture();
+            let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+            let headers = native_headers(at);
+            let body = json!({"messages":[{"role":"user","content":"x"}]});
+            let first = runtime
+                .choose(
+                    &test_snapshot(&config, "fixture-1"),
+                    "dynamic",
+                    "chat-completions",
+                    &body,
+                    &headers,
+                    at + chrono::Duration::milliseconds(1),
+                )
+                .unwrap();
+            let mut historical = serde_json::to_value(&*runtime.bindings.lock().unwrap()).unwrap();
+            let entry = historical["entries"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap();
+            let selected_identity = entry["model_identity"].clone();
+            let authorization = entry["authorization_generation"].clone();
+            let provider_identity = entry["provider_identity"].clone();
+            let original_decision = entry["decision"].clone();
+            let entry_object = entry.as_object_mut().unwrap();
+            let identity = entry_object.remove("model_identity").unwrap();
+            entry_object.insert("offering_identity".into(), identity);
+            entry_object.insert("blocked".into(), json!(blocker));
+            let selection = entry_object.get_mut("decision").unwrap()["selection"]
+                .as_object_mut()
+                .unwrap();
+            let identity = selection.remove("model_identity").unwrap();
+            selection.insert("offering_identity".into(), identity);
+            runtime
+                .store
+                .write_json("session-bindings.json", &historical)
+                .unwrap();
+            let bytes = std::fs::read(runtime.store.root.join("session-bindings.json")).unwrap();
+            let mut reranked = config.clone();
+            reranked
+                .providers
+                .get_mut("q")
+                .unwrap()
+                .models
+                .get_mut("m")
+                .unwrap()
+                .priority = 100;
+            crate::routing::reconcile(&runtime.store, &config, &reranked, &[]).unwrap();
+            crate::inputs::activate(&runtime.store, &reranked, "reranked").unwrap();
+            let store = runtime.store.clone();
+            drop(runtime);
+            let restarted = Runtime::new(store, "migrated".into()).unwrap();
+            assert_eq!(
+                std::fs::read(restarted.store.root.join("session-bindings.json")).unwrap(),
+                bytes
+            );
+            let normalized = serde_json::to_value(&*restarted.bindings.lock().unwrap()).unwrap();
+            let entry = normalized["entries"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap();
+            assert_eq!(entry["model_identity"], selected_identity);
+            assert_eq!(entry["provider_identity"], provider_identity);
+            assert_eq!(entry["authorization_generation"], authorization);
+            assert_eq!(entry["decision"], original_decision);
+            assert_eq!(entry["decision"]["selection"]["qualified_model"], "p/m");
+            let result = restarted.choose(
+                &test_snapshot(&reranked, "reranked"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &headers,
+                at + chrono::Duration::seconds(1),
+            );
+            match blocker {
+                None => {
+                    let retained = result.unwrap();
+                    assert_eq!(retained.selection.provider, first.selection.provider);
+                    assert_eq!(
+                        retained.selection.model_identity,
+                        first.selection.model_identity
+                    );
+                    assert_eq!(
+                        retained.selection.evidence["selected"]["qualified_model"],
+                        "p/m"
+                    );
+                }
+                Some(old) => {
+                    let expected = if old == "offering_removed" {
+                        "model_removed"
+                    } else {
+                        "model_disabled"
+                    };
+                    assert_eq!(result.err().unwrap().code, expected);
+                    assert_eq!(entry["blocked"], expected);
+                }
+            }
+            let bindings = restarted.bindings.lock().unwrap();
+            save_bindings(&restarted.store, &bindings).unwrap();
+            assert_eq!(
+                restarted
+                    .store
+                    .read_json::<Value>("session-bindings.json")
+                    .unwrap(),
+                normalized
+            );
+        }
+    }
+
+    #[test]
+    fn historical_evidence_normalizes_only_known_routing_envelopes_and_rejects_ambiguity() {
+        let untouched = json!({"offering":"user-value","offering_identity":"upstream-value","models":{"offering":{"offering_identity":"model-id"}}});
+        let mut evidence = json!({
+            "selection":{"offering_identity":"stable-token","offering":"p/offering"},
+            "selection_reason":"stable_offering_identity",
+            "excluded_candidates":[{"offering":"q/m","reason_code":"offering_disabled"}],
+            "metadata":untouched,
+            "models":{"offering":untouched},
+            "original_decision":{"selection":{"offering_identity":"original-token"}}
+        });
+        normalize_binding_evidence(&mut evidence).unwrap();
+        assert_eq!(evidence["selection"]["model_identity"], "stable-token");
+        assert_eq!(evidence["selection"]["qualified_model"], "p/offering");
+        assert_eq!(evidence["selection_reason"], "stable_model_identity");
+        assert_eq!(
+            evidence["excluded_candidates"][0]["reason_code"],
+            "model_disabled"
+        );
+        assert_eq!(
+            evidence["original_decision"]["selection"]["model_identity"],
+            "original-token"
+        );
+        assert_eq!(evidence["metadata"], untouched);
+        assert_eq!(evidence["models"]["offering"], untouched);
+        for mut ambiguous in [
+            json!({"selection":{"offering_identity":"same","model_identity":"same"}}),
+            json!({"excluded_candidates":[{"offering":"p/m","qualified_model":"p/m"}]}),
+        ] {
+            assert!(normalize_binding_evidence(&mut ambiguous).is_err());
+        }
+        let (_temporary, runtime, config) = fixture();
+        let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+        runtime
+            .choose(
+                &test_snapshot(&config, "fixture-1"),
+                "dynamic",
+                "chat-completions",
+                &json!({"messages":[{"role":"user","content":"x"}]}),
+                &native_headers(at),
+                at + chrono::Duration::milliseconds(1),
+            )
+            .unwrap();
+        let current = serde_json::to_value(&*runtime.bindings.lock().unwrap()).unwrap();
+        for decision in [
+            r#"{"selection":{"offering_identity":"first","offering_identity":"second"}}"#,
+            r#"{"selection":{"offering_identity":"first"},"selection":{"model_identity":"second"}}"#,
+        ] {
+            let mut mixed = current.clone();
+            mixed["entries"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap()["decision"] = Value::Null;
+            let encoded = serde_json::to_string(&mixed).unwrap().replacen(
+                "\"decision\":null",
+                &format!("\"decision\":{decision}"),
+                1,
+            );
+            assert!(decode_bindings(encoded.as_bytes()).is_err());
+        }
+        let mut ambiguous = current.clone();
+        let entry = ambiguous["entries"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap();
+        entry["offering_identity"] = entry["model_identity"].clone();
+        assert!(decode_bindings(&serde_json::to_vec(&ambiguous).unwrap()).is_err());
+        let mut historical = current.clone();
+        let entry = historical["entries"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        let identity = entry.remove("model_identity").unwrap();
+        entry.insert("offering_identity".into(), identity);
+        let encoded = serde_json::to_string(&historical).unwrap();
+        let duplicate = encoded.replacen(
+            "\"offering_identity\":",
+            "\"offering_identity\":\"duplicate\",\"offering_identity\":",
+            1,
+        );
+        assert!(decode_bindings(duplicate.as_bytes()).is_err());
+        historical["unexpected"] = Value::Null;
+        assert!(decode_bindings(&serde_json::to_vec(&historical).unwrap()).is_err());
+        let mut unknown = current;
+        unknown["unexpected"] = Value::Null;
+        assert!(decode_bindings(&serde_json::to_vec(&unknown).unwrap()).is_err());
+    }
+
     #[test]
     fn context_free_selection_does_not_wait_for_session_bindings() {
         let (_temporary, runtime, config) = fixture();

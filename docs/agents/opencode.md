@@ -75,7 +75,7 @@ Native model defaults are tools true, input text/image, output text, context
 native new-model defaults, not actual endpoint capabilities or zero-price claims.
 Explicit false and empty arrays are not absence. Source:
 [`schema/src/model.ts`](https://github.com/anomalyco/opencode/blob/026b106bc5d41b679ffc413264229c340871e4d3/packages/schema/src/model.ts#L19-L143).
-For selected concrete offerings, tmax projects the accepted effective metadata:
+For selected concrete models, tmax projects the accepted effective metadata:
 `limit.context/input/output`, `tool_call` to `capabilities.tools`, and explicit
 input/output modality arrays to `capabilities.input/output`. Local overrides win
 over the accepted catalog; downloaded-but-unaccepted metadata is not used. False,

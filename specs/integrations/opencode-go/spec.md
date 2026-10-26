@@ -258,7 +258,7 @@ must not be a forged user agent, a static session header, or a substitute for a
 qualified native session where one exists.
 
 Request history must retain the specific identity or compatibility blocker for a
-fixed offering or candidates sharing one blocker, including
+fixed model or candidates sharing one blocker, including
 `native_session_required` when Go's qualified session mechanism is missing.
 Different candidate failures must not be mislabeled as one shared cause. A
 retained destination rejected by client/session checks or configuration activation
@@ -419,11 +419,11 @@ provider's quota refresh returned HTTP `200` and retained its own usage snapshot
 Installed **pi 1.2.0 → tmax → Go `deepseek-v4.1-flash`**, using Chat Completions
 and SSE, completed one harmless tool-call/result round trip and one continuation
 per provider: three HTTP `200` requests each, with complete downstream delivery
-and reported usage. Provider, offering, authorization-generation, and quota
+and reported usage. Provider, model, authorization-generation, and quota
 observations remained isolated; workspace ownership was not established and no
 combined allowance was inferred.
 
-The concrete offering inherited accepted models.dev metadata without capability
+The concrete model inherited accepted models.dev metadata without capability
 overrides. Native inspection matched its context/output capacities, reasoning
 capability, and text/image input. A documented native `before_provider_request`
 hook changed only the existing request-generation budget to at most **512**;

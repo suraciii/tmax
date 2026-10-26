@@ -6,7 +6,8 @@
 subscription information, and model choices for coding agents. A supplementary
 local Web interface is also available.
 
-- Keep multiple accounts for one service in separate named provider instances.
+- Manage independent named access instances, including multiple instances for one
+  service or account; separate instances do not establish separate allowances.
 - Manage native model-provider settings for Codex CLI, pi, omp, OpenCode, and
   Hermes Agent.
 - Run a local, same-protocol model gateway with concrete models or user-defined

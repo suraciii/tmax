@@ -44,7 +44,7 @@ impl Context<'_> {
         {
             return Err(Error::new(
                 "incompatible",
-                "The offering belongs to a different upstream native provider entry",
+                "The model belongs to a different upstream native provider entry",
             ));
         }
         let provider = &config.providers[provider_id];
