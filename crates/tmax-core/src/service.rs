@@ -314,7 +314,7 @@ impl Resident {
             .into();
             key.filter(|key| !key.is_empty())
                 .map(|key| {
-                    crate::integrations::client(&loaded.config).map(|client| {
+                    crate::provider_integration::client(&loaded.config).map(|client| {
                         Arc::new(Snapshot {
                             client,
                             config: loaded.config.clone(),
@@ -375,7 +375,7 @@ impl Resident {
                 "Shared key is unavailable; explicitly replace it",
             ));
         }
-        let client = crate::integrations::client(&current.config)?;
+        let client = crate::provider_integration::client(&current.config)?;
         let metadata = crate::catalog::read(&self.store, "accepted")?.map(Arc::new);
         crate::reasoning::validate(&current.config, metadata.as_deref())?;
         let same = self
@@ -770,7 +770,7 @@ fn retained_session_arguments(request: &Request) -> Result<(&str, &str, &str)> {
 
 pub(crate) async fn browser_login(store: &Store, request: &Request) -> Result<Value> {
     if request.dry_run && request.command.last().is_some_and(|v| v == "login-start") {
-        return crate::native::browser_login::command(store, request);
+        return crate::agent_integration::browser_login::command(store, request);
     }
     rpc(store, "browser_login", Some(request.clone()), None)
         .await?
@@ -1198,7 +1198,7 @@ async fn serve_control(state: Shared, mut stream: control_transport::Server) -> 
                     .as_ref()
                     .ok_or_else(|| failure("invalid_arguments", "Missing login request"))?;
                 crate::operations::commands::validate(request)?;
-                crate::native::browser_login::command(&resident.store, request)
+                crate::agent_integration::browser_login::command(&resident.store, request)
             }
             "status" => Ok(resident.view()),
             "loaded" => Ok(

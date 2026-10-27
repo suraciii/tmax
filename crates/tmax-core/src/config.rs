@@ -517,19 +517,19 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         if !valid_id(id, false) {
             return Err(invalid("providers"));
         }
-        let endpoints =
-            crate::integrations::resolve(p).map_err(|_| invalid(&format!("{base}.endpoints")))?;
+        let endpoints = crate::provider_integration::resolve(p)
+            .map_err(|_| invalid(&format!("{base}.endpoints")))?;
         if let Some(auth) = &p.auth {
             match auth {
                 Auth::ApiKey { key_ref } => {
                     if key_ref.is_empty()
-                        || crate::integrations::integration_id(p)? == "codex-subscription"
+                        || crate::provider_integration::integration_id(p)? == "codex-subscription"
                     {
                         return Err(invalid(&format!("{base}.auth")));
                     }
                 }
                 Auth::Login { via, session_ref } => {
-                    let integration = crate::integrations::integration_id(p)?;
+                    let integration = crate::provider_integration::integration_id(p)?;
                     if via == "tmax"
                         || !config.agents.contains_key(via)
                         || !matches!(integration, "codex-subscription" | "kimi-coding-plan")
@@ -671,7 +671,7 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
             }
         }
         if let Ok((p, _)) = model(config, &a.id)
-            && crate::integrations::protocols(p)?.contains(&a.protocol)
+            && crate::provider_integration::protocols(p)?.contains(&a.protocol)
         {
             return Err(invalid("model_aliases.id"));
         }
@@ -688,10 +688,9 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         {
             return Err(invalid(&base));
         }
-        if t.roles
-            .keys()
-            .any(|role| !crate::native::supported_roles(&t.agent).contains(&role.as_str()))
-        {
+        if t.roles.keys().any(|role| {
+            !crate::agent_integration::supported_roles(&t.agent).contains(&role.as_str())
+        }) {
             return Err(invalid(&format!("{base}.roles")));
         }
         for (name, entry) in &t.providers {

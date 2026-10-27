@@ -226,10 +226,10 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         return crate::skill::install(store, r);
     }
     if path == "integration list" {
-        return Ok(json!({"integrations":crate::integrations::registry()}));
+        return Ok(json!({"integrations":crate::provider_integration::registry()}));
     }
     if path == "integration inspect" {
-        return crate::integrations::inspect(operand(r, 0)?);
+        return crate::provider_integration::inspect(operand(r, 0)?);
     }
     if path == "secret list" {
         return secret_inventory(store).await;
@@ -241,16 +241,16 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         || path == "agent recovery inspect"
         || path == "agent recovery discard"
     {
-        return crate::native::recovery(store, r).await;
+        return crate::agent_integration::recovery(store, r).await;
     }
     if path == "agent restore" {
-        return crate::native::restore_request(store, r).await;
+        return crate::agent_integration::restore_request(store, r).await;
     }
     if path == "agent discover" {
-        return crate::native::discover(store, arg(r, "agent"), None).await;
+        return crate::agent_integration::discover(store, arg(r, "agent"), None).await;
     }
     if path == "agent inspect" && r.operands.is_empty() {
-        return crate::native::discover(
+        return crate::agent_integration::discover(
             store,
             Some(required(r, "agent")?),
             Some(required(r, "path")?),
@@ -301,6 +301,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
                 "Saved configuration revision differs from the requested guard",
             ));
         }
+        crate::reasoning::validate_saved(store, &f.config)?;
         if r.dry_run {
             return impact(store, &f.config, &f.revision, None).await;
         }
@@ -344,6 +345,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         );
     }
     if path == "config validate" {
+        crate::reasoning::validate_saved(store, config)?;
         return Ok(
             json!({"snapshot_state":if file.exists{"available"}else{"absent"},"valid":true,"revision":file.revision,"external_availability":"not_verified"}),
         );
@@ -369,7 +371,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         let endpoint = |c: &Config, revision: &str| -> Value {
             match c.providers.get(id) {
                 Some(p) => {
-                    json!({"snapshot_state":"available","configuration_revision":revision,"configured":{"region":p.region,"endpoints":p.endpoints},"resolution":crate::integrations::endpoint_view(p).ok(),"reason_code":null})
+                    json!({"snapshot_state":"available","configuration_revision":revision,"configured":{"region":p.region,"endpoints":p.endpoints},"resolution":crate::provider_integration::endpoint_view(p).ok(),"reason_code":null})
                 }
                 None => {
                     json!({"snapshot_state":"available","configuration_revision":revision,"configured":null,"resolution":null,"reason_code":"provider_missing"})
@@ -403,10 +405,11 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             std::slice::from_ref(&scope)
         };
         for scope in scopes {
-            crate::integrations::observation_destination(provider, scope)?;
+            crate::provider_integration::observation_destination(provider, scope)?;
         }
         let mut data =
-            crate::integrations::refresh(store, config, operand(r, 0)?, scope, r.dry_run).await?;
+            crate::provider_integration::refresh(store, config, operand(r, 0)?, scope, r.dry_run)
+                .await?;
         if !r.dry_run
             && data["checks"].as_array().is_some_and(|a| {
                 a.iter()
@@ -425,15 +428,15 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         if let Ok((p, m)) = config::model(config, id) {
             let metadata =
                 crate::catalog::effective(store, p, Some((config::qualified(id)?.1, m)))?;
-            let protocols = crate::integrations::protocols(p)?;
+            let protocols = crate::provider_integration::protocols(p)?;
             let native_projection =
-                crate::native::reasoning_projection(&metadata["effective"], &protocols);
+                crate::agent_integration::reasoning_projection(&metadata["effective"], &protocols);
             let gateway_projection: serde_json::Map<String, Value> = protocols
                 .iter()
                 .map(|protocol| {
                     let input_metadata =
                         crate::reasoning::input_metadata(&metadata["effective"], m, protocol);
-                    let projection = crate::native::reasoning_projection(
+                    let projection = crate::agent_integration::reasoning_projection(
                         &input_metadata,
                         std::slice::from_ref(protocol),
                     );
@@ -492,10 +495,10 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         );
     }
     if path == "agent inspect" {
-        return crate::native::inspect(store, config, operand(r, 0)?).await;
+        return crate::agent_integration::inspect(store, config, operand(r, 0)?).await;
     }
     if path == "agent apply" {
-        return crate::native::apply_request(store, config, r).await;
+        return crate::agent_integration::apply_request(store, config, r).await;
     }
     if path == "network show" {
         return Ok(network_view(
@@ -531,7 +534,7 @@ fn model_list(config: &Config, r: &Request) -> Result<Value> {
                 continue;
             }
             for (mid, m) in &p.models {
-                let protocols = crate::integrations::protocols(p)?;
+                let protocols = crate::provider_integration::protocols(p)?;
                 if arg(r, "protocol").is_some_and(|proto| !protocols.iter().any(|p| p == proto)) {
                     continue;
                 }
@@ -598,7 +601,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
             json!({"kind":"agent_target","target":target,"agent_provider":null,"agent":t.agent,"path":t.scope})
         }
     } else if let (Some(agent), Some(path)) = (agent, path) {
-        crate::native::discover(store, Some(agent), Some(path)).await?;
+        crate::agent_integration::discover(store, Some(agent), Some(path)).await?;
         json!({"kind":"native_scope","target":null,"agent_provider":null,"agent":agent,"path":path})
     } else {
         json!({"kind":"gateway","target":null,"agent_provider":null,"agent":null,"path":null})
@@ -623,7 +626,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
     let requirements =
         context["agent"]
             .as_str()
-            .map(|agent| crate::native::compatibility::Context {
+            .map(|agent| crate::agent_integration::compatibility::Context {
                 agent,
                 target: context["target"].as_str(),
                 provider: entry.and_then(|e| e.provider.as_deref()),
@@ -921,7 +924,7 @@ async fn secret_inventory(store: &Store) -> Result<Value> {
                 json!({"state":"unknown","resources":[],"reason_code":"resident_identity_unavailable"})
             }
         };
-        let native = crate::native::secret_references(store, reference)?;
+        let native = crate::agent_integration::secret_references(store, reference)?;
         let safe = d["state"] == "unreferenced"
             && l["state"] == "unreferenced"
             && native["state"] == "unreferenced"
@@ -1076,7 +1079,6 @@ mod tests {
         );
         assert_eq!(login.exit_code, 3);
     }
-    #[cfg(unix)]
     fn request(command: &[&str], operands: &[&str], arguments: &[(&str, &[&str])]) -> Request {
         Request {
             command: command.iter().map(|value| (*value).into()).collect(),
@@ -1533,12 +1535,36 @@ mod tests {
             .unwrap();
         std::fs::create_dir(directory.path().join("native")).unwrap();
         assert_eq!(
-            crate::native::apply(&store, &config, "target", true)
+            crate::agent_integration::apply(&store, &config, "target", true)
                 .await
                 .unwrap_err()
                 .code,
             "incompatible"
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_saved_effort_map_rejects_validation_and_reload_before_effects() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("state"));
+        let config = b"version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='https://example.invalid/v1'\n[providers.p.models.m.effort_map.chat-completions]\nmax='undeclared'\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
+        store.write_raw("tmax.toml", config).unwrap();
+        for (action, dry_run) in [("validate", false), ("reload", true), ("reload", false)] {
+            let mut request = request(&["config", action], &[], &[]);
+            request.dry_run = dry_run;
+            let error = dispatch(&store, &request).await.unwrap_err();
+            assert_eq!(error.code, "reasoning_effort_incompatible");
+            assert_eq!(
+                error.field.as_deref(),
+                Some("providers.p.models.m.effort_map.chat-completions.max")
+            );
+            assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), config);
+            let files: Vec<_> = std::fs::read_dir(&store.root)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(files, [std::ffi::OsString::from("tmax.toml")]);
+        }
     }
 
     #[tokio::test]

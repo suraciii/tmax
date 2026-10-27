@@ -92,6 +92,10 @@ using other constraints, then validates effort on that backend or rejects before
 publishing a binding or dispatching. Explicitly reapply affected native entries
 and reload the tool after changing advertised inputs.
 
+After manual edits, `tmax config validate` and `tmax config reload --dry-run`
+validate map targets against accepted effective declarations. An invalid target
+also blocks executed reload before routing, autostart, or activation effects.
+
 Local verification on 2026-10-27 used the release binary with an isolated OS-home
 store and synthetic loopback upstreams. With higher-priority A declaring
 `low`/`high` and B declaring `high`/`max`, unmapped `max` rejected on A without

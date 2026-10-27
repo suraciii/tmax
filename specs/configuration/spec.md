@@ -203,15 +203,15 @@ Provider and AgentTarget are the principal managed objects under the
 [product ownership contract](../product/spec.md#purpose-and-scope). The `providers`
 and `agents` keys keep their existing syntax. Models are provider-owned children;
 account facts, authentication configuration, and optional subscription information
-do not introduce account, credential, or subscription resources. Integration
-selects qualified behavior, not a universal upstream-service identity.
+do not introduce account, credential, or subscription resources. A Provider
+integration selects qualified behavior, not a universal upstream-service identity.
 
 Supported provider fields:
 
 | Field | Type and meaning |
 | --- | --- |
 | `metadata` | Optional exact models.dev provider key; omission means no catalog metadata inheritance |
-| `integration` | Optional supported tmax integration ID; required when no qualified mapping exists for `metadata` |
+| `integration` | Optional supported tmax Provider integration ID; required when no qualified mapping exists for `metadata` |
 | `enabled` | Boolean, default true; false blocks new managed use |
 | `region` | Optional exact region ID from the selected known integration; invalid for a custom integration |
 | `endpoints` | Optional table from protocol name to exact absolute base-URL string; selection and completeness rules are below |
@@ -221,7 +221,7 @@ Supported provider fields:
 | `models` | Table of explicitly registered concrete models keyed by exact upstream model ID |
 | `inputs` | Optional table of named provider-local input declarations; omission means empty |
 
-Integration selection uses tmax's qualified registry, not execution of the
+Provider integration selection uses tmax's qualified registry, not execution of the
 catalog's `npm` value or inference from a provider ID. The local integration
 choices are discoverable independently of models.dev through the
 [CLI and equivalent Web operations](../cli/spec.md#inspection-and-observation).
@@ -474,8 +474,10 @@ Every target must appear in the model's effective accepted `reasoning_options`
 entry with `type = "effort"` and explicit `values`, after local overrides.
 Effective `reasoning = false`, unknown metadata, toggle-only controls, and
 `reasoning = true` without declared values do not qualify a target. Save, dry-run,
-reload/start, override edits, and catalog adoption validate the corresponding
-effective declarations; an incompatible change is rejected, not silently dropped.
+`config validate`, reload/start, override edits, and catalog adoption validate the
+corresponding effective declarations; an incompatible change is rejected, not
+silently dropped. Reload validates targets before routing reconciliation,
+autostart reconciliation, or resident activation, including when no resident runs.
 
 Maps apply only inside the gateway, to concrete requests and alias candidates.
 Direct native entries retain upstream capabilities and are not given a translated

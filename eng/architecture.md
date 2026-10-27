@@ -22,21 +22,84 @@ finite editable-field definitions also drive Web controls.
 - `tmax-core/src/config.rs` owns typed desired configuration, validation, content
   revisions, and comment-preserving save constraints.
 - `operations/` owns finite resource mutations and effect/result boundaries.
-- `integrations.rs` owns endpoint/operation declarations and explicit outbound
-  transport; `catalog.rs` owns downloaded versus accepted metadata.
-- `routing.rs` and `inputs.rs` own exact priority evaluation, scoped facts,
-  coherent revisions, and guarded publication.
+- `provider_integration.rs` owns upstream endpoint/operation declarations and
+  explicit outbound transport; `catalog.rs` owns downloaded versus accepted metadata.
+- `routing.rs` owns exact priority evaluation and selection. `inputs.rs` is the
+  stable facade for scoped rule-input facts and their shared authority. Private
+  owners under `inputs/` separate:
+  - `model.rs`: canonical heads, values, acquisition attempts, bindings and retained
+    saved/loaded views, including strict wire records and required nullable fields.
+  - `store.rs`: the `routing-state.json` codec, read-only historical normalization,
+    and duplicate-field rejection shared with retained gateway bindings.
+  - `lineage.rs`: provider/declaration identities, effect-free projections, binding
+    and publication guards, and retention. `lifecycle.rs` owns reconciliation,
+    activation, synchronous authorization invalidation, lock ordering and the
+    existing runtime-persistence-before-provider-observation-retention boundary.
+  - `exact.rs` and `value.rs`: arbitrary-precision decimal/instant operations,
+    normalized observations, ordered availability, idempotency and head publication.
+  - `snapshot.rs`: coherent configuration, input and accepted-metadata capture,
+    borrowed loaded metadata, and provenance-free routing evidence.
+  - `commands.rs` and `inspection.rs`: explicit runtime operations, safe input
+    details, dry-run and manual record/clear orchestration.
+  - `acquisition.rs`: one capture/read/recheck/commit transaction. Source I/O holds
+    only the cross-process provider-identity/input exclusion, not configuration or
+    routing locks; publication rechecks the captured saved or loaded authority.
+  - `codex_resets.rs`: the fixed, bounded public source and its qualified Markdown
+    grammar. `scheduler.rs` owns per-store monotonic due state, bounded rotating
+    batches, and schedule release during deactivation; it reuses acquisition.
+  Tests live with semantic owners; shared test support contains fixtures only.
+  This cutover does not create another identity registry or input desired state.
 - `observations.rs` owns bounded retained provider facts and separate latest
   attempts, guarded by provider incarnation, authorization, endpoint/source
   contract, and captured publication revision. Renames preserve the identity;
   removal/recreation and authorization changes cannot revive old results.
-- `native/` owns five distinct native schemas, credential handoff, supported
-  login owners, conflict detection, and protected three-way restoration.
+- `agent_integration.rs` is the stable Agent integration facade. Private feature
+  owners under `agent_integration/` separate:
+  - `scope.rs` and `discovery.rs`: native-path safety, bounded file reads, scope
+    selection, shared DSH credential locking, and read-only installation inventory.
+  - `planning.rs`: desired native entries, metadata/reasoning projections, configured
+    inspection, and pending owned-field comparisons without credential resolution.
+  - `application.rs`: execution-only credential resolution and guarded native
+    application. Protected capture precedes the write-ahead record; each external
+    write is guarded and recorded before terminal state and old-payload cleanup.
+  - `recovery.rs`: the sole retained capture schema, ownership and drift checks,
+    protected payload verification, three-way restore, discard, and secret
+    dependency tombstones. Durable recovery paths and formats remain unchanged.
+  - `authentication.rs`: retained login/account metadata, namespace-only credential
+    presence, native login/logout, and authorization snapshots. Authorization
+    invalidation remains synchronous and precedes the uncertain-login write-ahead
+    record. `browser_login.rs` owns the bounded Codex process/protocol workflow;
+    `compatibility.rs` owns effect-free selection/application eligibility.
+  - `adapters.rs` and `adapters/`: finite schema dispatch, shared exact capability
+    projection and credential artifacts, and concrete Codex, Pi/OMP, OpenCode,
+    Hermes, and DSH format/preservation rules. No plugin registry or second desired
+    state is introduced. `document.rs` and `dsh_patch.rs` own lossless editing.
+  - `installation.rs`: executable resolution, scoped command construction, and
+    version evidence, including safe Hermes provenance probing.
+  Tests live with their semantic owners. The DSH cross-owner lifecycle has a
+  dedicated test module; shared test support contains fixtures only.
 - `storage.rs` and `secrets.rs` own OS-home resolution, current-user-restricted
   plaintext secret/recovery files, safe inventory, and protected channels.
-- `service/`, `gateway.rs`, and `diagnostics.rs` own resident identity/lifecycle,
-  browser protections, same-protocol bounded forwarding, persistent continuity,
-  and bounded in-memory request evidence.
+- `service.rs` and `service/` own resident identity/lifecycle and browser protections.
+- `gateway.rs` is the stable public gateway facade and owns the shared runtime
+  budget declarations. Private feature owners under `gateway/` separate:
+  - `runtime.rs`: loaded snapshots, credential acquisition, bounded admission,
+    cancellation, and request lifecycle.
+  - `bindings.rs`: destination selection, retained session continuity, explanation,
+    and guarded activation. `bindings/store.rs` alone owns the persisted binding
+    representation, historical normalization, bounded IO, and initialization.
+  - `forwarding.rs`: request authentication, same-protocol HTTP forwarding, streamed
+    delivery, and model publication. `errors.rs` owns finite safe error responses.
+  - `client_identity.rs`, `native_context.rs`, and `opencode_session.rs`: qualified
+    native context, header handoff, and bounded conversation attribution.
+  - `capabilities.rs`: finite request/model capability checks.
+  - `probe.rs`: explicit fixed-destination diagnostics without resident startup.
+  - `response_observer.rs`: bounded JSON/SSE inspection and history evidence
+    finalization. Probes reuse inspection while retaining their distinct result
+    and usage-state projection.
+  Feature tests live with their owners; `test_support.rs` supplies shared fixtures
+  only and is compiled only for tests.
+- `diagnostics.rs` owns bounded in-memory request evidence and history retention.
 
 Configuration save, service activation, OS startup registration, and native
 application remain separate observable failure boundaries. No module introduces

@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::fs;
 
 fn fixture() -> (tempfile::TempDir, Store, Plan, Arc<Flow>) {
     let directory = tempfile::tempdir().unwrap();
@@ -400,7 +402,7 @@ async fn browser_login_recreated_provider_is_rejected_before_native_changes() {
 #[cfg(unix)]
 #[tokio::test]
 async fn browser_login_created_scope_runs_native_process_and_commits_only_completed_auth() {
-    const TEST: &str = "native::browser_login::tests::browser_login_created_scope_runs_native_process_and_commits_only_completed_auth";
+    const TEST: &str = "agent_integration::browser_login::tests::browser_login_created_scope_runs_native_process_and_commits_only_completed_auth";
     if let Ok(scenario) = std::env::var("TMAX_BROWSER_LOGIN_TEST_CHILD") {
         let (_directory, store, mut plan, flow) = fixture();
         // Let run create the scope and its native credential-store configuration.

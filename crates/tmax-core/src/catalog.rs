@@ -253,7 +253,7 @@ fn adoption_impact(
     let mut routes = Vec::new();
     for name in models.keys() {
         let (provider, _) = crate::config::model(config, name)?;
-        for protocol in crate::integrations::protocols(provider)? {
+        for protocol in crate::provider_integration::protocols(provider)? {
             routes.push(json!({"kind":"concrete","id":name,"protocol":protocol,"effect":"metadata_changed"}));
         }
     }
@@ -274,7 +274,7 @@ fn adoption_impact(
                 let name = qualified.as_deref().unwrap_or(&selected.id);
                 let alias_metadata;
                 let mut project_metadata: fn(&str, &str, &Value) -> Result<Value> =
-                    crate::native::model_metadata;
+                    crate::agent_integration::model_metadata;
                 let metadata = if let Some(metadata) = models.get(name) {
                     if entry.gateway == Some(true) {
                         let (_, model) = crate::config::model(config, name)?;
@@ -298,7 +298,7 @@ fn adoption_impact(
                     .get(&(selected.id.clone(), selected.protocol.clone()))
                     .filter(|_| entry.gateway == Some(true))
                 {
-                    project_metadata = crate::native::alias_model_metadata;
+                    project_metadata = crate::agent_integration::alias_model_metadata;
                     alias_metadata = (
                         crate::reasoning::alias_metadata(config, accepted, alias)?,
                         crate::reasoning::alias_metadata(config, Some(proposed), alias)?,
@@ -364,9 +364,9 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
                     json!({"source":"https://models.dev/api.json","download":"not_executed","accepted":"unchanged"}),
                 );
             }
-            let client = crate::integrations::client(config)?;
+            let client = crate::provider_integration::client(config)?;
             let response = tokio::time::timeout(
-                crate::integrations::OBSERVATION_DEADLINE,
+                crate::provider_integration::OBSERVATION_DEADLINE,
                 client.get("https://models.dev/api.json").send(),
             )
             .await
@@ -384,25 +384,26 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
                 ));
             }
             let mut response = response;
-            let bytes = tokio::time::timeout(crate::integrations::OBSERVATION_DEADLINE, async {
-                let mut bytes = Vec::new();
-                while let Some(chunk) = response
-                    .chunk()
-                    .await
-                    .map_err(|_| Error::new("observation_failed", "Catalog download interrupted"))?
-                {
-                    if bytes.len() + chunk.len() > 64 * 1024 * 1024 {
-                        return Err(Error::new(
-                            "observation_failed",
-                            "Catalog exceeds the supported download bound",
-                        ));
+            let bytes =
+                tokio::time::timeout(crate::provider_integration::OBSERVATION_DEADLINE, async {
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = response.chunk().await.map_err(|_| {
+                        Error::new("observation_failed", "Catalog download interrupted")
+                    })? {
+                        if bytes.len() + chunk.len() > 64 * 1024 * 1024 {
+                            return Err(Error::new(
+                                "observation_failed",
+                                "Catalog exceeds the supported download bound",
+                            ));
+                        }
+                        bytes.extend_from_slice(&chunk);
                     }
-                    bytes.extend_from_slice(&chunk);
-                }
-                Ok(bytes)
-            })
-            .await
-            .map_err(|_| Error::new("observation_failed", "Catalog response deadline expired"))??;
+                    Ok(bytes)
+                })
+                .await
+                .map_err(|_| {
+                    Error::new("observation_failed", "Catalog response deadline expired")
+                })??;
             let providers: BTreeMap<String, Value> =
                 serde_json::from_slice(&bytes).map_err(|_| {
                     Error::new(
@@ -543,7 +544,7 @@ fn choices(id: &str) -> Value {
         metadata: Some(id.into()),
         ..Provider::default()
     };
-    match crate::integrations::integration_id(&p) {
+    match crate::provider_integration::integration_id(&p) {
         Ok(id) => {
             json!([{"integration":id,"endpoint_setup":if id=="kimi-coding-plan"{"region_or_known_base"}else{"singleton_default"}}])
         }

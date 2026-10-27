@@ -1,4 +1,6 @@
 //! Effect-free native compatibility shared by selection advice and application.
+pub(crate) use super::authentication::AuthorizationSnapshot;
+use super::{adapters, authentication::native_login_provider};
 use crate::{
     Error, Result,
     config::{self, Auth, Config, Provider},
@@ -14,7 +16,7 @@ pub(crate) struct Context<'a> {
 
 impl Context<'_> {
     pub(crate) fn protocol(&self, protocol: &str) -> Result<()> {
-        if !super::adapters::AGENTS.contains(&self.agent) {
+        if !adapters::AGENTS.contains(&self.agent) {
             return Err(Error::new(
                 "unsupported_agent",
                 "This native agent has no qualified adapter",
@@ -47,8 +49,8 @@ impl Context<'_> {
             ));
         }
         let provider = &config.providers[provider_id];
-        let integration = crate::integrations::integration_id(provider)?;
-        if !crate::integrations::resolve(provider)?.contains_key(protocol) {
+        let integration = crate::provider_integration::integration_id(provider)?;
+        if !crate::provider_integration::resolve(provider)?.contains_key(protocol) {
             return Err(Error::new(
                 "incompatible",
                 "The upstream integration has no endpoint for this native protocol",
@@ -166,69 +168,16 @@ impl Context<'_> {
                 "A native-owned session cannot be copied to another target; select its declared owner or a qualified gateway",
             ));
         }
-        match (crate::integrations::integration_id(provider)?, self.agent) {
-            ("codex-subscription", "codex" | "opencode") => Ok(Some("openai")),
-            ("codex-subscription", "pi" | "omp" | "hermes") => Ok(Some("openai-codex")),
-            ("kimi-coding-plan", "omp") => Ok(Some("kimi-code")),
-            _ => Err(Error::new(
+        native_login_provider(
+            crate::provider_integration::integration_id(provider)?,
+            self.agent,
+        )
+        .map(Some)
+        .ok_or_else(|| {
+            Error::new(
                 "native_login_unqualified",
                 "This provider does not have a qualified login flow for this native owner",
-            )),
-        }
-    }
-}
-
-/// Only tmax's safe login-operation metadata, never a native credential store.
-pub(crate) struct AuthorizationSnapshot {
-    logins: super::Logins,
-}
-impl AuthorizationSnapshot {
-    pub(crate) fn capture(store: &crate::storage::Store) -> Result<Self> {
-        Ok(Self {
-            logins: store.read_json(super::LOGINS)?,
+            )
         })
-    }
-    pub(crate) fn assess(
-        &self,
-        store: &crate::storage::Store,
-        config: &Config,
-        context: &Context<'_>,
-        provider: &str,
-    ) -> Result<()> {
-        if context.gateway {
-            return Ok(());
-        }
-        let Some(Auth::Login { session_ref, .. }) = &config.providers[provider].auth else {
-            return Ok(());
-        };
-        let id = context.target.ok_or_else(|| {
-            Error::new(
-                "credential_unavailable",
-                "No declared native login owner is selected",
-            )
-        })?;
-        let target = config.agents.get(id).ok_or_else(|| {
-            Error::new(
-                "credential_unavailable",
-                "The native login owner is not configured",
-            )
-        })?;
-        let path = super::scope(store, &target.scope)?;
-        let revision = super::login_source_revision(target, &path);
-        if self.logins.entries.iter().any(|record| {
-            record.provider == provider
-                && record.target == id
-                && record.scope == path
-                && record.source_revision == revision
-                && record.state == "signed_in"
-                && session_ref.as_deref() == Some(record.session_ref.as_str())
-        }) {
-            Ok(())
-        } else {
-            Err(Error::new(
-                "credential_unavailable",
-                "Native authorization is absent, changed or uncertain; explicitly reestablish it through the declared owner",
-            ))
-        }
     }
 }
