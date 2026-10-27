@@ -244,7 +244,10 @@ fn adoption_impact(
             .cloned()
             .collect();
         if !affected.is_empty() {
-            aliases.insert((alias.id.clone(), alias.protocol.clone()), affected);
+            aliases.insert(
+                (alias.id.clone(), alias.protocol.clone()),
+                (alias, affected),
+            );
         }
     }
     let mut routes = Vec::new();
@@ -254,7 +257,7 @@ fn adoption_impact(
             routes.push(json!({"kind":"concrete","id":name,"protocol":protocol,"effect":"metadata_changed"}));
         }
     }
-    for ((id, protocol), affected) in &aliases {
+    for ((id, protocol), (_, affected)) in &aliases {
         routes.push(json!({"kind":"alias","id":id,"protocol":protocol,"models":affected,"effect":"candidate_metadata_changed"}));
     }
     let mut targets = Vec::new();
@@ -269,10 +272,44 @@ fn adoption_impact(
                     .as_ref()
                     .map(|provider| format!("{provider}/{}", selected.id));
                 let name = qualified.as_deref().unwrap_or(&selected.id);
-                if let Some((before, after)) = models.get(name) {
-                    let old_native =
-                        crate::native::model_metadata(&target.agent, &selected.protocol, before);
-                    match crate::native::model_metadata(&target.agent, &selected.protocol, after) {
+                let alias_metadata;
+                let mut project_metadata: fn(&str, &str, &Value) -> Result<Value> =
+                    crate::native::model_metadata;
+                let metadata = if let Some(metadata) = models.get(name) {
+                    if entry.gateway == Some(true) {
+                        let (_, model) = crate::config::model(config, name)?;
+                        alias_metadata = (
+                            crate::reasoning::input_metadata(
+                                &metadata.0,
+                                model,
+                                &selected.protocol,
+                            ),
+                            crate::reasoning::input_metadata(
+                                &metadata.1,
+                                model,
+                                &selected.protocol,
+                            ),
+                        );
+                        Some(&alias_metadata)
+                    } else {
+                        Some(metadata)
+                    }
+                } else if let Some((alias, _)) = aliases
+                    .get(&(selected.id.clone(), selected.protocol.clone()))
+                    .filter(|_| entry.gateway == Some(true))
+                {
+                    project_metadata = crate::native::alias_model_metadata;
+                    alias_metadata = (
+                        crate::reasoning::alias_metadata(config, accepted, alias)?,
+                        crate::reasoning::alias_metadata(config, Some(proposed), alias)?,
+                    );
+                    Some(&alias_metadata)
+                } else {
+                    None
+                };
+                if let Some((before, after)) = metadata {
+                    let old_native = project_metadata(&target.agent, &selected.protocol, before);
+                    match project_metadata(&target.agent, &selected.protocol, after) {
                         Ok(new_native) => {
                             let mut projected = crate::operations::diff_values(
                                 old_native.as_ref().ok(),
@@ -295,10 +332,6 @@ fn adoption_impact(
                             blockers.push(json!({"model":selected.id,"protocol":selected.protocol,"code":error.code,"field":error.field}));
                         }
                     }
-                } else if entry.gateway == Some(true)
-                    && aliases.contains_key(&(selected.id.clone(), selected.protocol.clone()))
-                {
-                    selections.push(json!({"id":selected.id,"protocol":selected.protocol}));
                 }
             }
             if !selections.is_empty() {
@@ -658,6 +691,102 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
         assert_eq!(aliases["route_metadata"], "revalidation_required");
     }
 
+    #[tokio::test]
+    async fn adoption_preview_reapplies_alias_efforts_when_a_non_winning_candidate_loses_one() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::at(temporary.path().to_path_buf());
+        let (mut config, mut old, _) = fixture();
+        config.agents.get_mut("aliases").unwrap().agent = "dsh".into();
+        assert!(
+            config.providers["account"].models["a"].priority
+                < config.providers["account"].models["b"].priority
+        );
+        for (model, values) in [
+            ("a", json!(["low", "high", "max"])),
+            ("b", json!(["low", "high"])),
+        ] {
+            old.providers.get_mut("directory").unwrap()["models"][model]["reasoning"] = json!(true);
+            old.providers.get_mut("directory").unwrap()["models"][model]["reasoning_options"] =
+                json!([{"type":"effort","values":values}]);
+        }
+        let mut new = old.clone();
+        new.revision = "new".into();
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["limit"]["context"] =
+            json!(10000);
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
+            json!([{"type":"effort","values":["low","high"]}]);
+        let impact = adoption_impact(&config, Some(&old), &new).unwrap();
+        let aliases = impact["affected_targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["target"] == "aliases")
+            .unwrap();
+        assert_eq!(aliases["native_application"], "unchanged");
+        assert_eq!(aliases["native_changes"], json!([]));
+
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
+            json!([{"type":"effort","values":["low"]}]);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        store.write_json("catalog/accepted.json", &old).unwrap();
+        store.write_json("catalog/latest.json", &new).unwrap();
+        let request = Request {
+            command: vec!["catalog".into(), "apply".into()],
+            operands: Vec::new(),
+            arguments: BTreeMap::from([("revision".into(), vec!["new".into()])]),
+            dry_run: true,
+            if_revision: None,
+        };
+        let preview = handle(&store, &config, &request).await.unwrap();
+        let aliases = preview["affected_targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["target"] == "aliases")
+            .unwrap();
+        assert_eq!(aliases["native_application"], "reapply_required");
+        assert_eq!(aliases["blockers"], json!([]));
+        let changes = aliases["native_changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 2);
+        for alias in ["explicit", "alternate"] {
+            let change = changes
+                .iter()
+                .find(|change| change["path"] == format!("models.{alias}.reasoningEfforts.high"))
+                .unwrap();
+            assert_eq!(change["kind"], "remove");
+            assert_eq!(change["before"], "high");
+            assert_eq!(change["boundary"], "native_write");
+            assert_eq!(change["resource"]["id"], "aliases");
+        }
+        assert_eq!(read(&store, "accepted").unwrap().unwrap().revision, "old");
+
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
+            json!([{"type":"effort","values":["max"]}]);
+        store.write_json("catalog/latest.json", &new).unwrap();
+        let preview = handle(&store, &config, &request).await.unwrap();
+        let aliases = preview["affected_targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["target"] == "aliases")
+            .unwrap();
+        assert_eq!(aliases["native_application"], "reapply_required");
+        assert_eq!(aliases["blockers"], json!([]));
+        let changes = aliases["native_changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 2);
+        for alias in ["explicit", "alternate"] {
+            let change = changes
+                .iter()
+                .find(|change| change["path"] == format!("models.{alias}.reasoningEfforts"))
+                .unwrap();
+            assert_eq!(change["kind"], "replace");
+            assert_eq!(change["before"], json!({"low":"low","high":"high"}));
+            assert_eq!(change["after"], false);
+        }
+    }
+
     #[test]
     fn adoption_validates_proposed_effective_metadata_but_honors_masking_overrides() {
         let (config, old, new) = fixture();
@@ -810,6 +939,35 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
         assert_eq!(
             std::fs::read(&native_file).unwrap(),
             b"unchanged native configuration"
+        );
+    }
+
+    #[test]
+    fn catalog_adoption_cannot_remove_a_mapped_upstream_effort() {
+        let (mut config, mut old, mut new) = fixture();
+        old.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
+            json!([{"type":"effort","values":["low","high"]}]);
+        new.providers.get_mut("directory").unwrap()["models"]["a"] =
+            old.providers["directory"]["models"]["a"].clone();
+        new.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
+            json!([{"type":"effort","values":["low"]}]);
+        config
+            .providers
+            .get_mut("account")
+            .unwrap()
+            .models
+            .get_mut("a")
+            .unwrap()
+            .effort_map
+            .insert(
+                "chat-completions".into(),
+                BTreeMap::from([("max".into(), "high".into())]),
+            );
+        let error = adoption_impact(&config, Some(&old), &new).unwrap_err();
+        assert_eq!(error.code, "reasoning_effort_incompatible");
+        assert_eq!(
+            error.field.as_deref(),
+            Some("providers.account.models.a.effort_map.chat-completions.max")
         );
     }
 

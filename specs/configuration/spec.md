@@ -434,6 +434,7 @@ referenced elsewhere by the exact `provider-id/model-id` name. It supports:
 | `enabled` | Boolean, default true for an explicitly declared model |
 | `priority` | Signed TOML integer, default zero |
 | `overrides` | Model metadata differences, not inference request parameters |
+| `effort_map` | Optional protocol dictionary: `chat-completions` or `responses` -> caller-facing input effort -> upstream effort string; omission or empty dictionaries means identity behavior. See [Model effort maps](#model-effort-maps). |
 | `timezone` | IANA zone, required when `schedule` is nonempty or any signal rule has `time_window` |
 | `schedule` | Array of time-rule tables |
 | `priority_rules` | Optional ordered array of named signal-rule tables; omission means empty |
@@ -458,6 +459,32 @@ fields in local overrides must be rejected. Identity fields such as `id` and
 merging, explicit false/zero values, and removal-to-inherit follow
 [Model catalog](../model-routing/spec.md#model-catalog). Known integration limits
 still constrain what can be advertised or executed.
+
+### Model effort maps
+
+`[providers.<id>.models."<upstream-id>".effort_map.<protocol>]` is an explicit
+single-step dictionary from caller-facing effort names to actual upstream effort
+values. Only `chat-completions` and `responses` are supported; the model must
+support the chosen protocol. Messages mappings are rejected. Both input names
+and target values must be nonempty strings without whitespace or control
+characters. Multiple inputs may name the same target; targets are not recursively
+resolved through the dictionary.
+
+Every target must appear in the model's effective accepted `reasoning_options`
+entry with `type = "effort"` and explicit `values`, after local overrides.
+Effective `reasoning = false`, unknown metadata, toggle-only controls, and
+`reasoning = true` without declared values do not qualify a target. Save, dry-run,
+reload/start, override edits, and catalog adoption validate the corresponding
+effective declarations; an incompatible change is rejected, not silently dropped.
+
+Maps apply only inside the gateway, to concrete requests and alias candidates.
+Direct native entries retain upstream capabilities and are not given a translated
+map. Removing a mapping restores identity for that input; it does not disable the
+input. An omitted request effort remains omitted unless an alias candidate has a
+fixed effort. Precedence is fixed candidate effort, then model map, then identity,
+under [Request parameters](../model-routing/spec.md#request-parameters). No map
+chooses a backend, default, thinking switch, budget, or inferred equivalent level.
+Manage the dictionaries with the [model effort-map commands](../cli/models/spec.md#model-effort-maps).
 
 ### Time-rule fields
 
@@ -607,8 +634,8 @@ merge unrelated sources, or silently choose one.
 `roles` only maps supported native model roles. It cannot define access roles,
 sampling values, reasoning settings, or agent-specific precedence overrides.
 Native configuration remains the owner of native request preferences; gateway
-candidate effort does not rewrite those settings. Metadata `temperature` and
-`reasoning_options` describe capability, not values to send. See
+model maps and fixed candidate effort do not rewrite those settings. Metadata
+`temperature` and `reasoning_options` describe capability, not values to send. See
 [Request parameters](../model-routing/spec.md#request-parameters).
 
 ### Native provider entries

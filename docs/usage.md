@@ -71,6 +71,37 @@ string remain explicit values; `--clear FIELD` restores inheritance/defaults.
 For example, supported fields include `--set enabled false`,
 `--set priority 0`, and `--set overrides.name ""`.
 
+### Explicit gateway effort maps
+
+After inspection establishes the actual supported upstream effort values, use
+the [model effort-map commands](../specs/cli/models/spec.md#model-effort-maps) to
+set, remove, or clear a protocol's input-name dictionary. The
+[configuration example](../specs/configuration/example.toml) shows a synthetic
+`max` -> `high` map with an explicit target declaration, not hosted qualification.
+Targets must be positively declared in effective accepted metadata; do not guess
+support from a model name or a reasoning boolean. Removing an entry restores
+identity, not input disabling. Maps supply no omitted effort, native defaults,
+thinking switches, or budgets, and Messages maps are rejected.
+
+These maps run only in the gateway. Direct native entries keep actual upstream
+capabilities. For aliases, fixed candidate effort takes precedence over a model
+map, then unmapped inputs use identity. Alias selectors expose the intersection
+of candidate input sets after these settings, not a winner's raw effort names.
+Changing only effort never silently selects another backend: the gateway selects
+using other constraints, then validates effort on that backend or rejects before
+publishing a binding or dispatching. Explicitly reapply affected native entries
+and reload the tool after changing advertised inputs.
+
+Local verification on 2026-10-27 used the release binary with an isolated OS-home
+store and synthetic loopback upstreams. With higher-priority A declaring
+`low`/`high` and B declaring `high`/`max`, unmapped `max` rejected on A without
+upstream dispatch; an explicit A `max` -> `high` map forwarded to A for both Chat
+Completions and Responses. The run also exercised omitted effort, fixed override
+precedence, protocol isolation, removal/clear, and real Pi file application:
+gateway alias inputs included the mapped common names while direct entries
+retained upstream-only names. No hosted inference, provider entitlement, or
+running native-agent consumption was established by this verification.
+
 ### Existing configuration with removed tier fields
 
 The current `~/.tmax/tmax.toml` authority strictly rejects the former per-model
@@ -268,10 +299,12 @@ To pin an effort for a particular candidate, update that candidate's alias
 entry. The options are repeatable for distinct candidates; each effort must be
 listed in that concrete model's effective positive `reasoning_options` metadata
 (`type = "effort"` with explicit `values`). `reasoning = true` alone is not
-enough. A configured value takes precedence over the caller's effort when that
-candidate is selected; without an override the caller's native value, including
-an omitted value, is preserved. Chat Completions and Responses support this;
-Messages does not.
+enough. A configured value takes precedence over both caller effort and the
+model map when that candidate is selected. Without a fixed override, an explicit
+model map applies to supplied input, otherwise identity or omission is preserved.
+The candidate advertises only its fixed upstream name; common alias choices are
+intersected after maps and fixed restrictions. Effort never chooses a different
+backend. Chat Completions and Responses support this; Messages does not.
 
 ```sh
 CANDIDATE="$PROVIDER_ID/$MODEL_ID"

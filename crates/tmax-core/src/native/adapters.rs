@@ -1,6 +1,7 @@
 //! Independent, version-specific native configuration mappings.
 //! Evidence is pinned to the concrete installations below, not a version range.
 use super::document::Format;
+use crate::reasoning::effort_values;
 use crate::{
     Error, Result,
     config::{AgentTarget, ModelReference},
@@ -131,34 +132,6 @@ const OMP_EFFORT_LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh
 // DSH 0.2.1-rc.2 catalog.ts THINKING_LEVEL_GATE and resolveModelReasoning;
 // independently qualified from Pi's thinkingLevelMap carrier.
 const DSH_EFFORT_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-// Reasoning options are capability declarations. They are projected into the
-// native agent's own selector vocabulary; they never choose a default level or
-// rewrite a request. Inexact names are not translated.
-fn effort_values(effective: &Value) -> Option<Vec<String>> {
-    if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
-        return None;
-    }
-    let options = effective.get("reasoning_options")?.as_array()?;
-    let mut values: Vec<String> = Vec::new();
-    for option in options {
-        if option.get("type").and_then(Value::as_str) != Some("effort") {
-            continue;
-        }
-        let Some(list) = option.get("values").and_then(Value::as_array) else {
-            continue;
-        };
-        for value in list {
-            let Some(value) = value.as_str().filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            if !values.iter().any(|existing| existing == value) {
-                values.push(value.to_owned());
-            }
-        }
-    }
-    (!values.is_empty()).then_some(values)
-}
 
 struct ReasoningProjection {
     state: &'static str,

@@ -61,10 +61,12 @@ million tokens, with optional `tiers[]` adding `inputTokensAbove` plus those fou
 rates. Zero price is valid and is not unknown price. `promptCache.short/long`
 are optional positive seconds. `thinkingLevelMap` keys are `off`, `minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`, with string or null values. It is not permission
-to fabricate effort support from `reasoning: true`. tmax projects effective
-`reasoning_options` effort values into this map as capability declarations: every
-key is written explicitly, holding its exact declared name or null. Names outside
-the keys are never translated and stay visible as omitted. A declaration with no
+to fabricate effort support from `reasoning: true`. For direct entries, tmax
+projects actual effective `reasoning_options` efforts. Gateway entries instead
+project caller-facing input names under the [shared mapping and alias rules](../../specs/integrations/spec.md#alias-reasoning-capability):
+every native key is written explicitly, holding the exact input name or null.
+Names outside the keys remain omitted, not renamed by the native adapter. Maps
+resolve only inside the gateway, not in pi's native field. A declaration with no
 level besides `off` is unrepresentable and blocks application before native
 writes. The map declares selector capability and sets no default thinking level
 or request value.
@@ -91,9 +93,10 @@ For a concrete tmax model, the qualified capability mapping is effective
 `limit.context` → `contextWindow`, `limit.output` → `maxTokens`, `reasoning` →
 `reasoning`, and supported `modalities.input` → `input` (intersection with native
 text/image). Unknown metadata is omitted; an unrepresentable known zero blocks
-application rather than being clamped or silently omitted. Alias rows do not
-claim their current winner's capabilities. See the
-[shared integration boundary](../../specs/integrations/spec.md#agent-boundaries).
+application rather than being clamped or silently omitted. Gateway aliases
+follow the shared
+[alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
+rule instead of claiming the current winner's capabilities.
 A metadata maximum is not an instruction to impose a new per-request generation
 cap. Existing sampling, effort, and output preferences remain owned by the
 [routing contract](../../specs/model-routing/spec.md#request-parameters).

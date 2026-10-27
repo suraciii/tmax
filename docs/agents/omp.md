@@ -106,12 +106,16 @@ Native `thinking.mode` accepts `effort`, `budget`, `google-level`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `efforts` (or the native legacy
 range fields) is required. `defaultLevel`, `effortMap`, `supportsDisplay`, and
 `requiresEffort` describe actual native controls. Do not synthesize a ladder
-from `reasoning: true`. tmax projects effective `reasoning_options` effort values
-as `thinking` with `mode: "effort"` and `efforts` holding the exact declared
-names inside that vocabulary, as capability declarations. Names outside the
-vocabulary are never translated and stay visible as omitted. With no name inside
-the vocabulary, the ladder is unrepresentable and blocks application before
-native writes. The projection sets no `defaultLevel`, budget, or request value. Native compatibility keys are a curated per-API schema
+from `reasoning: true`. tmax projects actual upstream efforts for direct entries,
+and gateway-facing input names for gateway entries under the
+[shared mapping and alias rules](../../specs/integrations/spec.md#alias-reasoning-capability),
+as `thinking` with `mode: "effort"` and exact representable `efforts`. Names
+outside the vocabulary stay visible as omitted, not renamed by the native
+adapter. Gateway model maps resolve after backend selection; tmax does not copy
+them into omp's `effortMap` or `compat.reasoningEffortMap` for direct or gateway
+entries. With no name inside the vocabulary, the ladder is unrepresentable and
+blocks application before native writes. The projection sets no `defaultLevel`,
+budget, or request value. Native compatibility keys are a curated per-API schema
 plus recognized runtime wire axes. Unknown compatibility keys warn nonfatally;
 preservation does not prove the API reads them. No guessed compatibility flags
 are needed for the basic provider example.
@@ -142,8 +146,9 @@ The independently qualified concrete tmax mapping is effective `limit.context`
 → `contextWindow`, `limit.output` → `maxTokens`, boolean `reasoning` → `reasoning`,
 and supported `modalities.input` → text/image `input`. Unknown is omitted; known
 zero cannot be represented in a custom row and blocks rather than silently
-becoming a native default. Alias metadata is omitted, not aggregated or copied
-from a current winner. See [shared boundaries](../../specs/integrations/spec.md#agent-boundaries).
+becoming a native default. Gateway aliases follow the shared
+[alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
+rule instead of copying concrete metadata.
 This is capability metadata, not a per-request generation cap. Existing native
 sampling, thinking effort/budgets, role presets, `omitMaxOutputTokens`, and other
 request preferences must remain untouched under the

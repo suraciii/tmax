@@ -39,6 +39,21 @@ pub(crate) fn model_metadata(agent: &str, protocol: &str, effective: &Value) -> 
     adapters::model_metadata(agent, protocol, effective)
 }
 
+pub(crate) fn alias_model_metadata(
+    agent: &str,
+    protocol: &str,
+    effective: &Value,
+) -> Result<Value> {
+    let mut metadata = model_metadata(agent, protocol, effective)?;
+    if agent == "dsh" && metadata.get("reasoningEfforts").is_none() {
+        // DSH merges retained model rows, so omission would preserve an obsolete
+        // selector. This alias has no shared selectable effort; candidates may
+        // still support reasoning independently.
+        metadata["reasoningEfforts"] = json!(false);
+    }
+    Ok(metadata)
+}
+
 pub(crate) fn reasoning_projection(effective: &Value, protocols: &[String]) -> Value {
     let view = |agent: &str, protocol: &str| {
         adapters::projection_view(agent, protocol, effective).unwrap_or_else(|error| {
@@ -1132,19 +1147,20 @@ async fn entries(
             }
             for m in &binding.models {
                 requirements.assess_public(config, &m.id, &m.protocol)?;
-                if config
+                if let Some(alias) = config
                     .model_aliases
                     .iter()
-                    .any(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
+                    .find(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
                 {
+                    let effective =
+                        crate::reasoning::alias_metadata(config, metadata.as_ref(), alias)?;
+                    model_metadata.insert(
+                        m.id.clone(),
+                        alias_model_metadata(&target.agent, &m.protocol, &effective)?,
+                    );
                     model_projection.insert(
                         m.id.clone(),
-                        json!({
-                            "state": "alias",
-                            "reason_code": "alias_metadata_unavailable",
-                            "fields": {},
-                            "omitted": [],
-                        }),
+                        adapters::projection_view(&target.agent, &m.protocol, &effective)?,
                     );
                 } else {
                     let (_, model_id) = config::qualified(&m.id)?;
@@ -1169,21 +1185,18 @@ async fn entries(
                             p,
                             Some((model_id, model)),
                         )?;
+                        let inputs = crate::reasoning::input_metadata(
+                            &projection["effective"],
+                            model,
+                            &m.protocol,
+                        );
                         model_metadata.insert(
                             m.id.clone(),
-                            adapters::model_metadata(
-                                &target.agent,
-                                &m.protocol,
-                                &projection["effective"],
-                            )?,
+                            adapters::model_metadata(&target.agent, &m.protocol, &inputs)?,
                         );
                         model_projection.insert(
                             m.id.clone(),
-                            adapters::projection_view(
-                                &target.agent,
-                                &m.protocol,
-                                &projection["effective"],
-                            )?,
+                            adapters::projection_view(&target.agent, &m.protocol, &inputs)?,
                         );
                     }
                 }
@@ -3143,6 +3156,39 @@ mod tests {
                 {"id":"new"}
             ]))
         );
+    }
+
+    #[test]
+    fn dsh_alias_reapply_clears_lost_common_efforts_without_changing_native_preferences() {
+        let current = json!({
+            "llm-pi-ai":{"config":{"providers":{"local":{"models":[{
+                "id":"shared", "reasoningEfforts":{"low":"low","high":"high"},
+                "maxTokens":1234,"thinkingBudgets":{"high":512}
+            }]}}}},
+            "agent-default-model":{"config":{"provider":"local","model":"shared","reasoningEffort":"high"}}
+        });
+        for (effective, expected) in [
+            (
+                json!({"reasoning_options":[{"type":"effort","values":["high"]}]}),
+                json!({"high":"high"}),
+            ),
+            (json!({}), json!(false)),
+        ] {
+            let mut model = alias_model_metadata("dsh", "chat-completions", &effective).unwrap();
+            model["id"] = json!("shared");
+            let desired =
+                json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[model]}}}}});
+            let mut text = serde_yaml::to_string(&current).unwrap();
+            for (path, value) in desired_fields("dsh", &desired, &current) {
+                text = document::set(&text, Format::Yaml, &path, value.as_ref()).unwrap();
+            }
+            let after = document::parse(&text, Format::Yaml).unwrap();
+            let row = &after["llm-pi-ai"]["config"]["providers"]["local"]["models"][0];
+            assert_eq!(row["reasoningEfforts"], expected);
+            assert_eq!(row["maxTokens"], 1234);
+            assert_eq!(row["thinkingBudgets"], json!({"high":512}));
+            assert_eq!(after["agent-default-model"], current["agent-default-model"]);
+        }
     }
     #[test]
     fn dsh_credentials_lock_records_owner_and_releases_on_error() {

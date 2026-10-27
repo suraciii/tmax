@@ -80,13 +80,17 @@ is not enough. Invalid effort or protocol mutations exit 2 and identify
 `candidate_reasoning_effort`.
 
 A configured value is fixed for that exact candidate and takes precedence over
-the caller's native effort when it is selected. Without a configured value, the
-gateway preserves the caller's explicit or omitted effort. Chat Completions
-and Responses accept configured effort; Messages rejects it. Updating an entry
-preserves unrelated map entries. Removing or replacing a candidate drops that
-candidate's map entry; explicit clear removes the named entry. These options do
-not add a global default, universal effort vocabulary, or other request
-parameters.
+both the caller's effort and any model effort map when it is selected. Without
+a fixed value, the gateway applies an explicit model map to supplied input,
+otherwise preserving identity or omission. Fixed > map > identity is the
+[request-parameter contract](../../../model-routing/spec.md#request-parameters),
+not an effort-based backend selector. Chat Completions and Responses accept
+configured effort; Messages rejects it. Updating an entry preserves unrelated
+map entries. Removing or replacing a candidate drops that candidate's fixed
+entry; explicit clear removes the named entry. These options add no global
+default, universal effort vocabulary, or other request parameters. The shared
+[alias capability rule](../../../integrations/spec.md#alias-reasoning-capability)
+restricts this candidate's advertised inputs to its fixed upstream name.
 
 ```sh
 tmax model alias add coding --protocol chat-completions \

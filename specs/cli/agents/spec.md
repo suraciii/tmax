@@ -181,14 +181,19 @@ restoring native settings never revokes the shared key. Stop management with
 
 Projection semantics follow the shared
 [capability mapping](../../integrations/spec.md#agent-boundaries) boundary.
+Gateway concrete entries use caller-facing names after explicit model maps;
+direct entries retain actual upstream declarations. Gateway aliases use the same
+states below after the shared
+[alias reasoning capability](../../integrations/spec.md#alias-reasoning-capability)
+rule intersects all candidate input sets after maps and fixed restrictions. No
+native entry receives a gateway translation map, default, or thinking switch.
 
 | Projection `state` | `reason_code` and meaning |
 | --- | --- |
 | `projected` | Null `reason_code`; `fields` carries the projected native capability fields. |
 | `partial` | `native_reasoning_options_partial`; `fields` carries the representable exact names and `omitted` lists the declared names the native schema cannot express. |
 | `not_supported` | `native_reasoning_options_unavailable`; the agent has no native reasoning-effort selector and `fields` is empty. |
-| `unavailable` | `reasoning_disabled` (explicit `reasoning = false`), `reasoning_options_unavailable` (no declared effort names), or `native_projection_unavailable` (no projection for this model); `fields` is empty. |
-| `alias` | `alias_metadata_unavailable`; the entry projects no candidate or current-winner metadata and `fields` is empty. |
+| `unavailable` | `reasoning_disabled` (explicit concrete-model `reasoning = false`), `reasoning_options_unavailable` (no declared effort names or no common alias effort names), or `native_projection_unavailable` (no projection for this model); `fields` is empty. |
 | `blocked` | `native_metadata_unrepresentable` with `message` explaining the unrepresentable capability; the error never fails inspection and blocks only that agent's application before native writes. |
 
 A null `native_projection` means planning failed or is unavailable; `blockers`

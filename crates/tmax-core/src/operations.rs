@@ -115,7 +115,8 @@ fn error_response(operation: &str, error: Error, dry_run: bool) -> Response {
             "unresolved_reference" | "unknown_resource" | "unsupported_operation"
         )
         || (error.field.as_deref().is_some_and(|field| {
-            field.starts_with("model_aliases.") && field.contains(".candidate_reasoning_effort.")
+            (field.starts_with("model_aliases.") && field.contains(".candidate_reasoning_effort."))
+                || (field.starts_with("providers.") && field.contains(".effort_map."))
         }) && matches!(
             code,
             "reasoning_incompatible"
@@ -427,8 +428,20 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             let protocols = crate::integrations::protocols(p)?;
             let native_projection =
                 crate::native::reasoning_projection(&metadata["effective"], &protocols);
+            let gateway_projection: serde_json::Map<String, Value> = protocols
+                .iter()
+                .map(|protocol| {
+                    let input_metadata =
+                        crate::reasoning::input_metadata(&metadata["effective"], m, protocol);
+                    let projection = crate::native::reasoning_projection(
+                        &input_metadata,
+                        std::slice::from_ref(protocol),
+                    );
+                    (protocol.clone(), projection)
+                })
+                .collect();
             return Ok(
-                json!({"kind":"concrete","qualified_model":id,"configuration":m,"metadata":metadata,"native_projection":native_projection,"protocols":protocols,"revision":file.revision,"priority_evaluation":crate::routing::explain(store,config,id,arg(r,"protocol").unwrap_or("chat-completions"),None)?}),
+                json!({"kind":"concrete","qualified_model":id,"configuration":m,"metadata":metadata,"native_projection":native_projection,"gateway_projection":gateway_projection,"protocols":protocols,"revision":file.revision,"priority_evaluation":crate::routing::explain(store,config,id,arg(r,"protocol").unwrap_or("chat-completions"),None)?}),
             );
         }
         let aliases: Vec<_> = config
@@ -1031,6 +1044,14 @@ mod tests {
             assert_eq!(configured.exit_code, 2);
             assert_eq!(configured.body["code"], code);
             assert_eq!(configured.body["status"], "error");
+            let mapped = error_response(
+                "model effort-map set",
+                Error::new(code, "Unsupported mapped effort")
+                    .field("providers.p.models.m.effort_map.responses.xhigh"),
+                false,
+            );
+            assert_eq!(mapped.exit_code, 2);
+            assert_eq!(mapped.body["code"], code);
             let runtime =
                 error_response("gateway probe", Error::new(code, "Runtime mismatch"), false);
             assert_eq!(runtime.exit_code, 4);
@@ -1072,6 +1093,37 @@ mod tests {
             dry_run: false,
             if_revision: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn model_inspect_separates_gateway_maps_from_upstream_native_capabilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\nresponses='http://127.0.0.1:39999'\n[providers.p.models.m]\neffort_map={chat-completions={xhigh='high'}}\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let inspect = dispatch(&store, &request(&["model", "inspect"], &["p/m"], &[]))
+            .await
+            .unwrap();
+        assert_eq!(
+            inspect["configuration"]["effort_map"]["chat-completions"]["xhigh"],
+            "high"
+        );
+        assert!(
+            inspect["native_projection"]["pi"]["fields"]["thinkingLevelMap"]["xhigh"].is_null()
+        );
+        assert_eq!(
+            inspect["gateway_projection"]["chat-completions"]["pi"]["fields"]["thinkingLevelMap"]["xhigh"],
+            "xhigh"
+        );
+        assert!(
+            inspect["gateway_projection"]["responses"]["pi"]["fields"]["thinkingLevelMap"]["xhigh"]
+                .is_null()
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            text.as_bytes()
+        );
     }
 
     #[test]

@@ -131,6 +131,8 @@ pub struct Model {
     pub priority: i64,
     #[serde(default)]
     pub overrides: ModelOverrides,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub effort_map: BTreeMap<String, BTreeMap<String, String>>,
     pub timezone: Option<String>,
     #[serde(default)]
     pub schedule: Vec<Schedule>,
@@ -143,6 +145,7 @@ impl Default for Model {
             enabled: true,
             priority: 0,
             overrides: ModelOverrides::default(),
+            effort_map: BTreeMap::new(),
             timezone: None,
             schedule: Vec::new(),
             priority_rules: Vec::new(),
@@ -514,7 +517,8 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         if !valid_id(id, false) {
             return Err(invalid("providers"));
         }
-        crate::integrations::resolve(p).map_err(|_| invalid(&format!("{base}.endpoints")))?;
+        let endpoints =
+            crate::integrations::resolve(p).map_err(|_| invalid(&format!("{base}.endpoints")))?;
         if let Some(auth) = &p.auth {
             match auth {
                 Auth::ApiKey { key_ref } => {
@@ -570,6 +574,30 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
             let path = format!("{base}.models.{name}");
             if name.is_empty() || name.chars().any(char::is_control) {
                 return Err(invalid(&path));
+            }
+            for (protocol, mappings) in &m.effort_map {
+                let field = format!("{path}.effort_map.{protocol}");
+                if !matches!(protocol.as_str(), "chat-completions" | "responses")
+                    || !endpoints.contains_key(protocol)
+                {
+                    return Err(Error::new(
+                        "invalid_configuration",
+                        "Model effort maps require a supported Chat Completions or Responses endpoint; Messages is not supported",
+                    )
+                    .field(field));
+                }
+                for (input, upstream) in mappings {
+                    if [input, upstream].into_iter().any(|effort| {
+                        effort.is_empty()
+                            || effort.chars().any(|c| c.is_control() || c.is_whitespace())
+                    }) {
+                        return Err(Error::new(
+                            "invalid_configuration",
+                            "Effort map input and upstream names must be nonempty without whitespace or control characters",
+                        )
+                        .field(format!("{field}.{input}")));
+                    }
+                }
             }
             if let Some(l) = &m.overrides.limit
                 && [l.context, l.input, l.output]
@@ -756,6 +784,46 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effort_maps_default_empty_and_validate_protocols_and_names() {
+        let base = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n";
+        let config = parse(base).unwrap();
+        let model = &config.providers["p"].models["m"];
+        assert!(model.effort_map.is_empty());
+        assert!(
+            serde_json::to_value(model)
+                .unwrap()
+                .get("effort_map")
+                .is_none()
+        );
+        assert!(!toml::to_string(model).unwrap().contains("effort_map"));
+        let mapped = parse(&format!(
+            "{base}effort_map={{chat-completions={{xhigh='high'}}}}\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            mapped.providers["p"].models["m"].effort_map["chat-completions"]["xhigh"],
+            "high"
+        );
+        for entry in [
+            "messages={high='high'}",
+            "responses={high='high'}",
+            "chat-completions={''='high'}",
+            "chat-completions={'two words'='high'}",
+            "chat-completions={high=''}",
+            "chat-completions={high='two words'}",
+        ] {
+            let error = parse(&format!("{base}effort_map={{{entry}}}\n")).unwrap_err();
+            assert_eq!(error.code, "invalid_configuration");
+            assert!(
+                error
+                    .field
+                    .unwrap()
+                    .starts_with("providers.p.models.m.effort_map.")
+            );
+        }
+    }
 
     #[test]
     fn dsh_target_accepts_model_only_incremental_configuration() {

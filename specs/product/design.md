@@ -29,7 +29,7 @@ an assistant or an approval/workflow system.
 | Peak pricing should change future selections | Cron jobs rewrite agent configuration or interrupt sessions | Evaluate schedules when selecting a new destination; retain established conversation selections |
 | Existing configuration belongs to the user | Regenerate whole agent config from tmax state | Track owned changes and compare against inputs captured within execution; unrelated settings and concurrent edits must survive |
 | Clients and providers speak different APIs | Normalize all traffic through a universal message format | Forward native protocols without translation, as selected by the user; reject incompatible agent configurations |
-| Metadata resembles inference controls | Convert capability fields into request defaults | Metadata never chooses request values; only explicit alias-candidate effort overrides the native request under the [routing contract](../model-routing/spec.md#request-parameters) |
+| Metadata resembles inference controls | Convert capability fields into request defaults | Metadata never chooses request values; only explicit gateway model effort maps or alias-candidate fixed effort resolve the native effort under the [routing contract](../model-routing/spec.md#request-parameters), without changing the selected backend |
 | Native login sessions are already maintained | Copy native refresh tokens into a central vault | Keep native sessions with their refresh owner and use only qualified sign-in/forwarding paths; no agent credential import |
 | Usage sources have different coverage | One synthesized balance across all accounts | Keep provider observations and local observations separate; incomplete evidence must remain visible |
 | A cheap alias suggests an absolute price promise | Infer one cheapest model from incomparable prices | Let users encode preferences; retain provider pricing evidence without claiming global cost optimality |
@@ -195,6 +195,12 @@ Upstream discovery may supply evidence or suggest a local change; it is not a
 hidden third metadata-precedence layer. The [catalog contract](../model-routing/spec.md#model-catalog)
 owns field mapping, override semantics, and adoption of metadata updates. Catalog
 metadata and user overrides cannot establish unverified integration support.
+
+The [capability projection design](../integrations/design.md) separates model
+declarations, explicit gateway effort maps, shared alias inputs, native
+representation, and request intent. Backend selection is independent of effort:
+validate on the selected backend or reject without a replacement. This adds no
+models, account pools, or capability resources.
 
 [OpenCode's provider configuration](https://opencode.ai/v2/docs/providers/)
 also distinguishes the configured provider key from the runtime package and

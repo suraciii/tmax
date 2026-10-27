@@ -38,6 +38,12 @@ the selected catalog revision, affected summary, and actual activation state;
 dry-run, consequential pending changes, and failures retain
 [full config impact](../../configuration/spec.md#configuration-impact-data).
 No result claims downloaded metadata is already accepted or loaded.
+Apply and its dry-run revalidate configured model effort-map targets and fixed
+candidate effort against the proposed effective declarations after overrides.
+An incompatible adoption is rejected without dropping user settings. Impact
+includes changed gateway-facing input sets and affected alias intersections;
+native reapplication remains explicit under the
+[shared capability rule](../../../integrations/spec.md#alias-reasoning-capability).
 
 Examples: `tmax catalog providers`, `tmax catalog models deepseek`,
 `tmax catalog inspect deepseek --model deepseek-flash`, `tmax catalog refresh`, and

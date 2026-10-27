@@ -109,8 +109,12 @@ such as `maxTokens`, display names, and thinking budgets, while replacing only
 explicitly projected capabilities. Selection still owns model membership and
 order; fields are matched by exact model ID rather than array position.
 
-For declared reasoning efforts, tmax maps only exact native names to identical
-wire strings. Absent keys stay absent; unknown names remain visible as omitted.
+For direct entries, tmax projects actual upstream declared efforts; for gateway
+entries it projects caller-facing input names under the
+[shared mapping and alias rules](../../specs/integrations/spec.md#alias-reasoning-capability).
+The native adapter uses exact names and identical wire strings, with maps resolved
+only inside the gateway after backend selection. Absent keys stay absent;
+unrepresentable names remain visible as omitted.
 A map with no level beyond `off` cannot represent a reasoning model and blocks
 application. `reasoning = true` without declared effort values invents no levels;
 explicit `reasoning = false` maps to native `reasoningEfforts: false`. The map is
@@ -170,6 +174,7 @@ and [`headless` bundle](https://github.com/deepseek-ai/deepseek-harness/blob/687
 | Home-target runtime, 2026-10-26 | An isolated release CLI configured one existing DSH home. Two independently authored headless profiles consumed the same home patch and native credential store. Actual DSH runs returned `DSH native OK` through Chat Completions, Responses, and Messages against synthetic loopback SSE endpoints. Existing home routes remained available; the home entry shadowed lower profile routes. This establishes no hosted-provider acceptance. |
 | Home-target recovery and Web, 2026-10-26 | Apply and restore previews left native files unchanged. Restore removed managed credential references and preserved existing home routes/defaults, later native patch rows, and unrelated credential records. Both profile manifests and patches remained byte-unchanged. The actual Web discovery form offered only the DSH home, recognized the registered target, and described the home-only file boundary. |
 | Gateway runtime boundary | Earlier profile-path runs exercised all three protocols through tmax's gateway against loopback fixtures. The home-target runs above exercised direct routes, not gateway continuity or hosted providers. |
+| Alias reasoning runtime and Web, 2026-10-27 | A release CLI applied a stateless Chat Completions alias referencing two OpenCode Go provider instances for `deepseek-v4.1-flash`. The actual DSH Web selector displayed Default, Low, High, and Max on the alias. Headless gateway calls succeeded with native default effort and a one-run explicit `high` effort, returning `DSH_ALIAS_OK` and `DSH_ALIAS_HIGH_OK`. Alias membership and native effort defaults remained unchanged. This exercises alias selection and the dispatched hosted route, not both accounts individually, other protocols, or session continuity. |
 
 In the home-target runs, DSH 0.2.1-rc.2 sent its truthful
 `deepseek-harness/...` User-Agent and no qualified session header. Complete independent requests may use
@@ -185,10 +190,18 @@ remain unchanged: an unsupported native effort fails until the selected model's
 actual capability or the caller's explicit preference is corrected. tmax does
 not repair that mismatch by selecting a default effort.
 
-A gateway alias carries no concrete model capability projection. An inherited
-explicit effort can therefore be rejected by DSH for an otherwise usable alias.
-Choose or omit that effort explicitly through DSH; tmax neither borrows one
-candidate's capabilities for the alias nor silently clears native preferences.
+A gateway alias can expose native `reasoningEfforts` under the shared
+[alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
+rule. It does not pin the alias to one account or borrow the current winner's
+metadata. An inherited explicit effort outside the projected choices can still
+be rejected by DSH; tmax does not silently clear or replace that preference.
+When the common choices are empty or unknown, native `reasoningEfforts: false`
+clears the old selector under the shared rule and marks the alias as non-reasoning
+in DSH. Inspection remains `unavailable` with `reasoning_options_unavailable`.
+This does not declare the candidates non-reasoning or change saved effort
+preferences; an incompatible inherited preference can still fail.
+Inspect and reapply affected entries as specified by the shared rule, then reload
+DSH. Neither native application nor this projection changes alias routing.
 
 In particular, direct **OpenCode Go is not qualified**: no genuine DSH Go session
 mechanism is established by this reference. The

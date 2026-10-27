@@ -627,12 +627,15 @@ and available usage information. Cancellation must end upstream consumption as
 far as the upstream transport supports. Alias replacement, routing headers,
 and authorized credential handling must not become protocol translation.
 
-Native settings and requests own inference parameters except explicitly chosen
-alias-candidate reasoning effort under
-[Request parameters](../model-routing/spec.md#request-parameters). Provider/model
-metadata remains capability information, not a selected effort, sampling default,
-or generation budget. No provider-, concrete-model-, alias-wide-, or agent-level
-arbitrary request-parameter override is introduced.
+Native settings and requests own inference parameters except explicit model
+effort maps and alias-candidate fixed reasoning effort under
+[Request parameters](../model-routing/spec.md#request-parameters). Model maps are
+gateway-only; direct native entries retain actual upstream capabilities.
+Provider/model metadata remains capability information, not a selected effort,
+sampling default, or generation budget. No provider-, concrete-model-, alias-wide-,
+or agent-level arbitrary request-parameter override is introduced. Changing only
+effort must retain the otherwise selected backend or reject before binding
+publication and dispatch, never select another backend to satisfy effort.
 
 Each in-flight request must keep its selected concrete or alias ID, provider,
 model, and authorization. Configuration changes must expose their impact before
@@ -1014,8 +1017,10 @@ credentials; do not claim readiness or add a fallback.
     field validation, reference checks, explicit reload, saved/loaded/applied state
     separation, invalid-file startup, and concurrent-write rejection. Configure
     every supported setting through CLI operations without authoring documents.
-    Preserve native request parameters except explicit candidate reasoning effort;
-    never turn metadata capabilities into chosen request values.
+    Preserve native request parameters except explicit model effort mapping or
+    fixed candidate effort; never turn metadata capabilities into chosen request
+    values. Select independently of effort, then validate only that backend;
+    effort failure must not publish a new binding or choose a replacement.
 18. Remove providers and targets only after references are explicitly resolved.
     Distinguish retained native files and secrets from removed desired settings;
     stopping management must not silently sign out or revoke upstream access.

@@ -119,9 +119,11 @@ and the route-context/capability readers in
 Local tmax overrides win over its accepted catalog snapshot, never an unapplied
 download. Known zero context blocks application because Hermes cannot represent
 it; unknown context remains absent. Unsupported input/output limits and complete
-modality lists are not written as invented Hermes fields. No alias aggregation
-or current-winner snapshot is generated. Existing native effort, request budgets,
-sampling, and unknown-model settings remain native-owned and are preserved.
+modality lists are not written as invented Hermes fields. Gateway aliases follow
+the shared [alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
+rule; Hermes has no native effort selector to project. Existing native effort,
+request budgets, sampling, and unknown-model settings remain native-owned and
+are preserved.
 
 The primary tmax mapping writes a named provider's `name`, `base_url`, `api_key`,
 canonical `transport`, selected `models`, and explicitly selected

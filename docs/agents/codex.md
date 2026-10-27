@@ -105,6 +105,11 @@ A metadata maximum is not a generation preference; existing
 native/user-owned under the
 [routing contract](../../specs/model-routing/spec.md#request-parameters).
 
+Gateway aliases follow the shared
+[alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
+rule. The tmax Codex adapter has no native effort-selector projection; the native
+catalog fields above do not authorize a synthetic catalog or request defaults.
+
 `review_model` selects `/review`'s model slug under the active provider; it cannot
 independently choose another provider. The adapter rejects a cross-provider
 review reference. `approvals_reviewer` is a different approval-request routing

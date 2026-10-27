@@ -77,6 +77,28 @@ under its provider, independent of wire protocol. It is a reference value, not
 another model, a catalog ID, a gateway alias, or an upstream URL.
 _Avoid_: Display label, catalog model ID, gateway model ID
 
+**Model capability declaration**:
+A sourced statement of a concrete model's supported inputs, limits, or controls,
+not a selected request value or proof of authorized upstream access.
+_Avoid_: Generation default, verified entitlement, request override
+
+**Reasoning effort**:
+An exact named value for a model's reasoning control, distinct from enabling
+thinking or choosing a reasoning budget. Names need not have equivalent meaning
+across models or native protocols.
+_Avoid_: Universal thinking level, reasoning capability, thinking switch
+
+**Reasoning effort mapping**:
+An explicit model-scoped correspondence from a caller-facing effort name to an
+upstream effort value for one protocol. It expresses user intent, not an
+inferred equivalence of reasoning quality, a thinking toggle, or a default.
+_Avoid_: Automatic level normalization, fixed effort, capability override
+
+**Native capability projection**:
+A representation of model capability declarations or derived alias effort choices
+in an Agent's supported configuration vocabulary, not a native request preference.
+_Avoid_: Model copy, default selection, request transformation
+
 **Effective priority**:
 A model's preference score at a particular instant, after applying
 evaluable user-defined priority rules. Higher scores rank eligible candidates first.

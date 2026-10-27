@@ -327,3 +327,68 @@ fn gateway_is_the_canonical_command_and_source_flag() {
     let network = tmax(&["network", "proxy", "--help"]);
     assert!(network.status.success());
 }
+
+#[test]
+fn effort_map_binary_surface_requires_supported_protocol_and_finite_operands() {
+    for action in ["set", "remove", "clear"] {
+        let help = tmax(&["model", "effort-map", action, "--help"]);
+        assert!(help.status.success());
+        let help = String::from_utf8(help.stdout).unwrap();
+        assert!(help.contains("--protocol"));
+        assert!(help.contains("--dry-run"));
+        assert!(help.contains("--if-revision"));
+    }
+    for args in [
+        vec!["model", "effort-map", "set", "p/m", "xhigh", "high"],
+        vec![
+            "model",
+            "effort-map",
+            "set",
+            "p/m",
+            "xhigh",
+            "--protocol",
+            "responses",
+        ],
+        vec![
+            "model",
+            "effort-map",
+            "set",
+            "p/m",
+            "xhigh",
+            "high",
+            "--protocol",
+            "messages",
+        ],
+        vec![
+            "model",
+            "effort-map",
+            "remove",
+            "p/m",
+            "--protocol",
+            "responses",
+        ],
+        vec![
+            "model",
+            "effort-map",
+            "clear",
+            "p/m",
+            "extra",
+            "--protocol",
+            "responses",
+        ],
+        vec![
+            "model",
+            "effort-map",
+            "set",
+            "p/m",
+            "xhigh",
+            "high",
+            "--protocol",
+            "responses",
+            "--blob",
+            "{}",
+        ],
+    ] {
+        json_error(&tmax(&args));
+    }
+}
