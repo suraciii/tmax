@@ -1,4 +1,4 @@
-use super::{arg, operand};
+use super::arguments::{arg, operand};
 use crate::{
     Error, Request, ResourceRef, Result,
     config::{Auth, Config, qualified},
