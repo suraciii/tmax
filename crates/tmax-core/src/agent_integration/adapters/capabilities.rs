@@ -33,26 +33,100 @@ pub(in crate::agent_integration) fn projection_view(
     protocol: &str,
     effective: &Value,
 ) -> Result<Value> {
-    if matches!(agent, "codex" | "hermes") {
-        return Ok(
-            json!({"state":"not_supported","reason_code":"native_reasoning_options_unavailable","fields":{},"omitted":[]}),
-        );
-    }
-    let Some(values) = effort_values(effective) else {
+    let mut view = if matches!(agent, "codex" | "hermes") {
+        json!({"state":"not_supported","reason_code":"native_reasoning_options_unavailable","fields":{},"omitted":[]})
+    } else if let Some(values) = effort_values(effective) {
+        match project_reasoning(agent, protocol, &values) {
+            Ok(projection) => json!({
+                "state": projection.state,
+                "reason_code": projection.reason_code,
+                "fields": projection.fields,
+                "omitted": projection.omitted,
+            }),
+            Err(error) => json!({
+                "state":"blocked", "reason_code":error.code,
+                "fields":{}, "omitted":values, "message":error.message,
+            }),
+        }
+    } else {
         let reason = if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
             "reasoning_disabled"
         } else {
             "reasoning_options_unavailable"
         };
-        return Ok(json!({"state":"unavailable","reason_code":reason,"fields":{},"omitted":[]}));
+        json!({"state":"unavailable","reason_code":reason,"fields":{},"omitted":[]})
     };
-    let projection = project_reasoning(agent, protocol, &values)?;
-    Ok(json!({
-        "state": projection.state,
-        "reason_code": projection.reason_code,
-        "fields": projection.fields,
-        "omitted": projection.omitted,
-    }))
+    view["input"] = project_input(agent, effective);
+    Ok(view)
+}
+
+fn project_input(agent: &str, effective: &Value) -> Value {
+    if !matches!(agent, "pi" | "omp" | "dsh" | "opencode" | "hermes") {
+        return json!({"state":"not_supported","reason_code":"native_input_not_supported","fields":{},"omitted":[],"message":"The qualified native adapter has no input-capability field."});
+    }
+    let Some(input) = effective
+        .pointer("/modalities/input")
+        .and_then(Value::as_array)
+    else {
+        return json!({"state":"unavailable","reason_code":"input_modalities_unknown","fields":{},"omitted":[],"message":"Input support is unknown. No capability is inferred; previously owned declarations are withdrawn. Native defaults or unowned declarations may still apply."});
+    };
+    if agent == "opencode" {
+        return json!({"state":"projected","reason_code":null,"fields":{"capabilities":{"input":input}},"omitted":[]});
+    }
+    let supported = ["text", "image"];
+    let represented = input
+        .iter()
+        .filter(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| supported.contains(&value))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let omitted = input
+        .iter()
+        .filter(|value| {
+            !value
+                .as_str()
+                .is_some_and(|value| supported.contains(&value))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if agent == "dsh" && represented.is_empty() {
+        return json!({"state":"blocked","reason_code":"native_input_unrepresentable","fields":{},"omitted":omitted,"message":"DSH treats an empty input list as native inheritance; this declared input capability cannot be represented."});
+    }
+    if agent == "hermes" {
+        let has_text = input.iter().any(|value| value.as_str() == Some("text"));
+        let partial = !omitted.is_empty() || !has_text;
+        return json!({"state":if partial {"partial"} else {"projected"},"reason_code":if partial {Some("native_input_partial")} else {None},"fields":{"model_overrides":{"supports_vision":input.iter().any(|value| value.as_str() == Some("image"))}},"omitted":omitted,"message":"Hermes maps image to model_overrides.<provider>.<model>.supports_vision. Text handling is native and cannot be disabled; an empty input set cannot be enforced."});
+    }
+    json!({"state":if omitted.is_empty() {"projected"} else {"partial"},"reason_code":if omitted.is_empty() {None} else {Some("native_input_partial")},"fields":{"input":represented},"omitted":omitted})
+}
+
+pub(super) fn append_input(agent: &str, effective: &Value, metadata: &mut Value) -> Result<()> {
+    let projection = project_input(agent, effective);
+    if projection["state"] == "blocked" {
+        return Err(Error::new(
+            "native_metadata_unrepresentable",
+            projection["message"]
+                .as_str()
+                .expect("blocked input explanation"),
+        )
+        .field("modalities.input"));
+    }
+    if let Some(fields) = projection["fields"].as_object() {
+        for (key, value) in fields {
+            if let (Some(existing), Some(additional)) = (
+                metadata.get_mut(key).and_then(Value::as_object_mut),
+                value.as_object(),
+            ) {
+                existing.extend(additional.clone());
+            } else {
+                metadata[key] = value.clone();
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn catalog_model_metadata(effective: &Value, include_output: bool) -> Result<Value> {
@@ -78,20 +152,6 @@ pub(super) fn catalog_model_metadata(effective: &Value, include_output: bool) ->
     }
     if let Some(reasoning) = effective.get("reasoning").and_then(Value::as_bool) {
         metadata["reasoning"] = json!(reasoning);
-    }
-    if let Some(input) = effective
-        .pointer("/modalities/input")
-        .and_then(Value::as_array)
-    {
-        // Qualified native schemas support only text and image, not the
-        // provider's entire modality vocabulary.
-        metadata["input"] = json!(
-            input
-                .iter()
-                .filter_map(Value::as_str)
-                .filter(|modality| matches!(*modality, "text" | "image"))
-                .collect::<Vec<_>>()
-        );
     }
     Ok(metadata)
 }

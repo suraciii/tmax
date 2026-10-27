@@ -106,6 +106,33 @@ gateway alias inputs included the mapped common names while direct entries
 retained upstream-only names. No hosted inference, provider entitlement, or
 running native-agent consumption was established by this verification.
 
+### Common alias input capabilities
+
+Gateway aliases expose only input modalities declared by every configured
+candidate, including disabled or temporarily unavailable candidates. Inspect
+with `tmax model inspect ALIAS --protocol chat-completions`: `capabilities.input`
+shows the common list and each candidate's effective declaration. A missing
+declaration is unknown, not false or text-only; correct the concrete model's
+metadata through existing model operations rather than invent an alias override.
+
+When both candidates declare text and image, native application includes both.
+Adding a text-only candidate removes common image support. Explicitly reapply
+affected Agent targets and reload the tool after changing membership or effective
+metadata; saving tmax settings does not rewrite native files. Reapplication
+withdraws obsolete managed input declarations. DSH cannot represent a known empty
+common input set and blocks before writing; an unknown declaration leaves native
+fallback visible rather than preserving a stale tmax image claim. Capability
+metadata and local parsing do not prove that a hosted upstream accepts images.
+
+Local verification on 2026-10-27 used the release binary with an isolated OS-home
+store, a local gateway, and a real DeepSeek Harness 0.2.1-rc.2 profile. Two
+candidates declaring text and image produced the common list; clearing one
+declaration made the intersection unknown and DSH's managed `input` row was
+withdrawn while native fallback stayed visible; restoring text and image
+reprojected both. A known empty intersection blocked preview and execution before
+any native write, leaving the patch and credential files byte-identical. No
+hosted inference or provider entitlement was exercised.
+
 ### Existing configuration with removed tier fields
 
 The current `~/.tmax/tmax.toml` authority strictly rejects the former per-model

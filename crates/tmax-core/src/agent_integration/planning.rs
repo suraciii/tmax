@@ -1,6 +1,8 @@
 //! Desired target resolution and safe native projection/comparison.
+#[cfg(test)]
+use super::adapters::desired_fields;
 use super::{
-    adapters::{self, Entry, File, desired_fields, inline_credential},
+    adapters::{self, Entry, File, inline_credential},
     authentication::auth_namespace_present,
     compatibility,
     discovery::safe_files,
@@ -455,13 +457,18 @@ pub(super) fn pending_native_changes(
             read_native(&file.path)?.as_deref().unwrap_or(""),
             file.format,
         )?;
-        let desired = desired_fields(&target.agent, &file.desired, &current);
         let previous = record.and_then(|record| {
             record
                 .files
                 .iter()
                 .find(|previous| previous.path == file.path)
         });
+        let desired = adapters::desired_fields_with_ownership(
+            &target.agent,
+            &file.desired,
+            &current,
+            previous.map_or(&[], |file| file.fields.as_slice()),
+        );
         for (path, value) in &desired {
             if !previous.is_some_and(|file| {
                 file.written

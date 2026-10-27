@@ -1,4 +1,4 @@
-//! Upstream capability declarations, gateway effort maps, and fixed alias effort.
+//! Upstream capabilities, common alias inputs, gateway effort maps, and fixed alias effort.
 use crate::{Error, Result, catalog, config::Config};
 use serde_json::{Value, json};
 pub(crate) fn validate_saved(store: &crate::storage::Store, config: &Config) -> Result<()> {
@@ -126,12 +126,88 @@ pub(crate) fn resolve<'a>(
     ))
 }
 
+enum CommonInput {
+    Unseen,
+    Declared(Vec<String>),
+    Unknown,
+}
+
+impl CommonInput {
+    fn include(&mut self, input: Option<&[Value]>) {
+        let Some(input) = input else {
+            *self = Self::Unknown;
+            return;
+        };
+        match self {
+            Self::Unseen => {
+                let mut common = Vec::new();
+                for value in input {
+                    let value = value.as_str().expect("declared input is a string");
+                    if !common.iter().any(|existing| existing == value) {
+                        common.push(value.to_owned());
+                    }
+                }
+                *self = Self::Declared(common);
+            }
+            Self::Declared(common) => {
+                common.retain(|value| {
+                    input
+                        .iter()
+                        .any(|item| item.as_str() == Some(value.as_str()))
+                });
+            }
+            Self::Unknown => {}
+        }
+    }
+
+    fn values(self) -> Option<Vec<String>> {
+        match self {
+            Self::Declared(values) => Some(values),
+            Self::Unseen | Self::Unknown => None,
+        }
+    }
+}
+
+fn declared_input(effective: &Value) -> Option<&[Value]> {
+    let input = effective.pointer("/modalities/input")?.as_array()?;
+    input
+        .iter()
+        .all(Value::is_string)
+        .then_some(input.as_slice())
+}
+
+/// Explain the same all-candidate input intersection used by native projection.
+pub(crate) fn alias_input_capability(
+    config: &Config,
+    metadata: Option<&catalog::Snapshot>,
+    alias: &crate::config::ModelAlias,
+) -> Result<Value> {
+    let mut common = CommonInput::Unseen;
+    let mut candidates = Vec::with_capacity(alias.candidates.len());
+    for candidate in &alias.candidates {
+        let (provider, model) = crate::config::model(config, candidate)?;
+        let (_, model_id) = crate::config::qualified(candidate)?;
+        let projection =
+            catalog::effective_from_snapshot(metadata, provider, Some((model_id, model)))?;
+        let input = declared_input(&projection["effective"]);
+        common.include(input);
+        candidates.push(json!({"model": candidate, "input": input}));
+    }
+    let common = common.values();
+    Ok(json!({
+        "state": if common.is_some() { "declared" } else { "unknown" },
+        "common": common,
+        "candidates": candidates,
+    }))
+}
+
 pub(crate) fn alias_metadata(
     config: &Config,
     metadata: Option<&catalog::Snapshot>,
     alias: &crate::config::ModelAlias,
 ) -> Result<Value> {
     let mut common: Option<Vec<String>> = None;
+    let mut common_input = CommonInput::Unseen;
     // Include every configured candidate: eligibility and priority are transient,
     // while native selectors persist until the next explicit application.
     for candidate in &alias.candidates {
@@ -139,6 +215,7 @@ pub(crate) fn alias_metadata(
         let (_, model_id) = crate::config::qualified(candidate)?;
         let projection =
             catalog::effective_from_snapshot(metadata, provider, Some((model_id, model)))?;
+        common_input.include(declared_input(&projection["effective"]));
         let values = if let Some(fixed) = alias.candidate_reasoning_effort.get(candidate) {
             // A fixed upstream value bypasses the model map, including a map
             // whose input has the same name as this fixed value.
@@ -157,13 +234,17 @@ pub(crate) fn alias_metadata(
             common = Some(values);
         }
     }
-    Ok(match common.filter(|values| !values.is_empty()) {
+    let mut effective = match common.filter(|values| !values.is_empty()) {
         Some(values) => json!({
             "reasoning": true,
             "reasoning_options": [{"type": "effort", "values": values}],
         }),
         None => json!({}),
-    })
+    };
+    if let Some(input) = common_input.values() {
+        effective["modalities"] = json!({"input": input});
+    }
+    Ok(effective)
 }
 
 pub(crate) fn supported(effective: &Value, effort: &str) -> Option<&'static str> {
@@ -341,6 +422,236 @@ mod tests {
             continuity: Some("stateless".into()),
         };
         (config, snapshot, alias)
+    }
+
+    #[test]
+    fn alias_inputs_intersect_in_first_candidate_order_without_other_modalities() {
+        let (config, mut snapshot, alias) = fixture();
+        for (first, second, expected) in [
+            (
+                json!(["text", "image", "audio", "text", "image"]),
+                json!(["image", "text", "image"]),
+                json!(["text", "image"]),
+            ),
+            (
+                json!(["image", "text", "image"]),
+                json!(["text", "image"]),
+                json!(["image", "text"]),
+            ),
+            (json!(["image"]), json!(["image"]), json!(["image"])),
+        ] {
+            snapshot.providers.get_mut("directory").unwrap()["models"]["a"]["modalities"] =
+                json!({"input": first, "output": ["image"]});
+            snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["modalities"] =
+                json!({"input": second, "output": ["text"]});
+            assert_eq!(
+                alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+                json!({
+                    "reasoning": true,
+                    "reasoning_options": [{"type": "effort", "values": ["high", "max"]}],
+                    "modalities": {"input": expected},
+                })
+            );
+            assert_eq!(
+                alias_input_capability(&config, Some(&snapshot), &alias).unwrap(),
+                json!({
+                    "state": "declared",
+                    "common": expected,
+                    "candidates": [
+                        {"model": "p/a", "input": first},
+                        {"model": "p/b", "input": second},
+                    ],
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_candidates_restrict_alias_inputs_independently_of_effort() {
+        let (config, mut snapshot, mut alias) = fixture();
+        assert!(!config.providers["p"].models["b"].enabled);
+        snapshot.providers.get_mut("directory").unwrap()["models"]["a"]["modalities"] =
+            json!({"input": ["text", "image"]});
+        snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["modalities"] =
+            json!({"input": ["text"]});
+        alias
+            .candidate_reasoning_effort
+            .insert("p/a".into(), "low".into());
+        alias
+            .candidate_reasoning_effort
+            .insert("p/b".into(), "high".into());
+        assert_eq!(
+            alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+            json!({"modalities": {"input": ["text"]}})
+        );
+        assert_eq!(
+            alias_input_capability(&config, Some(&snapshot), &alias).unwrap(),
+            json!({
+                "state": "declared", "common": ["text"],
+                "candidates": [
+                    {"model": "p/a", "input": ["text", "image"]},
+                    {"model": "p/b", "input": ["text"]},
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_alias_inputs_are_not_text_or_known_empty() {
+        let (config, snapshot, alias) = fixture();
+        for unknown in [
+            json!({}),
+            json!({"output": ["text"]}),
+            json!({"input": null}),
+            json!({"input": "text"}),
+            json!({"input": ["text", false]}),
+        ] {
+            for known in [json!(["text", "image"]), json!([])] {
+                for unknown_first in [false, true] {
+                    let mut snapshot = snapshot.clone();
+                    let (unknown_id, known_id) = if unknown_first {
+                        ("a", "b")
+                    } else {
+                        ("b", "a")
+                    };
+                    snapshot.providers.get_mut("directory").unwrap()["models"][unknown_id]["modalities"] =
+                        unknown.clone();
+                    snapshot.providers.get_mut("directory").unwrap()["models"][known_id]["modalities"] =
+                        json!({"input": known});
+                    let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+                    assert!(effective.get("modalities").is_none());
+                    assert_eq!(effort_values(&effective).unwrap(), ["high", "max"]);
+                    let inputs = if unknown_first {
+                        json!([{"model": "p/a", "input": null}, {"model": "p/b", "input": known}])
+                    } else {
+                        json!([{"model": "p/a", "input": known}, {"model": "p/b", "input": null}])
+                    };
+                    assert_eq!(
+                        alias_input_capability(&config, Some(&snapshot), &alias).unwrap(),
+                        json!({"state": "unknown", "common": null, "candidates": inputs})
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            alias_input_capability(&config, None, &alias).unwrap(),
+            json!({
+                "state": "unknown", "common": null,
+                "candidates": [
+                    {"model": "p/a", "input": null},
+                    {"model": "p/b", "input": null},
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn explicit_empty_and_disjoint_alias_inputs_remain_declared() {
+        let (config, mut snapshot, alias) = fixture();
+        for (first, second) in [
+            (json!([]), json!(["text", "image"])),
+            (json!(["text", "image"]), json!([])),
+            (json!([]), json!([])),
+            (json!(["image"]), json!(["text"])),
+        ] {
+            snapshot.providers.get_mut("directory").unwrap()["models"]["a"]["modalities"] =
+                json!({"input": first});
+            snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["modalities"] =
+                json!({"input": second});
+            assert_eq!(
+                alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+                json!({
+                    "reasoning": true,
+                    "reasoning_options": [{"type": "effort", "values": ["high", "max"]}],
+                    "modalities": {"input": []},
+                })
+            );
+            assert_eq!(
+                alias_input_capability(&config, Some(&snapshot), &alias).unwrap(),
+                json!({
+                    "state": "declared", "common": [],
+                    "candidates": [
+                        {"model": "p/a", "input": first},
+                        {"model": "p/b", "input": second},
+                    ],
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn alias_inputs_use_accepted_snapshot_and_local_replacement_overrides() {
+        let (mut config, mut snapshot, alias) = fixture();
+        snapshot.providers.get_mut("directory").unwrap()["models"]["a"]["modalities"] =
+            json!({"input": ["text", "image"]});
+        snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["modalities"] =
+            json!({"input": ["text"]});
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("b")
+            .unwrap()
+            .overrides =
+            serde_json::from_value::<ModelOverrides>(json!({"modalities": {"input": ["image"]}}))
+                .unwrap();
+        assert_eq!(
+            alias_metadata(&config, Some(&snapshot), &alias).unwrap()["modalities"],
+            json!({"input": ["image"]})
+        );
+        assert_eq!(
+            alias_input_capability(&config, Some(&snapshot), &alias).unwrap(),
+            json!({
+                "state": "declared", "common": ["image"],
+                "candidates": [
+                    {"model": "p/a", "input": ["text", "image"]},
+                    {"model": "p/b", "input": ["image"]},
+                ],
+            })
+        );
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("a")
+            .unwrap()
+            .overrides = serde_json::from_value::<ModelOverrides>(
+            json!({"modalities": {"input": ["image", "audio"]}}),
+        )
+        .unwrap();
+        assert_eq!(
+            alias_metadata(&config, None, &alias).unwrap(),
+            json!({"modalities": {"input": ["image"]}})
+        );
+        assert_eq!(
+            alias_input_capability(&config, None, &alias).unwrap(),
+            json!({
+                "state": "declared", "common": ["image"],
+                "candidates": [
+                    {"model": "p/a", "input": ["image", "audio"]},
+                    {"model": "p/b", "input": ["image"]},
+                ],
+            })
+        );
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("b")
+            .unwrap()
+            .overrides =
+            serde_json::from_value::<ModelOverrides>(json!({"modalities": {"input": []}})).unwrap();
+        assert_eq!(
+            alias_metadata(&config, Some(&snapshot), &alias).unwrap()["modalities"],
+            json!({"input": []})
+        );
+        assert_eq!(
+            alias_input_capability(&config, Some(&snapshot), &alias).unwrap()["common"],
+            json!([])
+        );
     }
 
     #[test]

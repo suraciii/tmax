@@ -196,6 +196,15 @@ native entry receives a gateway translation map, default, or thinking switch.
 | `unavailable` | `reasoning_disabled` (explicit concrete-model `reasoning = false`), `reasoning_options_unavailable` (no declared effort names or no common alias effort names), or `native_projection_unavailable` (no projection for this model); `fields` is empty. |
 | `blocked` | `native_metadata_unrepresentable` with `message` explaining the unrepresentable capability; the error never fails inspection and blocks only that agent's application before native writes. |
 
+Each projection also has an independent `input` projection with `state`,
+`reason_code`, `fields`, and `omitted`, and optional `message`. Its states are
+`projected`, `partial`, `unavailable` (unknown declaration/native inheritance),
+`not_supported` (no qualified native input field), or `blocked` (the declaration
+cannot be represented without changing its meaning). Top-level effort state
+does not conceal or override this input state. A blocked input projection blocks
+application before writes, but remains inspectable.
+
+
 A null `native_projection` means planning failed or is unavailable; `blockers`
 remain authoritative.
 

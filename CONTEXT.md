@@ -95,8 +95,9 @@ inferred equivalence of reasoning quality, a thinking toggle, or a default.
 _Avoid_: Automatic level normalization, fixed effort, capability override
 
 **Native capability projection**:
-A representation of model capability declarations or derived alias effort choices
-in an Agent's supported configuration vocabulary, not a native request preference.
+A representation of model capability declarations or derived alias common input
+capabilities and effort choices in an Agent's supported configuration vocabulary,
+not a native request preference.
 _Avoid_: Model copy, default selection, request transformation
 
 **Effective priority**:

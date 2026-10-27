@@ -392,7 +392,7 @@ function aliasForm(encoded='') {
   const currentEfforts=current?.candidate_reasoning_effort || {};
   const models=(state.models || []).filter(m=>m.kind==='concrete');
   formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称并引用同一原生协议下的已有模型；每个候选由模型引用和别名内的局部设置组成，可单独覆盖推理强度。留空表示不覆盖客户端请求，只能使用具体模型有效推理能力元数据列出的值。Messages 不支持此覆盖。',
-    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || 'chat-completions',{required:true,options:Object.entries(protocolNames)})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+(id?`<div class="actions">${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
+    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || 'chat-completions',{required:true,options:Object.entries(protocolNames)})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+(id?`<div class="actions">${button('查看共同能力','alias-detail',encoded,'small')}${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
       const candidates=[...document.querySelectorAll('[name=candidate]:checked')].map(i=>i.value);if(!candidates.length)throw Error('请至少选择一个候选模型。');
       const args={protocol:[protocol || value('protocol')],candidate:candidates};if(id&&protocol!==value('protocol'))args['new-protocol']=[value('protocol')];
       const efforts=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value.trim()]));
@@ -476,33 +476,50 @@ function projectionLevels(fields) {
   for(const key of Object.keys(fields||{}))if(!['thinkingLevelMap','reasoningEfforts','thinking','variants'].includes(key))rows.push([key,JSON.stringify(fields[key])]);
   return rows.length?`<div class="detail-facts">${rows.map(([label,value])=>fact(label,value)).join('')}</div>`:'';
 }
+function inputProjectionBlock(input) {
+  if(!input)return '';
+  const labels={projected:'已映射',partial:'部分映射',unavailable:'未知，沿用工具回退',not_supported:'工具不支持输入声明',blocked:'无法表示，将阻止写入'};
+  const reasons={native_input_not_supported:'该工具没有经过验证的原生输入能力声明字段。',input_modalities_unknown:'输入能力未知，不推断支持范围；重新应用时会撤回旧的受管声明，但工具默认值或非受管声明仍可能生效。',native_input_unrepresentable:'DSH 会将空输入列表解释为沿用原生配置，无法准确表示此能力声明。'};
+  const message=reasons[input.reason_code]||(input.fields?.model_overrides?'Hermes 将图片能力映射到 supports_vision；文本处理由工具自身管理，无法禁用，也无法强制执行空输入集合。':input.message);
+  return `<h4>输入能力</h4>${badge(labels[input.state]||input.state,input.state==='blocked'||input.state==='partial'?'amber':'')}${message?`<p class="muted">${escapeHtml(message)}</p>`:''}${projectionLevels(input.fields)}${input.omitted?.length?`<p class="label-note">未映射的输入类型：${escapeHtml(input.omitted.join('、'))}</p>`:''}`;
+}
 function projectionBlock(projection) {
   const p=projection && typeof projection==='object'?projection:{state:'unavailable',reason_code:'native_projection_unavailable'};
   const [label,tone]=projectionStates[p.state]||[p.state?`未知状态 ${p.state}`:'状态未知',''];
   const reason=p.reason_code?(projectionReasons[p.reason_code]||p.reason_code):'';
   const nested=p.protocols&&typeof p.protocols==='object'&&!Array.isArray(p.protocols)?`<p class="label-note">逐协议投影（上方档位字段为代表性协议的期望映射）：</p>${Object.entries(p.protocols).map(([protocol,sub])=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(protocolNames[protocol]||protocol)}</strong>${projectionBlock(sub)}</div></div>`).join('')}`:'';
-  return `<div class="projection-state">${badge(label,tone)}${reason?`<p class="muted">${escapeHtml(reason)}</p>`:''}${p.message?`<p class="muted">${escapeHtml(p.message)}</p>`:''}${projectionLevels(p.fields)}${Array.isArray(p.omitted)&&p.omitted.length?`<p class="label-note">未映射的声明值：${escapeHtml(p.omitted.join('、'))}</p>`:''}${nested}${detail(p,'查看投影原始字段')}</div>`;
+  return `<div class="projection-state"><h4>推理档位</h4>${badge(label,tone)}${reason?`<p class="muted">${escapeHtml(reason)}</p>`:''}${p.message?`<p class="muted">${escapeHtml(p.message)}</p>`:''}${projectionLevels(p.fields)}${Array.isArray(p.omitted)&&p.omitted.length?`<p class="label-note">未映射的声明值：${escapeHtml(p.omitted.join('、'))}</p>`:''}${inputProjectionBlock(p.input)}${nested}${detail(p,'查看投影原始字段')}</div>`;
 }
 function nativeProjectionSection(data) {
-  const intro=notice('以下是依据模型能力声明生成的期望档位映射：只描述“应用到工具”后将写入的档位声明，不代表已应用，也不是工具当前生效状态。推理档位的默认值由工具自身管理，tmax 不选择默认档位。');
-  if(!Array.isArray(data.native_projection))return `<h3 class="subheading">原生推理档位映射（期望能力）</h3>${intro}${notice('未能生成期望档位映射（规划失败或信息不可用）。请以阻塞原因与检查结果为准。','warning')}`;
+  const intro=notice('以下是应用后将写入的期望能力声明，不代表已应用或工具当前状态。别名输入取全部配置候选的共同能力；默认档位由工具自身管理。');
+  if(!Array.isArray(data.native_projection))return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${notice('未能生成期望能力映射。请以阻塞原因与检查结果为准。','warning')}`;
   const entries=data.native_projection.map(entry=>{
     const source=entry.source?.gateway?'tmax 本地网关':entry.source?.provider?providerName(entry.source.provider):'来源未知';
     const models=(entry.models||[]).map(m=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(m.id)}</strong> <small class="label-note mono">${escapeHtml(entry.name)} · ${escapeHtml(protocolNames[m.protocol]||m.protocol)}</small>${projectionBlock(m.projection)}</div></div>`).join('');
     return `<div class="list-row split"><div><h3>${escapeHtml(entry.name)}</h3><small class="label-note">${escapeHtml(source)}</small></div></div>${models||'<p class="muted">尚未配置模型。</p>'}`;
   }).join('');
-  return `<h3 class="subheading">原生推理档位映射（期望能力）</h3>${intro}${entries||'<p class="muted">尚未生成映射。</p>'}`;
+  return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${entries||'<p class="muted">尚未生成映射。</p>'}`;
 }
 function blockersSection(blockers) {
   const list=Array.isArray(blockers)?blockers:[];
   return list.length?`<h3 class="subheading">阻塞原因</h3>${list.map(b=>notice(escapeHtml(b.message||'存在未说明的阻塞原因。')+(b.code?` <span class="mono">${escapeHtml(b.code)}</span>`:''),'warning')).join('')}`:'';
 }
-async function modelDetail(id) {
+async function modelDetail(id,protocol) {
   const generation=openDialog(id,'<div class="loading">正在读取模型详情…</div>','MODEL');
   try {
-    const data=await read('model inspect',[id]);
+    const data=await read('model inspect',[id],protocol?{protocol:[protocol]}:{});
     if(generation!==state.dialogGeneration)return;
-    if(data.kind!=='concrete'){$('dialog-content').innerHTML=notice('此详情仅支持具体模型；别名请使用“管理”。','warning')+detail(data,'查看检查结果');return;}
+    if(data.kind==='alias') {
+      const input=data.capabilities?.input;
+      const matrix=agentTypes.filter(([agent])=>data.native_projection?.[agent]);
+      const list=items=>Array.isArray(items)?(items.length?items.join('、'):'空集合（没有共同输入）'):'未知（未声明）';
+      $('dialog-content').innerHTML=notice('别名只声明全部配置候选共同支持的输入能力，包括停用或暂不可用的候选；不跟随当前赢家，也不证明上游实际可用。')+
+        `<div class="detail-facts">${fact('别名',data.definition.id)}${fact('协议',protocolNames[data.definition.protocol]||data.definition.protocol)}${fact('共同输入能力',list(input?.common))}${fact('目录来源',data.metadata?.source)}${fact('目录修订',data.metadata?.metadata_revision)}</div>`+
+        `<h3 class="subheading">候选输入声明（有效值）</h3>`+(input?.candidates||[]).map(candidate=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(candidate.model)}</strong><p>${escapeHtml(list(candidate.input))}</p></div></div>`).join('')+
+        `<h3 class="subheading">各工具的期望能力映射</h3>`+matrix.map(([agent,name])=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(name)}</strong>${projectionBlock(data.native_projection[agent])}</div></div>`).join('')+
+        notice('候选或能力变化后，需要重新应用受影响的工具配置并重新加载工具。未知不代表不支持；旧的受管图片声明会在重新应用时撤回。')+detail(data,'查看检查结果与原始信息');
+      return;
+    }
     const meta=data.metadata||{};const effective=meta.effective||{};const catalog=meta.catalog||{};const overrides=meta.overrides||{};
     const reasoning=effective.reasoning;
     const options=Array.isArray(effective.reasoning_options)?effective.reasoning_options:[];
@@ -518,7 +535,7 @@ async function modelDetail(id) {
       (reasoning===false?notice('模型显式声明关闭推理（reasoning 为 false）。即使存在档位声明，也不会投影到编程工具。','warning'):'')+
       (options.length?options.map(o=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(o?.type||'未声明类型')}</strong><small class="label-note mono">${escapeHtml((Array.isArray(o?.values)?o.values:[]).join('、')||'未列出值')}</small>${o?.type==='effort'?'<p class="muted">effort 值声明工具可选择的推理档位，不是默认档位。</p>':''}</div></div>`).join(''):'<p class="muted">未声明推理档位（reasoning options 缺失）；不会合成或推断档位。</p>')+
       notice('来源区分：手动覆盖优先于目录合并；“未声明”表示该层没有此字段，不代表能力为否。')+
-      `<h3 class="subheading">各编程工具的期望档位映射</h3>`+
+      `<h3 class="subheading">各编程工具的期望能力映射</h3>`+
       (matrix.length?matrix.map(({name,projection})=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(name)}</strong>${projectionBlock(projection)}</div></div>`).join(''):notice('此次模型检查未提供各工具的期望档位映射。','warning'))+
       notice('以上是按模型能力声明生成的通用能力映射。将模型加入工具配置后，可在“编程工具”的配置详情中查看针对具体配置的映射与应用影响。')+
       `<div class="actions">${button('打开工具配置','navigate','agents','soft')}</div>`+
@@ -669,6 +686,7 @@ async function dispatch(action,id) {
     case 'model-tab': state.modelKind=id;state.query='';render();break;
     case 'alias-add': aliasForm();break;
     case 'alias-edit': aliasForm(id);break;
+    case 'alias-detail': {const [name,protocol]=JSON.parse(id);await modelDetail(name,protocol);break;}
     case 'alias-remove': {const [name,protocol]=JSON.parse(id);openOperation('model alias remove',[name],{protocol:[protocol]});break;}
     case 'alias-explain': {const [name,protocol]=JSON.parse(id);openOperation('model explain',[name],{protocol:[protocol]});break;}
     case 'agent-add': agentForm(id);break;

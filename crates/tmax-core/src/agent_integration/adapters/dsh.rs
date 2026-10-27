@@ -66,18 +66,6 @@ pub(super) fn model_metadata(effective: &Value) -> Result<Value> {
     if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
         metadata["reasoningEfforts"] = json!(false);
     }
-    // Unlike Pi/OMP, DSH treats [] as inheritance, not an explicit empty
-    // capability. Refuse rather than silently acquire native modalities.
-    if metadata
-        .get("input")
-        .and_then(Value::as_array)
-        .is_some_and(Vec::is_empty)
-    {
-        return Err(Error::new(
-            "native_metadata_unrepresentable",
-            "DSH treats an empty input list as native inheritance; this declared input capability cannot be represented",
-        ).field("modalities.input"));
-    }
     Ok(metadata)
 }
 
@@ -175,6 +163,31 @@ pub(super) fn preserve_models(path: &[String], value: &mut Value, current: &Valu
                         .entry(key.clone())
                         .or_insert_with(|| value.clone());
                 }
+            }
+        }
+    }
+}
+
+pub(super) fn withdraw_input(path: &[String], value: &mut Value, desired: &Value) {
+    if path.len() != 5
+        || path[0] != "llm-pi-ai"
+        || path[1] != "config"
+        || path[2] != "providers"
+        || path[4] != "models"
+    {
+        return;
+    }
+    if let Some(models) = value.as_array_mut()
+        && let Some(selected) = document::get(desired, path).and_then(Value::as_array)
+    {
+        for model in models {
+            if selected.iter().any(|selected| {
+                selected.get("id") == model.get("id") && selected.get("input").is_none()
+            }) {
+                model
+                    .as_object_mut()
+                    .expect("DSH model object")
+                    .remove("input");
             }
         }
     }
@@ -357,14 +370,16 @@ mod tests {
             );
         }
         for values in [json!(["off"]), json!(["ultra"])] {
+            let effective = json!({"reasoning_options":[{"type":"effort","values":values}],"modalities":{"input":["text"]}});
+            let projection = projection_view("dsh", "responses", &effective).unwrap();
+            assert_eq!(projection["state"], "blocked");
+            assert_eq!(projection["reason_code"], "native_metadata_unrepresentable");
+            assert_eq!(projection["input"]["state"], "projected");
+            assert_eq!(projection["input"]["fields"], json!({"input":["text"]}));
             assert_eq!(
-                projection_view(
-                    "dsh",
-                    "responses",
-                    &json!({"reasoning_options":[{"type":"effort","values":values}]})
-                )
-                .unwrap_err()
-                .code,
+                model_metadata("dsh", "responses", &effective)
+                    .unwrap_err()
+                    .code,
                 "native_metadata_unrepresentable"
             );
         }
@@ -397,6 +412,49 @@ mod tests {
                 {"id":"new"}
             ]))
         );
+    }
+
+    #[test]
+    fn dsh_alias_unknown_input_withdraws_only_from_owned_models() {
+        let current = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
+            {"id":"shared","input":["text","image"],"maxTokens":1234,"thinkingBudgets":{"high":512}}
+        ]}}}}});
+        let mut model =
+            crate::agent_integration::alias_model_metadata("dsh", "responses", &json!({})).unwrap();
+        model["id"] = json!("shared");
+        let desired = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[model]}}}}});
+        let path = vec![
+            "llm-pi-ai".into(),
+            "config".into(),
+            "providers".into(),
+            "local".into(),
+            "models".into(),
+        ];
+        let owned = vec![crate::agent_integration::recovery::Field {
+            path: path.clone(),
+            before_hash: "baseline".into(),
+            after_hash: "managed".into(),
+            observed_hash: "managed".into(),
+            released: false,
+        }];
+        for (ownership, expected_input) in [
+            (&[][..], Some(json!(["text", "image"]))),
+            (owned.as_slice(), None),
+        ] {
+            let fields =
+                super::super::desired_fields_with_ownership("dsh", &desired, &current, ownership);
+            let models = fields
+                .iter()
+                .find(|(field, _)| field == &path)
+                .unwrap()
+                .1
+                .as_ref()
+                .unwrap();
+            assert_eq!(models[0].get("input"), expected_input.as_ref());
+            assert_eq!(models[0]["reasoningEfforts"], false);
+            assert_eq!(models[0]["maxTokens"], 1234);
+            assert_eq!(models[0]["thinkingBudgets"], json!({"high":512}));
+        }
     }
 
     #[test]

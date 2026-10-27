@@ -137,10 +137,29 @@ identity, qualification, or safe conversation continuation.
 
 ### Alias reasoning capability
 
-Native application may project only common reasoning-effort choices for a gateway
-alias. It must use every explicitly configured candidate, including candidates
-whose provider or model is currently disabled. Availability, priority, routing
-rules, and the current winner must not narrow that set.
+Native application may project common input modalities and reasoning-effort
+choices for a gateway alias. Both use every explicitly configured candidate,
+including candidates whose provider or model is disabled. Availability, priority,
+routing rules, and the current winner must not narrow that set.
+
+#### Common input modalities
+
+| Condition | Required behavior |
+| --- | --- |
+| Evidence | Use accepted concrete-model catalog metadata plus local overrides. Do not infer support from model names, another account, native defaults, or live availability. |
+| Every candidate declares `modalities.input` | Intersect the complete lists, deduplicate, and preserve the first candidate's declaration order. Publish only that common list. An explicit empty list or disjoint lists gives a known empty intersection. |
+| Any candidate lacks the declaration | Common support is unknown; omit derived input metadata. Do not substitute text-only, an empty list, or another candidate's declaration. Effort derivation remains independent. |
+| Inspection | Expose common support as `declared` with an array (including empty), or `unknown` with null, and every qualified candidate's effective input list or null. Retain accepted metadata provenance. |
+| Native representation | Use the same version-qualified input mapping as concrete models. Report projected fields, omitted modalities, unsupported native fields, unknown fallback, or an unrepresentable declaration separately from effort projection. |
+| Reapplication | Replace or withdraw obsolete managed input declarations, never retain stale managed image support. Preserve unrelated settings and reject conflicting edits. For an already managed DSH models array, omission removes selected rows' obsolete `input`; on first application, unrelated existing native declarations remain native-owned. Native inheritance is not a claim of text-only support. |
+| Empty native representation | If the native schema would reinterpret a known empty set as inheritance, block that target's application before writes rather than invent support. |
+
+This is a declaration for native consumers, not an extra gateway request
+allowlist. Existing non-effort request eligibility and retained-session checks
+remain unchanged; effort still cannot filter or rerank candidates. No alias
+capability override or new configuration setting is introduced.
+
+#### Common effort choices
 
 | Step | Required behavior |
 | --- | --- |
@@ -150,7 +169,7 @@ rules, and the current winner must not narrow that set.
 | Common choices | Intersect all candidate caller-facing input sets after maps and fixed restrictions. Remove duplicates while retaining deterministic declaration order. Never use the union, guess correspondences, or synthesize defaults. |
 | Nonempty intersection | Supply `reasoning = true` and one `reasoning_options` entry with `type = "effort"` and the common `values` to the existing native capability mapping. |
 | Empty intersection | Supply no alias reasoning metadata. Do not infer reasoning support or emit an alias-wide non-reasoning capability claim. |
-| Other metadata | Omit alias limits, modalities, tools, prices, transport claims, and all other capability metadata. Never copy one candidate's or the current winner's metadata. |
+| Other metadata | Omit alias limits, output modalities, tools, prices, transport claims, and other capability metadata. Never copy one candidate's or the current winner's metadata. |
 
 Aliases use the same projected, partial, unavailable, blocked, or not-supported
 outcomes as concrete models under the native mapping above. Capability projection

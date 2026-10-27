@@ -124,6 +124,15 @@ An explicit default selection changes provider/model only, preserving existing
 HOME-level `agent-default-model` fields, including reasoning effort. Its home
 `config` shadows the complete lower-layer entry rather than merging profile defaults.
 
+Gateway aliases also project [common input modalities](../../specs/integrations/spec.md#common-input-modalities).
+All configured candidates must declare image input before the alias advertises
+it. Reapplication withdraws obsolete managed `input` declarations when evidence
+becomes unknown, while preserving unrelated row preferences. Native fallback may
+still apply; DSH defaults custom models with no input declaration to text. A
+known empty common input list blocks application because DSH would reinterpret
+it as inheritance.
+
+
 Sources:
 [`provider.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/llm/llm-pi-ai/src/provider.ts#L47-L62),
 [`config.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/llm/llm-pi-ai/src/config.ts#L287-L349),
