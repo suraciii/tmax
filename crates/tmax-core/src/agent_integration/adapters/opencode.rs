@@ -57,12 +57,10 @@ pub(super) fn model_metadata(effective: &Value) -> Result<Value> {
     if let Some(tools) = effective.get("tool_call").and_then(Value::as_bool) {
         metadata["capabilities"]["tools"] = json!(tools);
     }
-    for field in ["input", "output"] {
-        if let Some(modalities) = effective.get("modalities").and_then(|m| m.get(field))
-            && modalities.is_array()
-        {
-            metadata["capabilities"][field] = modalities.clone();
-        }
+    if let Some(modalities) = effective.pointer("/modalities/output")
+        && modalities.is_array()
+    {
+        metadata["capabilities"]["output"] = modalities.clone();
     }
     Ok(metadata)
 }

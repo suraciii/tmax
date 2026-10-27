@@ -40,19 +40,26 @@ page makes no external font, image, or script requests.
   to their existing configuration. Discovery failure does not block manual entry.
   Discovery does not import settings or credentials, and installation detection
   does not establish compatibility. Saving opens the configuration details.
-  Add an upstream or gateway provider entry, select its models, then
-  optionally choose its default (required for Codex). Saving these declarations does not write native files.
+  Add an upstream or gateway provider entry, select its models and native
+  protocols, then optionally choose its default (required for Codex). The model
+  choices list only published protocols, grouped Responses first for both concrete
+  models and aliases. A new alias initially prefers Responses when a concrete
+  candidate publishes it; existing selections retain their protocol. The client
+  uses the selected protocol;
+  the gateway does not translate or choose another one. Saving these declarations
+  does not write native files.
   Apply and restore remain separate explicit actions with optional previews.
   Details also show desired per-model reasoning selectors, omitted names, and
   blockers. These are not evidence of native reload or inference; default effort
   remains tool-owned.
   DSH requires an existing home directory (`DSH_HOME`, otherwise the OS home's
-  `.dsh`); application edits its common `cordis.patch.yml` and hands keys to the
-  adjacent native `.credentials.yaml`, enabling the credential service in the
-  HOME patch for headless consumption without bundle inspection. It does not
-  enumerate, select, create, or manage profiles. Whole home entry configurations
-  shadow lower profile configurations rather than deep-merging their routes or
-  defaults. Model-only application writes no `agent-default-model` entry; an
+  `.dsh`); application installs the independent `tmax-dsh.mjs` plugin, declares
+  its `llm-tmax` entry in `cordis.patch.yml`, and hands keys to the adjacent native
+  `.credentials.yaml`. It enables the credential service for headless consumption
+  without bundle inspection and preserves user `llm-pi-ai` routes. It does not
+  enumerate, select, create, or manage profiles. The managed home entry shadows
+  lower entries with the same identity. Model-only application writes no
+  `agent-default-model` entry; an
   explicit default changes provider/model while preserving existing HOME-level
   effort. Runtime overlays remain outside tmax's ownership. See the
   [DSH reference](agents/dsh.md) for evidence limits; historical profile-path

@@ -240,8 +240,16 @@ pub(super) fn model_inspect(
             "Alias identity is unknown or ambiguous; supply its protocol",
         ));
     }
+    let snapshot = crate::catalog::read(store, "accepted")?;
+    let effective = crate::reasoning::alias_metadata(config, snapshot.as_ref(), aliases[0])?;
+    let input_capability =
+        crate::reasoning::alias_input_capability(config, snapshot.as_ref(), aliases[0])?;
+    let native_projection = crate::agent_integration::reasoning_projection(
+        &effective,
+        std::slice::from_ref(&aliases[0].protocol),
+    );
     Ok(
-        json!({"kind":"alias","definition":aliases[0],"continuity":aliases[0].continuity.as_deref().unwrap_or("session"),"revision":file.revision}),
+        json!({"kind":"alias","definition":aliases[0],"continuity":aliases[0].continuity.as_deref().unwrap_or("session"),"revision":file.revision,"capabilities":{"input":input_capability},"metadata":{"effective":effective,"source":snapshot.as_ref().map(|s| &s.source),"metadata_revision":snapshot.as_ref().map(|s| &s.revision)},"native_projection":native_projection}),
     )
 }
 

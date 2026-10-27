@@ -235,11 +235,55 @@ pub(super) fn partial(
         json!({"_code":"partial_native_apply","target":record.target,"state":"recovery_required","changed_files":changed,"unchanged_files":unchanged,"remaining_files":record.files.iter().filter(|f|!f.written).map(|f|&f.path).collect::<Vec<_>>(),"reason_code":code,"message":message,"recovery":record.id,"recovery_metadata_updated":persisted,"native_reload":"not_attempted"}),
     )
 }
+pub(super) fn prune_empty_parents(
+    text: &mut String,
+    format: Format,
+    original: &Value,
+    fields: &[Field],
+) -> Result<()> {
+    // Only containers absent from the captured baseline may be removed.
+    let mut parents: BTreeSet<Vec<String>> = BTreeSet::new();
+    for field in fields {
+        for n in 1..field.path.len() {
+            parents.insert(field.path[..n].to_vec());
+        }
+    }
+    let mut parents: Vec<_> = parents.into_iter().collect();
+    parents.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    for parent in parents {
+        let value = document::parse(text, format)?;
+        if document::get(original, &parent).is_none()
+            && document::get(&value, &parent)
+                .is_some_and(|v| v.as_object().is_some_and(|m| m.is_empty()))
+        {
+            *text = document::set(text, format, &parent, None)?;
+        }
+    }
+    Ok(())
+}
+
 fn restore_text(
     current: Option<&str>,
     file: &FileRecord,
     capture: &Capture,
 ) -> Result<Option<String>> {
+    if file.format == Format::Text {
+        let actual = document::parse(current.unwrap_or(""), Format::Text)?;
+        let observed = field_hash(document::get(&actual, &["$text".into()]));
+        if revision(current) != revision(Some(&capture.after))
+            && revision(current) != revision(capture.before.as_deref())
+            && !file
+                .fields
+                .iter()
+                .any(|field| field.observed_hash == observed)
+        {
+            return Err(Error::new(
+                "native_conflict",
+                "The native plugin artifact changed after application; restoration stopped without overwriting it",
+            ));
+        }
+        return Ok(capture.before.clone());
+    }
     if file.format == Format::Credential {
         let actual = document::parse(current.unwrap_or(""), Format::Credential)?;
         let observed = field_hash(document::get(&actual, &["$credential".into()]));
@@ -273,24 +317,18 @@ fn restore_text(
             text = document::set(&text, file.format, &field.path, before)?;
         }
     }
-    // Remove only containers tmax introduced and which now have no settings.
     // User-added fields survive; comments force a conflict rather than deletion.
-    let mut parents: BTreeSet<Vec<String>> = BTreeSet::new();
-    for field in &file.fields {
-        for n in 1..field.path.len() {
-            parents.insert(field.path[..n].to_vec());
-        }
-    }
-    let mut parents: Vec<_> = parents.into_iter().collect();
-    parents.sort_by_key(|p| std::cmp::Reverse(p.len()));
-    for parent in parents {
-        let value = document::parse(&text, file.format)?;
-        if document::get(&original, &parent).is_none()
-            && document::get(&value, &parent)
-                .is_some_and(|v| v.as_object().is_some_and(|m| m.is_empty()))
-        {
-            text = document::set(&text, file.format, &parent, None)?;
-        }
+    prune_empty_parents(&mut text, file.format, &original, &file.fields)?;
+    if file.format == Format::DshPatch
+        && original.get("llm-tmax").is_none()
+        && document::parse(&text, file.format)?
+            .get("llm-tmax")
+            .is_some()
+    {
+        return Err(Error::new(
+            "native_conflict",
+            "Later edits keep the newly inserted llm-tmax plugin in use; restoration stopped before removing its entry or artifact",
+        ));
     }
     if capture.before.is_none()
         && document::parse(&text, file.format)?
@@ -699,6 +737,26 @@ mod tests {
                 baseline_values: vec![],
             },
         )
+    }
+    #[test]
+    fn plugin_restore_accepts_observed_prewrite_bytes_but_refuses_user_edits() {
+        let (mut file, capture) = record("new-plugin", None, Format::Text);
+        file.fields = vec![Field {
+            path: vec!["$text".into()],
+            before_hash: field_hash(None),
+            after_hash: field_hash(Some(&json!("new-plugin"))),
+            observed_hash: field_hash(Some(&json!("observed-plugin"))),
+            released: false,
+        }];
+        for current in [Some("observed-plugin"), Some("new-plugin"), None] {
+            assert_eq!(restore_text(current, &file, &capture).unwrap(), None);
+        }
+        assert_eq!(
+            restore_text(Some("user-edited-plugin"), &file, &capture)
+                .unwrap_err()
+                .code,
+            "native_conflict"
+        );
     }
     #[test]
     fn three_way_restore_preserves_later_unrelated_settings_and_comments() {

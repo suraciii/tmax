@@ -41,6 +41,7 @@ struct Row {
     mapping: String,
     indent: usize,
     value: serde_yaml::Value,
+    inserted: bool,
 }
 fn rows(text: &str) -> Result<Vec<Row>> {
     if text.trim().is_empty()
@@ -76,6 +77,27 @@ fn rows(text: &str) -> Result<Vec<Row>> {
     let mut result = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for (index, raw) in list.iter().enumerate() {
+        let outer = raw.as_mapping().ok_or_else(invalid)?;
+        let inserted = outer
+            .get("insert")
+            .filter(|_| outer.len() == 1)
+            .and_then(serde_yaml::Value::as_sequence)
+            .filter(|items| items.len() == 1)
+            .and_then(|items| items[0].as_mapping())
+            .filter(|map| map.get("id").and_then(serde_yaml::Value::as_str) == Some("llm-tmax"));
+        if inserted.is_none()
+            && outer
+                .get("insert")
+                .and_then(serde_yaml::Value::as_sequence)
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item.get("id").and_then(serde_yaml::Value::as_str) == Some("llm-tmax")
+                    })
+                })
+        {
+            return Err(invalid());
+        }
+        let raw = inserted.map_or(raw, |_| &outer["insert"][0]);
         let map = raw.as_mapping().ok_or_else(invalid)?;
         let id = map
             .get(serde_yaml::Value::String("id".into()))
@@ -100,12 +122,16 @@ fn rows(text: &str) -> Result<Vec<Row>> {
                 mapping.push_str(line);
             }
         }
+        if inserted.is_some() {
+            mapping = serde_json::to_string(&value(raw.clone())?).map_err(|_| invalid())?;
+        }
         result.push(Row {
             id,
             span: start..end,
             mapping,
             indent,
             value: raw.clone(),
+            inserted: inserted.is_some(),
         });
     }
     Ok(result)
@@ -131,12 +157,28 @@ fn tagged(value: &Value) -> bool {
         _ => false,
     }
 }
+// Inserted entries are regenerated. JSON is lossless here; for YAML, refuse
+// possible tags, anchors, aliases and comments rather than interpret tokens
+// with another partial parser. This deliberately includes quoted markers.
+fn opaque_insertion(text: &str) -> bool {
+    let mapping = text.trim().strip_prefix("- ").unwrap_or("");
+    serde_json::from_str::<Value>(mapping).is_err() && text.contains(['!', '&', '*', '#'])
+}
 pub(super) fn set(text: &str, path: &[String], desired: Option<&Value>) -> Result<String> {
     let id = path.first().ok_or_else(invalid)?;
     if id.starts_with('$') {
         return Err(invalid());
     }
     let all = rows(text)?;
+    if all
+        .iter()
+        .any(|row| row.id.as_ref() == Some(id) && id == "llm-tmax" && !row.inserted)
+    {
+        return Err(Error::new(
+            "native_namespace_conflict",
+            "llm-tmax must be an independent inserted plugin entry, not a patch of another instance",
+        ));
+    }
     let current = parse(text)?;
     for depth in 1..=path.len() {
         if let Some(branch) = super::document::get(&current, &path[..depth])
@@ -149,6 +191,11 @@ pub(super) fn set(text: &str, path: &[String], desired: Option<&Value>) -> Resul
         return Err(conflict());
     }
     if let Some(row) = all.iter().find(|row| row.id.as_ref() == Some(id)) {
+        if row.inserted
+            && (current.get(id).is_some_and(tagged) || opaque_insertion(&text[row.span.clone()]))
+        {
+            return Err(conflict());
+        }
         let changed = if path.len() == 1 {
             if row
                 .mapping
@@ -163,19 +210,25 @@ pub(super) fn set(text: &str, path: &[String], desired: Option<&Value>) -> Resul
             }
         } else {
             let mapping = super::document::yaml_edit(&row.mapping, &path[1..], desired)?;
-            let prefix = row.indent + 2;
-            if mapping.len() < prefix
-                || !mapping.as_bytes()[..prefix]
-                    .iter()
-                    .all(|byte| *byte == b' ')
-            {
-                return Err(invalid());
+            if row.inserted {
+                let mut fields = super::document::parse(&mapping, super::document::Format::Yaml)?;
+                fields.as_object_mut().ok_or_else(invalid)?.remove("id");
+                render(id, &fields, row.indent)?
+            } else {
+                let prefix = row.indent + 2;
+                if mapping.len() < prefix
+                    || !mapping.as_bytes()[..prefix]
+                        .iter()
+                        .all(|byte| *byte == b' ')
+                {
+                    return Err(invalid());
+                }
+                let mut output = String::new();
+                output.push_str(&" ".repeat(row.indent));
+                output.push_str("- ");
+                output.push_str(&mapping[prefix..]);
+                output
             }
-            let mut output = String::new();
-            output.push_str(&" ".repeat(row.indent));
-            output.push_str("- ");
-            output.push_str(&mapping[prefix..]);
-            output
         };
         let mut output = text.to_owned();
         output.replace_range(row.span.clone(), &changed);
@@ -217,7 +270,13 @@ pub(super) fn set(text: &str, path: &[String], desired: Option<&Value>) -> Resul
 fn render(id: &str, fields: &Value, indent: usize) -> Result<String> {
     let mut map = fields.as_object().ok_or_else(invalid)?.clone();
     map.insert("id".into(), json!(id));
-    let mapping = serde_json::to_string(&map).map_err(|_| invalid())?;
+    let entry = Value::Object(map);
+    let mapping = if id == "llm-tmax" {
+        serde_json::to_string(&json!({"insert":[entry]}))
+    } else {
+        serde_json::to_string(&entry)
+    }
+    .map_err(|_| invalid())?;
     Ok(format!("{}- {mapping}\n", " ".repeat(indent)))
 }
 
@@ -265,6 +324,82 @@ mod tests {
         assert_eq!(
             parse(&applied).unwrap()["llm-pi-ai"]["config"]["unrelated"]["keep"],
             true
+        );
+    }
+    #[test]
+    fn independent_plugin_insert_updates_without_changing_user_adapter() {
+        let original = "# user routes\n- id: llm-pi-ai\n  config: !!js process.env.USER_ROUTES\n";
+        let path = vec![
+            "llm-tmax".into(),
+            "config".into(),
+            "providers".into(),
+            "managed".into(),
+        ];
+        let first = set(
+            original,
+            &path,
+            Some(&json!({"api":"openai-completions","models":[{"id":"first"}]})),
+        )
+        .unwrap();
+        let second = set(
+            &first,
+            &path,
+            Some(&json!({"api":"openai-responses","models":[{"id":"second"}]})),
+        )
+        .unwrap();
+        assert!(second.starts_with(original));
+        let patches: serde_yaml::Value = serde_yaml::from_str(&second).unwrap();
+        assert_eq!(patches[1]["insert"][0]["id"].as_str(), Some("llm-tmax"));
+        assert_eq!(
+            parse(&second).unwrap()["llm-tmax"]["config"]["providers"]["managed"]["models"][0]["id"],
+            "second"
+        );
+        assert_eq!(set(&second, &["llm-tmax".into()], None).unwrap(), original);
+        assert!(parse("- insert:\n    - id: llm-tmax\n    - id: user\n").is_err());
+        assert!(parse("- insert:\n    - id: llm-tmax\n- id: llm-tmax\n").is_err());
+        assert!(parse("- id: user-group\n  insert:\n    - id: llm-tmax\n").is_err());
+    }
+    #[test]
+    fn inserted_plugin_edits_refuse_unowned_expressions() {
+        let original = "- insert:\n    - id: llm-tmax\n      name: /tmp/tmax-dsh.mjs\n      config:\n        custom: !!js process.env.USER_VALUE\n        providers:\n          managed: {api: openai-completions}\n";
+        let path = vec![
+            "llm-tmax".into(),
+            "config".into(),
+            "providers".into(),
+            "managed".into(),
+        ];
+        for custom in [
+            "!!js process.env.USER_VALUE",
+            "!js process.env.USER_VALUE",
+            "&custom retained",
+            "retained # user comment",
+            "some 'quote\n        other: !!js process.env.USER_VALUE",
+            "some \"quote\n        other: !!js process.env.USER_VALUE",
+        ] {
+            let original = original.replace("!!js process.env.USER_VALUE", custom);
+            for desired in [Some(json!({"api":"openai-responses"})), None] {
+                assert_eq!(
+                    set(&original, &path, desired.as_ref()).unwrap_err().code,
+                    "native_conflict"
+                );
+            }
+            assert!(set(&original, &["llm-tmax".into()], None).is_err());
+        }
+        let quoted = original.replace("!!js process.env.USER_VALUE", "\"!!js literal\"");
+        assert_eq!(
+            set(&quoted, &path, None).unwrap_err().code,
+            "native_conflict"
+        );
+        let json_row = format!(
+            "- {}\n",
+            json!({"insert":[{
+                "id":"llm-tmax", "config":{"custom":"!!js literal", "providers":{"managed":{}}}
+            }]})
+        );
+        let edited = set(&json_row, &path, Some(&json!({"api":"openai-responses"}))).unwrap();
+        assert_eq!(
+            parse(&edited).unwrap()["llm-tmax"]["config"]["custom"],
+            "!!js literal"
         );
     }
     #[test]

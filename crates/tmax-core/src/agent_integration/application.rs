@@ -1,12 +1,13 @@
 //! Native application transaction: preview, qualification, protected capture, guarded writes.
 use super::{
-    adapters::{self, File, desired_fields, inline_credential},
+    adapters::{self, File, desired_fields_with_ownership, inline_credential},
     document::{self, Format},
     installation::{version, version_blocker, version_warnings},
     planning::{entries, projection_view},
     recovery::{
         Capture, Field, FileRecord, INDEX, Index, Payload, Record, baseline, conflicts,
-        decode_payload, field_hash, owner, partial, protect_payload, record_for,
+        decode_payload, field_hash, owner, partial, protect_payload, prune_empty_parents,
+        record_for,
     },
     scope::{
         DshCredentialsLock, digest, dsh_credential_permissions, read_native, revision, scope,
@@ -134,6 +135,20 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         .as_ref()
         .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
     for file in &files {
+        if file.format == Format::Text
+            && file.path.exists()
+            && !previous.as_ref().is_some_and(|record| {
+                record
+                    .files
+                    .iter()
+                    .any(|owned| owned.path == file.path && !owned.fields.is_empty())
+            })
+        {
+            return Err(Error::new(
+                "native_namespace_conflict",
+                "The native plugin artifact already exists and is not owned by this target",
+            ));
+        }
         if file.format == Format::Credential
             && file.path.exists()
             && !previous.as_ref().is_some_and(|r| {
@@ -188,7 +203,12 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 }
             }
         }
-        let fields = desired_fields(&target.agent, &file.desired, &current);
+        let owned = previous
+            .as_ref()
+            .and_then(|record| record.files.iter().find(|old| old.path == file.path))
+            .map(|file| file.fields.as_slice())
+            .unwrap_or_default();
+        let fields = desired_fields_with_ownership(&target.agent, &file.desired, &current, owned);
         if file.format != Format::Credential {
             let old_fields = previous
                 .as_ref()
@@ -292,7 +312,12 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             });
             continue;
         }
-        let desired = desired_fields(&target.agent, &file.desired, &current);
+        let owned = previous
+            .as_ref()
+            .and_then(|record| record.files.iter().find(|old| old.path == file.path))
+            .map(|file| file.fields.as_slice())
+            .unwrap_or_default();
+        let desired = desired_fields_with_ownership(&target.agent, &file.desired, &current, owned);
         let mut after = before.clone().unwrap_or_default();
         let mut fields = Vec::new();
         let mut baseline_values = Vec::new();
@@ -338,6 +363,28 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 path: field,
                 released: false,
             });
+        }
+        if file.format == Format::DshPatch {
+            prune_empty_parents(&mut after, file.format, &original_value, &fields)?;
+            let value = document::parse(&after, file.format)?;
+            for field in owned {
+                if field.path.len() > 4
+                    && field.path[0] == "llm-tmax"
+                    && field.path[1] == "config"
+                    && field.path[2] == "providers"
+                {
+                    let route = &field.path[..4];
+                    if document::get(&file.desired, route).is_none()
+                        && document::get(&original_value, route).is_none()
+                        && document::get(&value, route).is_some()
+                    {
+                        return Err(Error::new(
+                            "native_conflict",
+                            "Unowned settings keep a removed DSH provider in use; preserve or move them before applying",
+                        ).field(route.join(".")));
+                    }
+                }
+            }
         }
         let exact_original_safe = original
             .is_none_or(|p| p.exact_original_safe && before.as_deref() == Some(p.after.as_str()))
@@ -436,7 +483,9 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         .and_then(|_| {
             if input.as_deref() == Some(prepared.after.as_str()) {
                 Ok(())
-            } else if prepared.file.format == Format::Credential && prepared.after.is_empty() {
+            } else if matches!(prepared.file.format, Format::Credential | Format::Text)
+                && prepared.after.is_empty()
+            {
                 match fs::remove_file(&prepared.file.path) {
                     Ok(()) => Ok(()),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -499,10 +548,165 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
 
 #[cfg(test)]
 mod tests {
+    use super::super::adapters::desired_fields;
     use super::super::{planning::pending_native_changes, test_support::inspection_target};
     use super::*;
     use crate::config::Auth;
     use std::collections::BTreeMap;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dsh_input_reapply_withdraws_owned_image_and_preserves_restore_baseline() {
+        const CHILD: &str = "TMAX_DSH_INPUT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("dsh");
+            fs::write(
+                &executable,
+                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '0.2.1-rc.2\\n'\n",
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "agent_integration::application::tests::dsh_input_reapply_withdraws_owned_image_and_preserves_restore_baseline", "--nocapture"])
+                .env(CHILD, "1").env("PATH", directory.path()).output().unwrap();
+            assert!(
+                output.status.success(),
+                "isolated DSH input lifecycle failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("authority"));
+        let path = directory.path().join("native");
+        fs::create_dir_all(&path).unwrap();
+        let patch = path.join("cordis.patch.yml");
+        let original = "# native input baseline\n- insert:\n    - id: llm-tmax\n      config:\n        providers:\n          local:\n            models:\n              - id: first\n                input: [text, image]\n                maxTokens: 1234\n                thinkingBudgets: {high: 512}\n- id: agent-default-model\n  config: {provider: existing, model: unchanged, reasoningEffort: high}\n";
+        fs::write(&patch, original).unwrap();
+        let reference = secrets::put(&store, "provider:p", b"synthetic-input-key").unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "dsh".into();
+        target.default = None;
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        let model_path = vec![
+            "llm-tmax".into(),
+            "config".into(),
+            "providers".into(),
+            "local".into(),
+            "models".into(),
+        ];
+        for (input, expected) in [
+            (
+                Some(vec!["text".to_owned(), "image".to_owned()]),
+                Some(json!(["text", "image"])),
+            ),
+            (Some(vec!["text".to_owned()]), Some(json!(["text"]))),
+            (None, None),
+            (None, None),
+        ] {
+            config
+                .providers
+                .get_mut("p")
+                .unwrap()
+                .models
+                .get_mut("first")
+                .unwrap()
+                .overrides
+                .modalities = input.map(|input| config::Modalities {
+                input: Some(input),
+                output: None,
+            });
+            store
+                .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+                .unwrap();
+            let result = apply(&store, &config, "managed", false).await.unwrap();
+            assert_eq!(result["_code"], "awaiting_native_reload");
+            let value =
+                document::parse(&fs::read_to_string(&patch).unwrap(), Format::DshPatch).unwrap();
+            let row = &document::get(&value, &model_path).unwrap()[0];
+            assert_eq!(row.get("input"), expected.as_ref());
+            assert_eq!(row["maxTokens"], 1234);
+            assert_eq!(row["thinkingBudgets"], json!({"high":512}));
+            assert_eq!(value["agent-default-model"]["config"]["model"], "unchanged");
+        }
+        let withdrawn = fs::read_to_string(&patch).unwrap();
+        let credentials = fs::read(path.join(".credentials.yaml")).unwrap();
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("first")
+            .unwrap()
+            .overrides
+            .modalities = Some(config::Modalities {
+            input: Some(vec![]),
+            output: None,
+        });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        for dry_run in [true, false] {
+            assert_eq!(
+                apply(&store, &config, "managed", dry_run)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "native_metadata_unrepresentable"
+            );
+            assert_eq!(fs::read_to_string(&patch).unwrap(), withdrawn);
+            assert_eq!(
+                fs::read(path.join(".credentials.yaml")).unwrap(),
+                credentials
+            );
+        }
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("first")
+            .unwrap()
+            .overrides
+            .modalities = None;
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let edited = document::set(&withdrawn, Format::DshPatch, &model_path,
+            Some(&json!([{"id":"first","input":["image"],"maxTokens":1234,"thinkingBudgets":{"high":512}}]))).unwrap();
+        fs::write(&patch, &edited).unwrap();
+        assert_eq!(
+            apply(&store, &config, "managed", false)
+                .await
+                .unwrap_err()
+                .code,
+            "native_conflict"
+        );
+        assert_eq!(fs::read_to_string(&patch).unwrap(), edited);
+        fs::write(&patch, &withdrawn).unwrap();
+        let index: Index = store.read_json(INDEX).unwrap();
+        super::super::recovery::restore(&store, &index.records.last().unwrap().id, false)
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&patch).unwrap(), original);
+    }
+
     #[tokio::test]
     async fn model_only_application_preserves_defaults_roles_and_uses_its_own_scope() {
         for agent in ["pi", "omp", "hermes"] {

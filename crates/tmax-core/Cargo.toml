@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["arbitrary_precision"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
 toml = "0.8"
 toml_edit = { version = "0.22", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }

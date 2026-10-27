@@ -1,6 +1,6 @@
 //! Independent, version-specific native configuration mappings.
 //! Evidence is pinned to the concrete installations below, not a version range.
-use super::document::Format;
+use super::document::{self, Format};
 use crate::{
     Error, Result,
     config::{AgentTarget, ModelReference},
@@ -175,6 +175,7 @@ pub(crate) fn model_metadata(agent: &str, protocol: &str, effective: &Value) -> 
         "hermes" => hermes::model_metadata(effective)?,
         _ => json!({}),
     };
+    capabilities::append_input(agent, effective, &mut metadata)?;
     capabilities::append_reasoning(agent, protocol, effective, &mut metadata)?;
     Ok(metadata)
 }
@@ -256,6 +257,54 @@ pub(super) fn desired_fields(
     fields
 }
 
+pub(super) fn desired_fields_with_ownership(
+    agent: &str,
+    desired: &Value,
+    current: &Value,
+    owned: &[super::recovery::Field],
+) -> Vec<(Vec<String>, Option<Value>)> {
+    let mut fields = desired_fields(agent, desired, current);
+    if agent == "dsh" {
+        for (path, value) in &mut fields {
+            if owned.iter().any(|field| field.path == *path)
+                && let Some(value) = value
+            {
+                dsh::withdraw_input(path, value, desired);
+            }
+        }
+    }
+    for field in owned {
+        let path = &field.path;
+        let selected_input = match agent {
+            "opencode" => {
+                path.len() == 6
+                    && path[0] == "providers"
+                    && path[2] == "models"
+                    && path[4] == "capabilities"
+                    && path[5] == "input"
+                    && document::get(desired, &path[..4]).is_some()
+            }
+            "hermes" => {
+                path.len() == 4
+                    && path[0] == "model_overrides"
+                    && path[3] == "supports_vision"
+                    && desired
+                        .get("providers")
+                        .and_then(|providers| providers.get(&path[1]))
+                        .and_then(|provider| provider.get("models"))
+                        .is_some_and(|models| models.get(&path[2]).is_some())
+            }
+            _ => false,
+        };
+        if selected_input && !fields.iter().any(|(desired, _)| desired == path) {
+            // Keep owning the withdrawal: restoring the original declaration
+            // here would reintroduce support absent from the common input set.
+            fields.push((path.clone(), None));
+        }
+    }
+    fields
+}
+
 pub(super) fn inline_credential(agent: &str, path: &[String]) -> bool {
     match agent {
         "hermes" => hermes::inline_credential(path),
@@ -282,6 +331,166 @@ pub(super) fn validate_existing(agent: &str, file: &File, current: &Value) -> Re
 mod tests {
     use super::test_support::target;
     use super::*;
+    #[test]
+    fn input_projection_distinguishes_unknown_empty_and_schema_limits() {
+        for agent in AGENTS {
+            let unknown = projection_view(agent, "chat-completions", &json!({})).unwrap();
+            assert_eq!(
+                unknown["input"]["state"],
+                if agent == "codex" {
+                    "not_supported"
+                } else {
+                    "unavailable"
+                }
+            );
+            assert_eq!(unknown["input"]["fields"], json!({}));
+            let empty = json!({"modalities":{"input":[]}});
+            let view = projection_view(agent, "chat-completions", &empty).unwrap();
+            match agent {
+                "pi" | "omp" => {
+                    assert_eq!(view["input"]["state"], "projected");
+                    assert_eq!(
+                        model_metadata(agent, "chat-completions", &empty).unwrap()["input"],
+                        json!([])
+                    );
+                }
+                "dsh" => {
+                    assert_eq!(view["input"]["state"], "blocked");
+                    assert_eq!(view["input"]["reason_code"], "native_input_unrepresentable");
+                    assert_eq!(
+                        model_metadata(agent, "chat-completions", &empty)
+                            .unwrap_err()
+                            .field
+                            .as_deref(),
+                        Some("modalities.input")
+                    );
+                }
+                "opencode" => {
+                    assert_eq!(
+                        view["input"]["fields"],
+                        json!({"capabilities":{"input":[]}})
+                    );
+                    assert_eq!(
+                        model_metadata(agent, "chat-completions", &empty).unwrap()["capabilities"]
+                            ["input"],
+                        json!([])
+                    );
+                }
+                "hermes" => {
+                    assert_eq!(view["input"]["state"], "partial");
+                    assert_eq!(
+                        view["input"]["fields"],
+                        json!({"model_overrides":{"supports_vision":false}})
+                    );
+                }
+                _ => assert_eq!(view["input"]["state"], "not_supported"),
+            }
+        }
+        let effective = json!({"modalities":{"input":["text","image","audio","video"]}});
+        for agent in ["pi", "omp", "dsh", "hermes"] {
+            let view = projection_view(agent, "responses", &effective).unwrap();
+            assert_eq!(view["input"]["state"], "partial");
+            assert_eq!(view["input"]["omitted"], json!(["audio", "video"]));
+            let metadata = model_metadata(agent, "responses", &effective).unwrap();
+            for (key, value) in view["input"]["fields"].as_object().unwrap() {
+                assert_eq!(metadata[key], *value);
+            }
+        }
+        let view = projection_view("opencode", "messages", &effective).unwrap();
+        assert_eq!(view["input"]["state"], "projected");
+        assert_eq!(
+            view["input"]["fields"]["capabilities"]["input"],
+            effective["modalities"]["input"]
+        );
+    }
+
+    #[test]
+    fn vanished_owned_input_is_deleted_not_restored_from_native_baseline() {
+        for (agent, desired, current, path) in [
+            (
+                "opencode",
+                json!({"providers":{"local":{"models":{"shared":{"modelID":"shared"}}}}}),
+                json!({"providers":{"local":{"models":{"shared":{"capabilities":{"input":["text","image"],"tools":true}}}}}}),
+                vec![
+                    "providers",
+                    "local",
+                    "models",
+                    "shared",
+                    "capabilities",
+                    "input",
+                ],
+            ),
+            (
+                "hermes",
+                json!({"providers":{"local":{"models":{"shared":{}}}}}),
+                json!({"model_overrides":{"local":{"shared":{"supports_vision":true,"supports_tools":true}}}}),
+                vec!["model_overrides", "local", "shared", "supports_vision"],
+            ),
+        ] {
+            let path = path.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let owned = vec![super::super::recovery::Field {
+                path: path.clone(),
+                before_hash: "native-image-baseline".into(),
+                after_hash: "managed-image".into(),
+                observed_hash: "managed-image".into(),
+                released: false,
+            }];
+            let fields = desired_fields_with_ownership(agent, &desired, &current, &owned);
+            assert_eq!(
+                fields.iter().find(|(field, _)| field == &path).unwrap().1,
+                None
+            );
+            assert!(
+                !desired_fields_with_ownership(agent, &desired, &current, &[])
+                    .iter()
+                    .any(|(field, _)| field == &path)
+            );
+            let mut text = serde_json::to_string(&current).unwrap();
+            for (field, value) in fields {
+                text = document::set(&text, Format::Json, &field, value.as_ref()).unwrap();
+            }
+            let after = document::parse(&text, Format::Json).unwrap();
+            assert!(document::get(&after, &path).is_none());
+            let sibling = if agent == "hermes" {
+                "supports_tools"
+            } else {
+                "tools"
+            };
+            let mut sibling_path = path[..path.len() - 1].to_vec();
+            sibling_path.push(sibling.into());
+            assert_eq!(document::get(&after, &sibling_path), Some(&json!(true)));
+        }
+    }
+    #[test]
+    fn pi_and_omp_reapplication_replaces_input_without_inventing_text() {
+        for agent in ["pi", "omp"] {
+            let current = json!({"providers":{"local":{"models":[{"id":"shared","input":["text","image"]}],"unrelated_native":"retained"}},"theme":"dark"});
+            for (effective, expected) in [
+                (
+                    json!({"modalities":{"input":["text"]}}),
+                    Some(json!(["text"])),
+                ),
+                (json!({"modalities":{"input":[]}}), Some(json!([]))),
+                (json!({}), None),
+            ] {
+                let mut model = alias_model_metadata(agent, "responses", &effective).unwrap();
+                model["id"] = json!("shared");
+                let desired = json!({"providers":{"local":{"models":[model]}}});
+                let mut text = serde_json::to_string(&current).unwrap();
+                for (path, value) in desired_fields_with_ownership(agent, &desired, &current, &[]) {
+                    text = document::set(&text, Format::Json, &path, value.as_ref()).unwrap();
+                }
+                let after = document::parse(&text, Format::Json).unwrap();
+                assert_eq!(
+                    after["providers"]["local"]["models"][0].get("input"),
+                    expected.as_ref()
+                );
+                assert_eq!(after["providers"]["local"]["unrelated_native"], "retained");
+                assert_eq!(after["theme"], "dark");
+            }
+        }
+    }
+
     #[test]
     fn opencode_integer_limits_preserve_zero_but_never_round_known_limits() {
         assert_eq!(

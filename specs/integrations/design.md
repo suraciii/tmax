@@ -19,6 +19,20 @@ explicit user mappings. A union describes partial coverage only; it is not the
 native selector contract. Mappings can expand the intersection without making
 effort an implicit model selector.
 
+Common input modalities follow the [alias capability contract](spec.md#common-input-modalities).
+They describe inputs supported by every configured candidate, not the currently
+eligible subset. A union could expose capabilities served by only some routes;
+it is not the native declaration chosen here. Missing declarations stay unknown;
+explicit empty lists stay empty. Input derivation and effort derivation are
+independent, and neither creates another editable alias setting.
+
+Native representation is separate from this derived fact. In particular, DSH
+defaults an undeclared custom model input to text, and treats an empty model input
+list as inheritance. Unknown input therefore exposes native fallback; a known
+empty common set cannot be faithfully applied to DSH. Reapplication must withdraw
+obsolete managed declarations, with the existing conflict and restoration rules.
+
+
 ## Domain ownership
 
 | Concept | Owner and meaning | Excluded meaning |

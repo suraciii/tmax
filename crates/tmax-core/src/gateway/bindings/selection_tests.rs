@@ -177,7 +177,7 @@ fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols()
             .choose_recorded(
                 &test_snapshot(&config, "unmapped"),
                 ("dynamic", protocol),
-                &max,
+                &crate::gateway::RequestFacts::from_value(max.clone()).unwrap(),
                 &headers,
                 at,
                 &mut evidence,
@@ -340,17 +340,9 @@ fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols()
                 .provider,
             "p"
         );
-        let mut upstream = max.clone();
-        crate::reasoning::apply(&mut upstream, protocol, mapped.effort.as_deref().unwrap())
-            .unwrap();
+        assert_eq!(mapped.effort.as_deref(), Some("high"));
         if protocol == "responses" {
-            assert_eq!(
-                upstream["reasoning"],
-                json!({"summary":"auto","effort":"high"})
-            );
-            assert_eq!(max["reasoning"]["effort"], "max");
-        } else {
-            assert_eq!(upstream["reasoning_effort"], "high");
+            assert_eq!(max["reasoning"], json!({"summary":"auto","effort":"max"}));
         }
 
         let previous = config.clone();

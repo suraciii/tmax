@@ -352,7 +352,11 @@ async fn effort_maps_reach_upstream_without_fallback_or_omitted_effort_synthesis
         let actual = received.recv().await.unwrap();
         let mut expected = body.clone();
         expected["model"] = json!("m");
-        crate::reasoning::apply(&mut expected, protocol, "high").unwrap();
+        if protocol == "responses" {
+            expected["reasoning"]["effort"] = json!("high");
+        } else {
+            expected["reasoning_effort"] = json!("high");
+        }
         assert_eq!(actual, expected);
         if protocol == "responses" {
             body["reasoning"].as_object_mut().unwrap().remove("effort");

@@ -60,7 +60,8 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
         }
         _ => return Err(Error::new("protocol_unavailable", "Unknown protocol")),
     };
-    crate::provider_integration::check_request(provider, protocol, &body)?;
+    let facts = super::RequestFacts::from_value(body.clone()).expect("generated request object");
+    crate::provider_integration::check_request(provider, protocol, &facts)?;
     let endpoints = crate::provider_integration::resolve(provider)?;
     let endpoint = endpoints
         .get(protocol)

@@ -1,22 +1,29 @@
 use super::native_context::independent as independent_context;
 use super::*;
-use crate::gateway::test_support::{GO_URL, fixture, native_headers};
+use crate::gateway::{
+    RequestFacts,
+    test_support::{GO_URL, fixture, native_headers},
+};
 use serde_json::json;
 
 #[test]
 fn stateless_context_is_protocol_qualified() {
     assert!(independent_context(
         "chat-completions",
-        &json!({"messages":[{"role":"user","content":"x"}]})
+        &RequestFacts::from_value(json!({"messages":[{"role":"user","content":"x"}]})).unwrap()
     ));
     assert!(!independent_context(
         "responses",
-        &json!({"input":"x","previous_response_id":"id","store":false})
+        &RequestFacts::from_value(json!({"input":"x","previous_response_id":"id","store":false}))
+            .unwrap()
     ));
-    assert!(!independent_context("responses", &json!({"input":"x"})));
+    assert!(!independent_context(
+        "responses",
+        &RequestFacts::from_value(json!({"input":"x"})).unwrap()
+    ));
     assert!(independent_context(
         "responses",
-        &json!({"input":[],"store":false})
+        &RequestFacts::from_value(json!({"input":[],"store":false})).unwrap()
     ));
 }
 
@@ -120,7 +127,8 @@ fn an_unattributed_client_reaches_go_through_the_gateway_attribution() {
     let provider = go.providers.get_mut("p").unwrap();
     provider.integration = Some("opencode-go".into());
     provider.endpoints.clear();
-    let body = json!({"messages":[{"role":"user","content":"x"}]});
+    let body =
+        RequestFacts::from_value(json!({"messages":[{"role":"user","content":"x"}]})).unwrap();
     let unattributed = HeaderMap::new();
     let mut unknown = HeaderMap::new();
     unknown.insert("user-agent", "generic-client".parse().unwrap());

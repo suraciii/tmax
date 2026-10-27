@@ -89,7 +89,7 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
     let credentials_lock = home.join(".credentials.yaml.lock");
     assert!(!credentials_lock.exists());
     let override_patch = format!(
-        "{original}- id: llm-pi-ai\n  config:\n    providers:\n      local:\n        modelOverrides:\n          first:\n            contextWindow: 4096\n"
+        "{original}- insert:\n    - id: llm-tmax\n      config:\n        providers:\n          local:\n            modelOverrides:\n              first:\n                contextWindow: 4096\n"
     );
     fs::write(path.join("cordis.patch.yml"), &override_patch).unwrap();
     for dry_run in [true, false] {
@@ -145,6 +145,7 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
         dsh_patch::parse(&applied).unwrap()["credentials"]["disabled"],
         false
     );
+    assert!(home.join("tmax-dsh.mjs").is_file());
     let native_credentials =
         document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap();
     assert_eq!(native_credentials["refs"]["EXISTING"], "synthetic-existing");
@@ -154,6 +155,93 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
             .unwrap()
             .values()
             .any(|v| v == "synthetic-managed")
+    );
+    let mut renamed = config.clone();
+    let target = renamed.agents.get_mut("managed").unwrap();
+    let provider = target.providers.remove("local").unwrap();
+    target.providers.insert("tmax".into(), provider);
+    store
+        .write_raw("tmax.toml", toml::to_string(&renamed).unwrap().as_bytes())
+        .unwrap();
+    let user_settings = dsh_patch::set(
+        &applied,
+        &[
+            "llm-tmax".into(),
+            "config".into(),
+            "providers".into(),
+            "local".into(),
+            "compat".into(),
+        ],
+        Some(&json!({"supportsDeveloperRole":false})),
+    )
+    .unwrap();
+    fs::write(path.join("cordis.patch.yml"), &user_settings).unwrap();
+    let credentials_before_rename = fs::read(&credentials).unwrap();
+    assert_eq!(
+        apply(&store, &renamed, "managed", false)
+            .await
+            .unwrap_err()
+            .code,
+        "native_conflict"
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+        user_settings
+    );
+    assert_eq!(fs::read(&credentials).unwrap(), credentials_before_rename);
+    assert!(!credentials_lock.exists());
+    fs::write(path.join("cordis.patch.yml"), &applied).unwrap();
+    apply(&store, &renamed, "managed", false).await.unwrap();
+    let renamed_patch = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+    let renamed_value = dsh_patch::parse(&renamed_patch).unwrap();
+    let providers = &renamed_value["llm-tmax"]["config"]["providers"];
+    assert!(
+        providers.get("local").is_none(),
+        "removed route must not remain registered"
+    );
+    assert_eq!(providers["tmax"]["api"], "openai-completions");
+    assert!(renamed_patch.starts_with(original));
+    store
+        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+        .unwrap();
+    apply(&store, &config, "managed", false).await.unwrap();
+    let applied = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+    assert!(
+        dsh_patch::parse(&applied).unwrap()["llm-tmax"]["config"]["providers"]
+            .get("tmax")
+            .is_none()
+    );
+    let index: Index = store.read_json(INDEX).unwrap();
+    let unowned = dsh_patch::set(
+        &applied,
+        &["llm-tmax".into(), "config".into(), "custom".into()],
+        Some(&json!("keep")),
+    )
+    .unwrap();
+    fs::write(path.join("cordis.patch.yml"), &unowned).unwrap();
+    let before_conflict_credentials = fs::read(&credentials).unwrap();
+    let before_conflict_plugin = fs::read(home.join("tmax-dsh.mjs")).unwrap();
+    assert_eq!(
+        restore(&store, &index.records[0].id, false)
+            .await
+            .unwrap_err()
+            .code,
+        "native_conflict"
+    );
+    assert!(!credentials_lock.exists());
+    assert_eq!(
+        fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+        unowned
+    );
+    assert_eq!(fs::read(&credentials).unwrap(), before_conflict_credentials);
+    assert_eq!(
+        fs::read(home.join("tmax-dsh.mjs")).unwrap(),
+        before_conflict_plugin
+    );
+    fs::write(path.join("cordis.patch.yml"), &applied).unwrap();
+    assert_eq!(
+        fs::read_to_string(native_profile.join("cordis.patch.yml")).unwrap(),
+        profile_patch
     );
     fs::write(
         path.join("cordis.patch.yml"),
@@ -186,6 +274,7 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
     fs::remove_file(&credentials_lock).unwrap();
     restore(&store, &index.records[0].id, false).await.unwrap();
     assert!(!credentials_lock.exists());
+    assert!(!home.join("tmax-dsh.mjs").exists());
     assert_eq!(
         fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
         format!("{original}- id: later\n  disabled: true\n")
@@ -247,7 +336,7 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
     let modified = dsh_patch::set(
         &owned,
         &[
-            "llm-pi-ai".into(),
+            "llm-tmax".into(),
             "config".into(),
             "providers".into(),
             "local".into(),

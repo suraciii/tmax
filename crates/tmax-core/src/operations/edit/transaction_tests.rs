@@ -42,7 +42,8 @@ async fn effort_map_mutations_upsert_isolate_protocols_and_restore_identity() {
     let model = &configured.config.providers["p"].models["m"];
     assert!(!model.effort_map.contains_key("chat-completions"));
     assert_eq!(model.effort_map["responses"]["xhigh"], "low");
-    let body = json!({"reasoning_effort":"xhigh"});
+    let body =
+        crate::gateway::RequestFacts::from_value(json!({"reasoning_effort":"xhigh"})).unwrap();
     assert_eq!(
         crate::reasoning::resolve(model, "chat-completions", &body, None).unwrap(),
         Some("xhigh")
@@ -173,7 +174,7 @@ async fn effort_maps_follow_provider_and_model_renames_and_clear_only_selected_p
         crate::reasoning::resolve(
             model,
             "chat-completions",
-            &json!({"reasoning_effort":"xhigh"}),
+            &crate::gateway::RequestFacts::from_value(json!({"reasoning_effort":"xhigh"})).unwrap(),
             None,
         )
         .unwrap(),

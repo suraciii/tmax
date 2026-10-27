@@ -49,7 +49,7 @@ application with an actionable reason. Authentication qualification is separate.
 | omp | Active-profile `models.yml`/`models.yaml`, provider/model overrides, model-role settings, native authentication | Respect profile/environment path overrides and credential precedence; `auth: oauth` does not itself create credentials or register a sign-in flow | Match the declared native API and transport; an existing omp auth gateway is evidence of an extension point, not a mandatory tmax dependency |
 | OpenCode | Provider packages, custom base URLs/models, multiple saved accounts per provider, local configuration and account storage | Detect the versioned schema and server-scoped active account. V1 and V2 provider shapes differ; credential stores and effective policy cannot be inferred from one config file | The provider package selects the protocol. Model picker filtering is not gateway authorization |
 | Hermes Agent | Profile-aware configuration, provider/model selection, native login and key sources, per-provider transport | Respect `HERMES_HOME`, native secret storage and managed configuration precedence | Match its selected Chat Completions, Messages, or Codex/Responses transport; a URL override alone does not validate that transport |
-| DSH | HOME `cordis.patch.yml`, common `llm-pi-ai` provider/model routes, adjacent home credential references | Require an existing DSH home scope; preserve unrelated HOME-level patch rows, provider fields, and expressions; do not enumerate or manage profiles or inspect bundles | Select native `openai-completions`, `openai-responses`, or `anthropic-messages`; configuration support alone does not establish native session identity or a provider-qualified route |
+| DSH | HOME `cordis.patch.yml`, independent `llm-tmax` provider/model routes, home `tmax-dsh.mjs`, and adjacent home credential references | Require an existing DSH home scope; preserve user `llm-pi-ai`, unrelated HOME-level rows, provider fields, and expressions; do not enumerate or manage profiles or inspect bundles | Register configured routes in DSH's common LLM runtime with native `openai-completions`, `openai-responses`, or `anthropic-messages`; configuration support alone does not establish native session identity or a provider-qualified route |
 
 Agent-owned credential stores must be managed through supported agent operations
 or a version-qualified contract. tmax must not assume that changing a database
@@ -137,10 +137,29 @@ identity, qualification, or safe conversation continuation.
 
 ### Alias reasoning capability
 
-Native application may project only common reasoning-effort choices for a gateway
-alias. It must use every explicitly configured candidate, including candidates
-whose provider or model is currently disabled. Availability, priority, routing
-rules, and the current winner must not narrow that set.
+Native application may project common input modalities and reasoning-effort
+choices for a gateway alias. Both use every explicitly configured candidate,
+including candidates whose provider or model is disabled. Availability, priority,
+routing rules, and the current winner must not narrow that set.
+
+#### Common input modalities
+
+| Condition | Required behavior |
+| --- | --- |
+| Evidence | Use accepted concrete-model catalog metadata plus local overrides. Do not infer support from model names, another account, native defaults, or live availability. |
+| Every candidate declares `modalities.input` | Intersect the complete lists, deduplicate, and preserve the first candidate's declaration order. Publish only that common list. An explicit empty list or disjoint lists gives a known empty intersection. |
+| Any candidate lacks the declaration | Common support is unknown; omit derived input metadata. Do not substitute text-only, an empty list, or another candidate's declaration. Effort derivation remains independent. |
+| Inspection | Expose common support as `declared` with an array (including empty), or `unknown` with null, and every qualified candidate's effective input list or null. Retain accepted metadata provenance. |
+| Native representation | Use the same version-qualified input mapping as concrete models. Report projected fields, omitted modalities, unsupported native fields, unknown fallback, or an unrepresentable declaration separately from effort projection. |
+| Reapplication | Replace or withdraw obsolete managed input declarations, never retain stale managed image support. Preserve unrelated settings and reject conflicting edits. For an already managed DSH models array, omission removes selected rows' obsolete `input`; on first application, unrelated existing native declarations remain native-owned. Native inheritance is not a claim of text-only support. |
+| Empty native representation | If the native schema would reinterpret a known empty set as inheritance, block that target's application before writes rather than invent support. |
+
+This is a declaration for native consumers, not an extra gateway request
+allowlist. Existing non-effort request eligibility and retained-session checks
+remain unchanged; effort still cannot filter or rerank candidates. No alias
+capability override or new configuration setting is introduced.
+
+#### Common effort choices
 
 | Step | Required behavior |
 | --- | --- |
@@ -150,7 +169,7 @@ rules, and the current winner must not narrow that set.
 | Common choices | Intersect all candidate caller-facing input sets after maps and fixed restrictions. Remove duplicates while retaining deterministic declaration order. Never use the union, guess correspondences, or synthesize defaults. |
 | Nonempty intersection | Supply `reasoning = true` and one `reasoning_options` entry with `type = "effort"` and the common `values` to the existing native capability mapping. |
 | Empty intersection | Supply no alias reasoning metadata. Do not infer reasoning support or emit an alias-wide non-reasoning capability claim. |
-| Other metadata | Omit alias limits, modalities, tools, prices, transport claims, and all other capability metadata. Never copy one candidate's or the current winner's metadata. |
+| Other metadata | Omit alias limits, output modalities, tools, prices, transport claims, and other capability metadata. Never copy one candidate's or the current winner's metadata. |
 
 Aliases use the same projected, partial, unavailable, blocked, or not-supported
 outcomes as concrete models under the native mapping above. Capability projection
@@ -183,15 +202,17 @@ native representation, and request intent, including this lossy DSH boundary.
 | Surface | Required behavior |
 | --- | --- |
 | Scope | Existing DSH home directory itself. Discovery uses nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`. An explicit target path selects the home directly; never infer it from a profile path. Do not enumerate, select, create, or manage profiles or inspect their bundles. |
-| Home configuration | Edit the home `cordis.patch.yml` by entry identity. Never write profile files, launcher-owned `cordis.yml`, or legacy `settings.yaml`. Preserve unrelated HOME-level rows, comments, provider fields, and opaque expressions; an uneditable owned branch blocks rather than being rewritten. |
-| Layering | Bundle patches → profile patch → home patch → command-line overlays. A home entry `config` replaces the whole lower-layer entry configuration, not a deep merge. Home common model configuration is authoritative across profiles using that home; lower profile routes and defaults are shadowed, not automatically copied or preserved in the home configuration. Runtime overlays remain outside tmax's ownership. |
-| Credential handoff | `llm-pi-ai` uses `apiKeyEnv: TMAX_<stable hash>` in the home patch. Executed apply resolves the referenced tmax key into that home's adjacent current-user-restricted `.credentials.yaml`, `version: 1`, under `refs`; preserve unrelated references and credential records. Accept empty stores and stamp version 1; nonempty stores without version 1 block. Apply and restore executions hold the native sibling `.credentials.yaml.lock` writer lock from initial credential read through commit. An existing lock blocks immediately with `native_credentials_busy`, without changing either native file or the external lock; never overwrite or reclaim it. Release owned locks on success and failure. Dry-run/inspect never create locks, resolve secrets, or return values. The native store is shared across profiles, not another tmax authority. |
+| Home configuration | Edit the home `cordis.patch.yml` by entry identity and install the embedded plugin as its direct child `tmax-dsh.mjs`. The plugin entry has id `llm-tmax` and its `name` is the artifact's absolute path. Its `config.providers.<native-name>` holds each selected route. Never write profile files, launcher-owned `cordis.yml`, or legacy `settings.yaml`. Preserve unrelated HOME-level rows, comments, provider fields, and opaque expressions; an uneditable owned branch blocks rather than being rewritten. |
+| Independent plugin | `llm-tmax` registers only its configured provider routes and reuses DSH's supported protocol adapter, not duplicated wire implementations or a second mount of `llm-pi-ai`. Provider configurations from every adapter register in the common LLM runtime. Provider route names must be globally unique across active adapters; distinct plugin identities do not isolate names or authorize automatic merging. The tmax-owned plugin configuration does not add a second configurable-provider directory or catalog. Preserve both direct upstream and gateway entries. |
+| Installation | Apply uses the embedded plugin artifact and DSH's native loader resolution for installed dependencies. It does not run npm installation or change profiles, presets, or bundle composition. |
+| Layering | Bundle patches → profile patch → home patch → command-line overlays. A home entry `config` replaces the whole lower-layer configuration for that same entry, not a deep merge. The independent `llm-tmax` entry leaves user `llm-pi-ai` routes and settings untouched; it does not copy or merge their configuration. Home tmax routes are common to profiles using that home. An explicitly managed home default may still shadow lower-layer defaults; runtime overlays remain outside tmax's ownership. |
+| Credential handoff | `llm-tmax` uses `apiKeyEnv: TMAX_<stable hash>` in the home patch. Executed apply resolves the referenced tmax key into that home's adjacent current-user-restricted `.credentials.yaml`, `version: 1`, under `refs`; preserve unrelated references and credential records. Accept empty stores and stamp version 1; nonempty stores without version 1 block. Apply and restore executions hold the native sibling `.credentials.yaml.lock` writer lock from initial credential read through commit. An existing lock blocks immediately with `native_credentials_busy`, without changing native files or the external lock; never overwrite or reclaim it. Release owned locks on success and failure. Dry-run/inspect never create locks, resolve secrets, or return values. The native store is shared across profiles, not another tmax authority. |
 | Headless credentials | When handing off a key, explicitly enable the native `credentials` service in the HOME patch, including for headless consumption, without inspecting a bundle. Preserve unrelated HOME-level service settings; do not require a secret-bearing environment or launch wrapper. |
 | Selection | Model-only application writes no `agent-default-model` entry, default reasoning effort, route `reasoning`, or thinking budget. An explicitly selected default changes only its provider/model reference, preserving existing HOME-level fields, including effort. Lower-layer defaults are not automatically imported into a new home entry `config`. No native model roles or native interactive login are qualified. |
 | Output metadata | Leave DSH output capability unprojected: explicit native `maxTokens` also sets a per-request default. Preserve existing HOME-level fields on retained selected models by exact model ID; explicitly projected fields override them, while membership and order remain the explicit selection. Do not import shadowed profile settings. |
 | Protocol | Support all three native protocol mappings without translation. A provider route has one protocol and base; incompatible selections in one route block rather than silently changing transport or dropping models. Existing `modelOverrides` on a selected HOME provider route block before writes rather than emitting incompatible `models` plus `modelOverrides`. |
 | Runtime qualification | Configuration/source qualification is not inference evidence. Unknown DSH gateway context does not establish a reusable conversation identity. Do not fabricate session headers, static IDs, or another client's User-Agent. Direct OpenCode Go access remains unqualified without its required genuine session mechanism. |
-| Recovery | Capture only managed changes, including native home credential references and required credential-service enablement. Preserve later unrelated edits and refuse conflicting owned edits under the common apply/restore contract. |
+| Recovery | Capture the plugin artifact, patch insertion, managed provider fields, native home credential references, and required credential-service enablement. Restore only owned changes to their captured baselines; preserve later unrelated edits and refuse conflicting owned edits under the common apply/restore contract. If later unowned additions prevent removing a newly inserted plugin, block before native writes rather than leaving an invalid entry or deleting its artifact. Recognize captured pre-write artifact content during interrupted transaction recovery. `llm-tmax` is the sole managed adapter entry; do not maintain or migrate an earlier `llm-pi-ai` application format. User-owned `llm-pi-ai` configuration remains untouched. |
 
 The [versioned DSH reference](../../docs/agents/dsh.md) records source evidence
 and its limits without establishing an untested version range or provider access.
@@ -332,6 +353,12 @@ proof of support. The upstream decides whether the exact model accepts a request
 tmax preserves its response without protocol conversion, implicit model changes,
 or fallback retries. Agent wire-format requirements, declared operation/transport
 boundaries, and original session/authorization bindings still apply.
+
+Protocol declarations advertise availability, not a preferred request protocol.
+The client chooses its native protocol explicitly; gateway dispatch follows that
+protocol or rejects the request. Configuration guidance and new Web choices
+prefer Responses when both the upstream declaration and the client support it.
+This preference must not change existing selections, native defaults, or requests.
 
 Every endpoint consumer must use this resolution: direct configuration, gateway
 dispatch, model compatibility checks, and provider discovery. Qualified

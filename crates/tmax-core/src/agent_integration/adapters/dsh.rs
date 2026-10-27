@@ -66,18 +66,6 @@ pub(super) fn model_metadata(effective: &Value) -> Result<Value> {
     if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
         metadata["reasoningEfforts"] = json!(false);
     }
-    // Unlike Pi/OMP, DSH treats [] as inheritance, not an explicit empty
-    // capability. Refuse rather than silently acquire native modalities.
-    if metadata
-        .get("input")
-        .and_then(Value::as_array)
-        .is_some_and(Vec::is_empty)
-    {
-        return Err(Error::new(
-            "native_metadata_unrepresentable",
-            "DSH treats an empty input list as native inheritance; this declared input capability cannot be represented",
-        ).field("modalities.input"));
-    }
     Ok(metadata)
 }
 
@@ -122,7 +110,11 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             refs.insert(credential_ref, json!(key));
         }
     }
-    let mut patch = json!({"llm-pi-ai":{"disabled":false,"config":{"providers":providers}}});
+    let mut patch = json!({"llm-tmax":{
+        "name":scope.join("tmax-dsh.mjs"),
+        "disabled":false,
+        "config":{"providers":providers}
+    }});
     if let Some(default) = &target.default {
         let active = entries
             .iter()
@@ -144,6 +136,12 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             json!({"version":1,"refs":refs}),
         ));
     }
+    files.push(file(
+        scope,
+        "tmax-dsh.mjs",
+        Format::Text,
+        json!({"$text":include_str!("dsh_plugin.mjs")}),
+    ));
     files.push(file(scope, "cordis.patch.yml", Format::DshPatch, patch));
     Ok(files)
 }
@@ -154,7 +152,7 @@ pub(super) fn inline_credential(path: &[String]) -> bool {
 
 pub(super) fn preserve_models(path: &[String], value: &mut Value, current: &Value) {
     if path.len() == 5
-        && path[0] == "llm-pi-ai"
+        && path[0] == "llm-tmax"
         && path[1] == "config"
         && path[2] == "providers"
         && path[4] == "models"
@@ -175,6 +173,31 @@ pub(super) fn preserve_models(path: &[String], value: &mut Value, current: &Valu
                         .entry(key.clone())
                         .or_insert_with(|| value.clone());
                 }
+            }
+        }
+    }
+}
+
+pub(super) fn withdraw_input(path: &[String], value: &mut Value, desired: &Value) {
+    if path.len() != 5
+        || path[0] != "llm-tmax"
+        || path[1] != "config"
+        || path[2] != "providers"
+        || path[4] != "models"
+    {
+        return;
+    }
+    if let Some(models) = value.as_array_mut()
+        && let Some(selected) = document::get(desired, path).and_then(Value::as_array)
+    {
+        for model in models {
+            if selected.iter().any(|selected| {
+                selected.get("id") == model.get("id") && selected.get("input").is_none()
+            }) {
+                model
+                    .as_object_mut()
+                    .expect("DSH model object")
+                    .remove("input");
             }
         }
     }
@@ -209,12 +232,12 @@ pub(super) fn validate_credentials(current: &Value) -> Result<()> {
 pub(super) fn validate_existing(file: &File, current: &Value) -> Result<()> {
     if let Some(providers) = file
         .desired
-        .pointer("/llm-pi-ai/config/providers")
+        .pointer("/llm-tmax/config/providers")
         .and_then(Value::as_object)
     {
         for name in providers.keys() {
             let route_path = vec![
-                "llm-pi-ai".into(),
+                "llm-tmax".into(),
                 "config".into(),
                 "providers".into(),
                 name.clone(),
@@ -265,17 +288,17 @@ mod tests {
             let entry = dsh_entry(protocol);
             let credential_ref = dsh_credential_ref(scope, &entry);
             let files = build(&target, scope, &[entry]).unwrap();
-            assert_eq!(files.len(), 2);
+            assert_eq!(files.len(), 3);
             assert_eq!(files[0].path, Path::new("/explicit/dsh/.credentials.yaml"));
             assert_eq!(files[0].desired["version"], 1);
             assert_eq!(
                 files[0].desired["refs"][&credential_ref],
                 "protected-key-reference"
             );
-            assert_eq!(files[1].path, scope.join("cordis.patch.yml"));
-            assert!(matches!(files[1].format, Format::DshPatch));
-            let patch = &files[1].desired;
-            let provider = &patch["llm-pi-ai"]["config"]["providers"]["local"];
+            assert_eq!(files[2].path, scope.join("cordis.patch.yml"));
+            assert!(matches!(files[2].format, Format::DshPatch));
+            let patch = &files[2].desired;
+            let provider = &patch["llm-tmax"]["config"]["providers"]["local"];
             assert_eq!(provider["api"], expected_api);
             assert_eq!(provider["apiKeyEnv"], credential_ref);
             assert_eq!(provider["models"], json!([{"id":"m"}]));
@@ -309,7 +332,7 @@ mod tests {
         }
         let files = build(&target("dsh"), scope, &[dsh_entry("chat-completions")]).unwrap();
         assert_eq!(
-            files[1].desired["agent-default-model"],
+            files[2].desired["agent-default-model"],
             json!({"config":{"provider":"local","model":"m"}})
         );
     }
@@ -357,33 +380,35 @@ mod tests {
             );
         }
         for values in [json!(["off"]), json!(["ultra"])] {
+            let effective = json!({"reasoning_options":[{"type":"effort","values":values}],"modalities":{"input":["text"]}});
+            let projection = projection_view("dsh", "responses", &effective).unwrap();
+            assert_eq!(projection["state"], "blocked");
+            assert_eq!(projection["reason_code"], "native_metadata_unrepresentable");
+            assert_eq!(projection["input"]["state"], "projected");
+            assert_eq!(projection["input"]["fields"], json!({"input":["text"]}));
             assert_eq!(
-                projection_view(
-                    "dsh",
-                    "responses",
-                    &json!({"reasoning_options":[{"type":"effort","values":values}]})
-                )
-                .unwrap_err()
-                .code,
+                model_metadata("dsh", "responses", &effective)
+                    .unwrap_err()
+                    .code,
                 "native_metadata_unrepresentable"
             );
         }
     }
     #[test]
     fn dsh_selected_models_preserve_native_fields_by_identity() {
-        let current = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
+        let current = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[
             {"id":"second","maxTokens":2048,"name":"Native second"},
             {"id":"first","maxTokens":1234,"contextWindow":4096,"thinkingBudgets":{"high":512}},
             {"id":"removed","maxTokens":99}
         ]}}}}});
-        let desired = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
+        let desired = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[
             {"id":"first","contextWindow":8192},
             {"id":"second"},
             {"id":"new"}
         ]}}}}});
         let fields = desired_fields("dsh", &desired, &current);
         let path: Vec<String> = vec![
-            "llm-pi-ai".into(),
+            "llm-tmax".into(),
             "config".into(),
             "providers".into(),
             "local".into(),
@@ -400,9 +425,52 @@ mod tests {
     }
 
     #[test]
+    fn dsh_alias_unknown_input_withdraws_only_from_owned_models() {
+        let current = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[
+            {"id":"shared","input":["text","image"],"maxTokens":1234,"thinkingBudgets":{"high":512}}
+        ]}}}}});
+        let mut model =
+            crate::agent_integration::alias_model_metadata("dsh", "responses", &json!({})).unwrap();
+        model["id"] = json!("shared");
+        let desired = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[model]}}}}});
+        let path = vec![
+            "llm-tmax".into(),
+            "config".into(),
+            "providers".into(),
+            "local".into(),
+            "models".into(),
+        ];
+        let owned = vec![crate::agent_integration::recovery::Field {
+            path: path.clone(),
+            before_hash: "baseline".into(),
+            after_hash: "managed".into(),
+            observed_hash: "managed".into(),
+            released: false,
+        }];
+        for (ownership, expected_input) in [
+            (&[][..], Some(json!(["text", "image"]))),
+            (owned.as_slice(), None),
+        ] {
+            let fields =
+                super::super::desired_fields_with_ownership("dsh", &desired, &current, ownership);
+            let models = fields
+                .iter()
+                .find(|(field, _)| field == &path)
+                .unwrap()
+                .1
+                .as_ref()
+                .unwrap();
+            assert_eq!(models[0].get("input"), expected_input.as_ref());
+            assert_eq!(models[0]["reasoningEfforts"], false);
+            assert_eq!(models[0]["maxTokens"], 1234);
+            assert_eq!(models[0]["thinkingBudgets"], json!({"high":512}));
+        }
+    }
+
+    #[test]
     fn dsh_alias_reapply_clears_lost_common_efforts_without_changing_native_preferences() {
         let current = json!({
-            "llm-pi-ai":{"config":{"providers":{"local":{"models":[{
+            "llm-tmax":{"config":{"providers":{"local":{"models":[{
                 "id":"shared", "reasoningEfforts":{"low":"low","high":"high"},
                 "maxTokens":1234,"thinkingBudgets":{"high":512}
             }]}}}},
@@ -422,14 +490,13 @@ mod tests {
             )
             .unwrap();
             model["id"] = json!("shared");
-            let desired =
-                json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[model]}}}}});
+            let desired = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[model]}}}}});
             let mut text = serde_yaml::to_string(&current).unwrap();
             for (path, value) in desired_fields("dsh", &desired, &current) {
                 text = document::set(&text, Format::Yaml, &path, value.as_ref()).unwrap();
             }
             let after = document::parse(&text, Format::Yaml).unwrap();
-            let row = &after["llm-pi-ai"]["config"]["providers"]["local"]["models"][0];
+            let row = &after["llm-tmax"]["config"]["providers"]["local"]["models"][0];
             assert_eq!(row["reasoningEfforts"], expected);
             assert_eq!(row["maxTokens"], 1234);
             assert_eq!(row["thinkingBudgets"], json!({"high":512}));

@@ -40,16 +40,6 @@ pub(super) fn model_metadata(effective: &Value) -> Result<Value> {
             metadata["model_overrides"][native] = json!(value);
         }
     }
-    if let Some(input) = effective
-        .pointer("/modalities/input")
-        .and_then(Value::as_array)
-    {
-        metadata["model_overrides"]["supports_vision"] = json!(
-            input
-                .iter()
-                .any(|modality| modality.as_str() == Some("image"))
-        );
-    }
     Ok(metadata)
 }
 

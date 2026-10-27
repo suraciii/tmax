@@ -27,6 +27,7 @@ saved fields. Use [common CLI rules](../spec.md),
 | Compact list | Do not repeat metadata, full evaluations, or inspect argv per row. |
 | Detailed concrete read | Expose [priority evaluations](rules/spec.md#priority-evaluation-data) once per model, not per protocol. |
 | Native reasoning projection | Concrete inspection includes upstream `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the model's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). Separate `gateway_projection` is keyed by protocol and describes mapped caller-facing inputs for gateway entries. Direct native entries retain upstream capabilities. These are desired capability projections, not defaults or evidence of native application. |
+| Alias input capability | `capabilities.input` contains `state` (`declared` or `unknown`), `common` (array, including empty, or null), and `candidates` of `{model, input}` (qualified reference and effective array or null). `metadata.effective` carries the derived common input and effort declarations; `metadata.source` and `metadata.metadata_revision` identify the accepted catalog basis when available. `native_projection` reports each Agent's expected input and effort representation. These are derived facts, never editable alias settings or proof of entitlement. |
 
 Examples: `tmax model list --kind concrete`, `tmax model list --kind alias`,
 `tmax model inspect deepseek/deepseek-flash`,

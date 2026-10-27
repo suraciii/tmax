@@ -800,6 +800,11 @@ the existing definition and effective upstream declarations. Its separate
 `gateway_projection`, keyed by protocol, uses caller-facing inputs after maps;
 `native_projection` retains actual upstream capabilities for direct entries.
 Alias inspection exposes its configured candidate-effort map.
+Alias inspection also exposes the [common input capability](../integrations/spec.md#common-input-modalities),
+its candidate declarations and accepted metadata provenance, and per-Agent native
+representations. These derived declarations do not change request eligibility,
+priority, session bindings, or the backend-stable effort rule.
+
 Explanations expose `candidate_reasoning_effort` for each evaluated candidate and
 the selected destination; null means no fixed override, not a selected upstream
 default. A no-request explanation does not invent caller input or map resolution.

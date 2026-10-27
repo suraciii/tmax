@@ -10,6 +10,8 @@ mod forwarding;
 mod native_context;
 mod opencode_session;
 mod probe;
+mod request_body;
+pub(crate) mod request_facts;
 mod response_observer;
 mod runtime;
 
@@ -19,11 +21,12 @@ mod test_support;
 pub use client_identity::{NativeClient, NativeRequirements, native_mismatch};
 pub use forwarding::{publication, router};
 pub use probe::probe;
+pub use request_facts::RequestFacts;
 pub use runtime::{Runtime, Snapshot, credential};
 
 // Concrete budgets are surfaced by status and exercised by the bounded-admission tests.
 pub const ACTIVE_LIMIT: usize = 16;
-pub const REQUEST_BYTES: usize = 4 * 1024 * 1024;
+pub const REQUEST_BYTES: usize = 512 * 1024 * 1024;
 pub const INSPECTION_BYTES: usize = 64 * 1024;
 pub const FORWARD_CHUNK_BYTES: usize = 16 * 1024;
 pub const CREDENTIAL_SECONDS: u64 = 10;
@@ -33,7 +36,7 @@ pub fn capability_mismatch(
     model_id: &str,
     model: &crate::config::Model,
     metadata: Option<&crate::catalog::Snapshot>,
-    body: &Value,
+    body: &RequestFacts,
     effort: Option<(&str, &str)>,
 ) -> Option<&'static str> {
     capabilities::mismatch(provider, model_id, model, metadata, body, effort)
@@ -43,7 +46,7 @@ pub(crate) fn ranking_mismatch(
     model_id: &str,
     model: &crate::config::Model,
     metadata: Option<&crate::catalog::Snapshot>,
-    body: &Value,
+    body: &RequestFacts,
 ) -> Option<&'static str> {
     capabilities::ranking_mismatch(provider, model_id, model, metadata, body)
 }

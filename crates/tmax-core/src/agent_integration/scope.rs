@@ -267,7 +267,7 @@ pub(super) fn configuration_files(agent: &str, path: &Path) -> Vec<PathBuf> {
         ],
         "opencode" => &["opencode.jsonc", "opencode.json"],
         "hermes" => &["config.yaml"],
-        "dsh" => &["cordis.patch.yml"],
+        "dsh" => &["cordis.patch.yml", "tmax-dsh.mjs"],
         _ => &[],
     };
     names.iter().map(|n| path.join(n)).collect()
