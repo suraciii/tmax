@@ -24,8 +24,31 @@ finite editable-field definitions also drive Web controls.
 - `operations/` owns finite resource mutations and effect/result boundaries.
 - `provider_integration.rs` owns upstream endpoint/operation declarations and
   explicit outbound transport; `catalog.rs` owns downloaded versus accepted metadata.
-- `routing.rs` and `inputs.rs` own exact priority evaluation, scoped facts,
-  coherent revisions, and guarded publication.
+- `routing.rs` owns exact priority evaluation and selection. `inputs.rs` is the
+  stable facade for scoped rule-input facts and their shared authority. Private
+  owners under `inputs/` separate:
+  - `model.rs`: canonical heads, values, acquisition attempts, bindings and retained
+    saved/loaded views, including strict wire records and required nullable fields.
+  - `store.rs`: the `routing-state.json` codec, read-only historical normalization,
+    and duplicate-field rejection shared with retained gateway bindings.
+  - `lineage.rs`: provider/declaration identities, effect-free projections, binding
+    and publication guards, and retention. `lifecycle.rs` owns reconciliation,
+    activation, synchronous authorization invalidation, lock ordering and the
+    existing runtime-persistence-before-provider-observation-retention boundary.
+  - `exact.rs` and `value.rs`: arbitrary-precision decimal/instant operations,
+    normalized observations, ordered availability, idempotency and head publication.
+  - `snapshot.rs`: coherent configuration, input and accepted-metadata capture,
+    borrowed loaded metadata, and provenance-free routing evidence.
+  - `commands.rs` and `inspection.rs`: explicit runtime operations, safe input
+    details, dry-run and manual record/clear orchestration.
+  - `acquisition.rs`: one capture/read/recheck/commit transaction. Source I/O holds
+    only the cross-process provider-identity/input exclusion, not configuration or
+    routing locks; publication rechecks the captured saved or loaded authority.
+  - `codex_resets.rs`: the fixed, bounded public source and its qualified Markdown
+    grammar. `scheduler.rs` owns per-store monotonic due state, bounded rotating
+    batches, and schedule release during deactivation; it reuses acquisition.
+  Tests live with semantic owners; shared test support contains fixtures only.
+  This cutover does not create another identity registry or input desired state.
 - `observations.rs` owns bounded retained provider facts and separate latest
   attempts, guarded by provider incarnation, authorization, endpoint/source
   contract, and captured publication revision. Renames preserve the identity;
