@@ -924,6 +924,7 @@ mod tests {
             candidate_reasoning_effort: BTreeMap::new(),
             enabled: true,
             continuity: Some("stateless".into()),
+            fallback: None,
         };
         let effective = crate::reasoning::alias_metadata(&config, None, &alias).unwrap();
         assert_eq!(

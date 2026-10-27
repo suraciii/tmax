@@ -141,15 +141,17 @@ pub(super) async fn forward(
         flight.record.model_kind = "malformed".into();
         return flight.reject(StatusCode::BAD_REQUEST, "invalid_model", "model_validation");
     };
-    let (snapshot, choice, now) = {
+    let snapshot;
+    let (choice, now, lineage, failure_epochs) = {
         let authority = runtime.snapshot.read().expect("snapshot lock");
-        let Some(snapshot) = authority.as_ref().cloned() else {
+        let Some(loaded) = authority.as_ref().cloned() else {
             return flight.reject(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "listener_unavailable",
                 "local_admission",
             );
         };
+        snapshot = loaded;
         if !local_key(&parts.headers).is_some_and(|key| matches_key(key, &snapshot.key)) {
             return flight.reject(
                 StatusCode::UNAUTHORIZED,
@@ -170,13 +172,31 @@ pub(super) async fn forward(
         flight.record.model = Some(public_id.clone());
         flight.record.model_kind = if alias { "alias" } else { "concrete" }.into();
         let now = Utc::now();
-        let choice = match runtime.choose_recorded(
+        let lineage = crate::inputs::Snapshot::capture_loaded(
+            &runtime.store,
+            &snapshot.config,
+            snapshot.metadata.as_deref(),
+        );
+        let failure_epochs =
+            match crate::failures::Snapshot::capture(&runtime.store, &snapshot.config) {
+                Ok(epochs) => epochs,
+                Err(error) => {
+                    return flight.reject(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &error.code,
+                        "selection",
+                    );
+                }
+            };
+        let choice = match runtime.choose_untried(
             &snapshot,
             (&public_id, protocol),
             &body,
             &parts.headers,
             now,
             &mut flight.record.decision,
+            &Default::default(),
+            &lineage,
         ) {
             Ok(v) => v,
             Err(e) => {
@@ -196,89 +216,231 @@ pub(super) async fn forward(
                 return flight.reject(StatusCode::CONFLICT, &e.code, "selection");
             }
         };
-        (snapshot, choice, now)
+        (choice, now, lineage, failure_epochs)
     };
-    let selection = choice.selection;
-    let Some(provider) = snapshot.config.providers.get(&selection.provider) else {
-        return flight.reject(StatusCode::BAD_REQUEST, "provider_unavailable", "selection");
-    };
-    let normalize = body.normalization_required;
-    drop(body);
-    let endpoint = choice.endpoint;
-    let path = match crate::provider_integration::operation_path(protocol) {
-        Ok(v) => v,
-        Err(e) => return flight.reject(StatusCode::BAD_REQUEST, &e.code, "operation_validation"),
-    };
+    let mut choice = choice;
+    let mut attempted = std::collections::BTreeSet::new();
+    let mut attempts = AttemptEvidence::default();
+    let fallback = snapshot
+        .config
+        .model_aliases
+        .iter()
+        .find(|alias| alias.id == public_id && alias.protocol == protocol)
+        .and_then(|alias| alias.fallback.as_ref());
     flight.record.admitted_at = Some(now);
     flight.record.configuration_revision = Some(snapshot.revision.clone());
-    flight.record.provider = Some(selection.provider.clone());
-    flight.record.qualified_model = Some(format!("{}/{}", selection.provider, selection.model));
-    flight.record.authorization_generation = Some(choice.authorization_generation);
-    flight.record.decision = safe_evidence(&selection.evidence);
-    flight.record.stage = "credential_acquisition".into();
-    runtime.history.update(flight.record.clone());
-    let Some(Auth::ApiKey { key_ref }) = &provider.auth else {
-        return flight.reject(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "credential_unavailable",
-            "credential_acquisition",
-        );
+    let path = match crate::provider_integration::operation_path(protocol) {
+        Ok(value) => value,
+        Err(error) => {
+            return flight.reject(StatusCode::BAD_REQUEST, &error.code, "operation_validation");
+        }
     };
-    let store = runtime.store.clone();
-    let key_ref = key_ref.clone();
-    let key = tokio::select! {biased;_ = flight.cancel.changed()=>return flight.reject(StatusCode::SERVICE_UNAVAILABLE,"force_stop","credential_acquisition"),result=credential(store,key_ref)=>match result{Ok(value)=>value,Err(error)=>return flight.reject(StatusCode::SERVICE_UNAVAILABLE,&error.code,"credential_acquisition")}};
-    let key = match std::str::from_utf8(&key) {
-        Ok(v) => v,
-        Err(_) => {
+    let mut original = Some(bytes);
+    let mut facts = Some(body);
+    let (response, attempt) = loop {
+        let selection = &choice.selection;
+        attempted.insert(selection.provider.clone());
+        let provider = &snapshot.config.providers[&selection.provider];
+        flight.record.provider = Some(selection.provider.clone());
+        flight.record.qualified_model = Some(format!("{}/{}", selection.provider, selection.model));
+        flight.record.authorization_generation = Some(choice.authorization_generation.clone());
+        flight.record.decision = safe_evidence(&selection.evidence);
+        attempts.apply(&mut flight.record);
+        flight.record.upstream_status = None;
+        flight.record.stage = "credential_acquisition".into();
+        runtime.history.update(flight.record.clone());
+        let Some(Auth::ApiKey { key_ref }) = &provider.auth else {
             return flight.reject(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "credential_invalid",
+                "credential_unavailable",
                 "credential_acquisition",
             );
-        }
-    };
-    let bytes = match request_body::rewrite(
-        bytes,
-        &selection.model,
-        protocol,
-        choice.effort.as_deref(),
-        normalize,
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return flight.reject(StatusCode::BAD_REQUEST, "invalid_json", "model_validation");
-        }
-    };
-    let go_session_header =
-        if crate::provider_integration::integration_id(provider).ok() == Some("opencode-go") {
-            choice.go_session_header
-        } else {
-            None
         };
-    let upstream_url = match parts.uri.query() {
-        Some(query) => format!("{}{}?{}", endpoint.trim_end_matches('/'), path, query),
-        None => format!("{}{}", endpoint.trim_end_matches('/'), path),
+        let key = tokio::select! {
+            biased;
+            _ = flight.cancel.changed() => return flight.reject(StatusCode::SERVICE_UNAVAILABLE,"force_stop","credential_acquisition"),
+            result = credential(runtime.store.clone(), key_ref.clone()) => match result {
+                Ok(value) => value,
+                Err(error) => return flight.reject(StatusCode::SERVICE_UNAVAILABLE,&error.code,"credential_acquisition"),
+            }
+        };
+        let key = match std::str::from_utf8(&key) {
+            Ok(value) => value,
+            Err(_) => {
+                return flight.reject(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "credential_invalid",
+                    "credential_acquisition",
+                );
+            }
+        };
+        let normalize = facts
+            .as_ref()
+            .expect("request facts before dispatch")
+            .normalization_required;
+        let input = if fallback.is_some() {
+            original.as_ref().expect("retained request").clone()
+        } else {
+            original.take().expect("single request attempt")
+        };
+        let outgoing = match request_body::rewrite(
+            input,
+            &selection.model,
+            protocol,
+            choice.effort.as_deref(),
+            normalize,
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                return flight.reject(StatusCode::BAD_REQUEST, "invalid_json", "model_validation");
+            }
+        };
+        if fallback.is_none() {
+            facts.take();
+        }
+        let go_session_header =
+            if crate::provider_integration::integration_id(provider).ok() == Some("opencode-go") {
+                choice.go_session_header
+            } else {
+                None
+            };
+        let upstream_url = match parts.uri.query() {
+            Some(query) => format!(
+                "{}{}?{}",
+                choice.endpoint.trim_end_matches('/'),
+                path,
+                query
+            ),
+            None => format!("{}{}", choice.endpoint.trim_end_matches('/'), path),
+        };
+        let mut outbound = snapshot
+            .client
+            .post(&upstream_url)
+            .headers(upstream_headers(
+                &parts.headers,
+                go_session_header,
+                &upstream_url,
+            ))
+            .body(outgoing);
+        if protocol == "messages"
+            && crate::provider_integration::integration_id(provider).ok() != Some("opencode-go")
+        {
+            outbound = outbound.header("x-api-key", key);
+        } else {
+            outbound = outbound.bearer_auth(key);
+        }
+        let outbound = match outbound.build() {
+            Ok(request) => request,
+            Err(_) => {
+                return flight.reject(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "credential_invalid",
+                    "credential_acquisition",
+                );
+            }
+        };
+        let interrupted = *flight.cancel.borrow();
+        if interrupted {
+            flight.finish("interrupted", "upstream_dispatch", Some("force_stop"));
+            return error_response(StatusCode::SERVICE_UNAVAILABLE, "force_stop", &id);
+        }
+        let attempt = AttemptContext {
+            snapshot: snapshot.clone(),
+            provider: selection.provider.clone(),
+            identity: choice.provider_identity.clone(),
+            authorization: choice.authorization_generation.clone(),
+            reset_epoch: failure_epochs.epoch(&choice.provider_identity).to_owned(),
+        };
+        attempts.push(
+            json!({"provider":selection.provider,"qualified_model":flight.record.qualified_model,
+            "upstream_status":null,"reason_code":null,"outcome":"in-progress"}),
+        );
+        attempts.apply(&mut flight.record);
+        flight.record.execution = "unknown".into();
+        flight.record.stage = "upstream_dispatch".into();
+        runtime.history.update(flight.record.clone());
+        let result = {
+            let mut dispatch = PendingDispatch {
+                flight: &mut flight,
+                resolved: false,
+            };
+            let result = tokio::select! {
+                biased;
+                _ = dispatch.flight.cancel.changed() => {
+                    return error_response(StatusCode::SERVICE_UNAVAILABLE,"force_stop",&id);
+                },
+                result = snapshot.client.execute(outbound) => result,
+            };
+            dispatch.resolved = true;
+            result
+        };
+        let (status, reason) = match &result {
+            Ok(response) => (Some(response.status().as_u16()), None),
+            Err(error) => (
+                None,
+                Some(if error.is_connect() {
+                    "upstream_connection_failed"
+                } else {
+                    "upstream_transport_failed"
+                }),
+            ),
+        };
+        if status.is_none_or(|status| status >= 400) {
+            attempt.record(&runtime, &mut flight.record, false, status, reason);
+        }
+        attempts.resolve(status, reason);
+        attempts.apply(&mut flight.record);
+        if fallback.is_some_and(|conditions| crate::failures::matches(conditions, status, reason)) {
+            let mut evidence = Value::Null;
+            match runtime.choose_untried(
+                &snapshot,
+                (&public_id, protocol),
+                facts.as_ref().expect("fallback request facts"),
+                &parts.headers,
+                Utc::now(),
+                &mut evidence,
+                &attempted,
+                &lineage,
+            ) {
+                Ok(next) => {
+                    choice = next;
+                    continue;
+                }
+                Err(error) if error.code != "fallback_exhausted" => {
+                    flight.record.decision["fallback"] = safe_evidence(&evidence);
+                    return flight.reject(StatusCode::CONFLICT, &error.code, "selection");
+                }
+                Err(_) => {}
+            }
+        }
+        match result {
+            Ok(response) => {
+                break (
+                    response,
+                    if status.is_some_and(|s| s < 400) {
+                        Some(attempt)
+                    } else {
+                        None
+                    },
+                );
+            }
+            Err(_) => {
+                let reason = reason.expect("transport reason");
+                flight.finish(
+                    "failed",
+                    if reason == "upstream_connection_failed" {
+                        "upstream_connection"
+                    } else {
+                        "upstream_dispatch"
+                    },
+                    Some(reason),
+                );
+                return error_response(StatusCode::BAD_GATEWAY, reason, &id);
+            }
+        }
     };
-    let mut outbound = snapshot
-        .client
-        .post(upstream_url.clone())
-        .headers(upstream_headers(
-            &parts.headers,
-            go_session_header,
-            &upstream_url,
-        ))
-        .body(bytes);
-    if protocol == "messages"
-        && crate::provider_integration::integration_id(provider).ok() != Some("opencode-go")
-    {
-        outbound = outbound.header("x-api-key", key);
-    } else {
-        outbound = outbound.bearer_auth(key);
-    }
-    flight.record.execution = "unknown".into();
-    flight.record.stage = "upstream_dispatch".into();
-    runtime.history.update(flight.record.clone());
-    let response = tokio::select! {biased;_ = flight.cancel.changed()=>{flight.finish("interrupted","upstream_dispatch",Some("force_stop"));return error_response(StatusCode::SERVICE_UNAVAILABLE,"force_stop",&id);},result=outbound.send()=>match result{Ok(v)=>v,Err(e)=>{let code=if e.is_connect(){"upstream_connection_failed"}else{"upstream_transport_failed"};flight.finish("failed",if e.is_connect(){"upstream_connection"}else{"upstream_dispatch"},Some(code));return error_response(StatusCode::BAD_GATEWAY,code,&id);}}};
+    drop(facts);
+    drop(original);
     let status = response.status();
     let headers = response.headers().clone();
     flight.record.upstream_status = Some(status.as_u16());
@@ -294,6 +456,8 @@ pub(super) async fn forward(
         flight,
         observer: Observer::new(protocol, sse, status.is_success()),
         done: false,
+        attempt,
+        runtime: runtime.clone(),
     };
     let stream = futures_util::stream::unfold(state, |mut state| async move {
         if state.done {
@@ -302,6 +466,7 @@ pub(super) async fn forward(
         let interrupted = *state.flight.cancel.borrow();
         if interrupted {
             state.observer.finish(&mut state.flight.record);
+            finish_pending_attempt(&mut state.flight.record, "interrupted", Some("force_stop"));
             state
                 .flight
                 .finish("interrupted", "upstream_stream", Some("force_stop"));
@@ -315,11 +480,22 @@ pub(super) async fn forward(
         }
         tokio::select! {
             biased;
-            _ = state.flight.cancel.changed()=>{state.observer.finish(&mut state.flight.record);state.flight.finish("interrupted","upstream_stream",Some("force_stop"));state.done=true;Some((Err(std::io::Error::other("request interrupted")),state))},
+            _ = state.flight.cancel.changed()=>{state.observer.finish(&mut state.flight.record);finish_pending_attempt(&mut state.flight.record,"interrupted",Some("force_stop"));state.flight.finish("interrupted","upstream_stream",Some("force_stop"));state.done=true;Some((Err(std::io::Error::other("request interrupted")),state))},
             result=state.upstream.next()=>match result {
                 Some(Ok(bytes))=>{state.observer.observe(&bytes);state.pending=bytes;let n=state.pending.len().min(FORWARD_CHUNK_BYTES);let chunk=state.pending.split_to(n);Some((Ok(chunk),state))},
-                Some(Err(_))=>{state.observer.finish(&mut state.flight.record);state.flight.finish("failed","upstream_stream",Some("upstream_stream_failed"));state.done=true;Some((Err(std::io::Error::other("upstream stream failed")),state))},
-                None=>{state.observer.finish(&mut state.flight.record);state.flight.record.downstream_complete=true;let outcome=if !state.observer.success{"failed"}else if state.observer.complete{"completed"}else{"unknown"};state.flight.finish(outcome,"downstream_delivery",if state.observer.complete{None}else{Some("completion_not_evidenced")});None}
+                Some(Err(_))=>{
+                    state.observer.finish(&mut state.flight.record);
+                    state.complete_attempt(false,Some("upstream_transport_failed"));
+                    state.flight.finish("failed","upstream_stream",Some("upstream_stream_failed"));state.done=true;
+                    Some((Err(std::io::Error::other("upstream stream failed")),state))
+                },
+                None=>{
+                    state.observer.finish(&mut state.flight.record);state.flight.record.downstream_complete=true;
+                    let success=state.observer.success && state.observer.complete;
+                    state.complete_attempt(success,None);
+                    let outcome=if !state.observer.success{"failed"}else if state.observer.complete{"completed"}else{"unknown"};
+                    state.flight.finish(outcome,"downstream_delivery",if state.observer.complete{None}else{Some("completion_not_evidenced")});None
+                }
             }
         }
     });
@@ -335,18 +511,192 @@ pub(super) async fn forward(
     }
     downstream
 }
+#[derive(Default)]
+struct AttemptEvidence {
+    entries: std::collections::VecDeque<Value>,
+    bytes: usize,
+    omitted: bool,
+}
+impl AttemptEvidence {
+    fn push(&mut self, value: Value) {
+        let size = value.to_string().len();
+        const BUDGET: usize = crate::diagnostics::RECORD_BYTES / 4;
+        if size > BUDGET {
+            self.omitted = true;
+            return;
+        }
+        while self.bytes + size > BUDGET || self.entries.len() >= 16 {
+            if let Some(first) = self.entries.pop_front() {
+                self.bytes -= first.to_string().len();
+            }
+            self.omitted = true;
+        }
+        self.bytes += size;
+        self.entries.push_back(value);
+    }
+    fn resolve(&mut self, status: Option<u16>, reason: Option<&str>) {
+        if self
+            .entries
+            .back()
+            .is_some_and(|entry| entry["outcome"] == "in-progress")
+        {
+            let mut entry = self.entries.pop_back().expect("pending attempt");
+            self.bytes -= entry.to_string().len();
+            entry["upstream_status"] = json!(status);
+            entry["reason_code"] = json!(reason);
+            if status.is_none_or(|status| status >= 400) {
+                entry["outcome"] = json!("failed");
+            }
+            self.push(entry);
+        }
+    }
+    fn apply(&self, record: &mut crate::diagnostics::Record) {
+        record.decision["attempts"] = json!(self.entries);
+        record.evidence_gap |= self.omitted;
+    }
+}
+
+fn finish_pending_attempt(
+    record: &mut crate::diagnostics::Record,
+    outcome: &str,
+    reason: Option<&str>,
+) {
+    if let Some(attempts) = record
+        .decision
+        .get_mut("attempts")
+        .and_then(Value::as_array_mut)
+        && let Some(attempt) = attempts
+            .last_mut()
+            .filter(|attempt| attempt["outcome"] == "in-progress")
+    {
+        attempt["outcome"] = json!(outcome);
+        attempt["reason_code"] = json!(reason);
+        let mut bytes: usize = attempts.iter().map(|entry| entry.to_string().len()).sum();
+        while bytes > crate::diagnostics::RECORD_BYTES / 4 {
+            bytes -= attempts.remove(0).to_string().len();
+            record.evidence_gap = true;
+        }
+    }
+}
+
+struct PendingDispatch<'a> {
+    flight: &'a mut Flight,
+    resolved: bool,
+}
+impl Drop for PendingDispatch<'_> {
+    fn drop(&mut self) {
+        if !self.resolved {
+            let interrupted = *self.flight.cancel.borrow();
+            let outcome = if interrupted {
+                "interrupted"
+            } else {
+                "cancelled"
+            };
+            let reason = if interrupted {
+                "force_stop"
+            } else {
+                "downstream_disconnected"
+            };
+            finish_pending_attempt(&mut self.flight.record, outcome, Some(reason));
+            self.flight
+                .finish(outcome, "upstream_dispatch", Some(reason));
+        }
+    }
+}
+
+struct AttemptContext {
+    snapshot: Arc<super::Snapshot>,
+    provider: String,
+    identity: String,
+    authorization: String,
+    reset_epoch: String,
+}
+impl AttemptContext {
+    fn record(
+        &self,
+        runtime: &Runtime,
+        record: &mut crate::diagnostics::Record,
+        success: bool,
+        status: Option<u16>,
+        reason: Option<&str>,
+    ) {
+        if let Err(error) = crate::failures::record(
+            &runtime.store,
+            &self.snapshot.config,
+            &self.provider,
+            &self.identity,
+            &self.authorization,
+            &self.reset_epoch,
+            success,
+            status,
+            reason,
+            Utc::now(),
+        ) {
+            record.decision["failure_state_error"] = json!(error.code);
+            record.evidence_gap = true;
+        }
+    }
+}
+
 struct ForwardStream {
     upstream: Pin<Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send>>,
     pending: Bytes,
     flight: Flight,
     observer: Observer,
     done: bool,
+    attempt: Option<AttemptContext>,
+    runtime: Arc<Runtime>,
+}
+impl ForwardStream {
+    fn complete_attempt(&mut self, success: bool, reason: Option<&str>) {
+        if let Some(attempt) = self.attempt.take() {
+            let status = if reason.is_none() {
+                self.flight.record.upstream_status
+            } else {
+                None
+            };
+            if success || reason.is_some() || !self.observer.success {
+                attempt.record(
+                    &self.runtime,
+                    &mut self.flight.record,
+                    success,
+                    status,
+                    reason,
+                );
+            }
+        }
+        let outcome = if success {
+            "completed"
+        } else if reason.is_some() || !self.observer.success {
+            "failed"
+        } else {
+            "unknown"
+        };
+        finish_pending_attempt(
+            &mut self.flight.record,
+            outcome,
+            reason.or((outcome == "unknown").then_some("completion_not_evidenced")),
+        );
+    }
 }
 impl Drop for ForwardStream {
     fn drop(&mut self) {
         if !self.flight.finished {
             self.observer.finish(&mut self.flight.record);
             let interrupted = *self.flight.cancel.borrow();
+            finish_pending_attempt(
+                &mut self.flight.record,
+                if interrupted {
+                    "interrupted"
+                } else {
+                    "cancelled"
+                },
+                Some(if interrupted {
+                    "force_stop"
+                } else {
+                    "downstream_disconnected"
+                }),
+            );
             self.flight.finish(
                 if interrupted {
                     "interrupted"
@@ -390,3 +740,7 @@ pub fn publication(config: &Config) -> Value {
 #[cfg(test)]
 #[path = "forwarding_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "fallback_tests.rs"]
+mod fallback_tests;

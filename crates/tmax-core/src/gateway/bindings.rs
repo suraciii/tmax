@@ -49,6 +49,7 @@ struct Binding {
 }
 pub(super) struct Choice {
     pub(super) selection: crate::routing::Selection,
+    pub(super) provider_identity: String,
     pub(super) authorization_generation: String,
     pub(super) endpoint: String,
     pub(super) go_session_header: Option<&'static str>,
@@ -223,6 +224,7 @@ impl Runtime {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn choose_recorded(
         &self,
         snapshot: &Snapshot,
@@ -231,6 +233,35 @@ impl Runtime {
         headers: &HeaderMap,
         now: chrono::DateTime<Utc>,
         evidence_out: &mut Value,
+    ) -> Result<Choice> {
+        let identities = crate::inputs::Snapshot::capture_loaded(
+            &self.store,
+            &snapshot.config,
+            snapshot.metadata.as_deref(),
+        );
+        self.choose_untried(
+            snapshot,
+            route,
+            body,
+            headers,
+            now,
+            evidence_out,
+            &Default::default(),
+            &identities,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn choose_untried(
+        &self,
+        snapshot: &Snapshot,
+        route: (&str, &str),
+        body: &super::request_facts::RequestFacts,
+        headers: &HeaderMap,
+        now: chrono::DateTime<Utc>,
+        evidence_out: &mut Value,
+        attempted: &std::collections::BTreeSet<String>,
+        identities: &crate::inputs::Snapshot<'_>,
     ) -> Result<Choice> {
         let (public_id, protocol) = route;
         let config = &snapshot.config;
@@ -291,12 +322,7 @@ impl Runtime {
                     "This retained native conversation is blocked; use a qualified new native session",
                 ));
             }
-            let identities = crate::inputs::Snapshot::capture_loaded(
-                &self.store,
-                config,
-                snapshot.metadata.as_deref(),
-            );
-            if let Some(reason) = binding_blocker(config, binding, &identities) {
+            if let Some(reason) = binding_blocker(config, binding, identities) {
                 binding.blocked = Some(reason.into());
                 save_bindings(&self.store, bindings)?;
                 return Err(Error::new(
@@ -324,6 +350,7 @@ impl Runtime {
                     priority: 0,
                     evidence,
                 },
+                provider_identity: binding.provider_identity.clone(),
                 authorization_generation: binding.authorization_generation.clone(),
                 endpoint: binding.endpoint.clone(),
                 go_session_header: context.as_ref().and_then(|c| c.go_session_header),
@@ -345,7 +372,7 @@ impl Runtime {
                 "Unknown native session is not a qualified fresh session; prior destinations cannot be reconstructed",
             ));
         }
-        let mut selection = crate::routing::select_request_loaded(
+        let mut selection = crate::routing::select_request_admitted(
             &self.store,
             config,
             public_id,
@@ -355,7 +382,8 @@ impl Runtime {
                 body,
                 native: &native,
             },
-            snapshot.metadata.as_deref(),
+            identities,
+            attempted,
         )?;
         let provider = &config.providers[&selection.provider];
         client_contract(provider, &native)?;
@@ -427,7 +455,7 @@ impl Runtime {
                     .as_ref()
                     .and_then(native_context::Context::scope_handle)
                     .expect("qualified native scope"),
-                provider_identity,
+                provider_identity: provider_identity.clone(),
                 model_identity,
                 provider: selection.provider.clone(),
                 model: selection.model.clone(),
@@ -448,6 +476,7 @@ impl Runtime {
         }
         Ok(Choice {
             selection,
+            provider_identity,
             authorization_generation,
             endpoint,
             go_session_header: context.as_ref().and_then(|c| c.go_session_header),

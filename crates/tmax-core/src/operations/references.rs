@@ -179,6 +179,7 @@ mod tests {
             candidates: vec!["p/model".into()],
             enabled: true,
             continuity: None,
+            fallback: None,
         });
         let error = guard(&config, &request).unwrap_err();
         assert_eq!(

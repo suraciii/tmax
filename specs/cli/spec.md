@@ -190,7 +190,9 @@ action. Later failures disclose completed, partial, and uncertain effects; there
 is no cross-boundary atomicity promise for login, secrets, save, activation, or
 native writes. Native sign-in can change a source's account before local commit; preserve
 [authentication failure reporting](providers/authentication/spec.md#provider-authentication-and-local-secrets).
-There is no automatic retry/replay engine or human-policy escalation.
+Management operations have no automatic retry/replay engine or human-policy
+escalation. Inference attempts follow explicit
+[gateway fallback policy](../model-routing/spec.md#request-fallback-and-failure-priority-override).
 
 ## Implementation status
 

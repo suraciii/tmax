@@ -305,3 +305,138 @@ async fn malformed_raw_extensions_never_dispatch_and_duplicate_models_use_last_v
     assert_eq!(wire.matches("\"off\"").count(), 1);
     server.abort();
 }
+
+#[tokio::test]
+async fn fallback_keeps_admitted_lineage_endpoint_and_body_across_reload() {
+    let first = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let first_address = first.local_addr().unwrap();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (entered, mut entering) = tokio::sync::mpsc::channel(1);
+    let first_app = Router::new().fallback({
+        let release = release.clone();
+        move || {
+            let release = release.clone();
+            let entered = entered.clone();
+            async move {
+                entered.send(()).await.unwrap();
+                release.notified().await;
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    axum::Json(json!({"error":"FIRST_LIMIT"})),
+                )
+            }
+        }
+    });
+    let first_server = tokio::spawn(async move { axum::serve(first, first_app).await.unwrap() });
+    let second = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_address = second.local_addr().unwrap();
+    let (captured, mut requests) = tokio::sync::mpsc::channel(1);
+    let second_app = Router::new().fallback(move |request: axum::extract::Request| {
+        let captured = captured.clone();
+        async move {
+            captured
+                .send(to_bytes(request.into_body(), 4096).await.unwrap())
+                .await
+                .unwrap();
+            axum::Json(
+                json!({"choices":[{"finish_reason":"stop","message":{"content":"SECOND_OK"}}]}),
+            )
+        }
+    });
+    let second_server = tokio::spawn(async move { axum::serve(second, second_app).await.unwrap() });
+    let (_temporary, runtime, initial) = fixture();
+    let mut config = initial.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .endpoints
+        .insert("chat-completions".into(), format!("http://{first_address}"));
+    config.providers.get_mut("q").unwrap().endpoints.insert(
+        "chat-completions".into(),
+        format!("http://{second_address}"),
+    );
+    config.model_aliases[0].continuity = Some("stateless".into());
+    config.model_aliases[0].fallback = Some(crate::config::FailureConditions {
+        http_statuses: vec![429],
+        ..Default::default()
+    });
+    publish(&runtime, &initial, &config, "admitted-before-reload");
+    runtime.open();
+    let request = axum::http::Request::builder().method("POST").uri("/v1/chat/completions")
+        .header("authorization", "Bearer test-local-key")
+        .header("content-type", "application/json")
+        .header("user-agent", "deepseek-harness/0.2.1-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)")
+        .body(Body::from(r#"{"model":"dynamic","messages":[{"role":"user","content":"original"}],"temperature":0.42}"#)).unwrap();
+    let forwarded = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { forward(State(runtime), request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entering.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut next = config.clone();
+    next.providers
+        .get_mut("q")
+        .unwrap()
+        .endpoints
+        .insert("chat-completions".into(), "http://127.0.0.1:9".into());
+    next.providers
+        .get_mut("q")
+        .unwrap()
+        .models
+        .get_mut("m")
+        .unwrap()
+        .priority = 99;
+    publish(&runtime, &config, &next, "activated-during-first-attempt");
+    release.notify_one();
+    let response = tokio::time::timeout(Duration::from_secs(5), forwarded)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let id = response.headers()["x-tmax-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let response = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert!(
+        std::str::from_utf8(&response)
+            .unwrap()
+            .contains("SECOND_OK")
+    );
+    let request: Value = serde_json::from_slice(&requests.recv().await.unwrap()).unwrap();
+    assert_eq!(
+        request,
+        json!({"model":"m","messages":[{"role":"user","content":"original"}],"temperature":0.42})
+    );
+    let inspected = runtime
+        .history
+        .view(&Request {
+            command: vec!["request".into(), "inspect".into()],
+            operands: vec![id],
+            arguments: Default::default(),
+            dry_run: false,
+            if_revision: None,
+        })
+        .unwrap();
+    assert_eq!(
+        inspected["record"]["configuration_revision"],
+        "admitted-before-reload"
+    );
+    assert_eq!(
+        inspected["record"]["decision"]["attempts"][0]["provider"],
+        "p"
+    );
+    assert_eq!(
+        inspected["record"]["decision"]["attempts"][1]["provider"],
+        "q"
+    );
+    assert_eq!(
+        inspected["record"]["decision"]["attempts"][1]["outcome"],
+        "completed"
+    );
+    first_server.abort();
+    second_server.abort();
+}

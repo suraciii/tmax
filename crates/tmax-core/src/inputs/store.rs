@@ -316,6 +316,7 @@ mod tests {
             candidates: vec!["p/m".into()],
             enabled: true,
             continuity: None,
+            fallback: None,
         });
         save_intent(&store, &config);
         reconcile(&store, &original, &config, &[]).unwrap();
@@ -374,6 +375,7 @@ mod tests {
                 candidates: vec!["p/m".into()],
                 enabled: true,
                 continuity: None,
+                fallback: None,
             });
         }
         save_intent(&store, &config);
@@ -465,6 +467,7 @@ mod tests {
             candidates: vec!["p/m".into()],
             enabled: true,
             continuity: None,
+            fallback: None,
         });
         save_intent(&store, &config);
         reconcile(&store, &original, &config, &[]).unwrap();

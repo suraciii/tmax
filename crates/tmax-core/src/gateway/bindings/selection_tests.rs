@@ -606,6 +606,7 @@ fn arbitrary_aliases_use_only_explicit_members_across_calendar_boundaries() {
         ("my.custom-name", vec!["q/m"]),
     ] {
         config.model_aliases.push(crate::config::ModelAlias {
+            fallback: None,
             candidate_reasoning_effort: Default::default(),
             id: id.into(),
             protocol: "chat-completions".into(),

@@ -272,6 +272,66 @@ revisions; a preview does not advance accepted metadata. Activation reports the
 actual service outcome. Catalog apply does not implicitly apply native files or
 change endpoint, enablement, or destination settings.
 
+## Request fallback and temporary provider priority
+
+Fallback is optional on each protocol-qualified stateless alias. These examples
+assume `gpt-6.1-terra` already references `cpa-us2/gpt-6.1-terra` and
+`llm-us/gpt-6.1-terra`, with CPA priority 2 and LLM priority 1:
+
+```sh
+tmax model alias update gpt-6.1-terra --protocol responses \
+  --set continuity stateless --set fallback.http_statuses 429
+tmax provider update cpa-us2 \
+  --set failure_policy.errors.http_statuses 429 \
+  --set failure_policy.consecutive_failures 3 \
+  --set failure_policy.priority 0 \
+  --set failure_policy.duration_seconds 18000
+tmax provider inspect cpa-us2
+tmax model explain gpt-6.1-terra --protocol responses --state loaded
+```
+
+The first two CPA 429 responses fall back to another eligible provider. The third
+also triggers a provider-wide replacement priority of 0 for five hours; later
+new selections prefer LLM. Configure fallback separately for each alias and
+protocol. The provider streak is shared across its models, not copied per alias.
+No quota API or asserted remaining balance is needed; 429 is a selected failure
+condition, not proof of exhausted allowance. Configuring a policy does not start
+the gateway or change native agent files.
+
+During the fixed interval, successes do not end the override and further failures
+do not extend it. Expiry restores normal rule evaluation and clears the old
+streak. Restart and history clear preserve it.
+Policy replacement and explicit reset fence outcomes from older admitted
+requests, including after restoring the original policy. An unrelated reload or
+same-policy restart preserves the state; pending saved changes do not reset a
+still-loaded policy.
+
+To explicitly end it early:
+
+```sh
+tmax provider failure-reset cpa-us2 --dry-run
+tmax provider failure-reset cpa-us2
+```
+
+To remove the policies:
+
+```sh
+tmax model alias update gpt-6.1-terra --protocol responses --clear fallback
+tmax provider update cpa-us2 --clear failure_policy
+```
+
+Connection-establishment failures can be opted into with
+`fallback.connection_errors`; ambiguous transport failures use
+`fallback.transport_errors`. Provider counting uses the corresponding fields
+under `failure_policy.errors`. HTTP 5xx and ambiguous transport fallback can
+duplicate execution or billing; configure them only when that trade-off is
+acceptable. Unknown clients, retained sessions, upstream-owned resource state,
+local rejection, and requests whose response delivery has begun cannot use
+fallback. Each provider is attempted at most once per request; exhaustion returns
+the last upstream rejection or transport failure, with a bounded attempt chain
+in gateway request details. Diagnostics retain status/reason, not raw error bodies.
+
+
 ## Native login and logout boundaries
 
 Native sign-in and sign-out run through a qualified native command; they are not

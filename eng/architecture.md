@@ -97,8 +97,10 @@ private to the feature unless another feature has a concrete consumer.
   raw fields. Unchanged bodies reuse their input bytes; rewritten bodies allocate
   one final output buffer. Duplicate keys and private-number representations use
   recursive compatibility normalization to preserve the former parser's semantics.
-  Forwarding releases the input bytes and policy facts before waiting for upstream
-  credentials or response headers; the outbound transport owns the emitted body.
+  With fallback enabled, original input bytes and parsed policy facts remain
+  available until the final attempt is selected; each rewrite starts from original
+  bytes, never a previous candidate's model/effort rewrite. Without fallback they
+  are released before awaiting the upstream response. Transport owns emitted bodies.
   Forwarding preserves incoming end-to-end header values, including repeated
   values and `Content-Type` parameters. It neither adds a missing `Content-Type`
   nor appends a second one. Existing credential, hop-by-hop, routing, and local
@@ -107,6 +109,12 @@ private to the feature unless another feature has a concrete consumer.
   `capabilities.rs` owns request/model compatibility checks.
 - `probe.rs` owns explicit diagnostics; `response_observer.rs` owns response
   evidence projection.
+- `failures.rs` owns identity/authorization/policy-scoped consecutive failure state
+  and fixed-expiry replacement priorities independently of request history.
+  Admission captures input lineage and failure-generation fences before awaiting
+  credentials. Fallback reuses admitted input facts while reading current failure
+  priorities. Semantic policy transitions fence late outcomes even after an ABA
+  policy replacement; pending-only edits do not reset an active loaded policy.
 
 ## Dependencies and state authority
 

@@ -26,11 +26,16 @@ candidate entity; membership commands do not create or remove the referenced Mod
 | --- | --- |
 | `enabled` | Boolean; clear restores true. |
 | `continuity` | `session` or `stateless`; clear restores `session`. Applies to every caller of this definition, not native Agent selections. |
+| `fallback.http_statuses` | Comma-separated unique HTTP error status integers, 400–599. |
+| `fallback.connection_errors`, `fallback.transport_errors` | Booleans selecting connection-establishment or ambiguous transport failures. |
+| `fallback` | Clear-only container; removes fallback without changing candidates or continuity. |
 
-Scalar `EDIT` accepts only `enabled` and `continuity`; use the separate
-candidate reasoning-effort options below for per-candidate overrides. Concrete
-mappings remain fixed and accept no continuity edit. Stateless selection still
-requires client/upstream qualification; it cannot bypass conversation rules.
+Scalar `EDIT` accepts the fields above; use separate candidate reasoning-effort
+options below for per-candidate overrides. A configured fallback requires
+`continuity = "stateless"` and at least one selected error condition. Clear its
+parent to disable it. Concrete mappings remain fixed; stateless context still
+requires client/upstream qualification. Transport and 5xx fallback disclose
+possible duplicate execution/billing; response delivery is never spliced.
 
 | Candidate or identity condition | Observable contract |
 | --- | --- |

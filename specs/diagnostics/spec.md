@@ -399,15 +399,18 @@ as required by the [billing contract](../product/spec.md#billing-quota-and-renew
 Local history cannot establish account-wide usage, remaining quota, or an official
 bill. Clearing history does not reset an upstream allowance.
 
-Diagnostics record failures; they do not introduce a generic automatic circuit
-breaker, transient-failure cooldown, failure counter for exclusion, automatic
-retry, or fallback. Only the existing qualified authentication, capability, and
-quota evidence in [Selection and continuity](../model-routing/spec.md#selection-and-continuity)
-may change eligibility. A request error, diagnostic summary, or absent record must
-not create a new exclusion, rewrite user priorities, or move an established
-destination. Configured priority rules may evaluate published input heads under
-the [rule authority](../model-routing/spec.md#rule-evaluation-and-explanation);
-that evaluation is not a diagnostic inference of user intent or eligibility.
+Diagnostics record failures; they do not own routing policy. Explicit
+[request fallback and failure priority policies](../model-routing/spec.md#request-fallback-and-failure-priority-override)
+own attempt permission, counters, and fixed-expiry overrides independently of
+retained diagnostic history. Record each attempted provider/model, HTTP status
+or transport reason, and final outcome without raw upstream error bodies,
+request content, or secrets. Bounded omissions remain explicit evidence gaps.
+Capture an attempt when dispatch begins, before its response headers arrive.
+Cancellation and force-stop finalize the pending attempt with an honest terminal
+outcome, not a lingering in-progress entry or a fabricated provider failure.
+Clearing or evicting history must not clear provider failure state, change quota
+facts, or move established destinations. Priority rules and current failure state
+are explained separately; no diagnostic summary implicitly creates a policy.
 
 ## Observable acceptance
 

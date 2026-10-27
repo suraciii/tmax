@@ -155,6 +155,27 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     if path == "provider inspect" {
         return inspection::provider_inspect(store, &file, r).await;
     }
+    if path == "provider failure-reset" {
+        let provider = operand(r, 0)?;
+        if r.if_revision
+            .as_ref()
+            .is_some_and(|expected| expected != &file.revision)
+        {
+            return Err(Error::new(
+                "inputs_changed",
+                "Saved configuration differs from the requested revision",
+            ));
+        }
+        if r.dry_run {
+            let state = crate::failures::inspect(store, config, provider, chrono::Utc::now())?;
+            return Ok(
+                json!({"provider":provider,"reset":false,"failure_state":state,"requested":"provider failure-reset"}),
+            );
+        }
+        let _lock = store.lock("configuration")?;
+        config::guard(store, &file.revision)?;
+        return crate::failures::reset(store, config, provider);
+    }
     if path == "provider refresh" {
         let provider = config
             .providers
@@ -249,6 +270,63 @@ mod tests {
             dry_run: false,
             if_revision: None,
         }
+    }
+    #[tokio::test]
+    async fn provider_failure_reset_previews_without_mutation_and_checks_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.failure_policy]\nconsecutive_failures=1\npriority=-100\nduration_seconds=3600\nerrors={http_statuses=[503]}\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let config = config::parse(text).unwrap();
+        crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        let runtime = crate::inputs::read_runtime(&store).unwrap();
+        let (identity, authorization) =
+            crate::inputs::provider_scope_binding(&runtime, &config, "p").unwrap();
+        crate::failures::record(
+            &store,
+            &config,
+            "p",
+            &identity,
+            &authorization,
+            &crate::failures::epoch(&store, &config, "p").unwrap(),
+            false,
+            Some(503),
+            None,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let state_path = store.root.join("provider-failures/state.json");
+        let before = std::fs::read(&state_path).unwrap();
+        let mut request = request(&["provider", "failure-reset"], &["p"], &[]);
+        request.dry_run = true;
+        request.if_revision = Some(config::revision(text.as_bytes()));
+        let preview = dispatch(&store, &request).await.unwrap();
+        assert_eq!(preview["reset"], false);
+        assert_eq!(preview["failure_state"]["active_priority"], -100);
+        let response = success_response("provider failure-reset", true, preview);
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.body["status"], "dry_run");
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        request.if_revision = Some("stale".into());
+        assert_eq!(
+            dispatch(&store, &request).await.unwrap_err().code,
+            "inputs_changed"
+        );
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        request.if_revision = Some(config::revision(text.as_bytes()));
+        request.dry_run = false;
+        let reset = dispatch(&store, &request).await.unwrap();
+        let response = success_response("provider failure-reset", false, reset);
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.body["operation"], "provider failure-reset");
+        assert_eq!(response.body["status"], "success");
+        let state = crate::failures::inspect(&store, &config, "p", chrono::Utc::now()).unwrap();
+        assert!(state["active_priority"].is_null());
+        assert_eq!(state["consecutive_failures"], 0);
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            text.as_bytes()
+        );
     }
     #[cfg(unix)]
     #[tokio::test]
