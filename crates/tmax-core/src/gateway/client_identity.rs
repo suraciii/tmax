@@ -146,7 +146,7 @@ pub(super) fn upstream_headers(
                     | "sec-fetch-dest"
             )
         {
-            out.insert(name.clone(), value.clone());
+            out.append(name.clone(), value.clone());
         }
     }
     if let Some(session) = go_session_header.and_then(|name| headers.get(name)) {

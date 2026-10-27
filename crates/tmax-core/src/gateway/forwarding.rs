@@ -267,7 +267,6 @@ pub(super) async fn forward(
             go_session_header,
             &upstream_url,
         ))
-        .header("content-type", "application/json")
         .body(bytes);
     if protocol == "messages"
         && crate::provider_integration::integration_id(provider).ok() != Some("opencode-go")
