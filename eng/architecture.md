@@ -99,6 +99,10 @@ private to the feature unless another feature has a concrete consumer.
   recursive compatibility normalization to preserve the former parser's semantics.
   Forwarding releases the input bytes and policy facts before waiting for upstream
   credentials or response headers; the outbound transport owns the emitted body.
+  Forwarding preserves incoming end-to-end header values, including repeated
+  values and `Content-Type` parameters. It neither adds a missing `Content-Type`
+  nor appends a second one. Existing credential, hop-by-hop, routing, and local
+  browser-header boundaries remain separate from this transparent forwarding.
 - Client-identity and native-context modules own client attribution;
   `capabilities.rs` owns request/model compatibility checks.
 - `probe.rs` owns explicit diagnostics; `response_observer.rs` owns response

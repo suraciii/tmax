@@ -13,6 +13,64 @@ fn key_comparison_requires_exact_bytes() {
 }
 
 #[tokio::test]
+async fn forwarding_preserves_client_content_type_values_without_inventing_one() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let upstream = Router::new().fallback(move |request: axum::extract::Request| {
+        let sent = sent.clone();
+        async move {
+            let content_types: Vec<_> = request
+                .headers()
+                .get_all("content-type")
+                .iter()
+                .map(|value| value.to_str().unwrap().to_owned())
+                .collect();
+            sent.send(content_types).await.unwrap();
+            StatusCode::OK
+        }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let (_temporary, runtime, config) = fixture();
+    let mut updated = config.clone();
+    for protocol in ["responses", "chat-completions", "messages"] {
+        updated
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .endpoints
+            .insert(protocol.into(), format!("http://{address}"));
+    }
+    publish(&runtime, &config, &updated, "content-type");
+    runtime.open();
+    for path in ["/v1/responses", "/v1/chat/completions", "/v1/messages"] {
+        for client_types in [
+            vec![],
+            vec!["application/json"],
+            vec!["application/json; charset=utf-8"],
+            vec!["application/vnd.example+json"],
+            vec!["application/json", "application/vnd.example+json"],
+        ] {
+            let mut request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header("authorization", "Bearer test-local-key")
+                .header("user-agent", "pi (linux test; x64)");
+            for &content_type in &client_types {
+                request = request.header("content-type", content_type);
+            }
+            let request = request.body(Body::from(r#"{"model":"p/m","input":"x","store":false,"messages":[{"role":"user","content":"x"}]}"#)).unwrap();
+            let response = forward(State(runtime.clone()), request).await;
+            let actual = received.recv().await.unwrap();
+            assert_eq!(actual, client_types, "path={path}");
+            assert_eq!(response.status(), StatusCode::OK);
+            to_bytes(response.into_body(), 4096).await.unwrap();
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
 async fn messages_beta_selector_reaches_upstream_and_other_queries_never_dispatch() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
