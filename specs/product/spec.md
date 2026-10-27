@@ -726,8 +726,8 @@ relocate the store, shorten the path, or choose an alternate control endpoint.
 The gateway must bound active requests, accepted request size, and request/response
 buffers. When local capacity is unavailable, reject a new request immediately
 with a distinguishable local-capacity result before upstream dispatch. There is
-no request waiting queue or local retry/failover. A caller decides whether to
-make a new request; rejection must not change model priorities or eligibility.
+no request waiting queue or failover for local capacity rejection. A caller decides
+whether to make a new request; rejection must not change priorities or eligibility.
 
 Streaming must propagate backpressure instead of accumulating unbounded output
 for a slow client. Enforce finite buffering even when an operation needs to
@@ -750,8 +750,9 @@ After inference dispatch, tmax must not impose a default total-generation,
 first-token, or text-idle timeout. A reasoning interval without text is not
 failure evidence. A connection or credential deadline must not remain attached
 as an accidental lifetime limit on an established inference stream. Explicit
-caller cancellation and qualified client/upstream deadlines remain observable;
-none permits automatic replay or switching the request's destination.
+caller cancellation and qualified client/upstream deadlines remain observable.
+Only explicit [request fallback](../model-routing/spec.md#request-fallback-and-failure-priority-override)
+permits another attempt, before response delivery and without moving retained sessions.
 
 ### Outbound network policy
 

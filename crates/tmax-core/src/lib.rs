@@ -5,6 +5,7 @@ pub mod agent_integration;
 pub mod catalog;
 pub mod config;
 pub mod diagnostics;
+pub mod failures;
 pub mod gateway;
 pub mod inputs;
 pub mod observations;

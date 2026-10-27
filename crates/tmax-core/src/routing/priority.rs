@@ -86,6 +86,7 @@ pub fn validate_model(model: &Model, provider: &Provider) -> Result<()> {
 pub(super) fn evaluate(
     config: &Config,
     snapshot: &Snapshot,
+    failures: &crate::failures::Snapshot,
     provider: &str,
     model_name: &str,
     at: DateTime<Utc>,
@@ -246,6 +247,22 @@ pub(super) fn evaluate(
         entry["evaluation"] = evaluation;
         rules.push(entry);
     }
+    let identity = snapshot.destination_identity(provider, model_name);
+    let failure_state = failures.inspect(
+        config,
+        provider,
+        identity
+            .as_ref()
+            .map(|(identity, authorization, _)| (identity.as_str(), authorization.as_str())),
+        at,
+    )?;
+    let normal_priority = priority;
+    if let Some(replacement) = failure_state["active_priority"].as_i64() {
+        priority = replacement;
+        if let Some(expires_at) = failure_state["expires_at"].as_str() {
+            boundaries.push(json!({"kind":"failure_penalty_expiry","at":expires_at,"rule_id":null,"input":null}));
+        }
+    }
     boundaries.sort_by_cached_key(|boundary| {
         (
             boundary["at"]
@@ -264,6 +281,7 @@ pub(super) fn evaluate(
     Ok(
         json!({"at":exact_at.canonical(),"configuration_revision":snapshot.configuration_revision(),"metadata_revision":snapshot.metadata_revision(),
         "input_revisions":revisions.into_values().collect::<Vec<_>>(),"priority_rules":rules,"selected_rule_id":selected,
+        "normal_priority":normal_priority,"failure_state":failure_state,
         "effective_priority":priority,"calendar_fallback":fallback,"calendar_superseded":selected.is_some(),"boundaries":boundaries}),
     )
 }
@@ -321,6 +339,7 @@ mod tests {
         let evaluation = evaluate(
             &config,
             &snapshot,
+            &crate::failures::Snapshot::default(),
             "p",
             "m",
             at,

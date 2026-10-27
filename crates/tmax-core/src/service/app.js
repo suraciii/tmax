@@ -180,6 +180,38 @@ function field(name, label, value='', options={}) {
   return `<label class="field"><span>${escapeHtml(label)}${options.required?' <span class="required">*</span>':''}</span>${control}${options.help?`<small>${escapeHtml(options.help)}</small>`:''}</label>`;
 }
 const value = name => $('f-'+name)?.value ?? '';
+function failureConditionFields(prefix, conditions) {
+  return field(prefix+'-statuses','HTTP 错误状态码',(conditions?.http_statuses || (conditions ? [] : [429])).join(', '),{help:'逗号分隔的 400–599 整数，例如 429, 503。留空表示不匹配 HTTP 状态码。'})+
+    '<div class="form-grid">'+field(prefix+'-connection','连接建立失败',String(conditions?.connection_errors ?? !conditions),{options:[['false','不匹配'],['true','匹配']]})+
+    field(prefix+'-transport','传输中断 / 响应读取失败',String(conditions?.transport_errors ?? false),{options:[['false','不匹配'],['true','匹配']]})+'</div>';
+}
+function failureConditionArguments(prefix, path, clears) {
+  const text=value(prefix+'-statuses').trim();const statuses=text?text.split(',').map(status=>status.trim()):[];
+  if(statuses.some(status=>!/^\d{3}$/.test(status)||Number(status)<400||Number(status)>599))throw Error('HTTP 状态码必须是逗号分隔的 400–599 整数。');
+  if(new Set(statuses).size!==statuses.length)throw Error('HTTP 状态码不能重复。');
+  const connection=value(prefix+'-connection')==='true',transport=value(prefix+'-transport')==='true';
+  if(!statuses.length&&!connection&&!transport)throw Error('请至少选择一种错误条件。');
+  if(!statuses.length)clears.push(path+'.http_statuses');
+  return [...(statuses.length?[path+'.http_statuses',statuses.join(',')]:[]),path+'.connection_errors',String(connection),path+'.transport_errors',String(transport)];
+}
+function bindPolicyFields(mode, container) {
+  const update=()=>{const enabled=value(mode)==='configured';$(container).hidden=!enabled;$(container).querySelectorAll('input,select,textarea').forEach(input=>input.disabled=!enabled);};
+  $('f-'+mode).addEventListener('change',update);update();
+}
+const failureAmbiguityWarning = '传输中断和部分 HTTP 错误（尤其 5xx）不能证明上游未执行请求；重发可能造成重复推理、计费或其他副作用。请仅选择可以接受此风险的错误条件。';
+function signedInteger(text, label) {
+  if(!/^[+-]?\d+$/.test(text))throw Error(label+'必须是整数。');
+  const integer=BigInt(text);if(integer < -9223372036854775808n || integer > 9223372036854775807n)throw Error(label+'超出 64 位整数范围。');
+  return integer.toString();
+}
+function hoursToSeconds(text) {
+  const match=/^(\d+)(?:\.(\d+))?$/.exec(text);if(!match)throw Error('持续小时数必须是正十进制数。');
+  const scale=10n**BigInt((match[2] || '').length),seconds=BigInt(match[1]+(match[2] || ''))*3600n;
+  if(seconds===0n||seconds%scale!==0n)throw Error('持续小时数必须大于零，并精确对应整数秒（例如 0.5 小时为 1800 秒）。');
+  const result=seconds/scale;if(result>9223372036854775807n/1000n)throw Error('持续时长超出支持范围，最多为 9223372036854775 秒。');
+  return result.toString();
+}
+const preciseInteger = number => Number.isSafeInteger(number)?String(number):'超出浏览器精确整数显示范围';
 function resultMessage(response) {
   const body=response.body;
   const known={unsupported_protected_input:'当前 Windows 版本无法接收受保护输入。配置尚未完成，需要修复运行时后再试。',inputs_changed:'配置已被其他操作更新。请关闭此表单，刷新页面后重新编辑。',target_incomplete:'请先添加模型来源和模型；Codex 还需选择默认模型。',native_schema_incompatible:'当前安装的是 OpenCode 1，请升级到 OpenCode 2 后应用配置。',credential_unavailable:'授权凭据不可用，请检查接入授权配置。',saved_not_active:'配置已保存，但未生效。请检查原因后重新加载配置。',awaiting_native_reload:'配置已写入，请重启或重新加载对应编程工具。',unresolved_reference:'还有其他配置引用此项。请先调整相关模型、别名或工具配置。',active_requests:'仍有请求进行中。请等待请求结束后再停止。',restart_required:'配置需要重启网关才能生效。',login_source_required:'请选择负责登录的工具配置。',interactive_required:'此操作需要交互登录，请通过本地命令行完成登录后刷新状态。'};
@@ -279,6 +311,47 @@ function editProvider(id) {
       return {operation:'provider update',operands:[id],args};
     });
 }
+function providerFailurePolicy(id) {
+  const policy=state.config.providers[id]?.failure_policy;
+  const duration=Number.isSafeInteger(policy?.duration_seconds)?String(policy.duration_seconds/3600):policy?'':'1';
+  formDialog('错误优先级策略',`配置 ${escapeHtml(id)} 连续命中错误后的固定优先级。表单建议值不会自动应用；新策略默认停用，必须明确选择启用。`,
+    field('policy-mode','策略配置',policy?'configured':'absent',{options:[['absent','不配置 / 清除策略'],['configured','配置策略']]})+
+    '<div id="failure-policy-fields">'+field('policy-enabled','策略开关',String(policy?.enabled ?? false),{options:[['false','停用'],['true','明确启用策略']]})+
+    failureConditionFields('policy',policy?.errors)+'<div class="form-grid">'+field('policy-threshold','连续错误次数',policy?.consecutive_failures ?? 3,{help:'必须为 1–4294967295 的整数；成功请求会清除普通连续计数。'})+
+    field('policy-priority','触发后的固定优先级',Number.isSafeInteger(policy?.priority)?String(policy.priority):policy?'':'-100',{help:'64 位有符号整数，可为负数；替换候选的最终优先级，不是上限或扣分。大整数请手动输入准确值。'})+'</div>'+
+    field('policy-hours','持续小时数',duration,{help:policy&&Number.isSafeInteger(policy.duration_seconds)?`当前精确时长：${policy.duration_seconds} 秒。保留此显示值将保留原始秒数；修改后须能精确换算为整数秒。`:'正十进制数，必须精确换算为整数秒，例如 1 或 0.5。'})+
+    notice('触发后采用固定到期时间；期间成功或继续失败都不会提前结束或延长。到期后重新计数，也可在详情中主动重置。')+notice(failureAmbiguityWarning,'warning')+'</div>',()=>{
+      const args={set:[],clear:[]};
+      if(value('policy-mode')==='absent'){if(policy)args.clear.push('failure_policy');else throw Error('当前未配置策略；请选择配置策略后保存。');}
+      else {
+        const threshold=value('policy-threshold').trim();if(!/^\d+$/.test(threshold)||BigInt(threshold)<1n||BigInt(threshold)>4294967295n)throw Error('连续错误次数必须是 1–4294967295 的整数。');
+        const seconds=policy&&Number.isSafeInteger(policy.duration_seconds)&&value('policy-hours').trim()===duration?String(policy.duration_seconds):hoursToSeconds(value('policy-hours').trim());
+        args.set=['failure_policy.enabled',value('policy-enabled'),...failureConditionArguments('policy','failure_policy.errors',args.clear),'failure_policy.consecutive_failures',BigInt(threshold).toString(),'failure_policy.priority',signedInteger(value('policy-priority').trim(),'固定优先级'),'failure_policy.duration_seconds',seconds];
+      }
+      if(!args.set.length)delete args.set;
+      if(!args.clear.length)delete args.clear;
+      return {operation:'provider update',operands:[id],args};
+    });
+  bindPolicyFields('policy-mode','failure-policy-fields');
+}
+function providerFailureState(data, id) {
+  const selected=data.failure_state,loaded=selected?.views?.loaded,saved=selected?.views?.file || selected;
+  const labels={not_configured:'未配置策略',disabled:'策略已停用',unavailable:'状态不可用',idle:'尚未累计错误',tracking:'正在累计连续错误',active:'固定优先级生效中',expired:'固定优先级已到期'};
+  const renderView=(failure,title,projection)=>{
+    const heading=`<h3 class="subheading">${escapeHtml(title)}</h3>`;
+    if(!failure||!Object.hasOwn(labels,failure.state))return heading+notice('检查结果未提供可识别的错误策略状态，无法判断连续错误次数或固定优先级。请刷新重试。','warning');
+    const trigger=failure.trigger_reason;
+    const triggerText=trigger?[trigger.status?`HTTP ${trigger.status}`:'',({upstream_connection_failed:'连接建立失败',upstream_transport_failed:'传输中断'}[trigger.reason_code] || trigger.reason_code || '')].filter(Boolean).join(' · ') || '未知':'无';
+    const unavailable=failure.state==='unavailable';
+    const status=projection&&failure.state==='active'?'已保存策略投影：固定优先级有效':labels[failure.state];
+    return heading+`<div class="detail-facts">${fact('策略状态',status)}${fact('当前连续错误次数',!unavailable&&Number.isSafeInteger(failure.consecutive_failures)?String(failure.consecutive_failures):'未知')}${fact(projection?'投影固定优先级':'当前路由固定优先级',unavailable?'未知':failure.active_priority==null?'未生效':preciseInteger(failure.active_priority))}${fact('触发时间',unavailable?'未知':failure.triggered_at || '暂无')}${fact('到期时间',unavailable?'未知':failure.expires_at || '暂无')}${fact('触发错误',unavailable?'未知':triggerText)}</div>`+
+      (unavailable?notice((failure.reason_code==='no_loaded_snapshot'?'暂无已加载的网关配置；当前路由策略状态未知。':'无法读取或确定此视图的错误状态；不能据此认定计数为零或固定优先级未生效。')+(failure.reason_code?' 原因代码：'+escapeHtml(failure.reason_code):''),'warning'):'');
+  };
+  return renderView(loaded,'错误优先级状态 · 已加载配置（当前路由）',false)+
+    (JSON.stringify(saved)!==JSON.stringify(loaded)?notice('已保存配置的策略状态与已加载配置不同。下方仅为已保存策略投影，不代表当前网关路由。')+renderView(saved,'错误优先级状态 · 已保存策略投影',true):'')+
+    notice('只统计策略匹配的错误；普通成功会清除连续计数，生效中的固定优先级不受成功影响，且不会延长到期时间。')+
+    `<div class="actions">${button('配置错误策略','provider-failure-policy',id,'small')}${button('重置错误状态','provider-failure-reset',id,'small danger')}</div>`;
+}
 async function providerDetail(id) {
   const generation=openDialog(providerName(id),'<div class="loading">正在读取接入详情…</div>','PROVIDER');
   try {
@@ -286,7 +359,8 @@ async function providerDetail(id) {
     if(generation!==state.dialogGeneration)return;
     const p=data.provider;
     $('dialog-content').innerHTML=`<div class="actions">${button('编辑信息','provider-edit',id,'primary','settings')}${button('配置授权','provider-auth',id,'','key')}${button('添加模型','model-add',id,'','plus')}</div><div class="detail-facts">${fact('本地 ID',id)}${fact('集成类型',serviceName(p))}${fact('授权',p.auth?'已配置 · 上游未验证':'尚未配置')}${fact('账户身份',data.identity || '未知')}${fact('订阅计划',p.subscription?.plan || '未记录')}${fact('续费日期',dateValue(data.renewal) || '未知')}</div><h3 class="subheading">额度与信息来源</h3>${notice('额度未知不代表额度为零。仅显示已获取的信息，不自动查询上游提供商。')}${(data.observations?.observations || []).filter(o=>o.scope==='quota').map(o=>`<div class="detail-facts">${fact('来源',o.source)}${fact('新鲜度',stateLabel(o.freshness?.state))}${fact('观测状态',stateLabel(o.state))}</div>`).join('') || '<p class="muted">暂无已知额度观测。</p>'}${inputs?.inputs?.length?detail(inputs,'查看额度输入及新鲜度'):''}<div class="actions">${button('查询上游额度','provider-quota',id,'small')}${button('登记额度输入','provider-input',id,'small')}</div>${detail(data,'查看继承、覆盖值、端点与完整详情')}<h3 class="subheading">更多操作</h3><div class="actions">${button('高级编辑','provider-advanced',id,'small')}${button('移除接入','provider-remove',id,'small danger')}</div>`;
-  }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
+    $('dialog-content').insertAdjacentHTML('beforeend',providerFailureState(data,id));
+  }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error')+notice('接入检查失败，错误计数与固定优先级状态未知。','warning')+`<div class="actions">${button('配置错误策略','provider-failure-policy',id)}${button('重置错误状态','provider-failure-reset',id,'danger')}</div>`;}
 }
 let loginPoll;
 function stopLoginPolling() { clearTimeout(loginPoll); loginPoll=null; }
@@ -392,7 +466,11 @@ function aliasForm(encoded='') {
   const currentEfforts=current?.candidate_reasoning_effort || {};
   const models=(state.models || []).filter(m=>m.kind==='concrete');
   formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称并引用同一原生协议下的已有模型；每个候选由模型引用和别名内的局部设置组成，可单独覆盖推理强度。留空表示不覆盖客户端请求，只能使用具体模型有效推理能力元数据列出的值。Messages 不支持此覆盖。',
-    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || Object.keys(protocolNames).find(p=>models.some(m=>m.published_protocols?.includes(p))) || 'responses',{required:true,options:Object.entries(protocolNames),help:'优先选择上游已声明的 Responses；协议由客户端配置决定，网关不自动切换或转换。'})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+(id?`<div class="actions">${button('查看共同能力','alias-detail',encoded,'small')}${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
+    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || Object.keys(protocolNames).find(p=>models.some(m=>m.published_protocols?.includes(p))) || 'responses',{required:true,options:Object.entries(protocolNames),help:'优先选择上游已声明的 Responses；协议由客户端配置决定，网关不自动切换或转换。'})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+
+    field('continuity','会话连续性',current?.continuity || '',{options:[['','默认会话连续性'],['session','会话连续性'],['stateless','无状态完整上下文']],help:'错误回退仅允许显式选择无状态，且请求必须携带完整上下文；不会迁移已经建立的会话或跨接入转发上游资源引用。'})+
+    '<h3 class="subheading">请求错误回退</h3>'+field('fallback-mode','回退策略',current?.fallback?'configured':'absent',{options:[['absent','不配置 / 清除回退'],['configured','明确配置回退']]})+
+    '<div id="fallback-fields">'+failureConditionFields('fallback',current?.fallback)+notice('仅在成功响应尚未开始时，按当前优先级选择下一个未尝试的接入；同一请求不会重复尝试同一接入。成功响应一旦开始（包括流式响应），后续中断也不会自动重试或切换。')+notice(failureAmbiguityWarning,'warning')+'</div>'+
+    (id?`<div class="actions">${button('查看共同能力','alias-detail',encoded,'small')}${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
       const candidates=[...document.querySelectorAll('[name=candidate]:checked')].map(i=>i.value);if(!candidates.length)throw Error('请至少选择一个候选模型。');
       const args={protocol:[protocol || value('protocol')],candidate:candidates};if(id&&protocol!==value('protocol'))args['new-protocol']=[value('protocol')];
       const efforts=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value.trim()]));
@@ -401,8 +479,17 @@ function aliasForm(encoded='') {
       if(value('protocol')==='messages'&&set.length)throw Error('Messages 不支持候选推理强度覆盖；请清除该候选的覆盖后重试。');
       if(set.length)args['candidate-reasoning-effort']=set;
       if(clear.length)args['clear-candidate-reasoning-effort']=clear;
+      const fields=[],clearFields=[];
+      if(value('continuity'))fields.push('continuity',value('continuity'));else if(current?.continuity)clearFields.push('continuity');
+      if(value('fallback-mode')==='configured'){
+        if(value('continuity')!=='stateless')throw Error('请求错误回退要求显式选择“无状态完整上下文”；已有会话不能迁移。');
+        fields.push(...failureConditionArguments('fallback','fallback',clearFields));
+      }else if(current?.fallback)clearFields.push('fallback');
+      if(fields.length)args.set=fields;
+      if(clearFields.length)args.clear=clearFields;
       return {operation:id?'model alias update':'model alias add',operands:[value('id').trim()],args};
     });
+  bindPolicyFields('fallback-mode','fallback-fields');
   const update=()=>{
     const prior=[...document.querySelectorAll('[name=candidate]')];const selectedCandidates=new Set(prior.length?prior.filter(input=>input.checked).map(input=>input.value):current?.candidates || []);
     const entered=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value]));
@@ -672,6 +759,8 @@ async function dispatch(action,id) {
     case 'provider-add': await addProvider();break;
     case 'provider-detail': await providerDetail(id);break;
     case 'provider-edit': editProvider(id);break;
+    case 'provider-failure-policy': providerFailurePolicy(id);break;
+    case 'provider-failure-reset': formDialog('重置接入错误状态',`清除 ${escapeHtml(id)} 的连续错误计数和生效中的固定优先级。不会删除策略，也不会验证上游已经恢复。`,notice('请先预览影响；确认重置后，后续请求重新累计错误。'),()=>({operation:'provider failure-reset',operands:[id]}),{submit:'重置错误状态',success:'错误状态已重置',onSaved:()=>providerDetail(id)});break;
     case 'provider-auth': providerAuth(id);break;
     case 'provider-remove': openOperation('provider remove',[id]);break;
     case 'provider-advanced': openOperation('provider update',[id]);break;

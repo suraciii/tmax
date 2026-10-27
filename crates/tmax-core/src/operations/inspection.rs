@@ -185,7 +185,7 @@ pub(super) async fn provider_inspect(
             }
         }
     };
-    let loaded_endpoint = match loaded {
+    let loaded_endpoint = match &loaded {
         Ok(Some(loaded)) => endpoint(&loaded.config, &loaded.revision),
         Ok(None) => {
             json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"resolution":null,"reason_code":"no_loaded_snapshot"})
@@ -196,8 +196,25 @@ pub(super) async fn provider_inspect(
     };
     let observations = crate::observations::inspect(store, config, id)
         .unwrap_or_else(|error| json!({"state":"unavailable","reason_code":error.code}));
+    let now = chrono::Utc::now();
+    let unavailable = |error: Error| json!({"state":"unavailable","reason_code":error.code});
+    let file_failure = config::load(store)
+        .and_then(|file| crate::failures::inspect(store, &file.config, id, now))
+        .unwrap_or_else(unavailable);
+    let loaded_failure = match &loaded {
+        Ok(Some(file)) => crate::failures::inspect_loaded(store, &file.config, id, now)
+            .unwrap_or_else(unavailable),
+        Ok(None) => json!({"state":"unavailable","reason_code":"no_loaded_snapshot"}),
+        Err(error) => unavailable(error.clone()),
+    };
+    let mut failure_state = if arg(r, "state") == Some("loaded") {
+        loaded_failure.clone()
+    } else {
+        file_failure.clone()
+    };
+    failure_state["views"] = json!({"file":file_failure,"loaded":loaded_failure});
     Ok(
-        json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"identity":null,"upstream_authentication":"unverified","observations":observations,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
+        json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"identity":null,"upstream_authentication":"unverified","observations":observations,"failure_state":failure_state,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
     )
 }
 
@@ -360,6 +377,7 @@ mod tests {
             candidates: vec!["p/m".into()],
             enabled: true,
             continuity: None,
+            fallback: None,
         });
         config.agents.insert(
             "target".into(),

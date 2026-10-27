@@ -1,5 +1,5 @@
 //! Same-protocol model gateway: a stable public facade over private feature owners.
-//! No retries, resource lookup, or protocol translation.
+//! Explicit bounded alias fallback; no resource lookup or protocol translation.
 use serde_json::{Value, json};
 
 mod bindings;

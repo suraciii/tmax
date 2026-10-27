@@ -43,6 +43,17 @@ pub(super) fn apply_fields(value: &mut Value, r: &Request, owner: &str) -> Resul
         let v = match kind {
             "boolean" => Value::Boolean(boolean(&pair[1])?),
             "integer" => integer(&pair[1])?,
+            "comma-u16-list" => Value::Array(
+                pair[1]
+                    .split(',')
+                    .map(|part| {
+                        part.trim()
+                            .parse::<u16>()
+                            .map(|n| Value::Integer(i64::from(n)))
+                            .map_err(|_| error())
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ),
             "nonnegative-integer" => {
                 let n = pair[1].parse::<i64>().map_err(|_| error())?;
                 if n < 0 {
@@ -84,6 +95,15 @@ pub(in crate::operations) fn fields(owner: &str) -> &'static [(&'static str, &'s
             ("subscription.auto_renew", "boolean"),
             ("subscription.charge.amount", "string"),
             ("subscription.charge.currency", "string"),
+            ("failure_policy.enabled", "boolean"),
+            ("failure_policy.errors.http_statuses", "comma-u16-list"),
+            ("failure_policy.errors.connection_errors", "boolean"),
+            ("failure_policy.errors.transport_errors", "boolean"),
+            ("failure_policy.consecutive_failures", "integer"),
+            ("failure_policy.priority", "integer"),
+            ("failure_policy.duration_seconds", "integer"),
+            ("failure_policy", "container"),
+            ("failure_policy.errors", "container"),
             ("endpoints", "container"),
             ("overrides", "container"),
             ("subscription", "container"),
@@ -124,7 +144,14 @@ pub(in crate::operations) fn fields(owner: &str) -> &'static [(&'static str, &'s
             ("overrides.cost", "container"),
             ("overrides.reasoning_options", "container"),
         ],
-        "alias" => &[("enabled", "boolean"), ("continuity", "string")],
+        "alias" => &[
+            ("enabled", "boolean"),
+            ("continuity", "string"),
+            ("fallback.http_statuses", "comma-u16-list"),
+            ("fallback.connection_errors", "boolean"),
+            ("fallback.transport_errors", "boolean"),
+            ("fallback", "container"),
+        ],
         _ => &[],
     }
 }
@@ -151,6 +178,40 @@ mod tests {
     use super::super::document::table;
     use super::*;
     use std::collections::BTreeMap;
+    #[test]
+    fn policy_status_lists_are_typed_and_whole_policies_can_be_cleared() {
+        let mut request = Request {
+            command: vec!["provider".into(), "update".into()],
+            operands: vec!["p".into()],
+            arguments: BTreeMap::from([(
+                "set".into(),
+                vec![
+                    "failure_policy.errors.http_statuses".into(),
+                    "429, 503".into(),
+                    "failure_policy.priority".into(),
+                    "-100".into(),
+                ],
+            )]),
+            dry_run: true,
+            if_revision: None,
+        };
+        let mut value = table();
+        apply_fields(&mut value, &request, "provider").unwrap();
+        assert_eq!(
+            value["failure_policy"]["errors"]["http_statuses"],
+            Value::Array(vec![Value::Integer(429), Value::Integer(503)])
+        );
+        assert_eq!(value["failure_policy"]["priority"].as_integer(), Some(-100));
+        for invalid in ["", "429,", "429,no", "65536"] {
+            request.arguments.get_mut("set").unwrap()[1] = invalid.into();
+            assert!(apply_fields(&mut table(), &request, "provider").is_err());
+        }
+        request.arguments = BTreeMap::from([("clear".into(), vec!["failure_policy".into()])]);
+        apply_fields(&mut value, &request, "provider").unwrap();
+        assert!(value.get("failure_policy").is_none());
+        assert!(field_kind("alias", "fallback", true).is_ok());
+        assert!(field_kind("alias", "fallback", false).is_err());
+    }
     #[test]
     fn no_arbitrary_fields_and_parent_rebuild() {
         let r = Request {

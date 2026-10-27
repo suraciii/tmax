@@ -220,6 +220,7 @@ Supported provider fields:
 | `subscription` | Optional user-maintained subscription information |
 | `models` | Table of explicitly registered concrete models keyed by exact upstream model ID |
 | `inputs` | Optional table of named provider-local input declarations; omission means empty |
+| `failure_policy` | Optional provider-wide consecutive-error fixed-priority policy; omission disables it. See [Failure policy fields](#failure-policy-fields). |
 
 Provider integration selection uses tmax's qualified registry, not execution of the
 catalog's `npm` value or inference from a provider ID. The local integration
@@ -424,6 +425,33 @@ automatic acquisition is explicitly paused; explicit refresh and manual record
 operations remain available without one. Scheduling, safe credentials, publication,
 and late-result rejection belong to the input lifecycle, not configuration loading.
 
+### Failure policy fields
+
+`[providers.<id>.failure_policy]` controls a fixed replacement score, not a cap
+or an edit to model base priorities. [Routing](../model-routing/spec.md#request-fallback-and-failure-priority-override)
+owns counting, lifetime, and attempt behavior.
+
+| Field | Type and constraint |
+| --- | --- |
+| `enabled` | Optional boolean, default true when a complete policy is explicitly configured |
+| `errors` | Required failure-conditions table below |
+| `consecutive_failures` | Required positive integer representable as unsigned 32-bit |
+| `priority` | Required signed 64-bit replacement priority |
+| `duration_seconds` | Required positive integer representable as an expiry duration |
+
+Failure conditions are shared by `failure_policy.errors` and alias `fallback`:
+
+| Field | Type and constraint |
+| --- | --- |
+| `http_statuses` | Optional unique array of integer HTTP error statuses 400–599; default empty |
+| `connection_errors` | Optional boolean, default false; connection-establishment failures |
+| `transport_errors` | Optional boolean, default false; ambiguous transport failures |
+
+At least one condition must be selected. Unknown fields, duplicate statuses,
+incomplete policies, zero counts/durations, and unrepresentable expiry are invalid
+even for disabled policies. Runtime streaks and expiry are not configuration.
+
+
 ## Concrete model settings
 
 `[providers.<id>.models."<upstream-id>"]` declares one child of its provider,
@@ -572,6 +600,7 @@ this ownership distinction adds no new syntax.
 | `candidate_reasoning_effort` | Optional map from exact members of `candidates` to nonempty effort strings without whitespace/control characters; omission or an empty map means no overrides. Values require the positive effective capability declaration and supported native protocol in [Request parameters](../model-routing/spec.md#request-parameters). |
 | `enabled` | Optional boolean, default true |
 | `continuity` | Optional `session` or `stateless`, default `session`; shared by every caller. Stateless requests still require qualified independent request context. |
+| `fallback` | Optional failure-conditions table; omission disables request fallback. Requires explicit `continuity = "stateless"`. |
 
 Duplicate `(protocol, id)` pairs and collisions with registered concrete public
 IDs in the same protocol scope are invalid, including disabled entries. Missing,

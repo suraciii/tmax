@@ -389,6 +389,7 @@ mod tests {
             candidate_reasoning_effort: BTreeMap::new(),
             enabled: true,
             continuity: Some("stateless".into()),
+            fallback: None,
         };
         (config, snapshot, alias)
     }

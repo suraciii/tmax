@@ -422,6 +422,11 @@ fn provider_commands() -> Command {
         "`subscription.plan`, `subscription.billing_period`: strings; `subscription.renewal_date`, `subscription.expiry_date`: YYYY-MM-DD dates; clear makes each manual fact unknown.\n",
         "`subscription.auto_renew`: boolean; clear means unknown, not false.\n",
         "`subscription.charge.amount`: nonnegative decimal string; `subscription.charge.currency`: uppercase three-letter currency string. Set or clear the pair together.\n",
+        "`failure_policy.enabled`: boolean, defaults true. `failure_policy.errors.http_statuses`: comma-separated unique HTTP statuses 400..599, e.g. 429,503; `failure_policy.errors.connection_errors` and `.transport_errors`: booleans. At least one error condition is required.\n",
+        "`failure_policy.consecutive_failures`: positive integer count; `failure_policy.priority`: signed integer fixed replacement score (may be negative), not a cap; `failure_policy.duration_seconds`: positive integer seconds. Configure count, priority, duration, and errors together; incomplete policies are rejected atomically, even when disabled.\n",
+        "Clear `failure_policy` to remove the complete policy, or clear optional error fields to restore their empty/false defaults while keeping at least one condition. Policy state is separate from configuration; provider failure-reset clears it explicitly. Active penalties expire at a fixed time, not extended by more failures or ended by success.\n",
+        "Selecting transport errors or HTTP 5xx explicitly accepts that upstream execution or billing may already have occurred; these observations do not prove that an upstream rejected the request before execution.\n",
+        "Example: tmax provider update custom-gateway --set failure_policy.errors.http_statuses 429,503 --set failure_policy.consecutive_failures 3 --set failure_policy.priority -100 --set failure_policy.duration_seconds 3600\n",
         "Clear also accepts `endpoints`, `overrides`, `subscription`, and `subscription.charge`; endpoint tables use dedicated `--endpoint P URL`/`--clear-endpoint P` options, never scalar blobs.",
     );
     let add = mutation(
@@ -489,6 +494,8 @@ fn provider_commands() -> Command {
         .subcommand(leaf("inspect", "Inspect a provider's configuration, inherited/effective metadata, access, inputs, and references.", "File and loaded projections, endpoint resolution, auth source/known-or-unknown identity, models, subscription/balance facts, input readiness, retained secret references, and file/loaded differences are distinct. No secret resolution or remote refresh.\n\nExit: 0 when inspection completes; unknown IDs are invalid input.\nExample: tmax provider inspect deepseek")
             .arg(required_pos(1, "ID", "Local provider ID.")))
         .subcommand(refresh)
+        .subcommand(mutation(leaf("failure-reset", "Clear a provider's retained failure streak and active priority penalty.", "Resets runtime failure state only; does not change policy, configuration revision, credentials, diagnostics, or bindings. It does not start a service. Dry-run shows current failure state without clearing it. --if-revision guards the saved configuration used to identify the provider.\n\nExit: 0 when reset or preview completes; 2 for unknown provider; 3 for changed inputs; 4 for persistence failure.\nExample: tmax provider failure-reset deepseek --dry-run")
+            .arg(required_pos(1, "ID", "Local provider ID.")), true, true))
         .subcommand(add)
         .subcommand(update)
         .subcommand(mutation(leaf("rename", "Rename a provider ID and migrate all dependent qualified references in one change.", "Reject collisions and preserve provider identity. No compatibility alias, automatic session retarget, or remove/add inference.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax provider rename deepseek deepseek-main")
@@ -888,7 +895,11 @@ fn model_rule_commands() -> Command {
 }
 
 fn model_alias_commands() -> Command {
-    let alias_edit = "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session), and per-candidate reasoning effort. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set an existing candidate's effort; repeat --clear-candidate-reasoning-effort QUALIFIED to remove an override. A candidate may be changed or cleared once per request, never both. Values must be nonempty and listed in that concrete candidate's effective positive reasoning_options metadata; reasoning=true alone is not enough. Only Chat Completions and Responses support overrides; Messages does not. No arbitrary request parameters, reasoning toggles, or budgets are accepted. Each candidate is a reference to an existing registered qualified model plus alias-local settings, not a separate model. Candidate lists cannot contain aliases or bare providers; preserve order and reject duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.";
+    let alias_edit = concat!(
+        "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session), and per-candidate reasoning effort. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set an existing candidate's effort; repeat --clear-candidate-reasoning-effort QUALIFIED to remove an override. A candidate may be changed or cleared once per request, never both. Values must be nonempty and listed in that concrete candidate's effective positive reasoning_options metadata; reasoning=true alone is not enough. Only Chat Completions and Responses support overrides; Messages does not. No arbitrary request parameters, reasoning toggles, or budgets are accepted. Each candidate is a reference to an existing registered qualified model plus alias-local settings, not a separate model. Candidate lists cannot contain aliases or bare providers; preserve order and reject duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.\n",
+        "Fallback fields: fallback.http_statuses is a comma-separated list of unique HTTP statuses 400..599 (e.g. 429,503); fallback.connection_errors and fallback.transport_errors are booleans. At least one error condition and explicit continuity=stateless are required. Clear fallback to remove the policy; clear an error field to restore empty/false only if another condition remains. Fallback stays within explicit candidates and attempts each provider once. It never migrates established sessions or falls back after partial streaming output. Transport errors and 5xx may follow upstream execution: enabling them explicitly accepts duplicate execution/billing risk.\n",
+        "Example: tmax model alias update L0 --protocol chat-completions --set continuity stateless --set fallback.http_statuses 429,503",
+    );
     let add = mutation(
         leaf_with_fields(
             "add",
@@ -900,8 +911,8 @@ fn model_alias_commands() -> Command {
         .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete model; repeat in order.").required(true))
         .arg(repeated("candidate-reasoning-effort", "QUALIFIED=EFFORT", "Set an existing candidate's supported reasoning effort; repeat for distinct candidates.").long_help(alias_edit))
         .arg(repeated("clear-candidate-reasoning-effort", "QUALIFIED", "Clear one candidate's effort override; repeat for distinct candidates.").long_help(alias_edit))
-        .arg(pair("set", "FIELD", "VALUE", "Set enabled or continuity.").long_help(alias_edit))
-        .arg(repeated("clear", "FIELD", "Clear enabled or continuity.").long_help(alias_edit))
+        .arg(pair("set", "FIELD", "VALUE", "Set enabled, continuity, or a typed fallback field.").long_help(alias_edit))
+        .arg(repeated("clear", "FIELD", "Clear enabled, continuity, or fallback fields/policy.").long_help(alias_edit))
         .arg(required_pos(1, "ID", "Public alias ID.")),
         true,
         true,
@@ -918,8 +929,8 @@ fn model_alias_commands() -> Command {
         .arg(repeated("candidate", "QUALIFIED", "Replace entire ordered candidate list."))
         .arg(repeated("candidate-reasoning-effort", "QUALIFIED=EFFORT", "Set an existing candidate's supported reasoning effort; repeat for distinct candidates.").long_help(alias_edit))
         .arg(repeated("clear-candidate-reasoning-effort", "QUALIFIED", "Clear one candidate's effort override; repeat for distinct candidates.").long_help(alias_edit))
-        .arg(pair("set", "FIELD", "VALUE", "Set enabled or continuity.").long_help(alias_edit))
-        .arg(repeated("clear", "FIELD", "Clear enabled or continuity.").long_help(alias_edit))
+        .arg(pair("set", "FIELD", "VALUE", "Set enabled, continuity, or a typed fallback field.").long_help(alias_edit))
+        .arg(repeated("clear", "FIELD", "Clear enabled, continuity, or fallback fields/policy.").long_help(alias_edit))
         .arg(required_pos(1, "ID", "Public alias ID.")),
         true,
         true,
@@ -1283,6 +1294,65 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{OutputFormat, command};
+
+    #[test]
+    fn provider_failure_policy_accepts_negative_fixed_priority_and_explicit_reset() {
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "provider",
+                "update",
+                "p",
+                "--set",
+                "failure_policy.priority",
+                "-100",
+                "--set",
+                "failure_policy.errors.http_statuses",
+                "429,503",
+                "--dry-run",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(
+            request.arguments["set"],
+            [
+                "failure_policy.priority",
+                "-100",
+                "failure_policy.errors.http_statuses",
+                "429,503"
+            ]
+        );
+        assert!(request.dry_run);
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "provider",
+                "failure-reset",
+                "p",
+                "--dry-run",
+                "--if-revision",
+                "revision",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.command, ["provider", "failure-reset"]);
+        assert_eq!(request.operands, ["p"]);
+        assert!(request.dry_run);
+        assert_eq!(request.if_revision.as_deref(), Some("revision"));
+        assert!(
+            command()
+                .try_get_matches_from([
+                    "tmax",
+                    "provider",
+                    "update",
+                    "p",
+                    "--set",
+                    "failure_policy.priority",
+                    "--unknown",
+                ])
+                .is_err()
+        );
+    }
 
     #[test]
     fn effort_map_commands_preserve_protocol_operands_and_mutation_guards() {

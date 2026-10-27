@@ -57,6 +57,7 @@ actual supported IDs instead of promising guessed integrations.
 | `provider update ID [--endpoint P URL]... [--clear-endpoint P]... [EDIT]` | Edit selected scalar fields/protocol entries, preserving other settings. At least one edit is required. |
 | `provider rename OLD NEW` | Rename the local ID and all dependent qualified references, preserving identity. |
 | `provider remove ID` | Remove contained settings after reference checks, with retained-secret/native disclosures. |
+| `provider failure-reset ID` | Explicitly clear this provider's current consecutive failure streak and fixed-priority override; preserve settings, history, bindings, and quota facts. Supports effect-free dry-run. |
 
 Add flags set their corresponding fields; setting the same field through `EDIT`
 is an error. Display names are independent of local IDs. `REGION` is an exact ID
@@ -83,6 +84,13 @@ validation and the meaning of an omitted custom base.
 | `subscription.renewal_date`, `subscription.expiry_date` | Dates; clear means unknown. |
 | `subscription.auto_renew` | Boolean; clear means unknown, not false. |
 | `subscription.charge.amount`, `subscription.charge.currency` | Nonnegative decimal-amount and uppercase three-letter currency strings, required together. |
+| `failure_policy.enabled` | Boolean; default true for an explicitly complete policy. |
+| `failure_policy.errors.http_statuses` | Comma-separated unique integers 400–599. |
+| `failure_policy.errors.connection_errors`, `failure_policy.errors.transport_errors` | Booleans selecting failure classes. |
+| `failure_policy.consecutive_failures` | Positive unsigned 32-bit threshold. |
+| `failure_policy.priority` | Signed fixed replacement score, not a delta or cap. |
+| `failure_policy.duration_seconds` | Positive integer duration in seconds. |
+| `failure_policy` | Clear-only container; remove the policy. |
 
 Clear also accepts `endpoints`, `overrides`, `subscription`, and
 `subscription.charge`. Clearing endpoints may combine with protocol operands to
@@ -106,6 +114,12 @@ The DeepSeek example uses an exact known selector. Its omitted protocol entries
 come from that map, unlike omitted custom entries. Update region with
 `--set region REGION` or `--clear region`. Help shows actual registry region choices,
 singleton defaults, and multi-protocol setup where supported.
+
+
+`provider inspect` includes `failure_state`: current streak, fixed override,
+trigger reason/time, and expiry or an explicit unavailable state. The
+[routing policy](../../model-routing/spec.md#request-fallback-and-failure-priority-override)
+owns semantic state transitions. A manual reset never initiates an upstream probe.
 
 ## Endpoint setup and resolution data
 

@@ -15,6 +15,11 @@ page makes no external font, image, or script requests.
   integration registry supplies protocols, regional choices, and endpoint defaults.
   Configure authentication separately. Provider details expose subscriptions,
   observations, inherited metadata, overrides, and explicit upstream refresh.
+  **Configure error policy** sets matched HTTP/connection/transport failures, the
+  consecutive-failure threshold, a signed fixed replacement priority, and duration
+  in hours. New policies require explicit enablement. Details distinguish loaded
+  routing state from saved policy and expose trigger/expiry and an explicit reset.
+  Preview does not change the counter or active override.
 - **Models** separates concrete models from aliases. Concrete forms edit names,
   enabled state, and base priority. Alias forms select exact concrete candidates
   and a native protocol, with an optional reasoning-effort input for each
@@ -30,6 +35,11 @@ page makes no external font, image, or script requests.
   binding publication and dispatch; it never chooses another backend. Restore
   name inheritance with the separate clear action; an explicit empty string
   remains different from an absent override.
+  Alias forms also expose optional request-error fallback, requiring explicit
+  stateless full-context continuity and selected failure conditions. No provider
+  is attempted twice in one request; successful response delivery prevents any
+  later fallback. Transport and HTTP 5xx retries can duplicate upstream execution
+  or billing. See [request fallback and temporary priority](usage.md#request-fallback-and-temporary-provider-priority).
   Concrete **Details** shows effective reasoning declarations, catalog/override
   provenance, and each tool's desired selector mapping, including protocol-specific
   OpenCode fields and DSH `reasoningEfforts`. Missing declarations are not inferred

@@ -49,8 +49,10 @@ pub(crate) fn authorization_changed_locked(store: &Store, provider: &str) -> Res
     }
     invalidate_changed(&mut runtime, &previous);
     retain(&mut runtime);
+    crate::failures::retain(store, &previous, &runtime)?;
     write_runtime(store, &runtime)?;
-    crate::observations::retain(store, &runtime)
+    crate::observations::retain(store, &runtime)?;
+    Ok(())
 }
 /// Reconcile saved intent, preserving identities only for explicit renames.
 pub(crate) fn reconcile(
@@ -75,8 +77,10 @@ pub(crate) fn reconcile(
         .map(|file| file.revision);
     invalidate_changed(&mut runtime, &before);
     retain(&mut runtime);
+    crate::failures::retain(store, &before, &runtime)?;
     write_runtime(store, &runtime)?;
-    crate::observations::retain(store, &runtime)
+    crate::observations::retain(store, &runtime)?;
+    Ok(())
 }
 /// Called only after successful service activation, not by inspection.
 pub fn activate(store: &Store, config: &Config, revision: &str) -> Result<()> {
@@ -99,17 +103,22 @@ pub fn activate(store: &Store, config: &Config, revision: &str) -> Result<()> {
     runtime.loaded = Some(view);
     invalidate_changed(&mut runtime, &before);
     retain(&mut runtime);
+    crate::failures::retain(store, &before, &runtime)?;
     write_runtime(store, &runtime)?;
-    crate::observations::retain(store, &runtime)
+    crate::observations::retain(store, &runtime)?;
+    Ok(())
 }
 pub fn deactivate(store: &Store) -> Result<()> {
     let _lock = store.lock("routing")?;
     let mut runtime = read_runtime(store)?;
+    let before = runtime.clone();
     clear_store_schedule(store);
     runtime.loaded = None;
     retain(&mut runtime);
+    crate::failures::retain(store, &before, &runtime)?;
     write_runtime(store, &runtime)?;
-    crate::observations::retain(store, &runtime)
+    crate::observations::retain(store, &runtime)?;
+    Ok(())
 }
 
 pub(super) fn ensure_saved_view(store: &Store, captured: &Config) -> Result<()> {

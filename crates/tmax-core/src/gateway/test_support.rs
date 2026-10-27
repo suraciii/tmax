@@ -67,6 +67,7 @@ pub(super) fn fixture() -> (tempfile::TempDir, Arc<Runtime>, Config) {
         config.providers.get_mut(id).unwrap().auth = Some(Auth::ApiKey { key_ref: reference });
     }
     config.model_aliases.push(crate::config::ModelAlias {
+        fallback: None,
         candidate_reasoning_effort: Default::default(),
         id: "dynamic".into(),
         protocol: "chat-completions".into(),

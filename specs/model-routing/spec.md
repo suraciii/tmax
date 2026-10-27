@@ -611,8 +611,8 @@ authority; request admission neither starts it nor waits for it.
 Known unavailable candidates may be skipped before dispatch only for non-effort
 eligibility. An effort rejection never enables this fallback. If no candidate
 remains, return an actionable unavailable result; do not use an unconfigured
-model or instance. Once upstream execution starts, this feature does not
-replay the request on another model or authorization after an error or partial stream.
+model or instance. Request-level attempts after dispatch require the explicit
+[request fallback policy](#request-fallback-and-failure-priority-override).
 
 Local capacity shortage follows
 [local request admission](../product/spec.md#local-request-admission), not
@@ -622,21 +622,14 @@ refresh follows
 [its coordination contract](../product/spec.md#credential-refresh-coordination),
 not another priority rule or permission to replay inference.
 
-Transient failures do not create a general cooldown or circuit breaker. A timeout,
-connection failure, generic rate-limit response, or upstream 5xx is a dated
-failure observation, not a persistent change to candidate eligibility, priority,
-or enablement. The next new selection evaluates the ordinary rules again and
-may select the same model. Do not accumulate failure counters into automatic
-exclusions, run recovery probes in the background, or expose a cooldown-reset
-operation for state this product does not maintain.
-
-Provider-specific evidence that establishes unavailable authorization, a known
-non-effort capability mismatch, or current quota exhaustion still applies within its
-qualified scope. A status code alone does not establish that evidence. Show an
-upstream retry hint when safe, but do not turn it into scheduled replay or an
-unqualified availability rule. The absence of downstream response bytes is not
-proof that upstream execution did not start; an ambiguous send outcome must not
-authorize retry on another provider or model.
+Without an explicit failure policy, transient errors do not change candidate
+eligibility, priority, or enablement. A configured failure priority override
+changes preference only; it does not establish exhausted quota or revoke access.
+Provider-specific evidence of unavailable authorization, non-effort capability
+mismatch, or current quota exhaustion still applies within its qualified scope.
+A status code alone does not establish those facts. An upstream retry hint does
+not schedule replay. Ambiguous outcomes may be attempted through another provider
+only under the explicit transport-error fallback option and its disclosed risk.
 
 Quota-based exclusion requires authoritative, sufficiently fresh evidence of
 exhaustion that applies to the selected upstream identity, model coverage, and
@@ -652,6 +645,59 @@ the provider may permit paid continuation. Exclusion requires scoped evidence of
 unavailable access, not a guess about billing policy. Do not query or model Extra
 Usage settings, subscription add-on wallets, or budget/spending-cap controls for
 routing. A qualified API-balance observation remains valid availability evidence.
+
+### Request fallback and failure priority override
+
+Fallback is opt-in on each protocol-qualified stateless model alias. It uses only
+that alias's explicit candidates and preserves the admitted configuration,
+protocol, request parameters, and full independent context. Fixed concrete
+requests, retained sessions, and upstream-owned continuation or resource IDs
+cannot move to another provider. Client qualification and provider restrictions
+remain mandatory.
+
+| Condition | Request behavior |
+| --- | --- |
+| Configured upstream HTTP error or configured connection/transport failure before delivery | Select the highest-current-priority eligible, unattempted provider among the admitted alias candidates. Resolve its own endpoint, model, authorization, and explicit effort from the original request. |
+| A provider has already been attempted | Never attempt that provider again within this request, including through another of its models. No delay, waiting queue, or same-provider retry loop. |
+| Later candidate fails request/effort validation | Reject; fallback cannot evade validation or silently change controls. |
+| No unattempted eligible candidate remains | Deliver the last upstream HTTP rejection when available, or the transport failure. Retain the attempted-provider chain. |
+| Successful response delivery has begun, including streaming headers | Never switch, splice output, or replay after partial delivery. |
+| Client cancellation, local capacity failure, or local validation failure | Do not fallback or count it as a provider failure. |
+
+HTTP error classes and connection/transport conditions are explicit user choices,
+not inferred quota signals. Selecting 5xx or ambiguous transport failures must
+disclose possible duplicate execution and billing. No response bytes is not proof
+of no upstream execution. There is no implicit inference timeout or background
+recovery probe. A request retains one local active slot across all attempts.
+
+A provider may opt into one failure priority policy. Its condition list is
+independent of an alias's fallback conditions. Matching failures from gateway
+attempts across its models count toward the configured consecutive threshold;
+fallback success on another provider cannot clear that count. A complete,
+observed successful attempt clears an ordinary streak. Unmatched errors,
+cancellation, or unknown completion neither increment nor clear it.
+
+| State or event | Priority and state effect |
+| --- | --- |
+| Threshold reached | Fix the provider's models to the configured replacement priority until trigger time plus configured duration. This overrides signal, calendar, and base scores, not enablement. |
+| Override active | Further errors do not extend expiry; success does not shorten it. Other providers' states are independent. |
+| Exact expiry | Old streak is zero; evaluate ordinary priority rules again. No recovery request is sent. |
+| Explicit failure reset | Clear the provider's streak and override without changing desired configuration, observations, history, or bindings. Outcomes from requests admitted before the reset cannot recreate that state. |
+| Restart or diagnostic history clear | Preserve the original override expiry and streak. |
+| Authorization or semantic policy replacement | Old state and late old-admission outcomes cannot affect the new authorization/policy, including replacement followed by restoration of the original policy. Same-policy reloads and provider ID renames preserve state; pending saved edits do not reset a still-loaded policy. |
+
+Concurrent outcomes are applied atomically in observation order. Priority state
+is independently retained operational state, not a mutation of configured base
+priority or a derivation reconstructed from diagnostic history. Read/explain
+shows normal score, current fixed override, streak, trigger reason, and absolute
+expiry; clearing history must not clear the override. A later fallback attempt
+reads current failure priority state without interrupting an already dispatched
+attempt. No existing session is reassigned by a priority change.
+Admission-time lineage, input heads, metadata, and endpoint resolution remain
+available to fallback even when an unrelated configuration reload occurs while
+an earlier attempt is running. A later attempt uses current failure overrides,
+not a reconstruction of its admitted identities from the replacement configuration.
+
 
 Continuity belongs to the shared alias definition: session-stable by default,
 stateless only by explicit configuration and qualified request context. The
@@ -701,12 +747,12 @@ upstream login-source scope or authorization change still has its normal blocker
 Shared-key replacement changes access for subsequent requests, never a session's
 namespace, retained destination, original evidence, or blocked state.
 
-In-flight requests retain their admission-time configuration, metadata, input
-heads, selected provider/model and resolved endpoint, and authorization snapshots
-through activation and input publication. Blocking applies to subsequent
-admission, not reassignment or replay of an in-flight request. Upstream
-conversation, response, file, and cache IDs must not cross account or provider
-boundaries.
+In-flight attempts retain their admission-time configuration, metadata, selected
+provider/model, resolved endpoint, and authorization snapshots through activation
+and input publication. Policy activation does not reassign an attempt. An explicit
+stateless fallback may start another attempt under its admitted candidate policy;
+current failure overrides affect that later selection. Upstream conversation,
+response, file, and cache IDs must not cross account or provider boundaries.
 
 OpenCode Chat Completions may establish its first gateway binding from its
 native `x-opencode-session` affinity and complete independent conversation
@@ -990,8 +1036,9 @@ the same alias ID; the gateway
 forwards the selected candidate's exact upstream ID and credentials. Adding another
 Go instance does not enroll it automatically. Candidate additions and ranking
 changes leave in-flight and established-session destinations stable. Removing a
-retained candidate blocks that session on activation without reassignment; an
-error after execution starts does not replay on a sibling.
+retained candidate blocks that session on activation without reassignment.
+Only an explicitly configured stateless fallback permits another attempt before
+response delivery; retained-session errors do not replay on a sibling.
 
 ## Acceptance boundary
 

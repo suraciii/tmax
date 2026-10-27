@@ -110,6 +110,18 @@ A user-defined condition and replacement preference score within one model.
 It changes preference, not candidate membership, entitlement, or task demand.
 _Avoid_: Task planner, quota reservation, inferred optimization
 
+**Request fallback**:
+An explicitly permitted attempt through another provider among a model alias's
+configured candidates after an upstream failure, before response delivery begins.
+It does not migrate a retained session or infer remaining quota.
+_Avoid_: Protocol translation, unlimited retry, automatic candidate discovery
+
+**Failure priority override**:
+A provider-scoped policy replacing its models' normal effective priorities with
+a fixed score for a fixed duration after consecutive configured failures.
+It changes preference, not enablement, quota facts, or established destinations.
+_Avoid_: Priority cap, permanent priority edit, quota exhaustion proof
+
 **Rule input**:
 A named, provider-scoped source of dated quota or reset-announcement facts for
 priority rules, with explicit model coverage and validity.

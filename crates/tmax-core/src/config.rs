@@ -62,6 +62,8 @@ pub struct Provider {
     pub models: BTreeMap<String, Model>,
     #[serde(default)]
     pub inputs: BTreeMap<String, InputDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_policy: Option<FailurePolicy>,
 }
 impl Default for Provider {
     fn default() -> Self {
@@ -76,8 +78,29 @@ impl Default for Provider {
             subscription: None,
             models: BTreeMap::new(),
             inputs: BTreeMap::new(),
+            failure_policy: None,
         }
     }
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FailureConditions {
+    #[serde(default)]
+    pub http_statuses: Vec<u16>,
+    #[serde(default)]
+    pub connection_errors: bool,
+    #[serde(default)]
+    pub transport_errors: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FailurePolicy {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    pub errors: FailureConditions,
+    pub consecutive_failures: u32,
+    pub priority: i64,
+    pub duration_seconds: i64,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -254,6 +277,8 @@ pub struct ModelAlias {
     #[serde(default = "yes")]
     pub enabled: bool,
     pub continuity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<FailureConditions>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -498,6 +523,23 @@ fn unique<T: Ord>(values: &[T]) -> bool {
     let set: std::collections::BTreeSet<_> = values.iter().collect();
     set.len() == values.len()
 }
+fn validate_failure_conditions(conditions: &FailureConditions, path: &str) -> Result<()> {
+    if conditions.http_statuses.is_empty()
+        && !conditions.connection_errors
+        && !conditions.transport_errors
+    {
+        return Err(invalid(path));
+    }
+    if !unique(&conditions.http_statuses)
+        || conditions
+            .http_statuses
+            .iter()
+            .any(|status| !(400..=599).contains(status))
+    {
+        return Err(invalid(&format!("{path}.http_statuses")));
+    }
+    Ok(())
+}
 pub fn validate(config: &Config) -> Result<()> {
     validate_inner(config, false)
 }
@@ -516,6 +558,20 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         let base = format!("providers.{id}");
         if !valid_id(id, false) {
             return Err(invalid("providers"));
+        }
+        if let Some(policy) = &p.failure_policy {
+            let path = format!("{base}.failure_policy");
+            validate_failure_conditions(&policy.errors, &format!("{path}.errors"))?;
+            if policy.consecutive_failures == 0 {
+                return Err(invalid(&format!("{path}.consecutive_failures")));
+            }
+            if policy.duration_seconds <= 0
+                || chrono::Duration::try_seconds(policy.duration_seconds)
+                    .and_then(|duration| chrono::Utc::now().checked_add_signed(duration))
+                    .is_none()
+            {
+                return Err(invalid(&format!("{path}.duration_seconds")));
+            }
         }
         let endpoints = crate::provider_integration::resolve(p)
             .map_err(|_| invalid(&format!("{base}.endpoints")))?;
@@ -640,6 +696,17 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
                 .is_some_and(|s| !matches!(s.as_str(), "session" | "stateless"))
         {
             return Err(invalid("model_aliases"));
+        }
+        if let Some(conditions) = &a.fallback {
+            let path = format!("model_aliases.{}.fallback", a.id);
+            validate_failure_conditions(conditions, &path)?;
+            if a.continuity.as_deref() != Some("stateless") {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    "Alias fallback requires stateless continuity; established sessions cannot migrate",
+                )
+                .field(path));
+            }
         }
         if (!allow_empty_aliases && a.candidates.is_empty()) || !unique(&a.candidates) {
             return Err(invalid("model_aliases.candidates"));
@@ -783,6 +850,72 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_policies_validate_and_reject_invalid_saves_atomically() {
+        let base = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n";
+        let alias =
+            "[[model_aliases]]\nid='fallback'\nprotocol='chat-completions'\ncandidates=['p/m']\n";
+        let old = parse(&format!("{base}{alias}")).unwrap();
+        assert!(old.providers["p"].failure_policy.is_none());
+        assert!(old.model_aliases[0].fallback.is_none());
+        let serialized = serde_json::to_value(&old).unwrap();
+        assert!(serialized["providers"]["p"].get("failure_policy").is_none());
+        assert!(serialized["model_aliases"][0].get("fallback").is_none());
+
+        let policy = "[providers.p.failure_policy]\nconsecutive_failures=3\npriority=-100\nduration_seconds=3600\nerrors={http_statuses=[429,503],connection_errors=true}\n";
+        let valid = format!(
+            "{base}{policy}{alias}continuity='stateless'\nfallback={{http_statuses=[429],transport_errors=true}}\n"
+        );
+        let parsed = parse(&valid).unwrap();
+        let failure = parsed.providers["p"].failure_policy.as_ref().unwrap();
+        assert!(failure.enabled);
+        assert_eq!(failure.priority, -100);
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::at(directory.path().into());
+        store.write_raw("tmax.toml", valid.as_bytes()).unwrap();
+        let revision = revision(valid.as_bytes());
+        for invalid in [
+            valid.replace("consecutive_failures=3", "consecutive_failures=0"),
+            valid.replace("consecutive_failures=3", "consecutive_failures=-1"),
+            valid.replace("consecutive_failures=3", "consecutive_failures=4294967296"),
+            valid.replace("priority=-100\n", ""),
+            valid.replace("duration_seconds=3600", "duration_seconds=0"),
+            valid.replace(
+                "duration_seconds=3600",
+                "duration_seconds=9223372036854775807",
+            ),
+            valid.replace("duration_seconds=3600", "duration_seconds=10000000000000"),
+            valid.replace(
+                "errors={http_statuses=[429,503],connection_errors=true}",
+                "errors={}",
+            ),
+            valid.replace(
+                "errors={http_statuses=[429,503],connection_errors=true}",
+                "enabled=false\nerrors={}",
+            ),
+            valid.replace("[429,503]", "[429,429]"),
+            valid.replace("[429,503]", "[399,503]"),
+            valid.replace("[429,503]", "[429,600]"),
+            valid.replace("continuity='stateless'", "continuity='session'"),
+            valid.replace("continuity='stateless'\n", ""),
+            valid.replace(
+                "fallback={http_statuses=[429],transport_errors=true}",
+                "fallback={}",
+            ),
+            valid.replace("transport_errors=true", "unknown_error=true"),
+        ] {
+            let document = invalid.parse().unwrap();
+            assert_eq!(
+                save(&store, &revision, &document).unwrap_err().code,
+                "invalid_configuration"
+            );
+            assert_eq!(
+                std::fs::read(store.root.join("tmax.toml")).unwrap(),
+                valid.as_bytes()
+            );
+        }
+    }
 
     #[test]
     fn effort_maps_default_empty_and_validate_protocols_and_names() {

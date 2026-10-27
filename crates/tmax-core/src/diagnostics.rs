@@ -411,6 +411,16 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "head_state"
                 | "priority"
                 | "effective_priority"
+                | "normal_priority"
+                | "failure_state"
+                | "active_priority"
+                | "consecutive_failures"
+                | "triggered_at"
+                | "expires_at"
+                | "trigger_reason"
+                | "attempts"
+                | "upstream_status"
+                | "failure_state_error"
                 | "base_priority"
                 | "fallback"
                 | "calendar"
@@ -540,6 +550,8 @@ pub fn safe_evidence(value: &Value) -> Value {
                     "selection",
                     "selected",
                     "effort_resolution",
+                    "attempts",
+                    "failure_state_error",
                     "selected_rule_id",
                     "winning_rule",
                     "calendar_fallback",
@@ -605,6 +617,7 @@ fn decision_summary(value: &Value) -> Value {
         "selection",
         "selected",
         "effort_resolution",
+        "failure_state_error",
         "selected_rule_id",
         "winning_rule",
         "calendar_fallback",
@@ -618,6 +631,20 @@ fn decision_summary(value: &Value) -> Value {
         {
             result.insert(key.into(), value.clone());
         }
+    }
+    if let Some(attempts) = value.get("attempts").and_then(Value::as_array) {
+        let mut retained = Vec::new();
+        let mut bytes = 0;
+        for attempt in attempts.iter().rev() {
+            let size = encoded_size(attempt).max(value_memory(attempt));
+            if bytes + size > RECORD_BYTES / 4 {
+                break;
+            }
+            bytes += size;
+            retained.push(attempt.clone());
+        }
+        retained.reverse();
+        result.insert("attempts".into(), Value::Array(retained));
     }
     if let Some(evaluation) = value.pointer("/selected_evaluation/priority_evaluation") {
         result.insert("selected_evaluation".into(), decision_summary(evaluation));

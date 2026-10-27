@@ -8,6 +8,7 @@ use crate::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::{borrow::Cow, collections::BTreeSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Selection {
@@ -111,6 +112,11 @@ enum SelectionView<'a> {
         request: Option<RequestRequirements<'a>>,
         context: Option<&'a Advice<'a>>,
     },
+    Admitted {
+        snapshot: &'a Snapshot<'a>,
+        request: RequestRequirements<'a>,
+        excluded_providers: &'a BTreeSet<String>,
+    },
 }
 fn decision(
     store: &Store,
@@ -121,19 +127,35 @@ fn decision(
     exact_at: &inputs::ExactInstant,
     view: SelectionView<'_>,
 ) -> Result<(Value, Option<Selection>)> {
-    let (snapshot, body, native, context) = match view {
-        SelectionView::Saved { body, context } => {
-            (Snapshot::capture(store, config), body, None, context)
-        }
+    let (snapshot, body, native, context, excluded_providers) = match view {
+        SelectionView::Saved { body, context } => (
+            Cow::Owned(Snapshot::capture(store, config)),
+            body,
+            None,
+            context,
+            None,
+        ),
         SelectionView::Loaded {
             metadata,
             request,
             context,
         } => (
-            Snapshot::capture_loaded(store, config, metadata),
+            Cow::Owned(Snapshot::capture_loaded(store, config, metadata)),
             request.map(|request| request.body),
             request.map(|request| request.native),
             context,
+            None,
+        ),
+        SelectionView::Admitted {
+            snapshot,
+            request,
+            excluded_providers,
+        } => (
+            Cow::Borrowed(snapshot),
+            Some(request.body),
+            Some(request.native),
+            None,
+            Some(excluded_providers),
         ),
     };
     let (alias, candidates) = candidates(config, id, protocol)?;
@@ -149,13 +171,14 @@ fn decision(
         })
         .map(|_| crate::agent_integration::compatibility::AuthorizationSnapshot::capture(store));
     let mut evaluations = Vec::new();
+    let failures = crate::failures::Snapshot::capture(store, config)?;
     let mut ranked = Vec::new();
     let mut excluded = Vec::new();
     for (provider, name) in candidates {
         let p = &config.providers[&provider];
         let m = &p.models[&name];
         let effort = config.candidate_effort(id, protocol, &provider, &name);
-        let evaluation = evaluate(config, &snapshot, &provider, &name, at, exact_at)?;
+        let evaluation = evaluate(config, &snapshot, &failures, &provider, &name, at, exact_at)?;
         let identity = snapshot.destination_identity(&provider, &name);
         let native_assessment =
             context
@@ -173,10 +196,15 @@ fn decision(
                     }
                     Ok(())
                 });
-        let reason = native_assessment
-            .as_ref()
-            .and_then(|result| result.as_ref().err())
-            .map(|error| error.code.as_str())
+        let reason = excluded_providers
+            .filter(|providers| providers.contains(&provider))
+            .map(|_| "provider_already_attempted")
+            .or_else(|| {
+                native_assessment
+                    .as_ref()
+                    .and_then(|result| result.as_ref().err())
+                    .map(|error| error.code.as_str())
+            })
             .or_else(|| {
                 eligibility(
                     p,
@@ -388,6 +416,43 @@ pub fn select_request_loaded(
     selection.ok_or_else(|| request_unavailable(&evidence))
 }
 
+/// Re-rank the immutable admitted configuration without revisiting attempted providers.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn select_request_admitted(
+    store: &Store,
+    config: &Config,
+    id: &str,
+    protocol: &str,
+    at: DateTime<Utc>,
+    request: RequestRequirements<'_>,
+    snapshot: &inputs::Snapshot<'_>,
+    excluded_providers: &BTreeSet<String>,
+) -> Result<Selection> {
+    let (evidence, selection) = decision(
+        store,
+        config,
+        id,
+        protocol,
+        at,
+        &inputs::ExactInstant::from_chrono(at),
+        SelectionView::Admitted {
+            snapshot,
+            request,
+            excluded_providers,
+        },
+    )?;
+    selection.ok_or_else(|| {
+        if excluded_providers.is_empty() {
+            request_unavailable(&evidence)
+        } else {
+            Error::new(
+                "fallback_exhausted",
+                "No unattempted provider satisfies the admitted request requirements",
+            )
+        }
+    })
+}
+
 pub(crate) fn explain_loaded(
     store: &Store,
     config: &Config,
@@ -465,6 +530,7 @@ mod tests {
             candidates: vec!["old/m".into()],
             enabled: true,
             continuity: None,
+            fallback: None,
         });
         store
             .write_raw("tmax.toml", toml::to_string(&loaded).unwrap().as_bytes())
