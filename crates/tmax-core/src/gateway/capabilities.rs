@@ -14,13 +14,87 @@ pub fn mismatch(
     body: &Value,
     candidate_effort: Option<(&str, &str)>,
 ) -> Option<&'static str> {
+    check(
+        provider,
+        model_id,
+        model,
+        metadata,
+        body,
+        candidate_effort,
+        true,
+    )
+}
+
+/// Ranking must never depend on the caller's effort or a candidate's override.
+pub fn ranking_mismatch(
+    provider: &Provider,
+    model_id: &str,
+    model: &Model,
+    metadata: Option<&catalog::Snapshot>,
+    body: &Value,
+) -> Option<&'static str> {
+    check(provider, model_id, model, metadata, body, None, false)
+}
+
+/// Validate the already selected destination without changing its eligibility.
+pub fn selected_mismatch(
+    provider: &Provider,
+    model_id: &str,
+    model: &Model,
+    metadata: Option<&catalog::Snapshot>,
+    body: &Value,
+    effort: Option<&str>,
+    explicit: bool,
+) -> Option<&'static str> {
     let projection =
         match catalog::effective_from_snapshot(metadata, provider, Some((model_id, model))) {
             Ok(value) => value,
             Err(_) => return Some("metadata_unavailable"),
         };
     let effective = &projection["effective"];
-    if let Some((protocol, effort)) = candidate_effort
+    if let Some(reason) = check_effective(effective, body, None, false) {
+        return Some(reason);
+    }
+    let effort = effort?;
+    if explicit {
+        return crate::reasoning::supported(effective, effort);
+    }
+    // An identity request keeps the historical unknown-metadata behavior.
+    if effort != "none" && effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
+        return Some("reasoning_incompatible");
+    }
+    if crate::reasoning::supported(effective, effort) == Some("reasoning_effort_incompatible") {
+        return Some("reasoning_effort_incompatible");
+    }
+    None
+}
+
+fn check(
+    provider: &Provider,
+    model_id: &str,
+    model: &Model,
+    metadata: Option<&catalog::Snapshot>,
+    body: &Value,
+    candidate_effort: Option<(&str, &str)>,
+    check_effort: bool,
+) -> Option<&'static str> {
+    let projection =
+        match catalog::effective_from_snapshot(metadata, provider, Some((model_id, model))) {
+            Ok(value) => value,
+            Err(_) => return Some("metadata_unavailable"),
+        };
+    let effective = &projection["effective"];
+    check_effective(effective, body, candidate_effort, check_effort)
+}
+
+fn check_effective(
+    effective: &Value,
+    body: &Value,
+    candidate_effort: Option<(&str, &str)>,
+    check_effort: bool,
+) -> Option<&'static str> {
+    if check_effort
+        && let Some((protocol, effort)) = candidate_effort
         && let Some(reason) = crate::reasoning::supported(effective, effort)
             .or_else(|| crate::reasoning::request_mismatch(protocol, body, effort))
     {
@@ -67,22 +141,24 @@ pub fn mismatch(
             .or_else(|| body.pointer("/reasoning/effort"))
             .and_then(Value::as_str)
     });
-    let reasoning = candidate_effort.map_or_else(
-        || {
-            body.get("reasoning_effort")
-                .and_then(Value::as_str)
-                .is_some_and(|v| v != "none")
-                || body
-                    .pointer("/reasoning/effort")
+    let reasoning = (check_effort
+        && candidate_effort.map_or_else(
+            || {
+                body.get("reasoning_effort")
                     .and_then(Value::as_str)
                     .is_some_and(|v| v != "none")
-        },
-        |(_, effort)| effort != "none",
-    ) || body
-        .get("thinking")
-        .and_then(|v| v.get("type"))
-        .and_then(Value::as_str)
-        .is_some_and(|v| matches!(v, "enabled" | "adaptive"));
+                    || body
+                        .pointer("/reasoning/effort")
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| v != "none")
+            },
+            |(_, effort)| effort != "none",
+        ))
+        || body
+            .get("thinking")
+            .and_then(|v| v.get("type"))
+            .and_then(Value::as_str)
+            .is_some_and(|v| matches!(v, "enabled" | "adaptive"));
     if reasoning && effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
         return Some("reasoning_incompatible");
     }
@@ -106,16 +182,10 @@ pub fn mismatch(
             }
         }
     }
-    if candidate_effort.is_none()
-        && let (Some(effort), Some(options)) = (
-            effort,
-            effective.get("reasoning_options").and_then(Value::as_array),
-        )
-        && options
-            .iter()
-            .filter(|option| option.get("type").and_then(Value::as_str) == Some("effort"))
-            .filter_map(|option| option.get("values").and_then(Value::as_array))
-            .any(|values| !values.iter().any(|value| value.as_str() == Some(effort)))
+    if check_effort
+        && candidate_effort.is_none()
+        && let Some(effort) = effort
+        && crate::reasoning::supported(effective, effort) == Some("reasoning_effort_incompatible")
     {
         return Some("reasoning_effort_incompatible");
     }
@@ -242,6 +312,55 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn ranking_ignores_effort_but_preserves_other_capability_requirements() {
+        let provider = Provider::default();
+        let mut model = Model::default();
+        model.overrides.reasoning = Some(false);
+        let body = json!({"reasoning_effort":"max"});
+        assert_eq!(ranking_mismatch(&provider, "m", &model, None, &body), None);
+        assert_eq!(
+            mismatch(&provider, "m", &model, None, &body, None),
+            Some("reasoning_incompatible")
+        );
+        assert_eq!(
+            ranking_mismatch(
+                &provider,
+                "m",
+                &model,
+                None,
+                &json!({"thinking":{"type":"enabled"}})
+            ),
+            Some("reasoning_incompatible")
+        );
+        model.overrides.tool_call = Some(false);
+        assert_eq!(
+            ranking_mismatch(
+                &provider,
+                "m",
+                &model,
+                None,
+                &json!({"reasoning_effort":"max","tools":[{}]})
+            ),
+            Some("tools_incompatible")
+        );
+    }
+
+    #[test]
+    fn identity_effort_preserves_unknown_metadata_but_explicit_targets_require_values() {
+        let provider = Provider::default();
+        let model = Model::default();
+        let body = json!({"reasoning_effort":"high"});
+        assert_eq!(
+            selected_mismatch(&provider, "m", &model, None, &body, Some("high"), false),
+            None
+        );
+        assert_eq!(
+            selected_mismatch(&provider, "m", &model, None, &body, Some("high"), true),
+            Some("reasoning_effort_unavailable")
+        );
+    }
+
+    #[test]
     fn explicit_false_and_zero_limits_are_not_unknown() {
         let p = Provider::default();
         let mut model = Model::default();
@@ -302,6 +421,32 @@ mod tests {
             Some("input_modality_incompatible")
         );
     }
+    #[test]
+    fn separate_effort_declarations_form_one_supported_value_set() {
+        let p = Provider::default();
+        let mut model = Model::default();
+        model.overrides.reasoning_options = Some(vec![
+            crate::config::ReasoningOption {
+                r#type: "effort".into(),
+                values: Some(vec!["low".into()]),
+            },
+            crate::config::ReasoningOption {
+                r#type: "effort".into(),
+                values: Some(vec!["high".into()]),
+            },
+        ]);
+        for effort in ["low", "high"] {
+            assert_eq!(
+                selected_mismatch(&p, "m", &model, None, &json!({}), Some(effort), false),
+                None
+            );
+        }
+        assert_eq!(
+            selected_mismatch(&p, "m", &model, None, &json!({}), Some("max"), false),
+            Some("reasoning_effort_incompatible")
+        );
+    }
+
     #[test]
     fn exponent_budget_comparison_is_exact_and_bounded() {
         assert!(exceeds(

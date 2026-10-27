@@ -20,6 +20,18 @@ owns sampling, thinking effort, and generation-budget preservation. The
 [agent CLI contract](../../specs/cli/agents/spec.md) owns apply and recovery.
 These pages do not redefine those contracts or authorize new provider routes.
 
+Gateway concrete effort selectors use explicit model-map input names. Gateway
+aliases follow the shared [alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
+rule: intersect all candidate input sets after model maps and fixed restrictions,
+not raw upstream declarations or a current winner snapshot. Native entries send
+those names to the gateway; fixed > map > identity resolution happens only after
+backend selection. Changing only effort must retain that backend or reject, never
+select another one. Direct native entries retain actual upstream capabilities;
+tmax does not install its gateway maps into native mapping fields. This changes
+no native preferences and qualifies no other alias capabilities or Messages
+effort writes. The shared rule owns explicit reapplication and native reload
+after changed maps, candidates, or effective capabilities.
+
 ## Qualification and evidence
 
 Each page records its consultation date, exact source revision, and the

@@ -4,7 +4,7 @@ use super::document::{
 use super::fields::{apply_fields, require_change};
 use super::references::rename_refs;
 use crate::operations::arguments::{arg, args, boolean, duration, operand, required};
-use crate::{Request, Result, config};
+use crate::{Error, Request, Result, config};
 use toml::Value;
 
 pub(super) fn mutate(
@@ -71,6 +71,49 @@ pub(super) fn mutate(
                 &field.split('.').collect::<Vec<_>>(),
                 strings(args(r, "value")),
             )?;
+        }
+        "model effort-map set" | "model effort-map remove" | "model effort-map clear" => {
+            let (p, m) = config::qualified(operand(r, 0)?)?;
+            let protocol = required(r, "protocol")?;
+            if !matches!(protocol, "chat-completions" | "responses") {
+                return Err(Error::new(
+                    "invalid_arguments",
+                    "Effort maps support only Chat Completions and Responses, not Messages",
+                )
+                .field("protocol"));
+            }
+            let model = get_mut(root, &["providers", p, "models", m])?;
+            if path.ends_with("set") {
+                put(
+                    model,
+                    &["effort_map", protocol, operand(r, 1)?],
+                    string(operand(r, 2)?),
+                )?;
+            } else if path.ends_with("remove") {
+                let input = operand(r, 1)?;
+                if remove(model, &["effort_map", protocol, input])?.is_none() {
+                    return Err(Error::new(
+                        "invalid_arguments",
+                        "No effort mapping exists for this protocol and input",
+                    )
+                    .field(format!(
+                        "providers.{p}.models.{m}.effort_map.{protocol}.{input}"
+                    )));
+                }
+            } else {
+                remove(model, &["effort_map", protocol])?;
+            }
+            if get(model, &["effort_map", protocol])
+                .is_ok_and(|mappings| mappings.as_table().is_some_and(|v| v.is_empty()))
+            {
+                remove(model, &["effort_map", protocol])?;
+            }
+            if model
+                .get("effort_map")
+                .is_some_and(|mappings| mappings.as_table().is_some_and(|v| v.is_empty()))
+            {
+                remove(model, &["effort_map"])?;
+            }
         }
         "model reasoning add"
         | "model reasoning replace"

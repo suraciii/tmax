@@ -468,6 +468,9 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "selection"
                 | "qualified_model"
                 | "candidate_reasoning_effort"
+                | "effort_resolution"
+                | "input_effort"
+                | "upstream_effort"
                 | "priority_evaluations"
                 | "excluded_candidates"
                 | "priority_used_for_ranking"
@@ -536,6 +539,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                     "priority",
                     "selection",
                     "selected",
+                    "effort_resolution",
                     "selected_rule_id",
                     "winning_rule",
                     "calendar_fallback",
@@ -600,6 +604,7 @@ fn decision_summary(value: &Value) -> Value {
         "priority",
         "selection",
         "selected",
+        "effort_resolution",
         "selected_rule_id",
         "winning_rule",
         "calendar_fallback",

@@ -13,7 +13,7 @@ saved fields. Use [common CLI rules](../spec.md),
 | Command | Result |
 | --- | --- |
 | `model list [--provider ID] [--protocol P] [--kind KIND]` | Compact concrete/alias identities, declared protocol support, shared publication, and availability. `KIND` is `concrete` or `alias`; omission includes both. |
-| `model inspect QUALIFIED [--protocol P]` | Concrete model details across all supported protocols; optional protocol filters the details. Include effective metadata/provenance, local overrides, revision-scoped local array indices, capabilities, priority/rules, and file/loaded differences. |
+| `model inspect QUALIFIED [--protocol P]` | Concrete model details across all supported protocols; optional protocol filters the details. Include effective metadata/provenance, local overrides, configured protocol-scoped `effort_map`, revision-scoped local array indices, capabilities, priority/rules, and file/loaded differences. |
 | `model inspect ID [--protocol P]` | Inspect a model alias's definition, candidates, shared continuity, and availability. Without protocol, infer only one uniquely configured alias ID. Ambiguous IDs require `--protocol`. |
 
 | Inspection fact | Contract |
@@ -26,7 +26,7 @@ saved fields. Use [common CLI rules](../spec.md),
 | Shared publication | Every shared-key holder sees the same list; no gateway-model CRUD, publishing/permission table, or automatic catalog enrollment. |
 | Compact list | Do not repeat metadata, full evaluations, or inspect argv per row. |
 | Detailed concrete read | Expose [priority evaluations](rules/spec.md#priority-evaluation-data) once per model, not per protocol. |
-| Native reasoning projection | Concrete inspection includes `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the model's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). This is desired capability mapping, not a default or evidence of native application. |
+| Native reasoning projection | Concrete inspection includes upstream `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the model's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). Separate `gateway_projection` is keyed by protocol and describes mapped caller-facing inputs for gateway entries. Direct native entries retain upstream capabilities. These are desired capability projections, not defaults or evidence of native application. |
 
 Examples: `tmax model list --kind concrete`, `tmax model list --kind alias`,
 `tmax model inspect deepseek/deepseek-flash`,
@@ -87,6 +87,42 @@ tmax model update deepseek/deepseek-flash --clear overrides.reasoning_options
 These examples distinguish explicit empty arrays from inheritance, not verified
 upstream reasoning support. Mutation results identify the model, changed fields,
 needed file revision, and saved/loaded outcome; full metadata remains in inspect.
+
+## Model effort maps
+
+| Command | Requested change |
+| --- | --- |
+| `model effort-map set QUALIFIED INPUT UPSTREAM --protocol P` | Upsert exactly one caller-facing input to upstream target correspondence for this model/protocol, preserving other entries. |
+| `model effort-map remove QUALIFIED INPUT --protocol P` | Remove exactly one mapping; an absent entry is an error. |
+| `model effort-map clear QUALIFIED --protocol P` | Remove all mappings for that protocol; already empty is a successful no-op. |
+
+These are ordinary configuration mutations with the shared dry-run, revision,
+validation, and saved/loaded result rules, not a separate preview/apply workflow.
+`P` must be `chat-completions` or `responses` and supported by the model;
+Messages is rejected. `INPUT` and `UPSTREAM` must be nonempty and contain no
+whitespace or control characters. `UPSTREAM` must be an explicitly declared
+effort in the accepted effective metadata after overrides; unknown, disabled, or
+toggle-only reasoning does not qualify it. Invalid names, protocols, and targets
+are usage/validation errors, not passthrough values.
+
+The [configuration schema](../../configuration/spec.md#model-effort-maps) owns
+the dictionary and effective-target validation; [Request parameters](../../model-routing/spec.md#request-parameters)
+owns gateway resolution and fixed > map > identity precedence. Removal restores
+identity, not input disabling. Maps do not supply omitted effort or modify native
+defaults, switches, or budgets, and do not apply to direct native entries. Read
+configured maps through `model inspect QUALIFIED`; inspect is not a new effort-map
+resource. After changing projected inputs, explicitly reapply affected native
+entries and reload their tools under the [alias capability rule](../../integrations/spec.md#alias-reasoning-capability).
+
+```sh
+tmax model effort-map set custom-gateway/example-model max high --protocol chat-completions
+tmax model effort-map remove custom-gateway/example-model max --protocol chat-completions
+tmax model effort-map clear custom-gateway/example-model --protocol chat-completions
+```
+
+The [configuration example](../../configuration/example.toml) supplies the
+synthetic model and declared target for these examples; they are not hosted
+provider qualification.
 
 ## Model explanation
 

@@ -71,7 +71,7 @@ The catalog reference and canonical model identity must never replace local IDs.
 
 Provider integration, region/endpoints, authentication, optional subscription
 data, enabled-model selection, priorities, schedules, input declarations,
-and priority rules are local settings, not fields inherited from models.dev.
+priority rules, and model effort maps are local settings, not inherited from models.dev.
 Endpoint consumers use the
 [integration resolver](../integrations/spec.md#endpoint-resolution), not metadata
 override merging. Two instances sharing an `env` suggestion must still choose
@@ -104,8 +104,11 @@ Catalog traffic follows the
 Downloading directory updates and applying changed defaults are distinct actions.
 Effective metadata uses an accepted snapshot, not a live network response.
 Applying changed model capabilities or limits must report effects on providers,
-routes, and agent settings; optional `--dry-run` exposes those effects without
-applying them. A changed catalog `api` value remains endpoint guidance.
+routes, and agent settings, including mapped input coverage and alias effort
+intersections. Revalidate every model-map target and fixed candidate effort
+against the proposed effective declarations after overrides; reject incompatible
+adoption without dropping mappings or fixed values. Optional `--dry-run` exposes
+those effects without applying them. A changed catalog `api` value remains endpoint guidance.
 Accepting that guidance requires an explicit provider endpoint/region change
 under the integration resolver, with impact reporting for credential
 destinations, routes, retained sessions, and native agent settings. It is not an
@@ -117,7 +120,7 @@ explicit operation with the same impact reporting and current validation of
 existing overrides and model references.
 
 Refresh must preserve local IDs, integration, region/endpoints, authentication,
-subscription information, overrides, enabled models, priorities,
+subscription information, overrides, enabled models, priorities, effort maps,
 schedules, input declarations, and priority rules. New directory entries are
 suggestions, not automatically enabled route candidates. The `api`, `env`, and
 `npm` metadata must not redirect existing credentials, read secrets, install
@@ -126,10 +129,11 @@ packages, or execute code merely because they appear in the directory.
 ## Request parameters
 
 Native agent configuration and requests own inference parameter values, except
-for an explicitly configured [alias candidate](../../CONTEXT.md)'s fixed reasoning
-effort below. Applying native provider entries preserves native sampling,
-reasoning, and output-budget preferences. There is no provider-, concrete-model-,
-or agent-level request-default or arbitrary request-override facility.
+for explicit model effort maps and an explicitly configured
+[alias candidate](../../CONTEXT.md)'s fixed reasoning effort below. Applying
+native provider entries preserves native sampling, reasoning, and output-budget
+preferences. There is no provider-, concrete-model-, or agent-level
+request-default or arbitrary request-override facility.
 
 Catalog `temperature = true` declares parameter support, not a numeric temperature.
 `reasoning_options` describes available controls, not a selected effort or mode.
@@ -141,17 +145,42 @@ the native agent's own selector fields under the
 default effort, level, budget, or thinking flag, and the native tool keeps
 ownership of thinking enablement, its defaults, and its request preferences.
 
+### Model effort mapping and resolution
+
+The [model effort map](../configuration/spec.md#model-effort-maps) is a
+protocol-scoped, single-step caller-input to upstream-value dictionary. It applies
+inside the gateway for both concrete models and selected alias candidates, never
+inside a direct native entry. Explicit mappings can name user-selected
+correspondences; the gateway does not infer equivalent quality, clamp to a nearby
+level, or translate thinking toggles or budgets.
+
+Resolve effort only on the selected backend, in this precedence order:
+
+1. An alias candidate's fixed effort supplies the upstream value, without applying
+   a model map, even if the caller omitted effort.
+2. Otherwise, map a supplied caller-facing input if an explicit model entry exists.
+3. Otherwise, preserve the input unchanged (identity); omission stays omitted.
+
+Mapped and fixed targets require positive effective effort declarations. Identity
+requests retain the existing unknown-metadata behavior: reject known mismatches,
+but do not fabricate support or reject solely because metadata is unknown. Map
+targets are actual upstream values, never another dictionary key to resolve.
+Removing a map restores identity; it does not disable that input. Only serialize
+the selected native effort field when a fixed or mapped value supplies or changes
+it; preserve unrelated, unknown, and omitted fields.
+
 ### Fixed candidate reasoning effort
 
 The [alias configuration](../configuration/spec.md#model-aliases) may assign one
 fixed effort to an exact concrete candidate. The same model may use different
-efforts under different aliases. There is no alias-wide fallback, implicit
-candidate enrollment, universal effort vocabulary, or level remapping.
+fixed efforts under different aliases. This is distinct from a model input map;
+there is no alias-wide fallback, implicit candidate enrollment, or universal
+effort vocabulary.
 
 | Condition | Observable behavior |
 | --- | --- |
-| No configured effort for this candidate | Preserve explicit and omitted request parameters, including explicit zero and false. Upstream defaults retain their native meaning. |
-| Configured candidate effort | Replace that request's native effort with the configured value before capability filtering, including retained-session checks. Serialize only the selected candidate's value at dispatch. |
+| No fixed effort for this candidate | Apply its explicit model map to a supplied input, otherwise preserve identity or omission. Preserve all other parameters, including explicit zero and false. Upstream defaults retain their native meaning. |
+| Configured candidate effort | Resolve to the configured upstream value after backend selection, including retained-session checks; do not apply a model map to it. Serialize only the selected candidate's value at dispatch. |
 | Capability declaration | Require an effective `reasoning_options` entry with `type = "effort"` and explicit `values` containing the exact configured value; effective `reasoning = false` rejects it. `reasoning = true`, absent values, and toggle-only controls are not effort declarations. |
 | Save, dry-run, reload/start, or catalog adoption | Validate against the corresponding accepted or proposed effective metadata, honoring explicit model metadata overrides. Reject an unsupported choice before credential provisioning or native sign-in/out effects, without saving it or adopting incompatible catalog metadata. No live inference qualification is required or inferred. |
 | Other controls | Do not inject thinking toggles, reasoning budgets, sampling, output limits, or arbitrary fields. Preserve unknown native extensions. |
@@ -160,19 +189,33 @@ candidate enrollment, universal effort vocabulary, or level remapping.
 
 | Native protocol | Effort field and preservation boundary |
 | --- | --- |
-| Chat Completions | `reasoning_effort`; preserve all unrelated fields. |
-| Responses | `reasoning.effort`; preserve other members of `reasoning`. A nonobject, nonnull `reasoning` value is incompatible with a configured effort and must not be discarded. |
-| Messages | Configured candidate effort is unsupported and rejected explicitly; do not translate a thinking budget/toggle or assume a provider's effort encoding. Unconfigured requests retain existing forwarding behavior. |
+| Chat Completions | `reasoning_effort`; a present non-string effort is malformed unless a fixed candidate value replaces it. Preserve all unrelated fields. |
+| Responses | `reasoning.effort`; a present non-string effort is malformed unless fixed candidate effort replaces it. Preserve other members of `reasoning`. A nonobject, nonnull `reasoning` value is incompatible and must not be discarded, even for a fixed override. |
+| Messages | Configured model maps and candidate effort are unsupported and rejected explicitly; do not translate a thinking budget/toggle or assume a provider's effort encoding. Unconfigured requests retain existing forwarding behavior. |
 
-Known incompatibilities with effective request parameters, limits, or required
-capabilities exclude candidates before a new alias selection or reject a
-fixed/retained destination before inference. Do not silently repair the request
-or move an established conversation. Unknown native extension fields remain
-opaque and preserved; their presence does not authorize an undeclared method/path
-under the [operation contract](../integrations/spec.md#supported-operations-and-resource-identity).
-Protocol-correct model resolution, explicit candidate effort, and authorized
-authentication/header handling remain the permitted forwarding transformations
-under the [product contract](../product/spec.md#model-gateway).
+### Backend-stable effort admission
+
+Known incompatibilities with limits, non-effort request parameters, or required
+capabilities may exclude candidates before a new alias selection or reject a
+fixed/retained destination. **Effort is explicitly excluded from that filtering
+and reranking.** For one coherent routing snapshot, continuity context, and other
+request constraints, changing only effort must select the same backend or reject.
+Choose a new backend using the other constraints and existing priorities, or keep
+the retained destination, then resolve and validate effort on that backend only.
+Reject an incompatible or malformed effort before publishing a new binding and
+before upstream dispatch. Do not retry, fall back, rerank, silently downgrade,
+or move an existing conversation because of effort. Existing bindings and their
+original decision evidence remain unchanged by a rejected request.
+
+Diagnostics distinguish caller input, upstream value, source (`fixed`, `map`,
+`identity`, or `omitted`), and selected backend under the
+[diagnostics contract](../diagnostics/spec.md#minimal-request-record).
+Unknown native extension fields remain opaque and preserved; their presence does
+not authorize an undeclared method/path under the
+[operation contract](../integrations/spec.md#supported-operations-and-resource-identity).
+Protocol-correct model resolution, explicit model effort mapping or candidate
+effort, and authorized authentication/header handling remain the permitted
+forwarding transformations under the [product contract](../product/spec.md#model-gateway).
 
 ## Model settings
 
@@ -451,8 +494,10 @@ report affected definitions and bound sessions under the continuity rules.
 
 Priorities, schedules, and ordered priority rules remain user-wide, not
 overridden per Agent, project, or model alias. Model aliases are shared within
-their native-protocol scope. Compatibility and upstream authorization filter
-eligibility, not preference scores; there are no per-client model permissions.
+their native-protocol scope. Non-effort compatibility and upstream authorization
+filter eligibility, not preference scores; effort follows post-selection
+validation under [Request parameters](#request-parameters). There are no
+per-client model permissions.
 Equal-priority primary/standby behavior and all priority evaluation use the
 existing model settings, not another scenario-specific rule system.
 
@@ -481,12 +526,11 @@ alias model list to every holder of the current shared key. Agent registration
 and native configured subsets do not filter it. Report unknown or unavailable
 access honestly; listing is not an inference check or automatic enrollment.
 A native model picker may show only its configured entry's selected subset.
-A concrete model reports its own effective metadata; a model alias's context,
-modalities, tools, and transport claims must be safe for all candidates in its
-capability contract, not copied from the current favorite. It has no single
-advertised token price when candidate prices differ. Response identity must
-remain protocol-correct; actual upstream identity remains visible in management
-request metadata.
+A concrete model reports its own effective metadata. Native alias capability
+projection follows the shared
+[alias reasoning capability](../integrations/spec.md#alias-reasoning-capability)
+rule. Response identity must remain protocol-correct; actual upstream identity
+remains visible in management request metadata.
 
 ## Selection and continuity
 
@@ -502,11 +546,12 @@ flowchart TB
     Request["Incoming request model: public ID and native protocol"] --> Kind{"Concrete or alias?"}
     Kind -->|Concrete| Fixed["Resolve its one qualified concrete model"]
     Kind -->|Alias| Candidates["Resolve the alias's explicit concrete candidates"]
-    Fixed --> Eligible["Check native protocol, capabilities, and authorization"]
+    Fixed --> Eligible["Check native protocol, non-effort capabilities, and authorization"]
     Candidates --> Eligible
     Eligible --> Model["Keep concrete fixed; select an alias candidate by effective priority"]
     Model --> Destination["Retain selected provider, model, and resolved endpoint"]
-    Destination --> Dispatch["Forward that model's exact upstream model ID and authorization; preserve native protocol"]
+    Destination --> Effort["Resolve and validate effort only here; reject without replacement before binding publication"]
+    Effort --> Dispatch["Forward that model's exact upstream model ID and authorization; preserve native protocol"]
 ```
 
 For a new selection, capture one coherent local admission snapshot: loaded
@@ -524,8 +569,9 @@ Pending file settings must not supply facts under a different loaded definition.
    subset, or target default is an inference admission requirement.
 2. Resolve the single concrete model or expand the alias's candidate
    source. Exclude disabled providers or models, unavailable resolved protocol
-   endpoints, operation/transport or capability mismatches, and unavailable
-   authorizations. Concrete access cannot expand to another model.
+   endpoints, operation/transport or non-effort capability mismatches, and
+   unavailable authorizations. Effort cannot exclude or rerank a candidate.
+   Concrete access cannot expand to another model.
 3. For a model alias, calculate each remaining model's effective priority
    under [Rule evaluation and explanation](#rule-evaluation-and-explanation) using
    that same snapshot and instant. Select the highest score; break ties by stable
@@ -535,9 +581,12 @@ Pending file settings must not supply facts under a different loaded definition.
    candidate only for a new selection, never silent movement of an existing
    session. Concrete access keeps its specified model regardless of any
    model's priority-rule result.
-4. Use the selected model's provider authorization. If eligibility changes
-   before dispatch, revalidate the fixed model or select again among the
-   alias's eligible candidates only while the selection is unbound.
+4. Resolve and validate effort on the selected destination before publishing a
+   new binding or dispatching. A mismatch rejects without retry or replacement,
+   including while selection is unbound. Use the selected model's provider
+   authorization. If non-effort eligibility changes before dispatch, revalidate
+   the fixed model or select again among the alias's eligible candidates only
+   while the selection is unbound.
    Any repeated selection captures a new coherent snapshot and instant; it must
    not mix old and new revisions or
    silently replace the evidence for the final decision. Do not release a
@@ -547,10 +596,11 @@ Pending file settings must not supply facts under a different loaded definition.
    [diagnostics contract](../diagnostics/spec.md#minimal-request-record) before
    forwarding the exact upstream model ID. Record the actual decision snapshot,
    ordered rule outcomes and applicable normalized input basis, calendar/base
-   fallback, effective priority, configured candidate effort, and selection or
-   tie-break reason within its bounded allowlist. An established-session request
-   records its retained destination, current configured effort, and original
-   decision evidence separately, not a current ranking presented as its cause.
+   fallback, effective priority, configured candidate effort, effort resolution,
+   and selection or tie-break reason within its bounded allowlist. An
+   established-session request records its retained destination, current effort
+   resolution, and original decision evidence separately, not a current ranking
+   presented as its cause.
 
 Selection consumes already published local evidence. It must not fetch an input,
 resolve a secret, perform a recovery probe, or wait for an in-flight refresh to
@@ -558,7 +608,8 @@ complete in order to evaluate priority. An explicitly
 opted-in service acquisition may publish facts independently under the input
 authority; request admission neither starts it nor waits for it.
 
-Known unavailable candidates may be skipped before dispatch. If no candidate
+Known unavailable candidates may be skipped before dispatch only for non-effort
+eligibility. An effort rejection never enables this fallback. If no candidate
 remains, return an actionable unavailable result; do not use an unconfigured
 model or instance. Once upstream execution starts, this feature does not
 replay the request on another model or authorization after an error or partial stream.
@@ -580,7 +631,7 @@ exclusions, run recovery probes in the background, or expose a cooldown-reset
 operation for state this product does not maintain.
 
 Provider-specific evidence that establishes unavailable authorization, a known
-capability mismatch, or current quota exhaustion still applies within its
+non-effort capability mismatch, or current quota exhaustion still applies within its
 qualified scope. A status code alone does not establish that evidence. Show an
 upstream retry hint when safe, but do not turn it into scheduled replay or an
 unqualified availability rule. The absence of downstream response bytes is not
@@ -625,9 +676,10 @@ themselves block an existing binding. A separate qualified authorization or
 compatibility change can still block continuation under the rules below.
 A verified new session allows a new selection; changing the clock or refreshing
 an input does not establish one.
-Changing a candidate's configured effort preserves that destination binding;
-subsequent admissions use the new effort under [Request parameters](#request-parameters).
-In-flight requests keep their admission-time effort and configuration snapshot.
+Changing a model effort map or a candidate's fixed effort preserves the
+destination binding; subsequent admissions resolve using the current snapshot
+under [Request parameters](#request-parameters). In-flight requests keep their
+admission-time effort and configuration snapshot.
 
 
 Activation must block affected bound sessions, without reassignment, when their
@@ -743,11 +795,16 @@ level uses the first published protocol. The
 [agent result contract](../cli/agents/spec.md#agent-result-data)
 owns the projection shape and states. Alias inspection must resolve one
 configured protocol-qualified identity; an ambiguous ID requires a protocol.
-Alias inspection exposes its configured candidate-effort map. Explanations expose
-`candidate_reasoning_effort` for each evaluated candidate and the selected
-destination; null means no configured override, not a selected upstream default.
-Retained-session explanation distinguishes the current configured effort from
-the original decision.
+Concrete inspection exposes its configured protocol-scoped `effort_map` alongside
+the existing definition and effective upstream declarations. Its separate
+`gateway_projection`, keyed by protocol, uses caller-facing inputs after maps;
+`native_projection` retains actual upstream capabilities for direct entries.
+Alias inspection exposes its configured candidate-effort map.
+Explanations expose `candidate_reasoning_effort` for each evaluated candidate and
+the selected destination; null means no fixed override, not a selected upstream
+default. A no-request explanation does not invent caller input or map resolution.
+Retained-session explanation distinguishes current configured effort from the
+original decision.
 Detailed Agent views distinguish each native provider's source, selected subset,
 scope, and applied/effective state. Gateway views expose the shared published
 list, alias-definition continuity, listener/key readiness, and blocked-session
@@ -1014,12 +1071,17 @@ error after execution starts does not replay on a sibling.
     native agent's tmax prefix from the request ID, and populate model availability
     before native selection without relying on a runtime selection callback.
 20. Preserve explicit and omitted native request parameters through concrete and
-    alias forwarding except the explicitly configured candidate effort in
-    [Request parameters](#request-parameters). Verify precedence before selection,
-    selected-candidate-only native encoding, passthrough without an override,
-    metadata/protocol rejection, and retained-destination behavior. Metadata
-    temperature support, reasoning options, and output limits never choose values.
-    Do not clamp values or move retained sessions to repair incompatibility.
+    alias forwarding except explicit model effort maps and fixed candidate effort
+    under [Request parameters](#request-parameters). Verify fixed > map > identity
+    precedence after selection, single-step selected-backend native encoding,
+    omission preservation, metadata/protocol rejection, and retained destinations.
+    With the same routing snapshot and other constraints, varying only effort
+    must retain the selected backend or reject before binding publication and
+    dispatch, without fallback or retry. Native alias choices are the intersection
+    of candidate input sets after maps and fixed restrictions. Direct native
+    entries retain actual upstream capabilities; Messages maps and fixed writes
+    remain rejected. Metadata never chooses values; do not clamp, infer a map,
+    synthesize switches/budgets, or move retained sessions to repair incompatibility.
 21. Keep transient request failures as observations without automatically cooling
     down a model or changing its priority. A later new selection may choose
     it again; provider-qualified authorization, capability, or quota exclusions

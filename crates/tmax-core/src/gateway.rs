@@ -38,6 +38,15 @@ pub fn capability_mismatch(
 ) -> Option<&'static str> {
     capabilities::mismatch(provider, model_id, model, metadata, body, effort)
 }
+pub(crate) fn ranking_mismatch(
+    provider: &crate::config::Provider,
+    model_id: &str,
+    model: &crate::config::Model,
+    metadata: Option<&crate::catalog::Snapshot>,
+    body: &Value,
+) -> Option<&'static str> {
+    capabilities::ranking_mismatch(provider, model_id, model, metadata, body)
+}
 
 pub fn limits() -> Value {
     json!({"active_requests":ACTIVE_LIMIT,"request_body_bytes":REQUEST_BYTES,"response_inspection_bytes":INSPECTION_BYTES,"downstream_chunk_bytes":FORWARD_CHUNK_BYTES,"credential_acquisition_seconds":CREDENTIAL_SECONDS,"waiting_queue":0,"inference_total_timeout":null,"inference_idle_timeout":null,"history_records":crate::diagnostics::RECORD_LIMIT,"history_record_bytes":crate::diagnostics::RECORD_BYTES})

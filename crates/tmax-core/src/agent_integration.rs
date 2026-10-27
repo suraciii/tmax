@@ -20,8 +20,8 @@ mod dsh_lifecycle_tests;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use adapters::model_metadata;
 pub use adapters::supported_roles;
+pub(crate) use adapters::{alias_model_metadata, model_metadata};
 pub use application::{apply, apply_request};
 pub use authentication::{login, login_source_agents, logout};
 pub use discovery::discover;

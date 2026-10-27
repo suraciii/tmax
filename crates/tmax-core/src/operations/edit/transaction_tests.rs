@@ -1,6 +1,186 @@
 use super::*;
 use std::collections::BTreeMap;
 
+const EFFORT_MAP_CONFIG: &str = "# personal model settings\nversion=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\nresponses='http://127.0.0.1:39999'\n[providers.p.models.m]\npriority=7 # retained priority\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['low','high']}]\n";
+
+fn effort_map_request(action: &str, operands: &[&str], protocol: &str) -> Request {
+    Request {
+        command: vec!["model".into(), "effort-map".into(), action.into()],
+        operands: operands.iter().map(|value| (*value).into()).collect(),
+        arguments: BTreeMap::from([("protocol".into(), vec![protocol.into()])]),
+        dry_run: false,
+        if_revision: None,
+    }
+}
+
+#[tokio::test]
+async fn effort_map_mutations_upsert_isolate_protocols_and_restore_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    store
+        .write_raw("tmax.toml", EFFORT_MAP_CONFIG.as_bytes())
+        .unwrap();
+    for (protocol, target) in [
+        ("chat-completions", "high"),
+        ("responses", "low"),
+        ("chat-completions", "low"),
+    ] {
+        let request = effort_map_request("set", &["p/m", "xhigh", target], protocol);
+        crate::operations::commands::validate(&request).unwrap();
+        execute(&store, &request).await.unwrap();
+    }
+    let configured = config::load(&store).unwrap();
+    let maps = &configured.config.providers["p"].models["m"].effort_map;
+    assert_eq!(maps["chat-completions"]["xhigh"], "low");
+    assert_eq!(maps["responses"]["xhigh"], "low");
+    let saved = configured.document.to_string();
+    assert!(saved.contains("# personal model settings"));
+    assert!(saved.contains("priority=7 # retained priority"));
+    let remove = effort_map_request("remove", &["p/m", "xhigh"], "chat-completions");
+    execute(&store, &remove).await.unwrap();
+    let configured = config::load(&store).unwrap();
+    let model = &configured.config.providers["p"].models["m"];
+    assert!(!model.effort_map.contains_key("chat-completions"));
+    assert_eq!(model.effort_map["responses"]["xhigh"], "low");
+    let body = json!({"reasoning_effort":"xhigh"});
+    assert_eq!(
+        crate::reasoning::resolve(model, "chat-completions", &body, None).unwrap(),
+        Some("xhigh")
+    );
+    let bytes = std::fs::read(store.root.join("tmax.toml")).unwrap();
+    assert_eq!(
+        execute(&store, &remove).await.unwrap_err().code,
+        "invalid_arguments"
+    );
+    assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), bytes);
+    let clear = effort_map_request("clear", &["p/m"], "responses");
+    execute(&store, &clear).await.unwrap();
+    let configured = config::load(&store).unwrap();
+    assert!(
+        configured.config.providers["p"].models["m"]
+            .effort_map
+            .is_empty()
+    );
+    assert!(!configured.document.to_string().contains("effort_map"));
+    let bytes = std::fs::read(store.root.join("tmax.toml")).unwrap();
+    assert_eq!(execute(&store, &clear).await.unwrap()["save"], "unchanged");
+    assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn effort_map_dry_run_and_invalid_targets_never_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    store
+        .write_raw("tmax.toml", EFFORT_MAP_CONFIG.as_bytes())
+        .unwrap();
+    let mut request = effort_map_request("set", &["p/m", "xhigh", "high"], "chat-completions");
+    request.dry_run = true;
+    request.if_revision = Some(config::revision(EFFORT_MAP_CONFIG.as_bytes()));
+    let preview = execute(&store, &request).await.unwrap();
+    assert!(preview["changes"].as_array().unwrap().iter().any(|change| {
+        change["boundary"] == "file_save"
+            && change["path"]
+                .as_str()
+                .is_some_and(|path| path.contains("effort_map"))
+    }));
+    assert_eq!(
+        std::fs::read(store.root.join("tmax.toml")).unwrap(),
+        EFFORT_MAP_CONFIG.as_bytes()
+    );
+    for dry_run in [false, true] {
+        request.dry_run = dry_run;
+        request.operands[2] = "unsupported".into();
+        let error = execute(&store, &request).await.unwrap_err();
+        assert_eq!(error.code, "reasoning_effort_incompatible");
+        assert_eq!(
+            error.field.as_deref(),
+            Some("providers.p.models.m.effort_map.chat-completions.xhigh")
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            EFFORT_MAP_CONFIG.as_bytes()
+        );
+    }
+    request.operands[2] = "high".into();
+    request.if_revision = Some("stale-revision".into());
+    assert_eq!(
+        execute(&store, &request).await.unwrap_err().code,
+        "inputs_changed"
+    );
+    assert_eq!(
+        std::fs::read(store.root.join("tmax.toml")).unwrap(),
+        EFFORT_MAP_CONFIG.as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn effort_maps_follow_provider_and_model_renames_and_clear_only_selected_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    store
+        .write_raw("tmax.toml", EFFORT_MAP_CONFIG.as_bytes())
+        .unwrap();
+    for (protocol, target) in [("chat-completions", "high"), ("responses", "low")] {
+        execute(
+            &store,
+            &effort_map_request("set", &["p/m", "xhigh", target], protocol),
+        )
+        .await
+        .unwrap();
+    }
+    for (command, operands) in [
+        (["provider", "rename"], ["p", "renamed"]),
+        (["model", "rename"], ["renamed/m", "new/with/slash"]),
+    ] {
+        execute(&store, &request(&command, &operands, &[]))
+            .await
+            .unwrap();
+    }
+    let configured = config::load(&store).unwrap();
+    assert!(!configured.config.providers.contains_key("p"));
+    assert!(
+        !configured.config.providers["renamed"]
+            .models
+            .contains_key("m")
+    );
+    let model = &configured.config.providers["renamed"].models["new/with/slash"];
+    assert_eq!(model.effort_map["chat-completions"]["xhigh"], "high");
+    assert_eq!(model.effort_map["responses"]["xhigh"], "low");
+    assert!(
+        configured
+            .document
+            .to_string()
+            .contains("# personal model settings")
+    );
+    assert!(
+        configured
+            .document
+            .to_string()
+            .contains("# retained priority")
+    );
+    execute(
+        &store,
+        &effort_map_request("clear", &["renamed/new/with/slash"], "chat-completions"),
+    )
+    .await
+    .unwrap();
+    let configured = config::load(&store).unwrap();
+    let model = &configured.config.providers["renamed"].models["new/with/slash"];
+    assert!(!model.effort_map.contains_key("chat-completions"));
+    assert_eq!(model.effort_map["responses"]["xhigh"], "low");
+    assert_eq!(
+        crate::reasoning::resolve(
+            model,
+            "chat-completions",
+            &json!({"reasoning_effort":"xhigh"}),
+            None,
+        )
+        .unwrap(),
+        Some("xhigh")
+    );
+}
+
 #[tokio::test]
 async fn legacy_gateway_edit_previews_without_writes_and_retains_shared_key() {
     let dir = tempfile::tempdir().unwrap();

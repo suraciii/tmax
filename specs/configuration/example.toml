@@ -1,5 +1,5 @@
 # Illustrative private persistence at ~/.tmax/tmax.toml; schema version stays 1.
-# Not implemented runtime support, onboarding input, or a file callers must author.
+# Illustrative settings, not onboarding input or a file callers must author.
 # Explicit CLI resource arguments create/update settings; Web is optional.
 # Secret references denote provisioned protected storage under ~/.tmax.
 # No clear secrets belong here; these illustrative references are not usable keys.
@@ -138,6 +138,17 @@ integration = "custom"
 [providers.custom-gateway.endpoints]
 chat-completions = "https://gateway.example/openai/v1"
 messages = "https://gateway.example/anthropic"
+
+# Synthetic model declarations illustrate a user-chosen map, not hosted support.
+[providers.custom-gateway.models."example-model".overrides]
+reasoning = true
+reasoning_options = [{ type = "effort", values = ["low", "high"] }]
+
+# Gateway-only, protocol -> input -> upstream; max maps once to declared high.
+# Omitted effort stays omitted; removal restores identity, not a default.
+# Direct native entries keep the upstream low/high capability declaration.
+[providers.custom-gateway.models."example-model".effort_map.chat-completions]
+max = "high"
 
 # Alias IDs are caller-chosen names with no built-in rank or candidate membership.
 [[model_aliases]]

@@ -155,7 +155,6 @@ fn decision(
         let p = &config.providers[&provider];
         let m = &p.models[&name];
         let effort = config.candidate_effort(id, protocol, &provider, &name);
-        let no_request = Value::Null;
         let evaluation = evaluate(config, &snapshot, &provider, &name, at, exact_at)?;
         let identity = snapshot.destination_identity(&provider, &name);
         let native_assessment =
@@ -188,17 +187,9 @@ fn decision(
                 )
             })
             .or_else(|| {
-                body.or_else(|| effort.map(|_| &no_request))
-                    .and_then(|body| {
-                        crate::gateway::capability_mismatch(
-                            p,
-                            &name,
-                            m,
-                            snapshot.metadata(),
-                            body,
-                            effort.map(|effort| (protocol, effort)),
-                        )
-                    })
+                body.and_then(|body| {
+                    crate::gateway::ranking_mismatch(p, &name, m, snapshot.metadata(), body)
+                })
             })
             .or_else(|| native.and_then(|native| crate::gateway::native_mismatch(p, native)));
         let observed_unavailability = if reason.is_none()

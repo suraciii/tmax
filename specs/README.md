@@ -15,6 +15,8 @@ and the invariants it protects.
     manual registration, source acquisition, freshness, and publication.
 - [Integration support](integrations/spec.md) — shared agent boundaries, provider
   qualification, and criteria for dedicated provider contracts.
+  - [Capability projection design](integrations/design.md) — reasoning declarations,
+    explicit gateway effort mappings, shared alias choices, and backend-stable routing.
   - [Codex subscription](integrations/codex-subscription/spec.md) — native login sources and ChatGPT gateway access.
   - [OpenCode Go](integrations/opencode-go/spec.md) — workspace keys, session identity, model endpoints, and subscription billing.
   - [Kimi Coding Plan](integrations/kimi-coding-plan/spec.md) — membership keys, native login, regional access, and permitted usage.

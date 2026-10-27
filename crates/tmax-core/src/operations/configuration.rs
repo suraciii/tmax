@@ -249,6 +249,13 @@ pub(super) async fn reset(store: &Store, r: &Request) -> Result<Value> {
     )
 }
 
+pub(super) fn validate(store: &Store, file: &config::LoadedFile) -> Result<Value> {
+    crate::reasoning::validate_saved(store, &file.config)?;
+    Ok(
+        json!({"snapshot_state":if file.exists{"available"}else{"absent"},"valid":true,"revision":file.revision,"external_availability":"not_verified"}),
+    )
+}
+
 pub(super) async fn reload(store: &Store, r: &Request) -> Result<Value> {
     let f = config::load(store)?;
     if let Some(expected) = &r.if_revision
@@ -259,6 +266,7 @@ pub(super) async fn reload(store: &Store, r: &Request) -> Result<Value> {
             "Saved configuration revision differs from the requested guard",
         ));
     }
+    crate::reasoning::validate_saved(store, &f.config)?;
     if r.dry_run {
         return impact(store, &f.config, &f.revision, None).await;
     }

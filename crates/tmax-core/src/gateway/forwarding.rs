@@ -169,28 +169,42 @@ pub(super) async fn forward(
         flight.record.model = Some(public_id.clone());
         flight.record.model_kind = if alias { "alias" } else { "concrete" }.into();
         let now = Utc::now();
-        let choice =
-            match runtime.choose(&snapshot, &public_id, protocol, &body, &parts.headers, now) {
-                Ok(v) => v,
-                Err(e) => return flight.reject(StatusCode::CONFLICT, &e.code, "selection"),
-            };
+        let choice = match runtime.choose_recorded(
+            &snapshot,
+            (&public_id, protocol),
+            &body,
+            &parts.headers,
+            now,
+            &mut flight.record.decision,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                let selected = flight
+                    .record
+                    .decision
+                    .get("selection")
+                    .or_else(|| flight.record.decision.get("selected"));
+                flight.record.provider = selected
+                    .and_then(|v| v.get("provider"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                flight.record.qualified_model = selected
+                    .and_then(|v| v.get("qualified_model"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                return flight.reject(StatusCode::CONFLICT, &e.code, "selection");
+            }
+        };
         (snapshot, choice, now)
     };
     let selection = choice.selection;
     let Some(provider) = snapshot.config.providers.get(&selection.provider) else {
         return flight.reject(StatusCode::BAD_REQUEST, "provider_unavailable", "selection");
     };
-    if let Some(effort) = snapshot.config.candidate_effort(
-        &public_id,
-        protocol,
-        &selection.provider,
-        &selection.model,
-    ) && let Err(error) = crate::reasoning::apply(&mut body, protocol, effort)
+    if let Some(effort) = choice.effort.as_deref()
+        && let Err(error) = crate::reasoning::apply(&mut body, protocol, effort)
     {
         return flight.reject(StatusCode::BAD_REQUEST, &error.code, "model_validation");
-    }
-    if let Err(e) = crate::provider_integration::check_request(provider, protocol, &body) {
-        return flight.reject(StatusCode::BAD_REQUEST, &e.code, "model_validation");
     }
     let endpoint = choice.endpoint;
     let path = match crate::provider_integration::operation_path(protocol) {

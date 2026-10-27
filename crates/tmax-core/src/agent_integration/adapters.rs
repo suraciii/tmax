@@ -179,6 +179,21 @@ pub(crate) fn model_metadata(agent: &str, protocol: &str, effective: &Value) -> 
     Ok(metadata)
 }
 
+pub(crate) fn alias_model_metadata(
+    agent: &str,
+    protocol: &str,
+    effective: &Value,
+) -> Result<Value> {
+    let mut metadata = model_metadata(agent, protocol, effective)?;
+    if agent == "dsh" && metadata.get("reasoningEfforts").is_none() {
+        // DSH merges retained model rows, so omission would preserve an obsolete
+        // selector. This alias has no shared selectable effort; candidates may
+        // still support reasoning independently.
+        metadata["reasoningEfforts"] = json!(false);
+    }
+    Ok(metadata)
+}
+
 pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Result<Vec<File>> {
     for role in target.roles.keys() {
         if !supported_roles(&target.agent).contains(&role.as_str()) {

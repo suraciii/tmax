@@ -144,9 +144,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         );
     }
     if path == "config validate" {
-        return Ok(
-            json!({"snapshot_state":if file.exists{"available"}else{"absent"},"valid":true,"revision":file.revision,"external_availability":"not_verified"}),
-        );
+        return configuration::validate(store, &file);
     }
     if path.starts_with("catalog ") {
         return crate::catalog::handle(store, config, r).await;
@@ -234,9 +232,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use super::*;
-    #[cfg(unix)]
     fn request(command: &[&str], operands: &[&str], arguments: &[(&str, &[&str])]) -> Request {
         Request {
             command: command.iter().map(|value| (*value).into()).collect(),
@@ -416,5 +412,29 @@ mod tests {
         assert_eq!(loaded["snapshot_state"], "unavailable");
         assert!(loaded.get("inputs").is_none());
         assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn invalid_saved_effort_map_rejects_validation_and_reload_before_effects() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("state"));
+        let config = b"version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='https://example.invalid/v1'\n[providers.p.models.m.effort_map.chat-completions]\nmax='undeclared'\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
+        store.write_raw("tmax.toml", config).unwrap();
+        for (action, dry_run) in [("validate", false), ("reload", true), ("reload", false)] {
+            let mut request = request(&["config", action], &[], &[]);
+            request.dry_run = dry_run;
+            let error = dispatch(&store, &request).await.unwrap_err();
+            assert_eq!(error.code, "reasoning_effort_incompatible");
+            assert_eq!(
+                error.field.as_deref(),
+                Some("providers.p.models.m.effort_map.chat-completions.max")
+            );
+            assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), config);
+            let files: Vec<_> = std::fs::read_dir(&store.root)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(files, [std::ffi::OsString::from("tmax.toml")]);
+        }
     }
 }

@@ -1,34 +1,6 @@
 use super::{dsh, opencode, pi_omp};
-use crate::{Error, Result};
+use crate::{Error, Result, reasoning::effort_values};
 use serde_json::{Value, json};
-
-// Reasoning options are capability declarations. They are projected into the
-// native agent's own selector vocabulary; they never choose a default level or
-// rewrite a request. Inexact names are not translated.
-pub(super) fn effort_values(effective: &Value) -> Option<Vec<String>> {
-    if effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
-        return None;
-    }
-    let options = effective.get("reasoning_options")?.as_array()?;
-    let mut values: Vec<String> = Vec::new();
-    for option in options {
-        if option.get("type").and_then(Value::as_str) != Some("effort") {
-            continue;
-        }
-        let Some(list) = option.get("values").and_then(Value::as_array) else {
-            continue;
-        };
-        for value in list {
-            let Some(value) = value.as_str().filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            if !values.iter().any(|existing| existing == value) {
-                values.push(value.to_owned());
-            }
-        }
-    }
-    (!values.is_empty()).then_some(values)
-}
 
 pub(super) struct ReasoningProjection {
     pub(super) state: &'static str,

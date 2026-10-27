@@ -1,5 +1,5 @@
 use super::{
-    capability_mismatch,
+    capabilities,
     client_identity::{NativeRequirements, client_contract},
     native_context,
     runtime::{Runtime, Snapshot},
@@ -52,6 +52,7 @@ pub(super) struct Choice {
     pub(super) authorization_generation: String,
     pub(super) endpoint: String,
     pub(super) go_session_header: Option<&'static str>,
+    pub(super) effort: Option<String>,
 }
 
 impl Runtime {
@@ -201,6 +202,7 @@ impl Runtime {
             json!({"blocked_sessions":affected,"renamed_destinations":renamed,"in_flight":"retain admission snapshots"}),
         )
     }
+    #[cfg(test)]
     pub(super) fn choose(
         &self,
         snapshot: &Snapshot,
@@ -210,6 +212,26 @@ impl Runtime {
         headers: &HeaderMap,
         now: chrono::DateTime<Utc>,
     ) -> Result<Choice> {
+        self.choose_recorded(
+            snapshot,
+            (public_id, protocol),
+            body,
+            headers,
+            now,
+            &mut Value::Null,
+        )
+    }
+
+    pub(super) fn choose_recorded(
+        &self,
+        snapshot: &Snapshot,
+        route: (&str, &str),
+        body: &Value,
+        headers: &HeaderMap,
+        now: chrono::DateTime<Utc>,
+        evidence_out: &mut Value,
+    ) -> Result<Choice> {
+        let (public_id, protocol) = route;
         let config = &snapshot.config;
         let context = native_context::identify(headers, body, protocol);
         let native = NativeRequirements::capture(headers, context.as_ref());
@@ -282,24 +304,17 @@ impl Runtime {
                 ));
             }
             let provider = &config.providers[&binding.provider];
-            let model = &provider.models[&binding.model];
-            if let Some(reason) = capability_mismatch(
-                provider,
-                &binding.model,
-                model,
-                snapshot.metadata.as_deref(),
+            let mut evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
+            let effort = selected_request(
+                snapshot,
+                public_id,
+                protocol,
+                (&binding.provider, &binding.model),
                 body,
-                config
-                    .candidate_effort(public_id, protocol, &binding.provider, &binding.model)
-                    .map(|effort| (protocol, effort)),
-            ) {
-                return Err(Error::new(
-                    reason,
-                    "Request requirements are incompatible with the retained model; no reassignment",
-                ));
-            }
+                &mut evidence,
+                evidence_out,
+            )?;
             client_contract(provider, &native)?;
-            let evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
             return Ok(Choice {
                 selection: crate::routing::Selection {
                     provider: binding.provider.clone(),
@@ -311,6 +326,7 @@ impl Runtime {
                 authorization_generation: binding.authorization_generation.clone(),
                 endpoint: binding.endpoint.clone(),
                 go_session_header: context.as_ref().and_then(|c| c.go_session_header),
+                effort,
             });
         }
         if retain
@@ -342,7 +358,15 @@ impl Runtime {
         )?;
         let provider = &config.providers[&selection.provider];
         client_contract(provider, &native)?;
-        crate::provider_integration::check_request(provider, protocol, body)?;
+        let effort = selected_request(
+            snapshot,
+            public_id,
+            protocol,
+            (&selection.provider, &selection.model),
+            body,
+            &mut selection.evidence,
+            evidence_out,
+        )?;
         let endpoints = crate::provider_integration::resolve(provider)?;
         let endpoint = endpoints
             .get(protocol)
@@ -426,8 +450,81 @@ impl Runtime {
             authorization_generation,
             endpoint,
             go_session_header: context.as_ref().and_then(|c| c.go_session_header),
+            effort,
         })
     }
+}
+
+/// Resolve only after choosing a backend. Rejection cannot enter ranking again
+/// or publish a new conversation binding.
+fn selected_request(
+    snapshot: &Snapshot,
+    public_id: &str,
+    protocol: &str,
+    destination: (&str, &str),
+    body: &Value,
+    evidence: &mut Value,
+    evidence_out: &mut Value,
+) -> Result<Option<String>> {
+    let (provider_id, model_id) = destination;
+    let provider = &snapshot.config.providers[provider_id];
+    let model = &provider.models[model_id];
+    let fixed = snapshot
+        .config
+        .candidate_effort(public_id, protocol, provider_id, model_id);
+    let input = match protocol {
+        "chat-completions" => body.get("reasoning_effort"),
+        "responses" => body.pointer("/reasoning/effort"),
+        _ => None,
+    }
+    .and_then(Value::as_str);
+    let mapped = input.is_some_and(|input| {
+        model
+            .effort_map
+            .get(protocol)
+            .is_some_and(|map| map.contains_key(input))
+    });
+    let source = if fixed.is_some() {
+        "fixed"
+    } else if mapped {
+        "map"
+    } else if input.is_some() {
+        "identity"
+    } else {
+        "omitted"
+    };
+    evidence["effort_resolution"] =
+        json!({"input_effort":input,"upstream_effort":null,"source":source});
+    *evidence_out = safe_evidence(evidence);
+    let resolved = crate::reasoning::resolve(model, protocol, body, fixed)?;
+    evidence["effort_resolution"]["upstream_effort"] = json!(resolved);
+    *evidence_out = safe_evidence(evidence);
+    if let Some(effort) = resolved
+        && let Some(reason) = crate::reasoning::request_mismatch(protocol, body, effort)
+    {
+        return Err(Error::new(
+            reason,
+            "Request reasoning controls conflict with the resolved effort",
+        ));
+    }
+    let explicit = fixed.is_some() || mapped;
+    let effort = resolved.filter(|effort| explicit && Some(*effort) != input);
+    if let Some(reason) = capabilities::selected_mismatch(
+        provider,
+        model_id,
+        model,
+        snapshot.metadata.as_deref(),
+        body,
+        resolved,
+        explicit,
+    ) {
+        return Err(Error::new(
+            reason,
+            "Request effort or controls are incompatible with the selected model; no reassignment",
+        ));
+    }
+    crate::provider_integration::check_request(provider, protocol, body)?;
+    Ok(effort.map(str::to_owned))
 }
 
 fn retained_explanation(

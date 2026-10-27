@@ -345,6 +345,27 @@ const COMMANDS: &[Command] = &[
         mutation: true,
     },
     Command {
+        path: "model effort-map set",
+        min: 3,
+        max: 3,
+        options: "protocol",
+        mutation: true,
+    },
+    Command {
+        path: "model effort-map remove",
+        min: 2,
+        max: 2,
+        options: "protocol",
+        mutation: true,
+    },
+    Command {
+        path: "model effort-map clear",
+        min: 1,
+        max: 1,
+        options: "protocol",
+        mutation: true,
+    },
+    Command {
         path: "model schedule add",
         min: 1,
         max: 1,
@@ -822,7 +843,7 @@ const COMMANDS: &[Command] = &[
     },
 ];
 pub fn catalog() -> Value {
-    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="gateway configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes","dsh"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method" if c.path=="provider login-start"=>vec!["browser","device"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"candidate-reasoning-effort"|"clear-candidate-reasoning-effort"|"model"),"switch":matches!(name,"new-codex"|"all-day"|"last"|"gateway"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation,"revision_guard":c.supports_revision()})}).collect::<Vec<_>>())
+    json!(COMMANDS.iter().map(|c|{let owner=if c.path.starts_with("provider "){"provider"}else if c.path.starts_with("model alias "){"alias"}else if c.path.starts_with("model "){"model"}else{""};let field_defs=super::edit::fields::fields(owner);let metadata:serde_json::Map<String,Value>=c.options.split_whitespace().map(|name|{let fields=if name=="set"||name=="clear"{if c.path=="gateway configure"{vec!["autostart"]}else{field_defs.iter().filter(|(field,kind)|if name=="set"{*kind!="container"}else{*field!="overrides.interleaved.field"}).map(|(field,_)|*field).collect()}}else{vec![]};let choices=match name{"protocol" if c.path.starts_with("model effort-map ")=>vec!["chat-completions","responses"],"protocol"|"new-protocol"=>vec!["chat-completions","responses","messages"],"agent" if c.path=="skill install"=>vec!["hermes"],"agent"=>vec!["codex","pi","omp","opencode","hermes","dsh"],"state"=>vec!["file","loaded"],"snapshot"=>vec!["accepted","latest"],"method" if c.path=="provider login-start"=>vec!["browser","device"],"method"=>vec!["login"],"source"=>vec!["manual","provider","codex-resets"],"kind" if c.path.starts_with("provider input")=>vec!["quota","reset"],"kind"=>vec!["concrete","alias"],"enabled"=>vec!["true","false"],"transport"=>vec!["http"],"weekday"=>vec!["mon","tue","wed","thu","fri","sat","sun"],_=>vec![]};(name.into(),json!({"arity":if matches!(name,"set"|"endpoint"){2}else{1},"choices":choices,"fields":fields,"repeatable":matches!(name,"set"|"clear"|"endpoint"|"clear-endpoint"|"value"|"weekday"|"date"|"candidate"|"candidate-reasoning-effort"|"clear-candidate-reasoning-effort"|"model"),"switch":matches!(name,"new-codex"|"all-day"|"last"|"gateway"|"empty-values"|"cancel-active"|"no-browser"|"key-stdin")}))}).collect();json!({"command":c.path.split_whitespace().collect::<Vec<_>>(),"operation":c.path,"operands":{"min":c.min,"max":c.max,"labels":operand_labels(c.path)},"arguments":c.options.split_whitespace().collect::<Vec<_>>(),"argument_metadata":metadata,"mutation":c.mutation,"dry_run":c.mutation,"revision_guard":c.supports_revision()})}).collect::<Vec<_>>())
 }
 fn operand_labels(path: &str) -> &'static [&'static str] {
     match path {
@@ -837,6 +858,8 @@ fn operand_labels(path: &str) -> &'static [&'static str] {
         }
         p if p.starts_with("provider ") => &["Provider ID"],
         "model rename" => &["Qualified model", "New exact upstream model ID"],
+        "model effort-map set" => &["Qualified model", "Input effort", "Upstream effort"],
+        "model effort-map remove" => &["Qualified model", "Input effort"],
         p if p.starts_with("model rule ") => {
             if p.ends_with("list") || p.ends_with("clear") {
                 &["Qualified model"]
@@ -958,6 +981,16 @@ pub fn validate(r: &Request) -> Result<()> {
             .field(key));
         }
     }
+    if path.starts_with("model effort-map ")
+        && !super::arg(r, "protocol")
+            .is_some_and(|protocol| matches!(protocol, "chat-completions" | "responses"))
+    {
+        return Err(Error::new(
+            "invalid_arguments",
+            "Effort maps require --protocol chat-completions or responses; Messages is unsupported",
+        )
+        .field("protocol"));
+    }
     if path == "provider key set" {
         let key_stdin = r.arguments.contains_key("key-stdin");
         let key_fd = r
@@ -1028,6 +1061,54 @@ pub fn validate(r: &Request) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn effort_map_catalog_and_protocol_contract_are_finite() {
+        let entries = catalog();
+        for (action, operands) in [
+            ("set", vec!["p/m", "xhigh", "high"]),
+            ("remove", vec!["p/m", "xhigh"]),
+            ("clear", vec!["p/m"]),
+        ] {
+            let operation = format!("model effort-map {action}");
+            let entry = entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["operation"] == operation)
+                .unwrap();
+            assert_eq!(entry["operands"]["min"], operands.len());
+            assert_eq!(entry["operands"]["max"], operands.len());
+            assert_eq!(
+                entry["argument_metadata"]["protocol"]["choices"],
+                json!(["chat-completions", "responses"])
+            );
+            assert_eq!(entry["mutation"], true);
+            assert_eq!(entry["dry_run"], true);
+            assert_eq!(entry["revision_guard"], true);
+            let mut request = Request {
+                command: operation.split_whitespace().map(str::to_string).collect(),
+                operands: operands.into_iter().map(str::to_string).collect(),
+                arguments: std::collections::BTreeMap::new(),
+                dry_run: true,
+                if_revision: Some("revision".into()),
+            };
+            assert!(validate(&request).is_err());
+            request
+                .arguments
+                .insert("protocol".into(), vec!["messages".into()]);
+            assert!(validate(&request).is_err());
+            request
+                .arguments
+                .insert("protocol".into(), vec!["responses".into()]);
+            validate(&request).unwrap();
+            request.arguments.insert(
+                "set".into(),
+                vec!["effort_map.responses.high".into(), "low".into()],
+            );
+            assert!(validate(&request).is_err());
+        }
+    }
+
     #[test]
     fn rejects_arbitrary_web_fields() {
         let request = Request {

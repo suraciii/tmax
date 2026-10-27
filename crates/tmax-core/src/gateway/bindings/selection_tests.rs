@@ -133,7 +133,281 @@ fn context_free_selection_does_not_wait_for_session_bindings() {
 }
 
 #[test]
-fn candidate_effort_precedes_filtering_and_retained_requests_without_rerouting() {
+fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols() {
+    for protocol in ["chat-completions", "responses"] {
+        let (_temporary, runtime, original) = fixture();
+        let mut config = original.clone();
+        config.model_aliases[0].protocol = protocol.into();
+        for (id, values) in [("p", vec!["low", "high"]), ("q", vec!["max"])] {
+            let provider = config.providers.get_mut(id).unwrap();
+            provider
+                .endpoints
+                .insert(protocol.into(), "http://127.0.0.1:9/v1".into());
+            provider
+                .models
+                .get_mut("m")
+                .unwrap()
+                .overrides
+                .reasoning_options = Some(vec![crate::config::ReasoningOption {
+                r#type: "effort".into(),
+                values: Some(values.into_iter().map(String::from).collect()),
+            }]);
+        }
+        publish(&runtime, &original, &config, "effort-protocol");
+        let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+        let headers = native_headers(at);
+        let request = |effort: Option<&str>| {
+            let mut body = if protocol == "responses" {
+                json!({"input":[{"role":"user","content":"x"}],"store":false,"reasoning":{"summary":"auto"}})
+            } else {
+                json!({"messages":[{"role":"user","content":"x"}]})
+            };
+            if let Some(effort) = effort {
+                if protocol == "responses" {
+                    body["reasoning"]["effort"] = json!(effort);
+                } else {
+                    body["reasoning_effort"] = json!(effort);
+                }
+            }
+            body
+        };
+        let max = request(Some("max"));
+        let mut evidence = Value::Null;
+        let error = runtime
+            .choose_recorded(
+                &test_snapshot(&config, "unmapped"),
+                ("dynamic", protocol),
+                &max,
+                &headers,
+                at,
+                &mut evidence,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "reasoning_effort_incompatible");
+        assert_eq!(evidence["selection"]["qualified_model"], "p/m");
+        assert_eq!(
+            evidence["effort_resolution"],
+            json!({"input_effort":"max","upstream_effort":"max","source":"identity"})
+        );
+        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+
+        let previous = config.clone();
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .effort_map
+            .insert(
+                protocol.into(),
+                BTreeMap::from([("max".into(), "high".into())]),
+            );
+        publish(&runtime, &previous, &config, "mapped");
+        let mut invalid = config.clone();
+        invalid
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .effort_map
+            .get_mut(protocol)
+            .unwrap()
+            .insert("max".into(), "unsupported".into());
+        publish(&runtime, &config, &invalid, "invalid-target");
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&invalid, "invalid-target"),
+                    "dynamic",
+                    protocol,
+                    &max,
+                    &headers,
+                    at
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_effort_incompatible"
+        );
+        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+        publish(&runtime, &invalid, &config, "mapped-restored");
+        let mut conflict = max.clone();
+        conflict["thinking"] = json!({"type":"disabled"});
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&config, "fresh-conflict"),
+                    "dynamic",
+                    protocol,
+                    &conflict,
+                    &headers,
+                    at
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_toggle_conflict"
+        );
+        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+
+        let mapped = runtime
+            .choose(
+                &test_snapshot(&config, "mapped"),
+                "dynamic",
+                protocol,
+                &max,
+                &headers,
+                at,
+            )
+            .unwrap();
+        assert_eq!(mapped.selection.provider, "p");
+        assert_eq!(mapped.effort.as_deref(), Some("high"));
+        assert_eq!(
+            mapped.selection.evidence["effort_resolution"],
+            json!({"input_effort":"max","upstream_effort":"high","source":"map"})
+        );
+        publish(&runtime, &config, &invalid, "retained-invalid-target");
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&invalid, "retained-invalid-target"),
+                    "dynamic",
+                    protocol,
+                    &max,
+                    &headers,
+                    at
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_effort_incompatible"
+        );
+        assert_eq!(runtime.bindings.lock().unwrap().entries.len(), 1);
+        assert!(
+            runtime
+                .bindings
+                .lock()
+                .unwrap()
+                .entries
+                .values()
+                .all(|binding| binding.blocked.is_none())
+        );
+        publish(&runtime, &invalid, &config, "retained-target-restored");
+        let mut removed = config.clone();
+        removed
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .effort_map
+            .clear();
+        publish(&runtime, &config, &removed, "removed-mapping");
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&removed, "removed-mapping"),
+                    "dynamic",
+                    protocol,
+                    &max,
+                    &headers,
+                    at
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_effort_incompatible"
+        );
+        publish(&runtime, &removed, &config, "restored-mapping");
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&config, "restored-mapping"),
+                    "dynamic",
+                    protocol,
+                    &max,
+                    &headers,
+                    at
+                )
+                .unwrap()
+                .selection
+                .provider,
+            "p"
+        );
+        let mut upstream = max.clone();
+        crate::reasoning::apply(&mut upstream, protocol, mapped.effort.as_deref().unwrap())
+            .unwrap();
+        if protocol == "responses" {
+            assert_eq!(
+                upstream["reasoning"],
+                json!({"summary":"auto","effort":"high"})
+            );
+            assert_eq!(max["reasoning"]["effort"], "max");
+        } else {
+            assert_eq!(upstream["reasoning_effort"], "high");
+        }
+
+        let previous = config.clone();
+        config
+            .providers
+            .get_mut("q")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .priority = 100;
+        publish(&runtime, &previous, &config, "reranked");
+        for effort in [Some("low"), Some("high"), None] {
+            let retained = runtime
+                .choose(
+                    &test_snapshot(&config, "reranked"),
+                    "dynamic",
+                    protocol,
+                    &request(effort),
+                    &headers,
+                    at,
+                )
+                .unwrap();
+            assert_eq!(retained.selection.provider, "p");
+            assert_eq!(
+                retained.selection.evidence["selection_reason"],
+                "retained_destination"
+            );
+            assert_eq!(retained.effort, None);
+            assert_eq!(
+                retained.selection.evidence["effort_resolution"]["upstream_effort"],
+                json!(effort)
+            );
+        }
+        let mut conflict = request(Some("max"));
+        conflict["thinking"] = json!({"type":"disabled"});
+        assert_eq!(
+            runtime
+                .choose(
+                    &test_snapshot(&config, "toggle-conflict"),
+                    "dynamic",
+                    protocol,
+                    &conflict,
+                    &headers,
+                    at
+                )
+                .err()
+                .unwrap()
+                .code,
+            "reasoning_toggle_conflict"
+        );
+        assert_eq!(runtime.bindings.lock().unwrap().entries.len(), 1);
+    }
+}
+
+#[test]
+fn fixed_effort_precedes_mapping_and_retained_requests_never_reroute() {
     let (_temporary, runtime, original) = fixture();
     let mut config = original.clone();
     for (provider, values) in [("p", vec!["low", "high"]), ("q", vec!["max"])] {
@@ -162,9 +436,23 @@ fn candidate_effort_precedes_filtering_and_retained_requests_without_rerouting()
             &native_headers(at),
             at,
         )
+        .err()
         .unwrap();
-    assert_eq!(first.selection.provider, "q");
+    assert_eq!(first.code, "reasoning_effort_incompatible");
+    assert!(runtime.bindings.lock().unwrap().entries.is_empty());
     let previous = config.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .models
+        .get_mut("m")
+        .unwrap()
+        .effort_map
+        .insert(
+            "chat-completions".into(),
+            BTreeMap::from([("max".into(), "low".into())]),
+        );
     config.model_aliases[0]
         .candidate_reasoning_effort
         .insert("p/m".into(), "high".into());
@@ -185,6 +473,11 @@ fn candidate_effort_precedes_filtering_and_retained_requests_without_rerouting()
     assert_eq!(
         fixed.selection.evidence["selection"]["candidate_reasoning_effort"],
         "high"
+    );
+    assert_eq!(fixed.effort.as_deref(), Some("high"));
+    assert_eq!(
+        fixed.selection.evidence["effort_resolution"]["source"],
+        "fixed"
     );
     let previous = config.clone();
     config.model_aliases[0]

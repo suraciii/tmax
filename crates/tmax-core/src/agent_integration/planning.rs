@@ -305,19 +305,20 @@ pub(super) async fn entries(
             }
             for m in &binding.models {
                 requirements.assess_public(config, &m.id, &m.protocol)?;
-                if config
+                if let Some(alias) = config
                     .model_aliases
                     .iter()
-                    .any(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
+                    .find(|a| a.id == m.id && a.protocol == m.protocol && a.enabled)
                 {
+                    let effective =
+                        crate::reasoning::alias_metadata(config, metadata.as_ref(), alias)?;
+                    model_metadata.insert(
+                        m.id.clone(),
+                        adapters::alias_model_metadata(&target.agent, &m.protocol, &effective)?,
+                    );
                     model_projection.insert(
                         m.id.clone(),
-                        json!({
-                            "state": "alias",
-                            "reason_code": "alias_metadata_unavailable",
-                            "fields": {},
-                            "omitted": [],
-                        }),
+                        adapters::projection_view(&target.agent, &m.protocol, &effective)?,
                     );
                 } else {
                     let (_, model_id) = config::qualified(&m.id)?;
@@ -342,21 +343,18 @@ pub(super) async fn entries(
                             p,
                             Some((model_id, model)),
                         )?;
+                        let inputs = crate::reasoning::input_metadata(
+                            &projection["effective"],
+                            model,
+                            &m.protocol,
+                        );
                         model_metadata.insert(
                             m.id.clone(),
-                            adapters::model_metadata(
-                                &target.agent,
-                                &m.protocol,
-                                &projection["effective"],
-                            )?,
+                            adapters::model_metadata(&target.agent, &m.protocol, &inputs)?,
                         );
                         model_projection.insert(
                             m.id.clone(),
-                            adapters::projection_view(
-                                &target.agent,
-                                &m.protocol,
-                                &projection["effective"],
-                            )?,
+                            adapters::projection_view(&target.agent, &m.protocol, &inputs)?,
                         );
                     }
                 }
@@ -804,5 +802,146 @@ mod tests {
                 assert_eq!(after[field], original[field]);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn direct_entries_retain_upstream_efforts_while_gateway_projection_uses_mapped_inputs() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::at(temporary.path().join("tmax"));
+        let mut model = config::Model {
+            overrides: serde_json::from_value(json!({
+                "reasoning":true,
+                "reasoning_options":[{"type":"effort","values":["high","max"]}]
+            }))
+            .unwrap(),
+            ..Default::default()
+        };
+        model.effort_map.insert(
+            "chat-completions".into(),
+            BTreeMap::from([("xhigh".into(), "high".into())]),
+        );
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey {
+                    key_ref: "opaque-reference-not-read".into(),
+                }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("m".into(), model)]),
+                ..Default::default()
+            },
+        );
+        let target = AgentTarget {
+            agent: "omp".into(),
+            scope: temporary.path().join("native"),
+            providers: BTreeMap::from([(
+                "local".into(),
+                config::NativeProvider {
+                    provider: Some("p".into()),
+                    gateway: None,
+                    models: vec![config::ModelSelection {
+                        id: "m".into(),
+                        protocol: "chat-completions".into(),
+                    }],
+                },
+            )]),
+            default: None,
+            roles: BTreeMap::new(),
+        };
+        let (direct, _) = entries(&store, &config, "target", &target, &target.scope, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            direct[0].model_metadata["m"]["thinking"],
+            json!({"mode":"effort","efforts":["high","max"]})
+        );
+        let provider = &config.providers["p"];
+        let model = &provider.models["m"];
+        let upstream =
+            crate::catalog::effective_from_snapshot(None, provider, Some(("m", model))).unwrap();
+        let inputs =
+            crate::reasoning::input_metadata(&upstream["effective"], model, "chat-completions");
+        assert_eq!(
+            adapters::model_metadata("omp", "chat-completions", &inputs).unwrap()["thinking"],
+            json!({"mode":"effort","efforts":["high","max","xhigh"]})
+        );
+        assert_eq!(
+            adapters::projection_view("omp", "chat-completions", &inputs).unwrap()["fields"]["thinking"],
+            json!({"mode":"effort","efforts":["high","max","xhigh"]})
+        );
+        assert_eq!(
+            crate::reasoning::effort_values(&upstream["effective"]).unwrap(),
+            ["high", "max"]
+        );
+    }
+
+    #[test]
+    fn alias_projection_intersects_mapped_and_fixed_efforts_of_every_configured_candidate() {
+        let mut first = config::Model {
+            overrides: serde_json::from_value(json!({
+                "reasoning_options":[{"type":"effort","values":["high","max"]}]
+            }))
+            .unwrap(),
+            ..Default::default()
+        };
+        first.effort_map.insert(
+            "chat-completions".into(),
+            BTreeMap::from([("xhigh".into(), "max".into())]),
+        );
+        let mut second = config::Model {
+            enabled: false,
+            priority: -100,
+            ..Default::default()
+        };
+        second.overrides = serde_json::from_value(json!({
+            "reasoning_options":[{"type":"effort","values":["xhigh","max"]}]
+        }))
+        .unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                models: BTreeMap::from([("first".into(), first), ("second".into(), second)]),
+                ..Default::default()
+            },
+        );
+        let mut alias = config::ModelAlias {
+            id: "shared".into(),
+            protocol: "chat-completions".into(),
+            candidates: vec!["p/first".into(), "p/second".into()],
+            candidate_reasoning_effort: BTreeMap::new(),
+            enabled: true,
+            continuity: Some("stateless".into()),
+        };
+        let effective = crate::reasoning::alias_metadata(&config, None, &alias).unwrap();
+        assert_eq!(
+            adapters::alias_model_metadata("dsh", &alias.protocol, &effective).unwrap(),
+            json!({"reasoningEfforts":{"xhigh":"xhigh","max":"max"}})
+        );
+        assert_eq!(
+            adapters::projection_view("dsh", &alias.protocol, &effective).unwrap()["fields"],
+            json!({"reasoningEfforts":{"xhigh":"xhigh","max":"max"}})
+        );
+        alias
+            .candidate_reasoning_effort
+            .insert("p/second".into(), "xhigh".into());
+        let effective = crate::reasoning::alias_metadata(&config, None, &alias).unwrap();
+        assert_eq!(
+            adapters::alias_model_metadata("dsh", &alias.protocol, &effective).unwrap(),
+            json!({"reasoningEfforts":{"xhigh":"xhigh"}})
+        );
+        alias
+            .candidate_reasoning_effort
+            .insert("p/first".into(), "high".into());
+        let effective = crate::reasoning::alias_metadata(&config, None, &alias).unwrap();
+        assert_eq!(
+            adapters::alias_model_metadata("dsh", &alias.protocol, &effective).unwrap(),
+            json!({"reasoningEfforts":false})
+        );
     }
 }

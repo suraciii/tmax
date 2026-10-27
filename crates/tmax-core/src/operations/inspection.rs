@@ -213,8 +213,20 @@ pub(super) fn model_inspect(
         let protocols = crate::provider_integration::protocols(p)?;
         let native_projection =
             crate::agent_integration::reasoning_projection(&metadata["effective"], &protocols);
+        let gateway_projection: serde_json::Map<String, Value> = protocols
+            .iter()
+            .map(|protocol| {
+                let input_metadata =
+                    crate::reasoning::input_metadata(&metadata["effective"], m, protocol);
+                let projection = crate::agent_integration::reasoning_projection(
+                    &input_metadata,
+                    std::slice::from_ref(protocol),
+                );
+                (protocol.clone(), projection)
+            })
+            .collect();
         return Ok(
-            json!({"kind":"concrete","qualified_model":id,"configuration":m,"metadata":metadata,"native_projection":native_projection,"protocols":protocols,"revision":file.revision,"priority_evaluation":crate::routing::explain(store,config,id,arg(r,"protocol").unwrap_or("chat-completions"),None)?}),
+            json!({"kind":"concrete","qualified_model":id,"configuration":m,"metadata":metadata,"native_projection":native_projection,"gateway_projection":gateway_projection,"protocols":protocols,"revision":file.revision,"priority_evaluation":crate::routing::explain(store,config,id,arg(r,"protocol").unwrap_or("chat-completions"),None)?}),
         );
     }
     let aliases: Vec<_> = config
@@ -270,6 +282,43 @@ pub(super) fn agent_list(config: &Config) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn model_inspect_separates_gateway_maps_from_upstream_native_capabilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\nresponses='http://127.0.0.1:39999'\n[providers.p.models.m]\neffort_map={chat-completions={xhigh='high'}}\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let file = config::load(&store).unwrap();
+        let request = Request {
+            command: vec!["model".into(), "inspect".into()],
+            operands: vec!["p/m".into()],
+            arguments: Default::default(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let inspect = model_inspect(&store, &file, &request).unwrap();
+        assert_eq!(
+            inspect["configuration"]["effort_map"]["chat-completions"]["xhigh"],
+            "high"
+        );
+        assert!(
+            inspect["native_projection"]["pi"]["fields"]["thinkingLevelMap"]["xhigh"].is_null()
+        );
+        assert_eq!(
+            inspect["gateway_projection"]["chat-completions"]["pi"]["fields"]["thinkingLevelMap"]["xhigh"],
+            "xhigh"
+        );
+        assert!(
+            inspect["gateway_projection"]["responses"]["pi"]["fields"]["thinkingLevelMap"]["xhigh"]
+                .is_null()
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            text.as_bytes()
+        );
+    }
+
     #[tokio::test]
     async fn incomplete_native_entry_and_alias_advice_exclude_the_same_protocol_that_apply_rejects()
     {

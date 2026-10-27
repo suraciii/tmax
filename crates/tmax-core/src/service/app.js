@@ -465,8 +465,8 @@ function agentForm(agent='') {
 }
 // Projection rendering is presentation only: core owns the mapping; these
 // helpers never derive levels, defaults, or alias capabilities.
-const projectionStates={projected:['可完整映射','green'],partial:['部分映射','amber'],not_supported:['工具不支持档位声明',''],unavailable:['暂无可投影声明',''],alias:['别名不推断能力','amber'],blocked:['无法映射，将阻止写入','amber']};
-const projectionReasons={native_reasoning_options_partial:'部分声明值不在该工具的档位词汇中，将被忽略，未映射值列在下方。',native_reasoning_options_unavailable:'该工具没有可写的原生推理档位声明字段。',native_reasoning_protocol_unsupported:'该原生协议不支持此工具的推理档位声明字段；此协议下不写入档位映射。',reasoning_disabled:'模型显式声明关闭推理（reasoning 为 false），不投影档位。',reasoning_options_unavailable:'模型未声明推理档位（reasoning options 缺失），没有可投影的档位。',native_projection_unavailable:'未生成该模型的投影信息，请以阻塞原因与检查结果为准。',alias_metadata_unavailable:'别名不从候选模型或当前选择推断推理能力；档位由请求与别名候选决定。',native_metadata_unrepresentable:'声明的档位无法用该工具的原生词汇表示，会在写入原生配置前阻止应用。'};
+const projectionStates={projected:['可完整映射','green'],partial:['部分映射','amber'],not_supported:['工具不支持档位声明',''],unavailable:['暂无可投影声明',''],blocked:['无法映射，将阻止写入','amber']};
+const projectionReasons={native_reasoning_options_partial:'部分声明值不在该工具的档位词汇中，将被忽略，未映射值列在下方。',native_reasoning_options_unavailable:'该工具没有可写的原生推理档位声明字段。',native_reasoning_protocol_unsupported:'该原生协议不支持此工具的推理档位声明字段；此协议下不写入档位映射。',reasoning_disabled:'模型显式声明关闭推理（reasoning 为 false），不投影档位。',reasoning_options_unavailable:'模型未声明推理档位或别名没有共同的推理档位，没有可投影的档位。',native_projection_unavailable:'未生成该模型的投影信息，请以阻塞原因与检查结果为准。',native_metadata_unrepresentable:'声明的档位无法用该工具的原生词汇表示，会在写入原生配置前阻止应用。'};
 function projectionLevels(fields) {
   const rows=[];
   if(fields?.thinkingLevelMap && typeof fields.thinkingLevelMap==='object')for(const [level,target] of Object.entries(fields.thinkingLevelMap))rows.push([level,target==null?'不支持（null）':String(target)]);

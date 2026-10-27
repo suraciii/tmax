@@ -398,4 +398,42 @@ mod tests {
             ]))
         );
     }
+
+    #[test]
+    fn dsh_alias_reapply_clears_lost_common_efforts_without_changing_native_preferences() {
+        let current = json!({
+            "llm-pi-ai":{"config":{"providers":{"local":{"models":[{
+                "id":"shared", "reasoningEfforts":{"low":"low","high":"high"},
+                "maxTokens":1234,"thinkingBudgets":{"high":512}
+            }]}}}},
+            "agent-default-model":{"config":{"provider":"local","model":"shared","reasoningEffort":"high"}}
+        });
+        for (effective, expected) in [
+            (
+                json!({"reasoning_options":[{"type":"effort","values":["high"]}]}),
+                json!({"high":"high"}),
+            ),
+            (json!({}), json!(false)),
+        ] {
+            let mut model = crate::agent_integration::alias_model_metadata(
+                "dsh",
+                "chat-completions",
+                &effective,
+            )
+            .unwrap();
+            model["id"] = json!("shared");
+            let desired =
+                json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[model]}}}}});
+            let mut text = serde_yaml::to_string(&current).unwrap();
+            for (path, value) in desired_fields("dsh", &desired, &current) {
+                text = document::set(&text, Format::Yaml, &path, value.as_ref()).unwrap();
+            }
+            let after = document::parse(&text, Format::Yaml).unwrap();
+            let row = &after["llm-pi-ai"]["config"]["providers"]["local"]["models"][0];
+            assert_eq!(row["reasoningEfforts"], expected);
+            assert_eq!(row["maxTokens"], 1234);
+            assert_eq!(row["thinkingBudgets"], json!({"high":512}));
+            assert_eq!(after["agent-default-model"], current["agent-default-model"]);
+        }
+    }
 }

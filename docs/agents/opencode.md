@@ -86,14 +86,18 @@ consumer; this does not establish actual endpoint capabilities.
 
 The custom-model schema cannot express a reasoning-support boolean. tmax never
 emits that unsupported field, prices, or request-body defaults. Effective
-`reasoning_options` effort values project as `variants` entries instead: each
-entry's `id` and one settings key carry an exact declared name as a capability
-declaration. Chat Completions and Responses use `settings.reasoningEffort`;
-Messages uses `settings.effort` alone. The entry writes no other variant field
-and synthesizes no thinking flag, budget, or default variant/effort; the native
-tool owns thinking enablement and request defaults. A model alias receives no
-candidate aggregation or current-winner metadata. Projected `variants` are owned
-model fields like the other capability fields; native request settings, bodies,
+`reasoning_options` effort values project as `variants` entries instead for direct
+native entries; gateway entries use mapped input names under the shared
+[alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
+rule. Each entry's `id` and one settings key carry the exact representable name.
+Chat Completions and Responses use `settings.reasoningEffort`; Messages uses
+`settings.effort` alone. This native field declaration does not qualify Messages
+gateway mapping or fixed effort writes. Entries write no other variant field
+and synthesize no thinking flag, budget, or default variant/effort; native
+preferences remain tool-owned. Model maps run only inside the gateway, after
+backend selection, not in the native entry. Projected `variants` are owned model
+fields like the other capability
+fields; native request settings, bodies,
 and unrelated model entries are preserved. Metadata output capacity is not a
 generation budget. Native variant-mapping sources:
 [`variant.ts`](https://github.com/anomalyco/opencode/blob/026b106bc5d41b679ffc413264229c340871e4d3/packages/core/src/variant.ts#L78-L105)

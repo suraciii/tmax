@@ -63,14 +63,20 @@ unknown rather than receive fabricated defaults. This is model-capability
 mapping, not a per-request generation budget or permission to change native
 preferences. The [request-parameter contract](../model-routing/spec.md#request-parameters)
 owns preservation of sampling, reasoning effort, and output-budget settings.
-This rule supplies no alias capability aggregation or current-winner snapshot.
+Gateway aliases follow the [alias reasoning capability](#alias-reasoning-capability)
+rule below, not a current-winner snapshot.
 
 Effective `reasoning_options` entries with `type = "effort"` and explicit
-`values` declare a concrete model's reasoning selector capabilities. Only these
-entries declare effort names; other entry types and missing `values` declare
-none. `reasoning = true` declares support only and synthesizes no names. An
-explicit `reasoning = false` stays explicit and suppresses the effort
-projection. Missing effort declarations stay unknown.
+`values` declare a concrete model's actual upstream reasoning selector
+capabilities. Only these entries declare upstream effort names; other entry
+types and missing `values` declare none. `reasoning = true` declares support
+only and synthesizes no names. An explicit `reasoning = false` stays explicit
+and suppresses the effort projection. Missing effort declarations stay unknown.
+For a concrete gateway entry, derive caller-facing inputs from these identities
+plus explicit protocol-scoped [model maps](../configuration/spec.md#model-effort-maps),
+whose targets must be declared upstream values. An explicit key overrides
+identity for that name. Direct native entries project the actual upstream
+declarations, not gateway maps. Gateway aliases use the intersection below.
 
 | Agent | Projected native fields | Exact-name rule |
 | --- | --- | --- |
@@ -81,14 +87,17 @@ projection. Missing effort declarations stay unknown.
 | DSH | Model `reasoningEfforts` map, or `false` for explicit non-reasoning capability | Exact declared keys from `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` map to the same wire strings; absent levels are omitted. A map must offer a level beyond `off`. |
 | Codex CLI, Hermes Agent | None | These agents have no native reasoning-effort selector to project. |
 
-Projection maps exact names only and never translates or renames a name. A
-partial intersection projects the representable names and keeps every other
-declared name visible as omitted. A projection with no usable native level is
-unrepresentable: it blocks that agent's application before native writes and
-stays visible in inspection. These fields declare selector capability only.
-They set no default effort, level, budget, thinking flag, or request value, and
-the native tool keeps ownership of thinking enablement, its defaults, and its
-request preferences under the
+Native projection maps its derived input names exactly to representable native
+names; it never copies upstream map targets into a gateway native selector or
+performs model-specific translation there. A partial projection keeps every
+unrepresentable input visible as omitted. A projection with no usable native
+level is unrepresentable: it blocks that agent's application before native writes
+and stays visible in inspection. These fields declare selector capability only.
+They set no default effort, level, budget, thinking switch, or request value.
+Native capability declarations can affect the tool's model representation;
+the [DSH alias limitation](#alias-reasoning-capability) makes that effect explicit.
+The native tool keeps ownership of thinking enablement, defaults, and request
+preferences under the
 [request-parameter contract](../model-routing/spec.md#request-parameters).
 
 The [versioned native field references](../../docs/agents/README.md#qualification-and-evidence)
@@ -125,6 +134,49 @@ rejects conflicting changes during the operation before overwrite. No preview,
 confirmation token, or claim of human approval is a prerequisite. Explicit
 business inputs specify requested scope and identity claims; they do not verify
 identity, qualification, or safe conversation continuation.
+
+### Alias reasoning capability
+
+Native application may project only common reasoning-effort choices for a gateway
+alias. It must use every explicitly configured candidate, including candidates
+whose provider or model is currently disabled. Availability, priority, routing
+rules, and the current winner must not narrow that set.
+
+| Step | Required behavior |
+| --- | --- |
+| Candidate metadata | Use each concrete candidate's accepted catalog metadata with its local overrides applied. Do not use an unaccepted catalog snapshot or native fallback values. |
+| Candidate input names | Collect declared `reasoning_options` values with `type = "effort"`, then add explicit map input keys for this protocol whose targets are positively declared upstream efforts. An explicit key overrides identity for that name. Effective `reasoning = false` or no declared effort names gives an empty set. A reasoning-support boolean alone supplies no names. |
+| Fixed candidate effort | If `candidate_reasoning_effort` is configured, restrict that candidate's advertised input set to its fixed upstream name, without applying a model map. Fixed override behavior for other caller inputs is not evidence that they belong in its advertised set. Precedence is fixed > map > identity under the [request-parameter contract](../model-routing/spec.md#request-parameters). |
+| Common choices | Intersect all candidate caller-facing input sets after maps and fixed restrictions. Remove duplicates while retaining deterministic declaration order. Never use the union, guess correspondences, or synthesize defaults. |
+| Nonempty intersection | Supply `reasoning = true` and one `reasoning_options` entry with `type = "effort"` and the common `values` to the existing native capability mapping. |
+| Empty intersection | Supply no alias reasoning metadata. Do not infer reasoning support or emit an alias-wide non-reasoning capability claim. |
+| Other metadata | Omit alias limits, modalities, tools, prices, transport claims, and all other capability metadata. Never copy one candidate's or the current winner's metadata. |
+
+Aliases use the same projected, partial, unavailable, blocked, or not-supported
+outcomes as concrete models under the native mapping above. Capability projection
+must not choose defaults, budgets, request preferences, or candidates, or inject
+thinking switches. DSH's native capability encoding has the limitation below.
+Only explicit model maps and fixed candidate effort have the narrow gateway
+request-resolution behavior linked above; native selectors send input names to
+the gateway, where the selected backend resolves them. Effort cannot filter or
+rerank routing candidates.
+
+For DSH, an empty or unknown common intersection must write native
+`reasoningEfforts: false` to clear any previously advertised selector rather
+than retain or inherit stale choices. Inspection still reports `unavailable`
+with `reasoning_options_unavailable`. This value marks the alias as non-reasoning
+in DSH's native model representation; it does not establish that its concrete
+candidates lack reasoning support. It does not change saved effort preferences,
+inject a request value, or repair a resulting native preference conflict.
+
+After candidate membership, model maps, fixed candidate effort, or effective
+capability metadata changes, inspect and explicitly reapply affected native
+entries, then reload the native tool. Accepted catalog changes and local
+overrides can change common choices; no metadata or map change automatically
+rewrites native files.
+
+The [capability design](design.md) separates declarations, common choices,
+native representation, and request intent, including this lossy DSH boundary.
 
 ### DSH home boundary
 

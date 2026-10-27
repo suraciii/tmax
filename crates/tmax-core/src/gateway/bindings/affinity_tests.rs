@@ -5,7 +5,8 @@ use crate::{
     gateway::{client_identity::upstream_headers, forwarding::forward, test_support::GO_URL},
 };
 use axum::{
-    body::Body,
+    Router,
+    body::{Body, to_bytes},
     extract::State,
     http::{Method, StatusCode},
 };
@@ -246,4 +247,125 @@ async fn go_identity_rejections_retain_exact_history_reason_without_dispatch() {
         assert!(record["upstream_status"].is_null());
     }
     assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+}
+
+#[tokio::test]
+async fn effort_maps_reach_upstream_without_fallback_or_omitted_effort_synthesis() {
+    for (protocol, path) in [
+        ("chat-completions", "/v1/chat/completions"),
+        ("responses", "/v1/responses"),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, mut received) = tokio::sync::mpsc::channel(4);
+        let upstream = Router::new().fallback(move |request: axum::extract::Request| {
+            let sent = sent.clone();
+            async move {
+                let body = to_bytes(request.into_body(), 4096).await.unwrap();
+                sent.send(serde_json::from_slice::<Value>(&body).unwrap()).await.unwrap();
+                axum::Json(json!({"id":"response","choices":[],"usage":{"input_tokens":1,"output_tokens":1}}))
+            }
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let (_temporary, runtime, original) = fixture();
+        let mut config = original.clone();
+        config.model_aliases[0].protocol = protocol.into();
+        for (id, values) in [("p", vec!["low", "high"]), ("q", vec!["max"])] {
+            let provider = config.providers.get_mut(id).unwrap();
+            provider
+                .endpoints
+                .insert(protocol.into(), format!("http://{address}"));
+            provider
+                .models
+                .get_mut("m")
+                .unwrap()
+                .overrides
+                .reasoning_options = Some(vec![crate::config::ReasoningOption {
+                r#type: "effort".into(),
+                values: Some(values.into_iter().map(String::from).collect()),
+            }]);
+        }
+        publish(&runtime, &original, &config, "wire-effort");
+        runtime.open();
+        let at = Utc::now();
+        runtime.bindings.lock().unwrap().epoch = at - chrono::Duration::seconds(1);
+        let headers = native_headers(at);
+        let mut body = if protocol == "responses" {
+            json!({"model":"dynamic","input":[{"role":"user","content":"x"}],"store":false,"reasoning":{"effort":"max","summary":"auto"},"extension":{"keep":true}})
+        } else {
+            json!({"model":"dynamic","messages":[{"role":"user","content":"x"}],"reasoning_effort":"max","extension":{"keep":true}})
+        };
+        let make_request = |body: &Value| {
+            let mut request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .body(Body::from(serde_json::to_vec(body).unwrap()))
+                .unwrap();
+            *request.headers_mut() = headers.clone();
+            request
+                .headers_mut()
+                .insert("authorization", "Bearer test-local-key".parse().unwrap());
+            request
+        };
+        let rejected = forward(State(runtime.clone()), make_request(&body)).await;
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
+        assert!(received.try_recv().is_err());
+        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+        let mut query = Request {
+            command: vec!["history".into(), "list".into()],
+            operands: vec![],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let listed = runtime.history.view(&query).unwrap();
+        query.command[1] = "inspect".into();
+        query.operands = vec![listed["records"][0]["request"].as_str().unwrap().into()];
+        let record = runtime.history.view(&query).unwrap();
+        assert_eq!(record["record"]["qualified_model"], "p/m");
+        assert_eq!(
+            record["record"]["reason_code"],
+            "reasoning_effort_incompatible"
+        );
+        assert_eq!(
+            record["record"]["decision"]["effort_resolution"]["input_effort"],
+            "max"
+        );
+
+        let previous = config.clone();
+        config
+            .providers
+            .get_mut("p")
+            .unwrap()
+            .models
+            .get_mut("m")
+            .unwrap()
+            .effort_map
+            .insert(
+                protocol.into(),
+                BTreeMap::from([("max".into(), "high".into())]),
+            );
+        publish(&runtime, &previous, &config, "wire-mapped");
+        let response = forward(State(runtime.clone()), make_request(&body)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        to_bytes(response.into_body(), 4096).await.unwrap();
+        let actual = received.recv().await.unwrap();
+        let mut expected = body.clone();
+        expected["model"] = json!("m");
+        crate::reasoning::apply(&mut expected, protocol, "high").unwrap();
+        assert_eq!(actual, expected);
+        if protocol == "responses" {
+            body["reasoning"].as_object_mut().unwrap().remove("effort");
+        } else {
+            body.as_object_mut().unwrap().remove("reasoning_effort");
+        }
+        let response = forward(State(runtime.clone()), make_request(&body)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        to_bytes(response.into_body(), 4096).await.unwrap();
+        let actual = received.recv().await.unwrap();
+        body["model"] = json!("m");
+        assert_eq!(actual, body);
+        assert_eq!(runtime.bindings.lock().unwrap().entries.len(), 1);
+        server.abort();
+    }
 }

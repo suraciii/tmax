@@ -93,7 +93,8 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             "unresolved_reference" | "unknown_resource" | "unsupported_operation"
         )
         || (error.field.as_deref().is_some_and(|field| {
-            field.starts_with("model_aliases.") && field.contains(".candidate_reasoning_effort.")
+            (field.starts_with("model_aliases.") && field.contains(".candidate_reasoning_effort."))
+                || (field.starts_with("providers.") && field.contains(".effort_map."))
         }) && matches!(
             code,
             "reasoning_incompatible"
@@ -160,6 +161,14 @@ mod tests {
             assert_eq!(configured.exit_code, 2);
             assert_eq!(configured.body["code"], code);
             assert_eq!(configured.body["status"], "error");
+            let mapped = error_response(
+                "model effort-map set",
+                Error::new(code, "Unsupported mapped effort")
+                    .field("providers.p.models.m.effort_map.responses.xhigh"),
+                false,
+            );
+            assert_eq!(mapped.exit_code, 2);
+            assert_eq!(mapped.body["code"], code);
             let runtime =
                 error_response("gateway probe", Error::new(code, "Runtime mismatch"), false);
             assert_eq!(runtime.exit_code, 4);

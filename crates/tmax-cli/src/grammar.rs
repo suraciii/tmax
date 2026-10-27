@@ -633,6 +633,20 @@ fn model_commands() -> Command {
             .arg(required_pos(2, "INDEX", "Zero-based local array position.")), true, false))
         .subcommand(mutation(leaf("clear", "Write an explicit empty local reasoning-options array.", "This differs from clearing overrides.reasoning_options, which restores catalog inheritance.\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax model reasoning clear deepseek/deepseek-flash")
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
+    let effort_map = Command::new("effort-map")
+        .about("Manage protocol-specific, gateway-only model effort mappings.")
+        .subcommand(mutation(leaf("set", "Set or replace one caller-input to upstream-effort mapping.", "Gateway-only: direct native entries keep actual upstream capabilities. Requires --protocol chat-completions|responses and a target in the model's effective positive reasoning_options metadata. Names must be nonempty without whitespace. Applies one mapping step to explicit input only; omission supplies no default, thinking switch, or budget. Fixed alias-candidate effort takes precedence. Changing effort never chooses another backend. Messages is unsupported.\n\nDry-run validates without writes.\nExit: 0 when saved; 2 for invalid mapping; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model effort-map set provider/model xhigh high --protocol chat-completions")
+            .arg(value("protocol", "P", "Supported model protocol: chat-completions or responses.").value_parser(["chat-completions", "responses"]).required(true))
+            .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
+            .arg(required_pos(2, "INPUT", "Exact caller-facing input effort."))
+            .arg(required_pos(3, "UPSTREAM", "Supported upstream effort target.")), true, true))
+        .subcommand(mutation(leaf("remove", "Remove exactly one protocol-specific effort mapping.", "The mapping must exist. Removal restores identity handling for INPUT; it does not disable that effort. Other protocols and inputs are preserved. Gateway-only; direct native entries are unchanged.\n\nDry-run validates without writes.\nExit: 0 when saved; 2 for absent mapping or invalid protocol; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model effort-map remove provider/model xhigh --protocol chat-completions")
+            .arg(value("protocol", "P", "chat-completions or responses; Messages is unsupported.").value_parser(["chat-completions", "responses"]).required(true))
+            .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
+            .arg(required_pos(2, "INPUT", "Exact mapped caller-facing input effort.")), true, true))
+        .subcommand(mutation(leaf("clear", "Clear all effort mappings for one protocol, restoring identity.", "Idempotent: an absent protocol map succeeds unchanged. Other protocols and model metadata are preserved. Gateway-only; direct native entries are unchanged.\n\nDry-run validates without writes.\nExit: 0 when saved or unchanged; 2 for invalid protocol; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model effort-map clear provider/model --protocol responses")
+            .arg(value("protocol", "P", "chat-completions or responses; Messages is unsupported.").value_parser(["chat-completions", "responses"]).required(true))
+            .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true));
     let schedule = Command::new("schedule")
         .about("Manage calendar priority schedules on concrete models.")
         .subcommand(schedule_rule("add", false))
@@ -701,6 +715,7 @@ fn model_commands() -> Command {
             .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name.")), true, true))
         .subcommand(override_commands)
         .subcommand(reasoning)
+        .subcommand(effort_map)
         .subcommand(schedule)
         .subcommand(rule)
         .subcommand(alias)
@@ -1268,6 +1283,32 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{OutputFormat, command};
+
+    #[test]
+    fn effort_map_commands_preserve_protocol_operands_and_mutation_guards() {
+        for (action, operands) in [
+            ("set", vec!["p/m", "xhigh", "high"]),
+            ("remove", vec!["p/m", "xhigh"]),
+            ("clear", vec!["p/m"]),
+        ] {
+            let mut args = vec!["tmax", "model", "effort-map", action];
+            args.extend(operands.iter().copied());
+            args.extend([
+                "--protocol",
+                "responses",
+                "--dry-run",
+                "--if-revision",
+                "revision",
+            ]);
+            let matches = command().try_get_matches_from(args).unwrap();
+            let request = super::request(&command(), &matches);
+            assert_eq!(request.command, ["model", "effort-map", action]);
+            assert_eq!(request.operands, operands);
+            assert_eq!(request.arguments["protocol"], ["responses"]);
+            assert!(request.dry_run);
+            assert_eq!(request.if_revision.as_deref(), Some("revision"));
+        }
+    }
 
     #[test]
     fn dsh_is_a_native_agent_but_not_a_skill_install_target() {
