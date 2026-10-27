@@ -1,154 +1,119 @@
 # Workspace boundaries and ownership
 
-This page records the production runtime boundary and feature ownership within
-the existing crates.
+This page records crate boundaries, module responsibilities, dependencies, and
+state ownership. Behavioral contracts belong in [specs](../specs/README.md);
+implementation details and verification results do not belong here.
 
-## Runtime boundary
+## Crate and entrypoint boundaries
 
-Program execution enters through the `tmax` binary. `tmax-cli` owns Clap grammar,
-offline help, presentation selection, and process exit. `tmax-core` owns the
-shared domain, semantic validation, persistence, operations, and resident runtime.
-
-The shared facade is `execute(Request) -> Response`. A request contains a finite
-command path, grammar-ordered operands, canonical named arguments, optional
-dry-run, and an optional file revision guard. It is not a configuration-document
-or shell-command interface. CLI and Web call the same operation owner. The
-validated `Config` types own persisted field semantics; the command catalog and
-finite editable-field definitions also drive Web controls.
+- `tmax-cli` owns command grammar, offline help, presentation, and process exit.
+- `tmax-core` owns domain rules, operations, persistence, and the resident runtime.
+- CLI and Web use the same core operation boundary. Neither presentation surface
+  owns a separate business-policy implementation.
+- Configuration types, the command catalog, and editable-field definitions are
+  shared authorities rather than independently maintained UI schemas.
 
 ## Feature ownership
 
-- `tmax-cli/src/` owns command grammar and presentation, not business rules.
-- `tmax-core/src/config.rs` owns typed desired configuration, validation, content
-  revisions, and comment-preserving save constraints.
-- `operations/` owns finite resource mutations and effect/result boundaries.
-- `provider_integration.rs` owns upstream endpoint/operation declarations and
-  explicit outbound transport; `catalog.rs` owns downloaded versus accepted metadata.
-- `routing.rs` owns exact priority evaluation and selection. `inputs.rs` is the
-  stable facade for scoped rule-input facts and their shared authority. Private
-  owners under `inputs/` separate:
-  - `model.rs`: canonical heads, values, acquisition attempts, bindings and retained
-    saved/loaded views, including strict wire records and required nullable fields.
-  - `store.rs`: the `routing-state.json` codec, read-only historical normalization,
-    and duplicate-field rejection shared with retained gateway bindings.
-  - `lineage.rs`: provider/declaration identities, effect-free projections, binding
-    and publication guards, and retention. `lifecycle.rs` owns reconciliation,
-    activation, synchronous authorization invalidation, lock ordering and the
-    existing runtime-persistence-before-provider-observation-retention boundary.
-  - `exact.rs` and `value.rs`: arbitrary-precision decimal/instant operations,
-    normalized observations, ordered availability, idempotency and head publication.
-  - `snapshot.rs`: coherent configuration, input and accepted-metadata capture,
-    borrowed loaded metadata, and provenance-free routing evidence.
-  - `commands.rs` and `inspection.rs`: explicit runtime operations, safe input
-    details, dry-run and manual record/clear orchestration.
-  - `acquisition.rs`: one capture/read/recheck/commit transaction. Source I/O holds
-    only the cross-process provider-identity/input exclusion, not configuration or
-    routing locks; publication rechecks the captured saved or loaded authority.
-  - `codex_resets.rs`: the fixed, bounded public source and its qualified Markdown
-    grammar. `scheduler.rs` owns per-store monotonic due state, bounded rotating
-    batches, and schedule release during deactivation; it reuses acquisition.
-  Tests live with semantic owners; shared test support contains fixtures only.
-  This cutover does not create another identity registry or input desired state.
-- `observations.rs` owns bounded retained provider facts and separate latest
-  attempts, guarded by provider incarnation, authorization, endpoint/source
-  contract, and captured publication revision. Renames preserve the identity;
-  removal/recreation and authorization changes cannot revive old results.
-- `agent_integration.rs` is the stable Agent integration facade. Private feature
-  owners under `agent_integration/` separate:
-  - `scope.rs` and `discovery.rs`: native-path safety, bounded file reads, scope
-    selection, shared DSH credential locking, and read-only installation inventory.
-  - `planning.rs`: desired native entries, metadata/reasoning projections, configured
-    inspection, and pending owned-field comparisons without credential resolution.
-  - `application.rs`: execution-only credential resolution and guarded native
-    application. Protected capture precedes the write-ahead record; each external
-    write is guarded and recorded before terminal state and old-payload cleanup.
-  - `recovery.rs`: the sole retained capture schema, ownership and drift checks,
-    protected payload verification, three-way restore, discard, and secret
-    dependency tombstones. Durable recovery paths and formats remain unchanged.
-  - `authentication.rs`: retained login/account metadata, namespace-only credential
-    presence, native login/logout, and authorization snapshots. Authorization
-    invalidation remains synchronous and precedes the uncertain-login write-ahead
-    record. `browser_login.rs` owns the bounded Codex process/protocol workflow;
-    `compatibility.rs` owns effect-free selection/application eligibility.
-  - `adapters.rs` and `adapters/`: finite schema dispatch, shared exact capability
-    projection and credential artifacts, and concrete Codex, Pi/OMP, OpenCode,
-    Hermes, and DSH format/preservation rules. No plugin registry or second desired
-    state is introduced. `document.rs` and `dsh_patch.rs` own lossless editing.
-  - `installation.rs`: executable resolution, scoped command construction, and
-    version evidence, including safe Hermes provenance probing.
-  Tests live with their semantic owners. The DSH cross-owner lifecycle has a
-  dedicated test module; shared test support contains fixtures only.
-- `storage.rs` and `secrets.rs` own OS-home resolution, current-user-restricted
-  plaintext secret/recovery files, safe inventory, and protected channels.
-- `service.rs` and `service/` own resident identity/lifecycle and browser protections.
-- `gateway.rs` is the stable public gateway facade and owns the shared runtime
-  budget declarations. Private feature owners under `gateway/` separate:
-  - `runtime.rs`: loaded snapshots, credential acquisition, bounded admission,
-    cancellation, and request lifecycle.
-  - `bindings.rs`: destination selection, retained session continuity, explanation,
-    and guarded activation. `bindings/store.rs` alone owns the persisted binding
-    representation, historical normalization, bounded IO, and initialization.
-  - `forwarding.rs`: request authentication, same-protocol HTTP forwarding, streamed
-    delivery, and model publication. `errors.rs` owns finite safe error responses.
-  - `client_identity.rs`, `native_context.rs`, and `opencode_session.rs`: qualified
-    native context, header handoff, and bounded conversation attribution.
-  - `capabilities.rs`: finite request/model capability checks.
-  - `probe.rs`: explicit fixed-destination diagnostics without resident startup.
-  - `response_observer.rs`: bounded JSON/SSE inspection and history evidence
-    finalization. Probes reuse inspection while retaining their distinct result
-    and usage-state projection.
-  Feature tests live with their owners; `test_support.rs` supplies shared fixtures
-  only and is compiled only for tests.
-- `diagnostics.rs` owns bounded in-memory request evidence and history retention.
+Paths below are relative to `crates/tmax-core/src/`.
 
-Configuration save, service activation, OS startup registration, and native
-application remain separate observable failure boundaries. No module introduces
-another desired-state authority or protocol-conversion layer.
+| Owner | Responsibility |
+| --- | --- |
+| `config.rs` | Desired configuration and its validation. |
+| `operations.rs`, `operations/` | Management operations and configuration-change coordination. |
+| `provider_integration.rs` | Provider access capabilities and outbound transport. |
+| `catalog.rs` | External directory metadata and locally accepted metadata. |
+| `routing.rs`, `routing/` | Model priority, eligibility, and selection. |
+| `inputs.rs`, `inputs/` | Rule-input facts and shared provider/declaration lineage. |
+| `observations.rs` | Retained provider observations and acquisition attempts. |
+| `agent_integration.rs`, `agent_integration/` | Agent configuration, authentication ownership, and restoration. |
+| `service.rs`, `service/` | Resident ownership, management surfaces, and platform lifecycle integration. |
+| `gateway.rs`, `gateway/` | Inference forwarding and retained session continuity. |
+| `storage.rs`, `secrets.rs`, `secrets/` | Local persistence and protected credential storage/channels. |
+| `diagnostics.rs` | Request evidence and history. |
 
-Retained session changes are staged, persisted, and only then published in RAM.
-A failed binding-store write leaves the previous live bindings authoritative;
-blocked sessions never bypass that state after a session-to-stateless edit.
-Dry-run uses the same blocker rules over the resident or durable retained state,
-returning bounded opaque handles rather than native session identifiers. It does
-not publish bindings, reserve work, resolve secrets, or initialize storage.
+## Internal feature boundaries
 
-Provider observation time is not an invented expiry. The declared DeepSeek
-balance source establishes a dated, exact-as-of observation, not a validity
-interval; subsequent routing evaluations report temporal qualification unknown.
-Manual subscription metadata does not establish API balance, account ownership,
-or entitlement. Failed refreshes retain the prior fact with a distinct latest
-attempt. Discovery observations never register concrete models implicitly.
+Feature roots expose shared entrypoints. Their implementation modules remain
+private to the feature unless another feature has a concrete consumer.
 
-Inference HTTP connections use `TCP_NODELAY` so separate response headers and
-streamed body chunks do not wait for Nagle buffering and a peer's delayed ACK.
-The listener rejects a connection if it cannot configure that socket option.
-The upstream client remains shared by the loaded snapshot, and response bodies
-remain pull-driven; this transport setting does not change admission limits,
-inspection bounds, cancellation, or forwarding semantics.
+### Operations
 
-Selection without a native binding key does not acquire the session-binding
-mutex. Requests with a key retain serialized binding checks and durable writes.
-The loaded-snapshot authority still excludes configuration activation during
-selection.
+- `arguments.rs` and `results.rs` own operation argument interpretation and result
+  presentation.
+- `configuration.rs`, `inspection.rs`, and `secret_commands.rs` own configuration
+  coordination, management views, and secret-management operations.
+- `commands.rs` owns the command catalog. `references.rs` owns typed deletion
+  dependencies.
+- `edit.rs` owns the configuration-edit transaction. Resource modules under
+  `edit/` own provider, model, alias, Agent, and service-setting transformations.
+- `edit/document.rs`, `edit/fields.rs`, and `edit/references.rs` own document
+  editing, editable-field definitions, and rename-reference transformations.
 
-## Local verification boundary
+### Resident service
 
-Real CLI and browser workflows are exercised under a dedicated passwd-backed OS
-account, never through a production `HOME` override. Installed agent parser,
-application/restoration, and synthetic loopback session/protocol tests are
-separate qualifications from provider-authorized hosted inference. Native
-configuration application may correctly require a native reload; it does not
-claim that a running native process already adopted the change.
+- `control.rs` owns the private management protocol and client/server coordination.
+- `resident.rs` owns the resident aggregate, activation, surfaces, and lifecycle.
+- `web.rs` owns the browser-facing management boundary and its operation bridge.
+- `startup.rs` owns startup-intent coordination. Platform-specific control,
+  startup, and Web modules own their OS integrations.
 
-The runtime admission limit is 16 concurrent requests with no waiting queue and
-a 4MiB request-body limit. A local-fixture run of 17 held requests observed 16
-accepted and one HTTP503, and a 5MiB body was rejected with HTTP413. Explicit
-cancel-active interrupted one observed active request; ordinary stop refused it.
-The separate 16KiB downstream-chunk and 64KiB response-inspection limits are
-implementation bounds. A deterministic history measurement retained 256 records,
-accounting for 2,163,456 resident-record bytes and 417,096 serialized bytes, below
-the 32KiB-per-record / 8MiB-total accounting budgets. This accounting includes
-owned capacities and conservative JSON-entry overhead, not total process RSS.
+### Model selection
+
+- `routing/calendar.rs` owns calendar semantics.
+- `routing/priority.rs` owns model validation and priority evaluation.
+- `routing/selection.rs` owns candidate eligibility, advice, and new selection.
+- Retained-session continuity belongs to gateway bindings, not to new selection.
+
+### Rule inputs
+
+- `inputs/model.rs` and `store.rs` own retained representations and their codec.
+- `lineage.rs` and `lifecycle.rs` own identity relationships and state transitions.
+- `exact.rs` and `value.rs` own input-value semantics; `snapshot.rs` owns the
+  coherent read view consumed by selection.
+- `commands.rs` and `inspection.rs` own management operations and views.
+- `acquisition.rs`, `codex_resets.rs`, and `scheduler.rs` own acquisition, the
+  qualified public-source integration, and scheduling.
+
+### Agent integration
+
+- `scope.rs`, `discovery.rs`, and `installation.rs` own native scopes and
+  installation evidence. `planning.rs` owns desired native projections.
+- `application.rs` and `recovery.rs` own native changes and restoration.
+- `authentication.rs`, `browser_login.rs`, and `compatibility.rs` own native
+  authentication state, browser sign-in orchestration, and compatibility.
+- `adapters.rs` and `adapters/` own Agent-specific mappings; `document.rs` and
+  `dsh_patch.rs` own native document editing.
+
+### Gateway
+
+- `runtime.rs` owns inference runtime state and request lifecycle.
+- `bindings.rs` and `bindings/store.rs` own retained destinations and persistence.
+- `forwarding.rs` and `errors.rs` own forwarding and gateway error responses.
+- Client-identity and native-context modules own client attribution;
+  `capabilities.rs` owns request/model compatibility checks.
+- `probe.rs` owns explicit diagnostics; `response_observer.rs` owns response
+  evidence projection.
+
+## Dependencies and state authority
+
+Operations coordinate feature owners rather than duplicate their domain rules.
+The service hosts management and inference surfaces. Gateway selection consumes
+routing; routing consumes configuration, input snapshots, metadata, and shared
+compatibility assessments. Platform-specific code stays behind its owning
+feature boundary.
+
+Desired configuration is the user's intent. Input facts, provider observations,
+loaded snapshots, session bindings, and request history are distinct operational
+state, not alternative desired-state authorities. Native Agent files remain
+external managed targets.
+
+Configuration persistence, service activation, native application, and OS startup
+registration are separate architectural effect boundaries, not one distributed
+transaction.
+
+Tests live with the feature or semantic owner they exercise. Shared test support
+contains fixtures rather than production policy.
 
 ## See also
 

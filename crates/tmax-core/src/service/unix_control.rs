@@ -1,7 +1,25 @@
 //! Unix endpoint ownership and peer qualification for the resident protocol.
-use super::{failure, socket_path, validate_control_path};
+use super::failure;
 use crate::{Result, storage::Store};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::{
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    path::PathBuf,
+};
+pub(super) fn socket_path(store: &Store) -> PathBuf {
+    store.root.join("resident.sock")
+}
+pub(super) fn validate_control_path(path: &std::path::Path) -> Result<()> {
+    std::os::unix::net::SocketAddr::from_pathname(path).map_err(|error| {
+        failure(
+            "resident_control_path_invalid",
+            &format!(
+                "Resident control socket path '{}' is not representable on this Unix platform: {error}. Use an OS account with a home that permits this socket path; tmax does not relocate its store or use an alternate endpoint",
+                path.display()
+            ),
+        )
+    })?;
+    Ok(())
+}
 pub(super) type Client = tokio::net::UnixStream;
 pub(super) type Server = tokio::net::UnixStream;
 

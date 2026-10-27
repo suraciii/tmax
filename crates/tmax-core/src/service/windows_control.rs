@@ -1,5 +1,5 @@
 //! Same-user, local-only Windows transport for the existing resident protocol.
-use super::{CONTROL_SECONDS, failure};
+use super::{control::CONTROL_SECONDS, failure};
 use crate::{Result, storage::Store};
 use sha2::{Digest, Sha256};
 use std::{
