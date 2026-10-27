@@ -215,7 +215,8 @@ impl Runtime {
         self.choose_recorded(
             snapshot,
             (public_id, protocol),
-            body,
+            &super::request_facts::RequestFacts::from_value(body.clone())
+                .expect("request fixture object"),
             headers,
             now,
             &mut Value::Null,
@@ -226,7 +227,7 @@ impl Runtime {
         &self,
         snapshot: &Snapshot,
         route: (&str, &str),
-        body: &Value,
+        body: &super::request_facts::RequestFacts,
         headers: &HeaderMap,
         now: chrono::DateTime<Utc>,
         evidence_out: &mut Value,
@@ -462,7 +463,7 @@ fn selected_request(
     public_id: &str,
     protocol: &str,
     destination: (&str, &str),
-    body: &Value,
+    body: &super::request_facts::RequestFacts,
     evidence: &mut Value,
     evidence_out: &mut Value,
 ) -> Result<Option<String>> {
@@ -472,12 +473,7 @@ fn selected_request(
     let fixed = snapshot
         .config
         .candidate_effort(public_id, protocol, provider_id, model_id);
-    let input = match protocol {
-        "chat-completions" => body.get("reasoning_effort"),
-        "responses" => body.pointer("/reasoning/effort"),
-        _ => None,
-    }
-    .and_then(Value::as_str);
+    let input = body.effort(protocol).as_str();
     let mapped = input.is_some_and(|input| {
         model
             .effort_map

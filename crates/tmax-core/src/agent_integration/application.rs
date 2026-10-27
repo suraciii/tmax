@@ -6,7 +6,8 @@ use super::{
     planning::{entries, projection_view},
     recovery::{
         Capture, Field, FileRecord, INDEX, Index, Payload, Record, baseline, conflicts,
-        decode_payload, field_hash, owner, partial, protect_payload, record_for,
+        decode_payload, field_hash, owner, partial, protect_payload, prune_empty_parents,
+        record_for,
     },
     scope::{
         DshCredentialsLock, digest, dsh_credential_permissions, read_native, revision, scope,
@@ -134,6 +135,20 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         .as_ref()
         .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
     for file in &files {
+        if file.format == Format::Text
+            && file.path.exists()
+            && !previous.as_ref().is_some_and(|record| {
+                record
+                    .files
+                    .iter()
+                    .any(|owned| owned.path == file.path && !owned.fields.is_empty())
+            })
+        {
+            return Err(Error::new(
+                "native_namespace_conflict",
+                "The native plugin artifact already exists and is not owned by this target",
+            ));
+        }
         if file.format == Format::Credential
             && file.path.exists()
             && !previous.as_ref().is_some_and(|r| {
@@ -349,6 +364,28 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 released: false,
             });
         }
+        if file.format == Format::DshPatch {
+            prune_empty_parents(&mut after, file.format, &original_value, &fields)?;
+            let value = document::parse(&after, file.format)?;
+            for field in owned {
+                if field.path.len() > 4
+                    && field.path[0] == "llm-tmax"
+                    && field.path[1] == "config"
+                    && field.path[2] == "providers"
+                {
+                    let route = &field.path[..4];
+                    if document::get(&file.desired, route).is_none()
+                        && document::get(&original_value, route).is_none()
+                        && document::get(&value, route).is_some()
+                    {
+                        return Err(Error::new(
+                            "native_conflict",
+                            "Unowned settings keep a removed DSH provider in use; preserve or move them before applying",
+                        ).field(route.join(".")));
+                    }
+                }
+            }
+        }
         let exact_original_safe = original
             .is_none_or(|p| p.exact_original_safe && before.as_deref() == Some(p.after.as_str()))
             && baseline_values
@@ -446,7 +483,9 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         .and_then(|_| {
             if input.as_deref() == Some(prepared.after.as_str()) {
                 Ok(())
-            } else if prepared.file.format == Format::Credential && prepared.after.is_empty() {
+            } else if matches!(prepared.file.format, Format::Credential | Format::Text)
+                && prepared.after.is_empty()
+            {
                 match fs::remove_file(&prepared.file.path) {
                     Ok(()) => Ok(()),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -544,7 +583,7 @@ mod tests {
         let path = directory.path().join("native");
         fs::create_dir_all(&path).unwrap();
         let patch = path.join("cordis.patch.yml");
-        let original = "# native input baseline\n- id: llm-pi-ai\n  config:\n    providers:\n      local:\n        models:\n          - id: first\n            input: [text, image]\n            maxTokens: 1234\n            thinkingBudgets: {high: 512}\n- id: agent-default-model\n  config: {provider: existing, model: unchanged, reasoningEffort: high}\n";
+        let original = "# native input baseline\n- insert:\n    - id: llm-tmax\n      config:\n        providers:\n          local:\n            models:\n              - id: first\n                input: [text, image]\n                maxTokens: 1234\n                thinkingBudgets: {high: 512}\n- id: agent-default-model\n  config: {provider: existing, model: unchanged, reasoningEffort: high}\n";
         fs::write(&patch, original).unwrap();
         let reference = secrets::put(&store, "provider:p", b"synthetic-input-key").unwrap();
         let mut target = inspection_target(path.clone());
@@ -566,7 +605,7 @@ mod tests {
         );
         config.agents.insert("managed".into(), target);
         let model_path = vec![
-            "llm-pi-ai".into(),
+            "llm-tmax".into(),
             "config".into(),
             "providers".into(),
             "local".into(),

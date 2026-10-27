@@ -1,4 +1,5 @@
 //! Provider integration for upstream model services.
+use crate::gateway::RequestFacts;
 use crate::{
     Error, Result,
     config::{Config, PROTOCOLS, Provider},
@@ -213,8 +214,8 @@ pub fn inference_protocol(method: &str, path: &str, query: Option<&str>) -> Opti
 pub fn protocols(provider: &Provider) -> Result<Vec<String>> {
     Ok(resolve(provider)?.into_keys().collect())
 }
-pub fn check_request(provider: &Provider, protocol: &str, body: &Value) -> Result<()> {
-    if protocol == "responses" && body.get("background").and_then(Value::as_bool) == Some(true) {
+pub fn check_request(provider: &Provider, protocol: &str, body: &RequestFacts) -> Result<()> {
+    if protocol == "responses" && body.background {
         return Err(Error::new(
             "capability_incompatible",
             "Background execution is not a declared operation for this integration",
@@ -226,20 +227,7 @@ pub fn check_request(provider: &Provider, protocol: &str, body: &Value) -> Resul
             "This provider has no endpoint for the requested native protocol",
         ));
     }
-    if integration_id(provider)? == "deepseek"
-        && protocol == "responses"
-        && [
-            "previous_response_id",
-            "conversation",
-            "store",
-            "background",
-        ]
-        .iter()
-        .any(|k| {
-            body.get(*k)
-                .is_some_and(|v| !v.is_null() && v != &json!(false))
-        })
-    {
+    if integration_id(provider)? == "deepseek" && protocol == "responses" && body.deepseek_state {
         return Err(Error::new(
             "capability_incompatible",
             "Official DeepSeek Responses requires complete independent input history and does not support server-state or background semantics",

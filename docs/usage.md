@@ -306,11 +306,27 @@ The local gateway is independent of managed Pi/Codex targets. Direct clients do 
 need an `agent` declaration or native apply. A concrete qualified model can be
 used directly; aliases are optional.
 
+Inference request bodies are limited to 512 MiB (536,870,912 bytes). This local
+HTTP-body byte limit is separate from a model's context window or token budget.
+An oversized body returns HTTP 413 with `request_too_large` before upstream
+dispatch; the gateway never truncates the request. Inspect the running limits
+with `tmax gateway status`. Each body is buffered and parsed, so concurrent large
+requests can use substantially more memory than their raw body sizes. Management
+API limits remain separate and unchanged.
+
 Available model protocols follow the provider's resolved endpoints, not a
 per-model approval list. An endpoint declaration is not proof of upstream model
 support: tmax forwards the selected native protocol and returns the upstream
 result. It does not translate protocols, switch models, or retry another
 destination when the upstream rejects a combination.
+
+The client chooses the protocol in its configuration and request path. Prefer
+Responses when upstream declarations and the client both support it; the gateway
+does not negotiate or switch protocols. Concrete IDs publish the provider's
+resolved protocols, while an alias publishes only its explicitly configured
+protocol. `agent model add ... --protocol responses` selects Responses for a
+native client; it is not a gateway-wide preference or a change to saved Chat
+Completions selections. Use separate DSH provider entries for different protocols.
 
 The default public ID can be the concrete model:
 
@@ -571,13 +587,17 @@ For the complete contract, see [CLI specs](../specs/cli/spec.md),
 
 DeepSeek Harness uses the same target/provider/model operations as the Pi example,
 with `--agent dsh` and the existing DSH home as its scope. Discovery uses nonblank
-`DSH_HOME`, otherwise the OS home directory's `.dsh`. tmax edits the home's
-`cordis.patch.yml`, not any profile or launcher-owned `cordis.yml`. It preserves
-unrelated HOME-level provider fields and expressions without enumerating,
-selecting, creating, or managing profiles. Home entry `config` replaces the
-complete lower-layer configuration; profile routes and defaults are not merged
-or automatically copied into the home configuration. Runtime overlays remain
-outside tmax's ownership.
+`DSH_HOME`, otherwise the OS home directory's `.dsh`. Apply installs the embedded
+`tmax-dsh.mjs` as a direct child of that home and manages its independent
+`llm-tmax` entry in `cordis.patch.yml`. It does not run npm installation or edit
+profiles, presets, bundles, or launcher-owned `cordis.yml`. User `llm-pi-ai`
+routes remain independent and untouched. tmax preserves unrelated HOME-level
+fields and expressions without enumerating, selecting, creating, or managing
+profiles. Provider configurations from all adapters share DSH's LLM runtime;
+native provider names must be globally unique, not automatically merged. Direct
+upstream and gateway entries may coexist. Runtime overlays remain outside
+tmax's ownership. The [DSH home boundary](../specs/integrations/spec.md#dsh-home-boundary)
+owns the application and recovery rules.
 
 ```sh
 DSH_SCOPE="${DSH_HOME:-$HOME/.dsh}"
@@ -604,10 +624,25 @@ never resolve or return key values.
 Output capability is intentionally not projected because DSH's explicit
 `maxTokens` would also change a per-request default.
 
-Reload DSH instances using that home after apply/restore. File writes are not
-runtime or provider-access evidence; historical profile-path qualification does
-not establish home-wide, multi-profile behavior. DSH has no qualified native
-login or Go session mechanism. See the [DSH guide](agents/dsh.md) for the source
-revision, credential ownership, exact reasoning-effort mapping, gateway
-limitations, and the explicit restore command. Skill installation remains
-shared `.agents` or Hermes-only.
+Reload DSH instances using that home after apply/restore. Restoration covers the
+plugin artifact, patch insertion, and owned provider and credential changes while
+preserving unrelated edits. The independent `llm-tmax` entry is the only supported
+application format; tmax does not migrate an earlier shared-adapter layout.
+File writes alone are not runtime or provider-access evidence. DSH 0.2.1-rc.2
+loaded the independent plugin and completed local synthetic image/tool requests
+through all three protocols, with direct and concrete gateway routes coexisting
+alongside a native user adapter. An isolated public apply–native request–restore
+run also passed with profiles unchanged. Synthetic gateway forwarding used a
+real isolated tmax router with harness-prepared native configuration. Separately,
+an installed release and matching resident passed public gateway apply and actual
+DSH headless Chat Completions and Responses requests through stateless aliases
+to the selected OpenCode Go provider. The current managed native entry is `tmax`,
+using `openai-responses`. Freeing that name required explicit removal of obsolete
+user routes in two local profile patches; tmax does not automate that edit.
+These runs do not qualify both accounts, hosted tools/images, native Web settings,
+or replay-state follow-up. DSH has no qualified native login or Go session
+mechanism. See
+the [DSH guide](agents/dsh.md) for the source revision, native loader and adapter
+reuse, credential ownership, exact reasoning-effort mapping, gateway limitations,
+and the explicit restore command. Skill installation remains shared `.agents`
+or Hermes-only.

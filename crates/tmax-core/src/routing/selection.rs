@@ -93,7 +93,7 @@ fn eligibility(
 /// The unchanged native request and its qualified client requirements.
 #[derive(Clone, Copy)]
 pub struct RequestRequirements<'a> {
-    pub body: &'a Value,
+    pub body: &'a crate::gateway::RequestFacts,
     pub native: &'a crate::gateway::NativeRequirements,
 }
 
@@ -103,7 +103,7 @@ pub(crate) struct Advice<'a> {
 
 enum SelectionView<'a> {
     Saved {
-        body: Option<&'a Value>,
+        body: Option<&'a crate::gateway::RequestFacts>,
         context: Option<&'a Advice<'a>>,
     },
     Loaded {
@@ -346,7 +346,7 @@ pub fn select_request(
     id: &str,
     protocol: &str,
     at: DateTime<Utc>,
-    body: &Value,
+    body: &crate::gateway::RequestFacts,
 ) -> Result<Selection> {
     let (evidence, selection) = decision(
         store,

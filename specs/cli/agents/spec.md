@@ -60,9 +60,12 @@ there is no extra empty-list precondition.
 For an upstream source, `ID` is the exact upstream model ID under that provider,
 without a redundant provider prefix. For a gateway source, it is the public concrete
 qualified name or alias ID, without an adapter's native display prefix.
-Protocol is explicit and establishes no conversion or compatibility. Upstream and
-gateway entries may coexist in one target. Native namespace conflicts or lack of
-qualified multi-provider support block application; never omit an entry silently.
+Protocol is explicit and establishes no conversion or compatibility. Prefer
+Responses when the upstream declares it and the native client supports it, under
+the [client-owned protocol rule](../../integrations/spec.md#endpoint-resolution).
+Upstream and gateway entries may coexist in one target. Native namespace conflicts
+or lack of qualified multi-provider support block application; never omit an
+entry silently.
 
 Saving any declaration, binding, or selection writes desired state only: it does
 not start inference, apply native files, import login, or provision a shared key.
@@ -135,18 +138,28 @@ existing entry, changed fields are captured for restore, and unrelated fields
 remain intact. It does not import native settings into desired configuration.
 Conflicting ownership by another tmax target and later edits to owned fields
 remain blockers.
-DSH directly configures its existing home through `cordis.patch.yml`, never
-profile files or launcher-owned `cordis.yml`. Discovery uses nonblank `DSH_HOME`,
-otherwise the OS home directory's `.dsh`; an explicit scope selects the home
-directly. tmax does not enumerate, select, create, or manage DSH profiles or
-inspect bundles. Home entry `config` replaces the complete lower-layer entry
-configuration rather than deep-merging profile routes or defaults. Existing
-HOME-level fields and expressions are preserved. Model-only application writes
-no `agent-default-model` entry or reasoning preferences; an explicit default
-changes provider/model only, retaining existing HOME-level effort settings.
-Credential handoff enables the native credential service in the HOME patch,
-including for headless consumption. Runtime overlays remain outside tmax's
-ownership. See the [DSH home boundary](../../integrations/spec.md#dsh-home-boundary).
+DSH uses the independent `llm-tmax` plugin under the
+[DSH home boundary](../../integrations/spec.md#dsh-home-boundary). Apply installs
+the embedded `tmax-dsh.mjs` as a direct child of the existing home and manages
+its entry in `cordis.patch.yml`; native loader resolution uses installed DSH
+dependencies without npm installation. It never edits profiles, presets, bundles,
+or launcher-owned `cordis.yml`. Discovery uses nonblank `DSH_HOME`, otherwise
+the OS home directory's `.dsh`; an explicit scope selects the home directly.
+User `llm-pi-ai` configuration stays independent and untouched. Every adapter's
+provider configurations register in DSH's common LLM runtime, so selected native
+names must be globally unique; tmax does not automatically merge colliding names.
+Removing a previously managed DSH route restores its captured baseline and removes
+introduced empty containers, not an invalid empty provider registration. Unowned
+settings that keep a newly introduced route in use block before native writes.
+Direct upstream and gateway entries may coexist. Existing HOME-level fields and
+expressions remain preserved under the owning boundary. Model-only application
+writes no `agent-default-model` entry or reasoning preferences; an explicit
+default changes provider/model only, retaining existing HOME-level effort
+settings. Credential handoff enables the native credential service in the HOME
+patch, including for headless consumption. Recovery covers the artifact, plugin
+insertion, and owned provider and credential fields. `llm-tmax` is the only
+managed adapter entry; no earlier adapter application format is supported or
+automatically migrated. Runtime overlays remain outside tmax's ownership.
 
 Upstream entries use their referenced endpoints/auth and need no running tmax
 gateway or model aliases. Gateway entries use its local URL and the current shared

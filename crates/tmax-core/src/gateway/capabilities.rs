@@ -1,17 +1,17 @@
 //! Finite known request/capability checks, including explicit candidate effort.
+use super::request_facts::RequestFacts;
 use crate::{
     catalog,
     config::{Model, Provider},
 };
 use serde_json::Value;
-use std::collections::BTreeSet;
 
 pub fn mismatch(
     provider: &Provider,
     model_id: &str,
     model: &Model,
     metadata: Option<&catalog::Snapshot>,
-    body: &Value,
+    body: &RequestFacts,
     candidate_effort: Option<(&str, &str)>,
 ) -> Option<&'static str> {
     check(
@@ -31,7 +31,7 @@ pub fn ranking_mismatch(
     model_id: &str,
     model: &Model,
     metadata: Option<&catalog::Snapshot>,
-    body: &Value,
+    body: &RequestFacts,
 ) -> Option<&'static str> {
     check(provider, model_id, model, metadata, body, None, false)
 }
@@ -42,7 +42,7 @@ pub fn selected_mismatch(
     model_id: &str,
     model: &Model,
     metadata: Option<&catalog::Snapshot>,
-    body: &Value,
+    body: &RequestFacts,
     effort: Option<&str>,
     explicit: bool,
 ) -> Option<&'static str> {
@@ -74,7 +74,7 @@ fn check(
     model_id: &str,
     model: &Model,
     metadata: Option<&catalog::Snapshot>,
-    body: &Value,
+    body: &RequestFacts,
     candidate_effort: Option<(&str, &str)>,
     check_effort: bool,
 ) -> Option<&'static str> {
@@ -89,7 +89,7 @@ fn check(
 
 fn check_effective(
     effective: &Value,
-    body: &Value,
+    body: &RequestFacts,
     candidate_effort: Option<(&str, &str)>,
     check_effort: bool,
 ) -> Option<&'static str> {
@@ -100,85 +100,42 @@ fn check_effective(
     {
         return Some(reason);
     }
-    let messages = body.get("messages").and_then(Value::as_array);
-    let input = body.get("input").and_then(Value::as_array);
-    let tool_use = body
-        .get("tools")
-        .and_then(Value::as_array)
-        .is_some_and(|v| !v.is_empty())
-        || body
-            .get("functions")
-            .and_then(Value::as_array)
-            .is_some_and(|v| !v.is_empty())
-        || messages.into_iter().flatten().any(|m| {
-            m.get("role").and_then(Value::as_str) == Some("tool")
-                || m.get("tool_calls")
-                    .and_then(Value::as_array)
-                    .is_some_and(|v| !v.is_empty())
-        })
-        || input.into_iter().flatten().any(|m| {
-            matches!(
-                m.get("type").and_then(Value::as_str),
-                Some("function_call" | "function_call_output")
-            )
-        })
-        || messages
-            .into_iter()
-            .flatten()
-            .filter_map(|m| m.get("content").and_then(Value::as_array))
-            .flatten()
-            .any(|c| {
-                matches!(
-                    c.get("type").and_then(Value::as_str),
-                    Some("tool_use" | "tool_result")
-                )
-            });
+    let tool_use = body.tool_use;
     if tool_use && effective.get("tool_call").and_then(Value::as_bool) == Some(false) {
         return Some("tools_incompatible");
     }
     let effort = candidate_effort.map(|(_, effort)| effort).or_else(|| {
-        body.get("reasoning_effort")
-            .or_else(|| body.pointer("/reasoning/effort"))
-            .and_then(Value::as_str)
+        if body.reasoning_effort.present() {
+            body.reasoning_effort.as_str()
+        } else {
+            body.nested_effort.as_str()
+        }
     });
     let reasoning = (check_effort
         && candidate_effort.map_or_else(
             || {
-                body.get("reasoning_effort")
-                    .and_then(Value::as_str)
-                    .is_some_and(|v| v != "none")
-                    || body
-                        .pointer("/reasoning/effort")
-                        .and_then(Value::as_str)
-                        .is_some_and(|v| v != "none")
+                body.reasoning_effort.as_str().is_some_and(|v| v != "none")
+                    || body.nested_effort.as_str().is_some_and(|v| v != "none")
             },
             |(_, effort)| effort != "none",
         ))
-        || body
-            .get("thinking")
-            .and_then(|v| v.get("type"))
-            .and_then(Value::as_str)
-            .is_some_and(|v| matches!(v, "enabled" | "adaptive"));
+        || body.thinking_enabled;
     if reasoning && effective.get("reasoning").and_then(Value::as_bool) == Some(false) {
         return Some("reasoning_incompatible");
     }
-    if body.get("temperature").is_some_and(|v| !v.is_null())
-        && effective.get("temperature").and_then(Value::as_bool) == Some(false)
-    {
+    if body.temperature && effective.get("temperature").and_then(Value::as_bool) == Some(false) {
         return Some("temperature_incompatible");
     }
-    for field in ["max_tokens", "max_output_tokens", "max_completion_tokens"] {
-        if let Some(count) = body.get(field) {
-            for limit in [
-                effective.pointer("/limit/output").and_then(Value::as_u64),
-                effective.pointer("/limit/context").and_then(Value::as_u64),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if exceeds(count, limit) {
-                    return Some("output_budget_incompatible");
-                }
+    for count in body.output_budgets.iter().flatten() {
+        for limit in [
+            effective.pointer("/limit/output").and_then(Value::as_u64),
+            effective.pointer("/limit/context").and_then(Value::as_u64),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if exceeds(count, limit) {
+                return Some("output_budget_incompatible");
             }
         }
     }
@@ -189,33 +146,11 @@ fn check_effective(
     {
         return Some("reasoning_effort_incompatible");
     }
-    let structured = body
-        .pointer("/response_format/type")
-        .or_else(|| body.pointer("/text/format/type"))
-        .and_then(Value::as_str)
-        == Some("json_schema");
+    let structured = body.structured;
     if structured && effective.get("structured_output").and_then(Value::as_bool) == Some(false) {
         return Some("structured_output_incompatible");
     }
-    let mut modalities = BTreeSet::new();
-    if body.get("input").is_some_and(Value::is_string) {
-        modalities.insert("text");
-    }
-    for message in messages
-        .into_iter()
-        .flatten()
-        .chain(input.into_iter().flatten())
-    {
-        if message.get("content").is_some_and(Value::is_string) {
-            modalities.insert("text");
-        }
-        if let Some(content) = message.get("content").and_then(Value::as_array) {
-            for part in content {
-                modality(part, &mut modalities);
-            }
-        }
-        modality(message, &mut modalities);
-    }
+    let modalities = &body.input_modalities;
     if let Some(allowed) = effective
         .pointer("/modalities/input")
         .and_then(Value::as_array)
@@ -226,31 +161,23 @@ fn check_effective(
         return Some("input_modality_incompatible");
     }
     if let (Some(requested), Some(allowed)) = (
-        body.get("modalities").and_then(Value::as_array),
+        Some(&body.output_modalities),
         effective
             .pointer("/modalities/output")
             .and_then(Value::as_array),
     ) && requested
         .iter()
-        .filter_map(Value::as_str)
         .any(|required| !allowed.iter().any(|value| value.as_str() == Some(required)))
     {
         return Some("output_modality_incompatible");
     }
     None
 }
-fn exceeds(count: &Value, limit: u64) -> bool {
-    if let Some(count) = count.as_u64() {
-        return count > limit;
-    }
-    let Some(number) = count.as_number() else {
-        return false;
-    };
-    let text = number.to_string();
+fn exceeds(text: &str, limit: u64) -> bool {
     if text.starts_with('-') {
         return false;
     }
-    let (mantissa, exponent) = text.split_once(['e', 'E']).unwrap_or((&text, "0"));
+    let (mantissa, exponent) = text.split_once(['e', 'E']).unwrap_or((text, "0"));
     let fractional = mantissa
         .split_once('.')
         .map_or(0, |(_, fraction)| fraction.len());
@@ -284,28 +211,9 @@ fn exceeds(count: &Value, limit: u64) -> bool {
     }
     significant.any(|byte| byte != b'0')
 }
-fn modality(part: &Value, modalities: &mut BTreeSet<&'static str>) {
-    match part.get("type").and_then(Value::as_str) {
-        Some("text" | "input_text") => {
-            modalities.insert("text");
-        }
-        Some("image" | "image_url" | "input_image") => {
-            modalities.insert("image");
-        }
-        Some("audio" | "input_audio") => {
-            modalities.insert("audio");
-        }
-        Some("document" | "input_file")
-            if part.pointer("/source/media_type").and_then(Value::as_str)
-                == Some("application/pdf") =>
-        {
-            modalities.insert("pdf");
-        }
-        Some("video" | "input_video") => {
-            modalities.insert("video");
-        }
-        _ => {}
-    }
+#[cfg(test)]
+fn facts(value: serde_json::Value) -> RequestFacts {
+    RequestFacts::from_value(value).unwrap()
 }
 #[cfg(test)]
 mod tests {
@@ -316,7 +224,7 @@ mod tests {
         let provider = Provider::default();
         let mut model = Model::default();
         model.overrides.reasoning = Some(false);
-        let body = json!({"reasoning_effort":"max"});
+        let body = RequestFacts::from_value(serde_json::json!({"reasoning_effort":"max"})).unwrap();
         assert_eq!(ranking_mismatch(&provider, "m", &model, None, &body), None);
         assert_eq!(
             mismatch(&provider, "m", &model, None, &body, None),
@@ -328,7 +236,7 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"thinking":{"type":"enabled"}})
+                &facts(json!({"thinking":{"type":"enabled"}}))
             ),
             Some("reasoning_incompatible")
         );
@@ -339,7 +247,7 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"reasoning_effort":"max","tools":[{}]})
+                &facts(json!({"reasoning_effort":"max","tools":[{}]}))
             ),
             Some("tools_incompatible")
         );
@@ -349,7 +257,8 @@ mod tests {
     fn identity_effort_preserves_unknown_metadata_but_explicit_targets_require_values() {
         let provider = Provider::default();
         let model = Model::default();
-        let body = json!({"reasoning_effort":"high"});
+        let body =
+            RequestFacts::from_value(serde_json::json!({"reasoning_effort":"high"})).unwrap();
         assert_eq!(
             selected_mismatch(&provider, "m", &model, None, &body, Some("high"), false),
             None
@@ -371,7 +280,7 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"tools":[{"type":"function"}]}),
+                &facts(json!({"tools":[{"type":"function"}]})),
                 None
             ),
             Some("tools_incompatible")
@@ -382,11 +291,11 @@ mod tests {
             output: Some(0),
         });
         assert_eq!(
-            mismatch(&p, "m", &model, None, &json!({"max_tokens":1}), None),
+            mismatch(&p, "m", &model, None, &facts(json!({"max_tokens":1})), None),
             Some("output_budget_incompatible")
         );
         assert_eq!(
-            mismatch(&p, "m", &model, None, &json!({"max_tokens":0}), None),
+            mismatch(&p, "m", &model, None, &facts(json!({"max_tokens":0})), None),
             None
         );
     }
@@ -404,7 +313,9 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"messages":[{"role":"user","content":"x"}],"extension":{"type":"image"}}),
+                &facts(
+                    json!({"messages":[{"role":"user","content":"x"}],"extension":{"type":"image"}})
+                ),
                 None
             ),
             None
@@ -415,7 +326,9 @@ mod tests {
                 "m",
                 &model,
                 None,
-                &json!({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"not retained"}}]}]}),
+                &facts(
+                    json!({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"not retained"}}]}]})
+                ),
                 None
             ),
             Some("input_modality_incompatible")
@@ -437,27 +350,29 @@ mod tests {
         ]);
         for effort in ["low", "high"] {
             assert_eq!(
-                selected_mismatch(&p, "m", &model, None, &json!({}), Some(effort), false),
+                selected_mismatch(
+                    &p,
+                    "m",
+                    &model,
+                    None,
+                    &facts(json!({})),
+                    Some(effort),
+                    false
+                ),
                 None
             );
         }
         assert_eq!(
-            selected_mismatch(&p, "m", &model, None, &json!({}), Some("max"), false),
+            selected_mismatch(&p, "m", &model, None, &facts(json!({})), Some("max"), false),
             Some("reasoning_effort_incompatible")
         );
     }
 
     #[test]
     fn exponent_budget_comparison_is_exact_and_bounded() {
-        assert!(exceeds(
-            &serde_json::from_str("1e100000000").unwrap(),
-            u64::MAX
-        ));
-        assert!(!exceeds(&serde_json::from_str("1e-100000000").unwrap(), 1));
-        assert!(!exceeds(&serde_json::from_str("1.000e3").unwrap(), 1000));
-        assert!(exceeds(
-            &serde_json::from_str("1.000000000000000001e3").unwrap(),
-            1000
-        ));
+        assert!(exceeds("1e100000000", u64::MAX));
+        assert!(!exceeds("1e-100000000", 1));
+        assert!(!exceeds("1.000e3", 1000));
+        assert!(exceeds("1.000000000000000001e3", 1000));
     }
 }

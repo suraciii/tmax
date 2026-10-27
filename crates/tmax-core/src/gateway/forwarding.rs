@@ -1,8 +1,9 @@
 //! Same-protocol routing and pull-driven upstream response forwarding.
 use super::{
-    FORWARD_CHUNK_BYTES, REQUEST_BYTES,
+    FORWARD_CHUNK_BYTES, REQUEST_BYTES, RequestFacts,
     client_identity::{hop_header, upstream_headers},
     errors::error_response,
+    request_body,
     response_observer::Observer,
     runtime::{Flight, Runtime, credential},
 };
@@ -124,18 +125,18 @@ pub(super) async fn forward(
         );
     }
     let bytes = tokio::select! {_ = flight.cancel.changed()=>{return flight.reject(StatusCode::SERVICE_UNAVAILABLE,"force_stop","local_admission");},result=tokio::time::timeout(Duration::from_secs(30),to_bytes(body,REQUEST_BYTES))=>{match result{Ok(Ok(v))=>v,Ok(Err(_))=>return flight.reject(StatusCode::PAYLOAD_TOO_LARGE,"request_too_large","local_admission"),Err(_)=>return flight.reject(StatusCode::REQUEST_TIMEOUT,"request_acquisition_deadline","local_admission")}}};
-    let mut body: Value = match serde_json::from_slice(&bytes) {
-        Ok(Value::Object(v)) => Value::Object(v),
+    let body = match RequestFacts::parse(&bytes) {
+        Ok(body) => body,
         _ => {
             flight.record.model_kind = "malformed".into();
             return flight.reject(StatusCode::BAD_REQUEST, "invalid_json", "model_validation");
         }
     };
     let Some(public_id) = body
-        .get("model")
-        .and_then(Value::as_str)
+        .model
+        .as_ref()
         .filter(|s| !s.is_empty() && !s.chars().any(char::is_control))
-        .map(str::to_owned)
+        .cloned()
     else {
         flight.record.model_kind = "malformed".into();
         return flight.reject(StatusCode::BAD_REQUEST, "invalid_model", "model_validation");
@@ -201,11 +202,8 @@ pub(super) async fn forward(
     let Some(provider) = snapshot.config.providers.get(&selection.provider) else {
         return flight.reject(StatusCode::BAD_REQUEST, "provider_unavailable", "selection");
     };
-    if let Some(effort) = choice.effort.as_deref()
-        && let Err(error) = crate::reasoning::apply(&mut body, protocol, effort)
-    {
-        return flight.reject(StatusCode::BAD_REQUEST, &error.code, "model_validation");
-    }
+    let normalize = body.normalization_required;
+    drop(body);
     let endpoint = choice.endpoint;
     let path = match crate::provider_integration::operation_path(protocol) {
         Ok(v) => v,
@@ -239,7 +237,18 @@ pub(super) async fn forward(
             );
         }
     };
-    body["model"] = Value::String(selection.model.clone());
+    let bytes = match request_body::rewrite(
+        bytes,
+        &selection.model,
+        protocol,
+        choice.effort.as_deref(),
+        normalize,
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return flight.reject(StatusCode::BAD_REQUEST, "invalid_json", "model_validation");
+        }
+    };
     let go_session_header =
         if crate::provider_integration::integration_id(provider).ok() == Some("opencode-go") {
             choice.go_session_header
@@ -258,7 +267,8 @@ pub(super) async fn forward(
             go_session_header,
             &upstream_url,
         ))
-        .json(&body);
+        .header("content-type", "application/json")
+        .body(bytes);
     if protocol == "messages"
         && crate::provider_integration::integration_id(provider).ok() != Some("opencode-go")
     {

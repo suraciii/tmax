@@ -31,7 +31,7 @@ const areas = {
 };
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber'],['dsh','DeepSeek Harness','D','blue']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-coding-plan':'Kimi Coding Plan','custom':'自定义集成'};
-const protocolNames = {'chat-completions':'Chat Completions','responses':'Responses','messages':'Messages'};
+const protocolNames = {'responses':'Responses','chat-completions':'Chat Completions','messages':'Messages'};
 const stateLabel = value => ({saved:'已保存',native_reload_and_inference_not_verified:'尚未验证工具加载与实际使用',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',restored_reload_pending:'已恢复，重新打开工具后生效',pending_native_changes:'有修改待应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
 const state = {area:'overview', catalog:[], config:null, providers:[], models:[], agents:[], runtime:null, integrations:[], errors:[], revision:null, loaded:false, generation:0, modelKind:'concrete', query:'', busy:false, dialogGeneration:0};
 let toastTimer;
@@ -392,7 +392,7 @@ function aliasForm(encoded='') {
   const currentEfforts=current?.candidate_reasoning_effort || {};
   const models=(state.models || []).filter(m=>m.kind==='concrete');
   formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称并引用同一原生协议下的已有模型；每个候选由模型引用和别名内的局部设置组成，可单独覆盖推理强度。留空表示不覆盖客户端请求，只能使用具体模型有效推理能力元数据列出的值。Messages 不支持此覆盖。',
-    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || 'chat-completions',{required:true,options:Object.entries(protocolNames)})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+(id?`<div class="actions">${button('查看共同能力','alias-detail',encoded,'small')}${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
+    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || Object.keys(protocolNames).find(p=>models.some(m=>m.published_protocols?.includes(p))) || 'responses',{required:true,options:Object.entries(protocolNames),help:'优先选择上游已声明的 Responses；协议由客户端配置决定，网关不自动切换或转换。'})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+(id?`<div class="actions">${button('查看共同能力','alias-detail',encoded,'small')}${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
       const candidates=[...document.querySelectorAll('[name=candidate]:checked')].map(i=>i.value);if(!candidates.length)throw Error('请至少选择一个候选模型。');
       const args={protocol:[protocol || value('protocol')],candidate:candidates};if(id&&protocol!==value('protocol'))args['new-protocol']=[value('protocol')];
       const efforts=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value.trim()]));
@@ -427,7 +427,7 @@ function agentForm(agent='') {
   const generation=formDialog('添加工具配置','选择编程工具和配置目录，保存后继续选择模型。此处只登记配置；应用到工具时才会修改文件。',
     field('agent','编程工具',agent || 'codex',{required:true,options:agentTypes.map(a=>[a[0],a[1]])})+
     '<section class="tool-discovery" aria-label="本地配置检测"><div class="actions"><h3 class="grow">本地配置目录</h3><button type="button" class="btn text small" id="agent-rescan">重新检测</button></div><div id="agent-discovery" aria-live="polite"></div></section>'+
-    field('path','配置目录','',{required:true,placeholder:'选择检测结果，或直接填写配置目录',help:'DSH 须选择已有的 DSH_HOME 根目录（默认使用环境变量 DSH_HOME，否则为系统用户的 ~/.dsh），无需选择 profile。应用时只修改根目录的 cordis.patch.yml 和相邻的 .credentials.yaml，不管理 profile。其他目录可直接填写；相对路径以 tmax 配置目录为基准。'})+
+    field('path','配置目录','',{required:true,placeholder:'选择检测结果，或直接填写配置目录',help:'DSH 须选择已有的 DSH_HOME 根目录（默认使用环境变量 DSH_HOME，否则为系统用户的 ~/.dsh），无需选择 profile。应用时在根目录交付独立的 llm-tmax 插件及其配置和凭证，不修改用户的 llm-pi-ai，不管理 profile。其他目录可直接填写；相对路径以 tmax 配置目录为基准。'})+
     field('target','配置名称','',{required:true,placeholder:'例如：codex-main',help:'用于区分同一个工具的不同配置，可自行修改。'}),()=>{
       const duplicate=registered(value('agent'),value('path').trim());
       if(duplicate)throw Error('此目录已添加为“'+duplicate.target+'”，请打开已有配置。');
@@ -554,8 +554,8 @@ function agentSource(target) {
 }
 function agentModel(encoded) {
   const [target,name]=JSON.parse(encoded);const source=state.config.agents[target].providers[name];
-  const candidates=(state.models || []).filter(m=>source.gateway || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/'))).flatMap(m=>(m.published_protocols || []).map(p=>[JSON.stringify([source.gateway?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p] || p}`]));
-  formDialog('添加可选模型',state.config.agents[target].agent==='codex'?'添加到此来源的模型列表后，可选择为默认模型。':'应用后可在工具中选择这些模型，保留当前默认模型。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates]}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
+  const candidates=Object.keys(protocolNames).flatMap(p=>(state.models || []).filter(m=>(source.gateway || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/')))&&m.published_protocols?.includes(p)).map(m=>[JSON.stringify([source.gateway?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p]}`]));
+  formDialog('添加可选模型',state.config.agents[target].agent==='codex'?'添加到此来源的模型列表后，可选择为默认模型。':'应用后可在工具中选择这些模型，保留当前默认模型。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates],help:'仅列出上游已声明的协议，Responses 优先。选择后由工具使用该协议请求；网关不转换协议，已有设置不会自动更改。'}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
 }
 function agentDefault(target) {
   const config=state.config.agents[target];

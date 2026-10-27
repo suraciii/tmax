@@ -10,6 +10,7 @@ pub(super) enum Format {
     Yaml,
     Toml,
     DshPatch,
+    Text,
     Credential,
 }
 
@@ -28,6 +29,7 @@ pub(super) fn parse(text: &str, format: Format) -> Result<Value> {
         return Ok(serde_json::json!({}));
     }
     let value = match format {
+        Format::Text => return Ok(serde_json::json!({"$text": text})),
         Format::DshPatch => return super::dsh_patch::parse(text),
         Format::Credential => {
             serde_json::json!({"$credential": crate::config::revision(text.as_bytes())})
@@ -555,6 +557,8 @@ pub(super) fn set(
         Format::Yaml => yaml_edit(text, path, value)?,
         Format::DshPatch => super::dsh_patch::set(text, path, value)?,
         Format::Toml => toml_edit(text, path, value)?,
+        Format::Text if path == ["$text"] => value.and_then(Value::as_str).unwrap_or("").to_owned(),
+        Format::Text => return Err(invalid()),
         Format::Credential => return Err(invalid()),
     };
     parse(&output, format)?;

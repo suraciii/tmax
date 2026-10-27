@@ -90,6 +90,15 @@ private to the feature unless another feature has a concrete consumer.
 - `runtime.rs` owns inference runtime state and request lifecycle.
 - `bindings.rs` and `bindings/store.rs` own retained destinations and persistence.
 - `forwarding.rs` and `errors.rs` own forwarding and gateway error responses.
+- `request_facts.rs` validates the complete JSON request and extracts policy facts
+  without retaining message text, attachment payloads, or a full request tree.
+  Selection, continuity, reasoning, and provider checks share those facts.
+- `request_body.rs` overlays the selected model and resolved effort on borrowed
+  raw fields. Unchanged bodies reuse their input bytes; rewritten bodies allocate
+  one final output buffer. Duplicate keys and private-number representations use
+  recursive compatibility normalization to preserve the former parser's semantics.
+  Forwarding releases the input bytes and policy facts before waiting for upstream
+  credentials or response headers; the outbound transport owns the emitted body.
 - Client-identity and native-context modules own client attribution;
   `capabilities.rs` owns request/model compatibility checks.
 - `probe.rs` owns explicit diagnostics; `response_observer.rs` owns response

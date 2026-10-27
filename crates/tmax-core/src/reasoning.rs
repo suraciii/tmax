@@ -1,4 +1,5 @@
 //! Upstream capabilities, common alias inputs, gateway effort maps, and fixed alias effort.
+use crate::gateway::{RequestFacts, request_facts::Effort};
 use crate::{Error, Result, catalog, config::Config};
 use serde_json::{Value, json};
 pub(crate) fn validate_saved(store: &crate::storage::Store, config: &Config) -> Result<()> {
@@ -87,30 +88,25 @@ pub(crate) fn input_metadata(
 pub(crate) fn resolve<'a>(
     model: &'a crate::config::Model,
     protocol: &str,
-    body: &'a Value,
+    body: &'a RequestFacts,
     fixed: Option<&'a str>,
 ) -> Result<Option<&'a str>> {
-    if protocol == "responses"
-        && body
-            .get("reasoning")
-            .is_some_and(|v| !v.is_object() && !v.is_null())
-    {
+    if protocol == "responses" && body.reasoning_invalid {
         return Err(Error::new(
             "reasoning_parameter_invalid",
             "Responses reasoning must be an object or null",
         ));
     }
-    let value = match protocol {
-        "chat-completions" => body.get("reasoning_effort"),
-        "responses" => body.pointer("/reasoning/effort"),
-        _ => return Ok(None),
-    };
+    if !matches!(protocol, "chat-completions" | "responses") {
+        return Ok(None);
+    }
+    let value = body.effort(protocol);
     if let Some(effort) = fixed {
         return Ok(Some(effort));
     }
-    let Some(value) = value.filter(|v| !v.is_null()) else {
+    if matches!(value, Effort::Missing | Effort::Null) {
         return Ok(None);
-    };
+    }
     let input = value.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
         Error::new(
             "reasoning_parameter_invalid",
@@ -326,51 +322,24 @@ pub(crate) fn validate(config: &Config, metadata: Option<&catalog::Snapshot>) ->
     Ok(())
 }
 
-pub(crate) fn request_mismatch(protocol: &str, body: &Value, effort: &str) -> Option<&'static str> {
+pub(crate) fn request_mismatch(
+    protocol: &str,
+    body: &RequestFacts,
+    effort: &str,
+) -> Option<&'static str> {
     if !matches!(protocol, "chat-completions" | "responses") {
         return Some("candidate_reasoning_protocol_unsupported");
     }
-    if protocol == "responses"
-        && body
-            .get("reasoning")
-            .is_some_and(|value| !value.is_object() && !value.is_null())
-    {
+    if protocol == "responses" && body.reasoning_invalid {
         return Some("reasoning_parameter_invalid");
     }
-    if effort != "none"
-        && body.pointer("/thinking/type").and_then(Value::as_str) == Some("disabled")
-    {
+    if effort != "none" && body.thinking_disabled {
         return Some("reasoning_toggle_conflict");
     }
-    if effort == "none"
-        && body
-            .pointer("/thinking/type")
-            .and_then(Value::as_str)
-            .is_some_and(|kind| matches!(kind, "enabled" | "adaptive"))
-    {
+    if effort == "none" && body.thinking_enabled {
         return Some("reasoning_toggle_conflict");
     }
     None
-}
-
-pub(crate) fn apply(body: &mut Value, protocol: &str, effort: &str) -> Result<()> {
-    if let Some(reason) = request_mismatch(protocol, body, effort) {
-        return Err(Error::new(
-            reason,
-            "Configured candidate effort conflicts with the native request reasoning control",
-        ));
-    }
-    match protocol {
-        "chat-completions" => body["reasoning_effort"] = json!(effort),
-        "responses" => {
-            if body.get("reasoning").is_none_or(Value::is_null) {
-                body["reasoning"] = json!({});
-            }
-            body["reasoning"]["effort"] = json!(effort);
-        }
-        _ => unreachable!("validated protocol"),
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -793,7 +762,8 @@ mod tests {
             "responses".into(),
             BTreeMap::from([("max".into(), "high".into()), ("high".into(), "low".into())]),
         );
-        let mut body = json!({"reasoning":{"effort":"max","summary":"auto"}});
+        let body = RequestFacts::from_value(json!({"reasoning":{"effort":"max","summary":"auto"}}))
+            .unwrap();
         assert_eq!(
             resolve(&model, "responses", &body, None).unwrap(),
             Some("high")
@@ -806,33 +776,25 @@ mod tests {
             resolve(
                 &model,
                 "chat-completions",
-                &json!({"reasoning_effort":"max"}),
+                &RequestFacts::from_value(json!({"reasoning_effort":"max"})).unwrap(),
                 None
             )
             .unwrap(),
             Some("max")
-        );
-        let effort = resolve(&model, "responses", &body, None)
-            .unwrap()
-            .unwrap()
-            .to_owned();
-        apply(&mut body, "responses", &effort).unwrap();
-        assert_eq!(
-            body,
-            json!({"reasoning":{"effort":"high","summary":"auto"}})
         );
         for body in [
             json!({}),
             json!({"reasoning":null}),
             json!({"reasoning":{"effort":null}}),
         ] {
+            let body = RequestFacts::from_value(body).unwrap();
             assert_eq!(resolve(&model, "responses", &body, None).unwrap(), None);
         }
         assert_eq!(
             resolve(
                 &model,
                 "responses",
-                &json!({"reasoning":{"effort":42}}),
+                &RequestFacts::from_value(json!({"reasoning":{"effort":42}})).unwrap(),
                 None
             )
             .unwrap_err()

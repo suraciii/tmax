@@ -3,9 +3,9 @@
 // openai-completions.js sendSessionAffinityHeaders/openrouter; native
 // core/session-manager.js generates UUIDv7 for newSession and preserves it on resume.
 // Hermes 0.22.1 agent/opencode_affinity.py preserves a root session across auxiliary work.
+use super::request_facts::RequestFacts;
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub struct Context {
@@ -30,7 +30,7 @@ impl Context {
     }
     pub fn can_start_binding(
         &self,
-        body: &Value,
+        body: &RequestFacts,
         protocol: &str,
         epoch: DateTime<Utc>,
         now: DateTime<Utc>,
@@ -55,26 +55,7 @@ impl Context {
         {
             return false;
         }
-        let messages = match protocol {
-            "chat-completions" | "messages" => body.get("messages"),
-            "responses" => body.get("input"),
-            _ => None,
-        };
-        match messages {
-            Some(Value::String(_)) => true,
-            Some(Value::Array(messages)) => {
-                let mut users = 0;
-                for message in messages {
-                    match message.get("role").and_then(Value::as_str) {
-                        Some("system" | "developer") => {}
-                        Some("user") => users += 1,
-                        _ => return false,
-                    }
-                }
-                users == 1
-            }
-            _ => false,
-        }
+        body.new_session(protocol)
     }
 }
 pub fn binding_key(scope_handle: &str, public_id: &str, protocol: &str) -> String {
@@ -85,7 +66,7 @@ pub fn binding_key(scope_handle: &str, public_id: &str, protocol: &str) -> Strin
     }
     format!("native:{:x}", hash.finalize())
 }
-pub fn identify(headers: &HeaderMap, body: &Value, protocol: &str) -> Option<Context> {
+pub fn identify(headers: &HeaderMap, body: &RequestFacts, protocol: &str) -> Option<Context> {
     let ua = headers.get("user-agent")?.to_str().ok()?;
     let family = if ua.starts_with("pi (") && ua.ends_with(')') && ua.contains(';') {
         "pi"
@@ -165,92 +146,14 @@ pub fn names_session(headers: &HeaderMap) -> bool {
         .any(|name| headers.get(*name).is_some_and(|v| !v.as_bytes().is_empty()))
 }
 
-pub fn has_remote_state(body: &Value) -> bool {
-    body.get("previous_response_id")
-        .is_some_and(|v| !v.is_null())
-        || body.get("conversation").is_some_and(|v| !v.is_null())
-        || body.get("background").and_then(Value::as_bool) == Some(true)
-        || body
-            .get("input")
-            .and_then(Value::as_array)
-            .is_some_and(|input| {
-                input
-                    .iter()
-                    .any(|item| item.get("type").and_then(Value::as_str) == Some("item_reference"))
-            })
+pub fn has_remote_state(body: &RequestFacts) -> bool {
+    body.remote_state
 }
-pub fn has_unbound_resources(body: &Value) -> bool {
-    if body
-        .pointer("/prompt/id")
-        .is_some_and(|value| !value.is_null())
-        || body
-            .get("tools")
-            .and_then(Value::as_array)
-            .is_some_and(|tools| {
-                tools.iter().any(|tool| {
-                    tool.get("type").and_then(Value::as_str) == Some("file_search")
-                        && tool
-                            .get("vector_store_ids")
-                            .and_then(Value::as_array)
-                            .is_some_and(|ids| !ids.is_empty())
-                })
-            })
-    {
-        return true;
-    }
-    let unbound = |part: &Value| {
-        matches!(
-            part.get("type").and_then(Value::as_str),
-            Some("input_file" | "file" | "document")
-        ) && [
-            part.get("file_id"),
-            part.pointer("/file/file_id"),
-            part.pointer("/source/file_id"),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|value| !value.is_null())
-    };
-    for item in body
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .chain(
-            body.get("input")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten(),
-        )
-    {
-        if unbound(item)
-            || item
-                .get("content")
-                .and_then(Value::as_array)
-                .is_some_and(|content| content.iter().any(unbound))
-        {
-            return true;
-        }
-    }
-    false
+pub fn has_unbound_resources(body: &RequestFacts) -> bool {
+    body.unbound_resources
 }
-pub fn independent(protocol: &str, body: &Value) -> bool {
-    if has_remote_state(body) {
-        return false;
-    }
-    match protocol {
-        "chat-completions" | "messages" => body
-            .get("messages")
-            .and_then(Value::as_array)
-            .is_some_and(|v| !v.is_empty()),
-        "responses" => {
-            body.get("store").and_then(Value::as_bool) == Some(false)
-                && body
-                    .get("input")
-                    .is_some_and(|v| v.is_array() || v.is_string())
-        }
-        _ => false,
-    }
+pub fn independent(protocol: &str, body: &RequestFacts) -> bool {
+    body.independent(protocol)
 }
 #[cfg(test)]
 mod tests {
@@ -272,7 +175,10 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "pi (linux 7; x64)".parse().unwrap());
         headers.insert("x-session-id", id.parse().unwrap());
-        let body = json!({"messages":[{"role":"user","content":"not inspected"}]});
+        let body = RequestFacts::from_value(
+            serde_json::json!({"messages":[{"role":"user","content":"not inspected"}]}),
+        )
+        .unwrap();
         let context = identify(&headers, &body, "chat-completions").unwrap();
         assert!(context.can_start_binding(
             &body,
@@ -281,7 +187,7 @@ mod tests {
             now
         ));
         assert!(!context.can_start_binding(&body, "chat-completions", now, now));
-        let resumed = json!({"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"y"},{"role":"user","content":"z"}]});
+        let resumed = RequestFacts::from_value(serde_json::json!({"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"y"},{"role":"user","content":"z"}]})).unwrap();
         assert!(!context.can_start_binding(
             &resumed,
             "chat-completions",
@@ -301,13 +207,22 @@ mod tests {
         for (protocol, body) in [
             (
                 "chat-completions",
-                json!({"messages":[{"role":"user","content":"x"}]}),
+                RequestFacts::from_value(
+                    serde_json::json!({"messages":[{"role":"user","content":"x"}]}),
+                )
+                .unwrap(),
             ),
             (
                 "messages",
-                json!({"messages":[{"role":"user","content":"x"}]}),
+                RequestFacts::from_value(
+                    serde_json::json!({"messages":[{"role":"user","content":"x"}]}),
+                )
+                .unwrap(),
             ),
-            ("responses", json!({"input":"x","store":false})),
+            (
+                "responses",
+                RequestFacts::from_value(serde_json::json!({"input":"x","store":false})).unwrap(),
+            ),
         ] {
             let context = identify(&headers, &body, protocol).unwrap();
             assert!(context.session.is_none());
@@ -318,11 +233,14 @@ mod tests {
         }
         assert!(!independent(
             "responses",
-            &json!({"input":"x","store":true})
+            &RequestFacts::from_value(json!({"input":"x","store":true})).unwrap()
         ));
         assert!(!independent(
             "responses",
-            &json!({"input":"x","store":false,"previous_response_id":"remote"})
+            &RequestFacts::from_value(
+                json!({"input":"x","store":false,"previous_response_id":"remote"})
+            )
+            .unwrap()
         ));
     }
     #[test]
@@ -332,7 +250,7 @@ mod tests {
         assert!(
             identify(
                 &headers,
-                &json!({"messages":[{"role":"user"}]}),
+                &RequestFacts::from_value(json!({"messages":[{"role":"user"}]})).unwrap(),
                 "chat-completions"
             )
             .is_none()
