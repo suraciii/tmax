@@ -267,12 +267,11 @@ impl Runtime {
         let config = &snapshot.config;
         let context = native_context::identify(headers, body, protocol);
         let native = NativeRequirements::capture(headers, context.as_ref());
-        if native_context::has_unbound_resources(body) {
-            return Err(Error::new(
-                "original_resource_binding_unavailable",
-                "This operation contains a provider-owned resource without a qualified original authorization binding",
-            ));
-        }
+        // The gateway is a plain model provider: any authenticated request is
+        // routed and forwarded as-is. A recognized native client context only
+        // enables destination affinity; nothing is rejected for being an
+        // unrecognized client, an incomplete context, or a continuation that
+        // references upstream-owned state.
         let alias = config
             .model_aliases
             .iter()
@@ -280,30 +279,9 @@ impl Runtime {
         let continuity = alias
             .map(|a| a.continuity.as_deref().unwrap_or("session"))
             .unwrap_or("fixed");
-        if alias.is_some()
-            && continuity == "stateless"
-            && !context.as_ref().is_some_and(|c| c.independent)
-        {
-            return Err(Error::new(
-                "independent_context_required",
-                "Stateless forwarding requires a qualified native client with complete independent context",
-            ));
-        }
         let key = context
             .as_ref()
             .and_then(|c| c.binding_key(public_id, protocol));
-        if alias.is_some() && continuity == "session" && key.is_none() {
-            return Err(Error::new(
-                "session_identity_unavailable",
-                "This alias requires the qualified native conversation identity",
-            ));
-        }
-        if native_context::has_remote_state(body) && key.is_none() {
-            return Err(Error::new(
-                "original_binding_unavailable",
-                "Upstream-owned continuation requires its qualified original destination binding",
-            ));
-        }
         let retain = key.is_some()
             && continuity != "stateless"
             && (alias.is_some()
@@ -312,23 +290,26 @@ impl Runtime {
         let mut bindings = key
             .as_ref()
             .map(|_| self.bindings.lock().expect("bindings mutex"));
-        if let Some(bindings) = bindings.as_mut()
-            && let Some(key) = &key
-            && let Some(binding) = bindings.entries.get_mut(key)
-        {
-            if let Some(reason) = binding.blocked.as_ref() {
-                return Err(Error::new(
-                    reason,
-                    "This retained native conversation is blocked; use a qualified new native session",
-                ));
+        let retained = 'retained: {
+            let Some(bindings) = bindings.as_mut() else {
+                break 'retained Ok(None);
+            };
+            let Some(key) = key.as_ref() else {
+                break 'retained Ok(None);
+            };
+            let Some(binding) = bindings.entries.get_mut(key) else {
+                break 'retained Ok(None);
+            };
+            // A blocked or incompatible retained destination only disables
+            // destination affinity for this request; the request is still
+            // served by normal selection.
+            if binding.blocked.is_some() {
+                break 'retained Ok(None);
             }
             if let Some(reason) = binding_blocker(config, binding, identities) {
                 binding.blocked = Some(reason.into());
                 save_bindings(&self.store, bindings)?;
-                return Err(Error::new(
-                    reason,
-                    "Retained destination is incompatible; it will not be reassigned",
-                ));
+                break 'retained Ok(None);
             }
             let provider = &config.providers[&binding.provider];
             let mut evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
@@ -342,7 +323,7 @@ impl Runtime {
                 evidence_out,
             )?;
             client_contract(provider, &native)?;
-            return Ok(Choice {
+            Ok(Some(Choice {
                 selection: crate::routing::Selection {
                     provider: binding.provider.clone(),
                     model: binding.model.clone(),
@@ -355,23 +336,22 @@ impl Runtime {
                 endpoint: binding.endpoint.clone(),
                 go_session_header: context.as_ref().and_then(|c| c.go_session_header),
                 effort,
-            });
+            }))
+        }?;
+        if let Some(choice) = retained {
+            return Ok(choice);
         }
-        if retain
-            && !context.as_ref().is_some_and(|c| {
+        // Affinity retention records only genuinely fresh qualified
+        // sessions; an unfresh session is still served, just not retained.
+        let record = retain
+            && context.as_ref().is_some_and(|c| {
                 c.can_start_binding(
                     body,
                     protocol,
                     bindings.as_ref().expect("qualified binding lock").epoch,
                     now,
                 )
-            })
-        {
-            return Err(Error::new(
-                "original_binding_unavailable",
-                "Unknown native session is not a qualified fresh session; prior destinations cannot be reconstructed",
-            ));
-        }
+            });
         let mut selection = crate::routing::select_request_admitted(
             &self.store,
             config,
@@ -437,41 +417,51 @@ impl Runtime {
                 selection.evidence["selected_evaluation"] = evaluation;
             }
         }
-        if retain {
+        if record {
             let bindings = bindings.as_mut().expect("qualified binding lock");
-            selection.evidence["scope_handle"] = json!(
-                context
-                    .as_ref()
-                    .and_then(native_context::Context::scope_handle)
-            );
             if bindings.entries.len() >= BINDING_LIMIT {
-                return Err(Error::new(
-                    "session_binding_capacity",
-                    "Durable native session capacity reached; no existing binding is evicted or reassigned",
-                ));
-            }
-            let binding = Binding {
-                context_handle: context
-                    .as_ref()
-                    .and_then(native_context::Context::scope_handle)
-                    .expect("qualified native scope"),
-                provider_identity: provider_identity.clone(),
-                model_identity,
-                provider: selection.provider.clone(),
-                model: selection.model.clone(),
-                protocol: protocol.into(),
-                public_id: public_id.into(),
-                endpoint: endpoint.clone(),
-                authorization_generation: authorization_generation.clone(),
-                continuity: continuity.into(),
-                decision: safe_evidence(&selection.evidence),
-                blocked: None,
-            };
-            let key = key.expect("qualified binding key");
-            bindings.entries.insert(key.clone(), binding);
-            if let Err(error) = save_bindings(&self.store, bindings) {
-                bindings.entries.remove(&key);
-                return Err(error);
+                // Durable capacity only caps affinity retention; the request
+                // itself is still served.
+                selection.evidence["binding_retention"] = json!("capacity_reached");
+            } else {
+                selection.evidence["scope_handle"] = json!(
+                    context
+                        .as_ref()
+                        .and_then(native_context::Context::scope_handle)
+                );
+                let binding = Binding {
+                    context_handle: context
+                        .as_ref()
+                        .and_then(native_context::Context::scope_handle)
+                        .expect("qualified native scope"),
+                    provider_identity: provider_identity.clone(),
+                    model_identity,
+                    provider: selection.provider.clone(),
+                    model: selection.model.clone(),
+                    protocol: protocol.into(),
+                    public_id: public_id.into(),
+                    endpoint: endpoint.clone(),
+                    authorization_generation: authorization_generation.clone(),
+                    continuity: continuity.into(),
+                    decision: safe_evidence(&selection.evidence),
+                    blocked: None,
+                };
+                let key = key.expect("qualified binding key");
+                // A permanently blocked conversation is never reassigned;
+                // recording over it would silently clear the block.
+                if bindings
+                    .entries
+                    .get(&key)
+                    .is_some_and(|existing| existing.blocked.is_some())
+                {
+                    selection.evidence["binding_retention"] = json!("blocked");
+                } else {
+                    bindings.entries.insert(key.clone(), binding);
+                    if let Err(error) = save_bindings(&self.store, bindings) {
+                        bindings.entries.remove(&key);
+                        return Err(error);
+                    }
+                }
             }
         }
         Ok(Choice {

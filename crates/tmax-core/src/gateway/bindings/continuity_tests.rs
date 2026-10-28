@@ -72,54 +72,47 @@ fn opencode_first_use_and_resume_keep_the_selected_destination() {
         "ses_unknown_remote_continuation".parse().unwrap(),
     );
     headers.insert("x-session-id", headers["x-opencode-session"].clone());
+    // Plain provider: remote-state continuations, provider-owned resource
+    // references, and conflicting session headers are forwarded, not policed.
+    // The session headers above keep no retained binding, so these requests
+    // select normally and record nothing.
     let remote = json!({"messages":[{"role":"user","content":"continue"}],"previous_response_id":"upstream-owned"});
-    assert_eq!(
-        restarted
-            .choose(
-                &test_snapshot(&preferred, "priority-change"),
-                "dynamic",
-                "chat-completions",
-                &remote,
-                &headers,
-                now
-            )
-            .err()
-            .unwrap()
-            .code,
-        "original_binding_unavailable"
-    );
+    restarted
+        .choose(
+            &test_snapshot(&preferred, "priority-change"),
+            "dynamic",
+            "chat-completions",
+            &remote,
+            &headers,
+            now,
+        )
+        .unwrap();
     let files = json!({"messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"upstream-owned"}}]}]});
-    assert_eq!(
-        restarted
-            .choose(
-                &test_snapshot(&preferred, "priority-change"),
-                "dynamic",
-                "chat-completions",
-                &files,
-                &headers,
-                now
-            )
-            .err()
-            .unwrap()
-            .code,
-        "original_resource_binding_unavailable"
-    );
+    restarted
+        .choose(
+            &test_snapshot(&preferred, "priority-change"),
+            "dynamic",
+            "chat-completions",
+            &files,
+            &headers,
+            now,
+        )
+        .unwrap();
     headers.insert("x-session-id", "conflicting".parse().unwrap());
-    assert_eq!(
-        restarted
-            .choose(
-                &test_snapshot(&preferred, "priority-change"),
-                "dynamic",
-                "chat-completions",
-                &body,
-                &headers,
-                now
-            )
-            .err()
-            .unwrap()
-            .code,
-        "session_identity_unavailable"
-    );
+    restarted
+        .choose(
+            &test_snapshot(&preferred, "priority-change"),
+            "dynamic",
+            "chat-completions",
+            &body,
+            &headers,
+            now,
+        )
+        .unwrap();
+    // The two genuine OpenCode sessions stay retained; the forwarded
+    // remote-state, unbound-resource, and conflicting-header requests
+    // recorded nothing.
+    assert_eq!(restarted.bindings.lock().unwrap().entries.len(), 2);
 }
 
 #[tokio::test]
@@ -369,19 +362,23 @@ fn failed_binding_activation_preserves_live_state_and_retry_persists_blockers() 
         impact["blocked_sessions"][0]["reason_code"],
         "alias_disabled"
     );
+    publish(&runtime, &disabled, &config, "recovered");
     let restarted = Runtime::new(runtime.store.clone(), "retry".into()).unwrap();
-    let error = restarted
+    // A blocked retained session no longer rejects the request; it only
+    // loses destination affinity and is served by normal selection.
+    let choice = restarted
         .choose(
-            &test_snapshot(&config, "fixture-1"),
+            &test_snapshot(&config, "recovered"),
             "dynamic",
             "chat-completions",
             &body,
             &headers,
             at + chrono::Duration::seconds(1),
         )
-        .err()
         .unwrap();
-    assert_eq!(error.code, "alias_disabled");
+    assert_eq!(choice.selection.provider, "p");
+    // Exactly the original session remains; the retry added nothing.
+    assert_eq!(restarted.bindings.lock().unwrap().entries.len(), 1);
 }
 #[test]
 fn stateless_activation_cannot_bypass_a_retained_session_block() {
@@ -411,7 +408,9 @@ fn stateless_activation_cannot_bypass_a_retained_session_block() {
         .unwrap()
         .priority = 100;
     publish(&runtime, &config, &stateless, "stateless");
-    let error = runtime
+    // The retained session is blocked by the continuity change, but the
+    // request degrades to normal selection instead of being rejected.
+    let degraded = runtime
         .choose(
             &test_snapshot(&stateless, "stateless"),
             "dynamic",
@@ -420,9 +419,8 @@ fn stateless_activation_cannot_bypass_a_retained_session_block() {
             &headers,
             at + chrono::Duration::seconds(1),
         )
-        .err()
         .unwrap();
-    assert_eq!(error.code, "continuity_changed");
+    assert_eq!(degraded.selection.provider, "q");
     let fresh = native_headers(at + chrono::Duration::seconds(2));
     let choice = runtime
         .choose(
@@ -478,7 +476,10 @@ fn incompatible_activation_block_is_permanent_without_reassignment() {
         bindings_before
     );
     let runtime = Runtime::new(store, "after-historical-cutover".into()).unwrap();
-    let error = runtime
+    // The incompatible retained destination is permanent and never
+    // reassigned, but it no longer rejects the request: normal selection
+    // serves it and the block stays recorded.
+    let choice = runtime
         .choose(
             &test_snapshot(&config, "restored"),
             "dynamic",
@@ -487,14 +488,14 @@ fn incompatible_activation_block_is_permanent_without_reassignment() {
             &headers,
             at + chrono::Duration::seconds(1),
         )
-        .err()
         .unwrap();
-    assert_eq!(error.code, "candidate_removed");
-    assert_eq!(runtime.bindings.lock().unwrap().entries.len(), 1);
+    assert_eq!(choice.selection.provider, "p");
+    let bindings = runtime.bindings.lock().unwrap();
+    assert_eq!(bindings.entries.len(), 1);
 }
 
 #[test]
-fn omp_chat_history_can_use_stateless_alias_but_not_session_or_remote_state() {
+fn omp_chat_history_is_forwarded_for_stateless_alias() {
     let (_temporary, runtime, config) = fixture();
     let mut stateless = config.clone();
     stateless.model_aliases[0].continuity = Some("stateless".into());
@@ -518,37 +519,25 @@ fn omp_chat_history_can_use_stateless_alias_but_not_session_or_remote_state() {
         .unwrap();
     assert_eq!(choice.selection.provider, "p");
     assert!(runtime.bindings.lock().unwrap().entries.is_empty());
-    let error = runtime
-        .choose(
-            &test_snapshot(&config, "omp-session"),
-            "dynamic",
-            "chat-completions",
-            &body,
-            &headers,
-            Utc::now(),
-        )
-        .err()
-        .unwrap();
-    assert_eq!(error.code, "session_identity_unavailable");
-    for rejected in [
+    // Continuations referencing upstream-owned state and requests carrying
+    // unusable session headers are forwarded, not policed.
+    for forwarded in [
         json!({"messages":[]}),
         json!({"messages":[{"role":"user","content":"x"}],"previous_response_id":"resp_1"}),
     ] {
-        let error = runtime
+        runtime
             .choose(
                 &test_snapshot(&stateless, "omp-stateless"),
                 "dynamic",
                 "chat-completions",
-                &rejected,
+                &forwarded,
                 &headers,
                 Utc::now(),
             )
-            .err()
             .unwrap();
-        assert_eq!(error.code, "independent_context_required");
     }
     headers.insert("x-session-id", "unqualified-session".parse().unwrap());
-    let error = runtime
+    runtime
         .choose(
             &test_snapshot(&stateless, "omp-stateless"),
             "dynamic",
@@ -557,7 +546,33 @@ fn omp_chat_history_can_use_stateless_alias_but_not_session_or_remote_state() {
             &headers,
             Utc::now(),
         )
-        .err()
         .unwrap();
-    assert_eq!(error.code, "independent_context_required");
+    assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+}
+
+#[test]
+fn session_alias_without_recognized_identity_is_served_by_normal_selection() {
+    let (_temporary, runtime, config) = fixture();
+    publish(&runtime, &config, &config, "omp-session");
+    let mut headers = HeaderMap::new();
+    headers.insert("user-agent", "omp/18.12.6".parse().unwrap());
+    let body = json!({"messages":[
+        {"role":"user","content":"first"},
+        {"role":"assistant","content":"answer"},
+        {"role":"user","content":"continue"}
+    ]});
+    let choice = runtime
+        .choose(
+            &test_snapshot(&config, "omp-session"),
+            "dynamic",
+            "chat-completions",
+            &body,
+            &headers,
+            Utc::now(),
+        )
+        .unwrap();
+    assert_eq!(choice.selection.provider, "p");
+    // No recognized conversation identity means no retained binding, but the
+    // request itself was served.
+    assert!(runtime.bindings.lock().unwrap().entries.is_empty());
 }

@@ -648,12 +648,18 @@ routing. A qualified API-balance observation remains valid availability evidence
 
 ### Request fallback and failure priority override
 
-Fallback is opt-in on each protocol-qualified stateless model alias. It uses only
-that alias's explicit candidates and preserves the admitted configuration,
-protocol, request parameters, and full independent context. Fixed concrete
-requests, retained sessions, and upstream-owned continuation or resource IDs
-cannot move to another provider. Client qualification and provider restrictions
-remain mandatory.
+Fallback is opt-in on each protocol-qualified stateless model alias. It uses
+only that alias's explicit candidates and preserves the admitted configuration,
+protocol, and request parameters. The gateway is a plain model provider for its
+callers: any authenticated request is routed and forwarded unchanged, whatever
+client sends it and whether or not it carries complete independent context or
+upstream-owned continuation/resource references. A recognized native client
+context only grants that conversation destination affinity; it never gates
+entry. Fixed concrete requests and retained sessions keep their destination
+while it stays valid; upstream-owned references are forwarded as-is and may be
+rejected by the upstream itself. Provider-side native requirements (the session
+or client identity an upstream itself demands) still filter candidate
+eligibility.
 
 | Condition | Request behavior |
 | --- | --- |
@@ -1162,12 +1168,13 @@ response delivery; retained-session errors do not replay on a sibling.
     because ranking changed. Only verified new sessions use the changed
     candidate set or ranking; an existing blocked session is not a new one.
 26. Preserve bindings and blocked state across normal stop/start, restart, and
-    request-history clearing. When binding state is lost, allow a fresh selection
-    for the full-context OpenCode path above or a trusted new session distinguished by the qualified adapter from
-    continuation. Otherwise keep the affected scope blocked until a qualified
-    native reset or new identity scope establishes independent context; do not
-    promise that a generic new-chat action, invented identity, or configuration
-    restoration repairs it.
+    request-history clearing. A blocked scope permanently loses destination
+    affinity: its requests are served by normal selection instead of being
+    rejected, the block is never reassigned, cleared, or recorded over, and no
+    generic new-chat action, invented identity, or configuration restoration
+    repairs affinity. When binding state is lost, allow a fresh selection for
+    the full-context OpenCode path above or a trusted new session distinguished
+    by the qualified adapter from continuation.
 27. Add a target before configuring native providers, selected models, or a default,
     then use it as a provider's native-login source. It remains valid but incomplete
     for native model application, not an invalid source or a gateway prerequisite.
