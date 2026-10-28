@@ -393,6 +393,34 @@ The local gateway is independent of managed Pi/Codex targets. Direct clients do 
 need an `agent` declaration or native apply. A concrete qualified model can be
 used directly; aliases are optional.
 
+### Connecting an unmanaged client
+
+An agent without a version-qualified [native reference](agents/README.md) is
+unmanaged: tmax does not read or write its configuration. Connect it as a plain
+provider instead:
+
+- **Base URL** — the configured listener, for example `http://127.0.0.1:17840`.
+  The protocol paths are `/v1/chat/completions`, `/v1/responses`, and
+  `/v1/messages`; the client's own configuration chooses the protocol, and the
+  gateway does not translate it.
+- **Authorization** — `Authorization: Bearer <shared key>`. Deliver the key on an
+  attached terminal with `tmax gateway key show` and paste it into the client; no
+  generated or revealed key belongs in examples, argv, environment, or files.
+- **Model** — any ID published for the current key: a concrete
+  `PROVIDER_ID/MODEL_ID` or an enabled alias, restricted to the protocol it
+  publishes. No Agent registration, native selection, client registry, or
+  allowlist entry is involved.
+
+```sh
+curl -s http://127.0.0.1:17840/v1/models \
+  -H "Authorization: Bearer <paste from tmax gateway key show>"
+```
+
+Do not infer an unknown agent's schema from a similar tool or edit its files on a
+guess. Manual connection is the supported path because an unqualified format has
+no evidence; an agent becomes a maintained target only with a version-qualified
+reference and the shared apply/restore contract, as the agents above.
+
 Inference request bodies are limited to 512 MiB (536,870,912 bytes). This local
 HTTP-body byte limit is separate from a model's context window or token budget.
 An oversized body returns HTTP 413 with `request_too_large` before upstream
