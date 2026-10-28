@@ -202,10 +202,12 @@ The gateway forwards requests; it does not police their content. Candidate
 exclusion is limited to configuration state (a disabled provider, model, or
 alias), missing authorization, an unsupported protocol endpoint, a provider
 already attempted by alias fallback, native client-identity requirements, and
-observed availability. Declared limits, capabilities, parameters, and effort
-values never exclude a candidate and never reject a request: an undeclared or
-otherwise unknown value is forwarded unchanged, and the upstream answers with
-its own truthful error. **Effort resolution happens only on the selected
+observed availability under its own scoped, as-of evidence rules
+([selection and continuity](#selection-and-continuity)). No observation establishes
+exhaustion beyond its qualified instant or window. Declared limits, capabilities,
+parameters, and effort values never exclude a candidate and never reject a
+request: an undeclared or otherwise unknown value is forwarded unchanged, and
+the upstream answers with its own truthful error. **Effort resolution happens only on the selected
 backend**, so changing effort never reranks, retries, downgrades, or moves an
 existing conversation. Existing bindings and their original decision evidence
 are unaffected by request content.
