@@ -100,7 +100,11 @@ fn historical_names_preserve_session_identity_evidence_and_permanent_blockers() 
                 } else {
                     "model_disabled"
                 };
-                assert_eq!(result.err().unwrap().code, expected);
+                // The persisted block keeps affinity away from the removed
+                // destination, but the request is still served by normal
+                // selection over the remaining candidates.
+                let choice = result.unwrap();
+                assert_ne!(choice.selection.provider, "p");
                 assert_eq!(entry["blocked"], expected);
             }
         }

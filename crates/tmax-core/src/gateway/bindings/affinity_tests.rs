@@ -69,7 +69,9 @@ fn native_requirements_filter_new_selection_but_never_move_retained_destination(
         "retained_destination"
     );
     native.insert("x-opencode-session", "conflicting-session".parse().unwrap());
-    let error = runtime
+    // Conflicting session headers are no longer rejected; the request loses
+    // affinity and is served by normal selection.
+    let choice = runtime
         .choose(
             &test_snapshot(&go, "native-context"),
             "dynamic",
@@ -78,9 +80,8 @@ fn native_requirements_filter_new_selection_but_never_move_retained_destination(
             &native,
             at + chrono::Duration::seconds(3),
         )
-        .err()
         .unwrap();
-    assert_eq!(error.code, "session_identity_unavailable");
+    assert_eq!(choice.selection.provider, "q");
     let bindings = runtime.bindings.lock().unwrap();
     assert_eq!(
         bindings
@@ -157,7 +158,10 @@ fn pi_go_forwarding_preserves_native_identity_across_turns_resume_and_new_sessio
     disabled.providers.get_mut("p").unwrap().enabled = false;
     publish(&resumed, &go, &disabled, "go-disabled");
     publish(&resumed, &disabled, &go, "go-restored");
-    let error = resumed
+    // The retained destination was blocked while the provider was disabled;
+    // after restore the request degrades to normal selection instead of
+    // being rejected, and no new binding is recorded.
+    let choice = resumed
         .choose(
             &snapshot,
             "p/m",
@@ -166,9 +170,8 @@ fn pi_go_forwarding_preserves_native_identity_across_turns_resume_and_new_sessio
             &headers,
             at,
         )
-        .err()
         .unwrap();
-    assert_eq!(error.code, "provider_disabled");
+    assert_eq!(choice.selection.provider, "p");
     assert_eq!(resumed.bindings.lock().unwrap().entries.len(), 2);
 }
 

@@ -17,15 +17,6 @@ pub(super) fn safe_message(code: &str) -> &'static str {
         "local_capacity" => "Local capacity unavailable; request was not dispatched",
         "request_too_large" => "Request exceeds the local body limit",
         "authentication_failed" => "Current shared gateway key required",
-        "session_identity_unavailable" => {
-            "A qualified native conversation identity is required for session-stable alias forwarding"
-        }
-        "original_binding_unavailable" => {
-            "Original native destination is unavailable; only a qualified new native session can select a new destination"
-        }
-        "original_resource_binding_unavailable" => {
-            "A provider-owned resource lacks its qualified original authorization binding; no lookup or replay was attempted"
-        }
         "independent_context_required" => {
             "This alias requires a qualified client with complete independent context and no upstream-owned continuation state"
         }

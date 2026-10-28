@@ -497,8 +497,14 @@ pre-cutover CLI (`tmax gateway stop`, then `tmax web stop`) or its existing Web
 controls to perform the explicit stops before starting the current executable;
 the new CLI will not take over or terminate an incompatible daemon.
 
-The gateway accepts same-protocol requests and forwards to the configured provider;
-it does not translate protocols. Configure a real provider credential before
+The gateway is a plain model provider for its callers: any request bearing the
+shared key is routed and forwarded unchanged, whatever client sends it and
+whether or not it carries complete conversation context. It accepts
+same-protocol requests and forwards to the configured provider; it does not
+translate protocols. A recognized native client only gains that conversation
+destination affinity; unrecognized clients are served the same way, and an
+upstream that itself requires a native session or client identity still filters
+which candidates are eligible. Configure a real provider credential before
 expecting upstream completion. Synthetic loopback checks qualify local wiring
 only. The exact hosted scenario and its native request-control qualifications are
 recorded in the owning [Go evidence section](../specs/integrations/opencode-go/spec.md#sources-and-evidence-status);
