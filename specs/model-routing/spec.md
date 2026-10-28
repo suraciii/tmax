@@ -139,7 +139,10 @@ Catalog `temperature = true` declares parameter support, not a numeric temperatu
 `reasoning_options` describes available controls, not a selected effort or mode.
 `limit.output` describes capacity, not a request output budget. Neither catalog
 metadata nor local metadata overrides choose, inject, cap, replace, or remove
-request values. Capability projection writes the same control declarations into
+request values. A request's output budget (`max_tokens`, `max_output_tokens`,
+`max_completion_tokens`) is forwarded unchanged; the gateway never compares it
+with declared limits or candidates' capacity, and the upstream clamps or rejects
+it with its own error. Capability projection writes the same control declarations into
 the native agent's own selector fields under the
 [shared agent boundary](../integrations/spec.md#agent-boundaries). It sets no
 default effort, level, budget, or thinking flag, and the native tool keeps

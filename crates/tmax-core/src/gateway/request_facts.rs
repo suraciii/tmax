@@ -15,7 +15,6 @@ pub struct RequestFacts {
     pub(crate) thinking_enabled: bool,
     pub(crate) thinking_disabled: bool,
     pub(crate) temperature: bool,
-    pub(crate) output_budgets: [Option<String>; 3],
     pub(crate) structured: bool,
     pub(crate) input_modalities: BTreeSet<&'static str>,
     pub(crate) output_modalities: BTreeSet<String>,
@@ -116,11 +115,6 @@ impl RequestFacts {
             thinking_enabled: matches!(thinking.field("type").atom, Atom::Enabled | Atom::Adaptive),
             thinking_disabled: thinking.field("type").atom == Atom::Disabled,
             temperature: root.take("temperature").nonnull(),
-            output_budgets: [
-                root.take("max_tokens").number,
-                root.take("max_output_tokens").number,
-                root.take("max_completion_tokens").number,
-            ],
             structured: format.atom == Atom::JsonSchema,
             input_modalities: modalities,
             output_modalities: root.take("modalities").strings,
@@ -302,7 +296,6 @@ struct Node {
     kind: Kind,
     atom: Atom,
     text: Option<String>,
-    number: Option<String>,
     fields: BTreeMap<&'static str, Node>,
     array: Items,
     strings: BTreeSet<String>,
@@ -311,7 +304,6 @@ static ABSENT: Node = Node {
     kind: Kind::Missing,
     atom: Atom::Other,
     text: None,
-    number: None,
     fields: BTreeMap::new(),
     array: Items {
         array: false,
@@ -392,7 +384,6 @@ enum Context {
     Prompt,
     Modalities,
     Retain,
-    Number,
     Scalar,
     Discard,
 }
@@ -412,9 +403,6 @@ impl Context {
             (Root, "text") => ("text", Text),
             (Root, "prompt") => ("prompt", Prompt),
             (Root, "modalities") => ("modalities", Modalities),
-            (Root, "max_tokens") => ("max_tokens", Number),
-            (Root, "max_output_tokens") => ("max_output_tokens", Number),
-            (Root, "max_completion_tokens") => ("max_completion_tokens", Number),
             (Root, "temperature") => ("temperature", Scalar),
             (Root, "previous_response_id") => ("previous_response_id", Scalar),
             (Root, "conversation") => ("conversation", Scalar),
@@ -472,47 +460,22 @@ impl<'de> Visitor<'de> for Seed<'_> {
             ..Node::default()
         })
     }
-    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Node, E> {
-        let number = if self.context == Context::Number {
-            value.to_string()
-        } else {
-            String::new()
-        };
-        self.numeric(number)
+    fn visit_i64<E: de::Error>(self, _value: i64) -> Result<Node, E> {
+        self.numeric()
     }
-    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Node, E> {
-        let number = if self.context == Context::Number {
-            value.to_string()
-        } else {
-            String::new()
-        };
-        self.numeric(number)
+    fn visit_u64<E: de::Error>(self, _value: u64) -> Result<Node, E> {
+        self.numeric()
     }
-    fn visit_i128<E: de::Error>(self, value: i128) -> Result<Node, E> {
+    fn visit_i128<E: de::Error>(self, _value: i128) -> Result<Node, E> {
         *self.duplicates = true;
-        let number = if self.context == Context::Number {
-            value.to_string()
-        } else {
-            String::new()
-        };
-        self.numeric(number)
+        self.numeric()
     }
-    fn visit_u128<E: de::Error>(self, value: u128) -> Result<Node, E> {
+    fn visit_u128<E: de::Error>(self, _value: u128) -> Result<Node, E> {
         *self.duplicates = true;
-        let number = if self.context == Context::Number {
-            value.to_string()
-        } else {
-            String::new()
-        };
-        self.numeric(number)
+        self.numeric()
     }
-    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Node, E> {
-        let number = if self.context == Context::Number {
-            value.to_string()
-        } else {
-            String::new()
-        };
-        self.numeric(number)
+    fn visit_f64<E: de::Error>(self, _value: f64) -> Result<Node, E> {
+        self.numeric()
     }
     fn visit_str<E: de::Error>(self, value: &str) -> Result<Node, E> {
         Ok(Node {
@@ -573,7 +536,8 @@ impl<'de> Visitor<'de> for Seed<'_> {
                 if access.next_key::<Key<'de>>()?.is_some() {
                     return Err(de::Error::custom("unexpected number map field"));
                 }
-                return self.numeric(number);
+                let _ = number;
+                return self.numeric();
             }
             let field = self.context.field(&key);
             if !keys.insert(key) {
@@ -591,10 +555,9 @@ impl<'de> Visitor<'de> for Seed<'_> {
     }
 }
 impl Seed<'_> {
-    fn numeric<E: de::Error>(self, value: String) -> Result<Node, E> {
+    fn numeric<E: de::Error>(self) -> Result<Node, E> {
         Ok(Node {
             kind: Kind::Number,
-            number: (self.context == Context::Number).then_some(value),
             ..Node::default()
         })
     }

@@ -126,19 +126,6 @@ fn check_effective(
     if body.temperature && effective.get("temperature").and_then(Value::as_bool) == Some(false) {
         return Some("temperature_incompatible");
     }
-    for count in body.output_budgets.iter().flatten() {
-        for limit in [
-            effective.pointer("/limit/output").and_then(Value::as_u64),
-            effective.pointer("/limit/context").and_then(Value::as_u64),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if exceeds(count, limit) {
-                return Some("output_budget_incompatible");
-            }
-        }
-    }
     if check_effort
         && candidate_effort.is_none()
         && let Some(effort) = effort
@@ -172,44 +159,6 @@ fn check_effective(
         return Some("output_modality_incompatible");
     }
     None
-}
-fn exceeds(text: &str, limit: u64) -> bool {
-    if text.starts_with('-') {
-        return false;
-    }
-    let (mantissa, exponent) = text.split_once(['e', 'E']).unwrap_or((text, "0"));
-    let fractional = mantissa
-        .split_once('.')
-        .map_or(0, |(_, fraction)| fraction.len());
-    let mut significant = mantissa
-        .bytes()
-        .filter(|byte| *byte != b'.')
-        .skip_while(|byte| *byte == b'0')
-        .peekable();
-    if significant.peek().is_none() {
-        return false;
-    }
-    if limit == 0 {
-        return true;
-    }
-    let digits = significant.clone().count();
-    let exponent = match exponent.parse::<i64>() {
-        Ok(value) => value,
-        Err(_) => return !exponent.starts_with('-'),
-    };
-    let integer_digits = (digits as i128) + (exponent as i128) - (fractional as i128);
-    let bound = limit.to_string();
-    if integer_digits != (bound.len() as i128) {
-        return integer_digits > (bound.len() as i128);
-    }
-    for expected in bound.bytes() {
-        match significant.next().unwrap_or(b'0').cmp(&expected) {
-            std::cmp::Ordering::Greater => return true,
-            std::cmp::Ordering::Less => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    significant.any(|byte| byte != b'0')
 }
 #[cfg(test)]
 fn facts(value: serde_json::Value) -> RequestFacts {
@@ -290,12 +239,10 @@ mod tests {
             input: None,
             output: Some(0),
         });
+        // A requested output budget is forwarded, never pre-rejected: the
+        // upstream clamps or rejects it with its own truthful error.
         assert_eq!(
             mismatch(&p, "m", &model, None, &facts(json!({"max_tokens":1})), None),
-            Some("output_budget_incompatible")
-        );
-        assert_eq!(
-            mismatch(&p, "m", &model, None, &facts(json!({"max_tokens":0})), None),
             None
         );
     }
@@ -366,13 +313,5 @@ mod tests {
             selected_mismatch(&p, "m", &model, None, &facts(json!({})), Some("max"), false),
             Some("reasoning_effort_incompatible")
         );
-    }
-
-    #[test]
-    fn exponent_budget_comparison_is_exact_and_bounded() {
-        assert!(exceeds("1e100000000", u64::MAX));
-        assert!(!exceeds("1e-100000000", 1));
-        assert!(!exceeds("1.000e3", 1000));
-        assert!(exceeds("1.000000000000000001e3", 1000));
     }
 }
