@@ -308,7 +308,9 @@ impl Runtime {
             }
             if let Some(reason) = binding_blocker(config, binding, identities) {
                 binding.blocked = Some(reason.into());
-                save_bindings(&self.store, bindings)?;
+                // Persisting the block is housekeeping: a storage failure
+                // must not deny a request the gateway can still serve.
+                let _ = save_bindings(&self.store, bindings);
                 break 'retained Ok(None);
             }
             let provider = &config.providers[&binding.provider];
@@ -457,9 +459,11 @@ impl Runtime {
                     selection.evidence["binding_retention"] = json!("blocked");
                 } else {
                     bindings.entries.insert(key.clone(), binding);
-                    if let Err(error) = save_bindings(&self.store, bindings) {
+                    if save_bindings(&self.store, bindings).is_err() {
+                        // Durable retention only improves later affinity; a
+                        // storage failure still serves the current request.
                         bindings.entries.remove(&key);
-                        return Err(error);
+                        selection.evidence["binding_retention"] = json!("save_failed");
                     }
                 }
             }

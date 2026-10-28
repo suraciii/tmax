@@ -137,9 +137,9 @@ pub fn identify(headers: &HeaderMap, body: &RequestFacts, protocol: &str) -> Opt
 ///
 /// A request that carries either session header but disagrees with itself, or
 /// carries one from an unrecognized client, still named a session: the gateway
-/// must reject it rather than silently attribute it. Only a request carrying no
-/// session header is unattributed, and only that request may be attributed by
-/// the gateway itself.
+/// never attributes a session to it, and serves it without affinity instead.
+/// Only a request carrying no session header is unattributed, and only that
+/// request may be attributed by the gateway itself.
 pub fn names_session(headers: &HeaderMap) -> bool {
     ["x-opencode-session", "x-session-id"]
         .iter()
