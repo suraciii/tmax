@@ -11,18 +11,10 @@ use std::{
 pub struct RequestFacts {
     pub model: Option<String>,
     pub normalization_required: bool,
-    pub(crate) tool_use: bool,
-    pub(crate) thinking_enabled: bool,
-    pub(crate) temperature: bool,
-    pub(crate) structured: bool,
-    pub(crate) input_modalities: BTreeSet<&'static str>,
-    pub(crate) output_modalities: BTreeSet<String>,
     pub(crate) reasoning_effort: Effort,
     pub(crate) nested_effort: Effort,
     pub(crate) remote_state: bool,
     pub(crate) unbound_resources: bool,
-    pub(crate) background: bool,
-    pub(crate) deepseek_state: bool,
     messages: Items,
     input: Items,
     store_false: bool,
@@ -78,23 +70,9 @@ impl RequestFacts {
         let messages = root.take("messages").items();
         let input = root.take("input").items();
         let mut reasoning = root.take("reasoning");
-        let thinking = root.take("thinking");
-        let response_format = root.take("response_format").take("type");
-        let text_format = root.take("text").take("format").take("type");
-        let format = if response_format.kind != Kind::Missing {
-            response_format
-        } else {
-            text_format
-        };
         let top_effort = root.take("reasoning_effort").effort();
         let nested_effort = reasoning.take("effort").effort();
         let tools = root.take("tools").items();
-        let functions = root.take("functions").items();
-        let mut modalities = messages.modalities.clone();
-        modalities.extend(input.modalities.iter().copied());
-        if input.string {
-            modalities.insert("text");
-        }
         let previous = root.take("previous_response_id");
         let conversation = root.take("conversation");
         let background = root.take("background");
@@ -103,15 +81,6 @@ impl RequestFacts {
         Ok(Self {
             model: root.take("model").text,
             normalization_required: duplicate_keys,
-            tool_use: tools.nonempty
-                || functions.nonempty
-                || messages.tools
-                || input.function_calls,
-            thinking_enabled: matches!(thinking.field("type").atom, Atom::Enabled | Atom::Adaptive),
-            temperature: root.take("temperature").nonnull(),
-            structured: format.atom == Atom::JsonSchema,
-            input_modalities: modalities,
-            output_modalities: root.take("modalities").strings,
             reasoning_effort: top_effort,
             nested_effort,
             remote_state: previous.nonnull()
@@ -122,10 +91,6 @@ impl RequestFacts {
                 || tools.resources
                 || messages.resources
                 || input.resources,
-            background: background.kind == Kind::True,
-            deepseek_state: [previous, conversation, store, background]
-                .iter()
-                .any(|v| v.nonnull() && v.kind != Kind::False),
             messages,
             input,
             store_false,
@@ -164,11 +129,8 @@ struct Items {
     nonempty: bool,
     valid_roles: bool,
     users: u8,
-    tools: bool,
-    function_calls: bool,
     references: bool,
     resources: bool,
-    modalities: BTreeSet<&'static str>,
 }
 impl Items {
     fn include(&mut self, item: Node, context: Context) {
@@ -183,10 +145,6 @@ impl Items {
         }
         if context == Context::Content {
             self.resources |= item.unbound();
-            if let Some(modality) = item.modality() {
-                self.modalities.insert(modality);
-            }
-            self.tools |= matches!(item.field("type").atom, Atom::ToolUse | Atom::ToolResult);
             return;
         }
         match item.field("role").atom {
@@ -194,25 +152,9 @@ impl Items {
             Atom::User => self.users = self.users.saturating_add(1).min(2),
             _ => self.valid_roles = false,
         }
-        self.tools |=
-            item.field("role").atom == Atom::Tool || item.field("tool_calls").array.nonempty;
-        self.function_calls |= matches!(
-            item.field("type").atom,
-            Atom::FunctionCall | Atom::FunctionOutput
-        );
         self.references |= item.field("type").atom == Atom::ItemReference;
         self.resources |= item.unbound();
-        if let Some(modality) = item.modality() {
-            self.modalities.insert(modality);
-        }
-        let content = item.field("content");
-        if content.kind == Kind::String {
-            self.modalities.insert("text");
-        }
-        self.modalities
-            .extend(content.array.modalities.iter().copied());
-        self.resources |= content.array.resources;
-        self.tools |= content.array.tools;
+        self.resources |= item.field("content").array.resources;
     }
 }
 
@@ -304,11 +246,8 @@ static ABSENT: Node = Node {
         nonempty: false,
         valid_roles: false,
         users: 0,
-        tools: false,
-        function_calls: false,
         references: false,
         resources: false,
-        modalities: BTreeSet::new(),
     },
     strings: BTreeSet::new(),
 };
@@ -334,20 +273,6 @@ impl Node {
             Kind::Null => Effort::Null,
             Kind::String => Effort::String(self.text.unwrap_or_default()),
             _ => Effort::Invalid,
-        }
-    }
-    fn modality(&self) -> Option<&'static str> {
-        match self.field("type").atom {
-            Atom::Text => Some("text"),
-            Atom::Image => Some("image"),
-            Atom::Audio => Some("audio"),
-            Atom::Video => Some("video"),
-            Atom::Document | Atom::InputFile
-                if self.field("source").field("media_type").atom == Atom::Pdf =>
-            {
-                Some("pdf")
-            }
-            _ => None,
         }
     }
     fn unbound(&self) -> bool {

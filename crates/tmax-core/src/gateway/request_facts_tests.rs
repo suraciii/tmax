@@ -49,11 +49,9 @@ fn duplicate_decoded_fields_replace_instead_of_accumulating() {
     expected.normalization_required = true;
     assert_eq!(actual, expected);
     assert_eq!(actual.model.as_deref(), Some("last"));
-    assert!(!actual.tool_use);
     assert!(!actual.remote_state);
     assert!(!actual.unbound_resources);
     assert!(actual.new_session("chat-completions"));
-    assert_eq!(actual.input_modalities, BTreeSet::from(["text"]));
 }
 
 #[test]
@@ -76,22 +74,11 @@ fn presence_type_and_structured_format_precedence_are_preserved() {
             facts.nested_effort.as_str(),
             body.pointer("/reasoning/effort").and_then(Value::as_str)
         );
-        assert_eq!(
-            facts.structured,
-            body.pointer("/response_format/type")
-                .or_else(|| body.pointer("/text/format/type"))
-                .and_then(Value::as_str)
-                == Some("json_schema")
-        );
-        assert_eq!(
-            facts.temperature,
-            body.get("temperature").is_some_and(|v| !v.is_null())
-        );
     }
 }
 
 #[test]
-fn resource_and_modality_facts_only_follow_native_paths() {
+fn resource_facts_only_follow_native_paths() {
     let facts = RequestFacts::from_value(json!({
         "messages":[{"role":"user","content":[
             {"type":"document","source":{"media_type":"application/pdf","file_id":false}},
@@ -103,37 +90,25 @@ fn resource_and_modality_facts_only_follow_native_paths() {
         "extension":{"type":"image","file_id":"opaque"}
     }))
     .unwrap();
-    assert!(facts.tool_use);
     assert!(facts.unbound_resources);
-    assert_eq!(
-        facts.input_modalities,
-        BTreeSet::from(["audio", "pdf", "video"])
-    );
-    assert_eq!(
-        facts.output_modalities,
-        BTreeSet::from(["image".into(), "text".into()])
-    );
     assert!(!facts.remote_state);
 }
 
 #[test]
 fn response_state_false_null_and_empty_values_keep_their_distinctions() {
-    for (value, remote, deepseek) in [
-        (json!(null), false, false),
-        (json!(false), true, false),
-        (json!(""), true, true),
-        (json!([]), true, true),
+    for (value, remote) in [
+        (json!(null), false),
+        (json!(false), true),
+        (json!(""), true),
+        (json!([]), true),
     ] {
         let facts = RequestFacts::from_value(
             json!({"previous_response_id":value,"input":[],"store":false}),
         )
         .unwrap();
         assert_eq!(facts.remote_state, remote);
-        assert_eq!(facts.deepseek_state, deepseek);
         assert_eq!(facts.independent("responses"), !remote);
     }
-    let input = RequestFacts::from_value(json!({"input":[{"type":"tool_use"}]})).unwrap();
-    assert!(!input.tool_use);
 }
 
 #[test]
@@ -160,7 +135,6 @@ fn raw_value_token_remains_an_opaque_native_extension() {
         RequestFacts::parse(br#"{"extension":{"$serde_json::private::RawValue":"not JSON"}}"#)
             .unwrap();
     assert!(!facts.normalization_required);
-    assert!(!facts.tool_use);
     assert!(!facts.remote_state);
 }
 
