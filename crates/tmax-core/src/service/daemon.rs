@@ -339,8 +339,8 @@ impl Daemon {
             json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"daemon":view["daemon"],"gateway":view["gateway"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Inspect stored shared-key availability; explicitly replace missing or unsupported key material")}else{Value::Null}}),
         )
     }
-    async fn start_inference(&mut self, restart: bool, force: bool) -> Result<Value> {
-        if let Some(listener) = self.inference.as_ref().filter(|_| !restart) {
+    async fn start_inference(&mut self) -> Result<Value> {
+        if let Some(listener) = self.inference.as_ref() {
             if listener.task.is_finished() {
                 return Err(failure(
                     "listener_unavailable",
@@ -378,7 +378,7 @@ impl Daemon {
             Some(TcpListener::bind(requested).await.map_err(|_|failure("endpoint_occupied","Requested inference endpoint is occupied or unavailable; no fallback attempted"))?)
         };
         let interrupted = if self.inference.is_some() {
-            self.runtime.stop(force)?
+            self.runtime.stop()
         } else {
             0
         };
@@ -439,11 +439,7 @@ impl Daemon {
             #[cfg(windows)]
             listener_closed: None,
         });
-        let mut value = self.lifecycle(
-            "inference",
-            if restart { "restarted" } else { "started" },
-            Some(requested),
-        );
+        let mut value = self.lifecycle("inference", "started", Some(requested));
         value["interrupted_requests"] = json!(interrupted);
         Ok(value)
     }
@@ -507,13 +503,13 @@ async fn run_owned(
         shutdown.clone(),
     )));
     if autostart {
-        let result = state.lock().await.start_inference(false, false).await;
+        let result = state.lock().await.start_inference().await;
         match result {
             Ok(value) if value["gateway"]["ready"] == true => {
                 #[cfg(windows)]
                 if let Err(error) = windows_startup::record_launch(&store, None) {
                     let mut daemon = state.lock().await;
-                    let _ = daemon.runtime.stop(true);
+                    let _ = daemon.runtime.stop();
                     if let Some(surface) = daemon.inference.take() {
                         surface.stop().await;
                     }
@@ -555,7 +551,7 @@ async fn run_owned(
         let _ = task.await;
     }
     let daemon = state.lock().await;
-    let _ = daemon.runtime.stop(true);
+    let _ = daemon.runtime.stop();
     let inputs_released = crate::inputs::deactivate(&store);
     drop(daemon);
     let endpoint_released = listener.release();
@@ -593,12 +589,10 @@ pub(super) async fn daemon_control(
 ) -> Result<Value> {
     let group = request.command.first().map(String::as_str).unwrap_or("");
     let action = request.command.get(1).map(String::as_str).unwrap_or("");
-    let force = request.arguments.contains_key("cancel-active");
     match (group, action) {
-        ("gateway", "start") => daemon.start_inference(false, force).await,
-        ("gateway", "restart") => daemon.start_inference(true, force).await,
+        ("gateway", "start") => daemon.start_inference().await,
         ("gateway", "stop") => {
-            let interrupted = daemon.runtime.stop(force)?;
+            let interrupted = daemon.runtime.stop();
             if let Some(surface) = daemon.inference.take() {
                 surface.stop().await;
             }
@@ -828,18 +822,18 @@ mod tests {
             key_state: "absent".into(),
             shutdown: Arc::new(Shutdown::new()),
         };
-        let first = daemon.start_inference(false, false).await.unwrap();
+        let first = daemon.start_inference().await.unwrap();
         assert_eq!(first["gateway"]["ready"], true);
         store
             .write_raw("tmax.toml", b"invalid pending configuration")
             .unwrap();
-        let repeated = daemon.start_inference(false, false).await.unwrap();
+        let repeated = daemon.start_inference().await.unwrap();
         assert_eq!(repeated["lifecycle"]["action"], "reused");
         assert_eq!(
             repeated["gateway"]["config_revision"],
             first["gateway"]["config_revision"]
         );
-        daemon.runtime.stop(false).unwrap();
+        daemon.runtime.stop();
         daemon.inference.take().unwrap().stop().await;
     }
     #[cfg(unix)]
@@ -859,18 +853,11 @@ mod tests {
             .await
             .unwrap()
         }
-        fn request(action: &str, force: bool) -> Request {
+        fn request(action: &str) -> Request {
             Request {
                 command: vec!["gateway".into(), action.into()],
                 operands: Vec::new(),
-                arguments: if force {
-                    std::collections::BTreeMap::from([(
-                        "cancel-active".into(),
-                        vec!["true".into()],
-                    )])
-                } else {
-                    Default::default()
-                },
+                arguments: Default::default(),
                 dry_run: false,
                 if_revision: None,
             }
@@ -894,7 +881,7 @@ mod tests {
         let ownership = store.try_lock("daemon-owner").unwrap().unwrap();
         let first_owner = tokio::spawn(run_owned(owner_store, ownership, false));
         let first = ready(&store).await;
-        let started = rpc(&store, "control", Some(request("start", false)), None)
+        let started = rpc(&store, "control", Some(request("start")), None)
             .await
             .unwrap()
             .unwrap();
@@ -912,7 +899,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let stopped = rpc(&store, "control", Some(request("stop", true)), None)
+        let stopped = rpc(&store, "control", Some(request("stop")), None)
             .await
             .unwrap()
             .unwrap();
@@ -934,12 +921,12 @@ mod tests {
             first["daemon"]["identity"]["process_instance"],
             second["daemon"]["identity"]["process_instance"]
         );
-        let restarted = rpc(&store, "control", Some(request("start", false)), None)
+        let restarted = rpc(&store, "control", Some(request("start")), None)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(restarted["gateway"]["ready"], true);
-        let stopped_again = rpc(&store, "control", Some(request("stop", false)), None)
+        let stopped_again = rpc(&store, "control", Some(request("stop")), None)
             .await
             .unwrap()
             .unwrap();

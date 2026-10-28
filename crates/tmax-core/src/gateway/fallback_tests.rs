@@ -392,7 +392,7 @@ async fn cancellation_during_send_preserves_attempt_chain_without_counting_unkno
         assert_eq!(active["decision"]["attempts"][1]["provider"], "q");
         assert_eq!(active["decision"]["attempts"][1]["outcome"], "in-progress");
         if force_stop {
-            assert_eq!(runtime.stop(true).unwrap(), 1);
+            assert_eq!(runtime.stop(), 1);
             let response = tokio::time::timeout(Duration::from_secs(5), task)
                 .await
                 .unwrap()
@@ -481,7 +481,7 @@ async fn cancellation_after_success_headers_finalizes_attempt_without_provider_f
             assert!(std::str::from_utf8(&chunk).unwrap().contains("PARTIAL"));
         }
         if force_stop {
-            assert_eq!(runtime.stop(true).unwrap(), 1);
+            assert_eq!(runtime.stop(), 1);
             assert!(
                 tokio::time::timeout(Duration::from_secs(5), downstream.next())
                     .await

@@ -782,14 +782,14 @@ const COMMANDS: &[Command] = &[
         path: "gateway stop",
         min: 0,
         max: 0,
-        options: "cancel-active",
+        options: "",
         mutation: true,
     },
     Command {
         path: "gateway restart",
         min: 0,
         max: 0,
-        options: "cancel-active",
+        options: "",
         mutation: true,
     },
     Command {
@@ -911,7 +911,7 @@ pub fn catalog() -> Value {
                 "fields": fields,
                 "field_types": field_types,
                 "repeatable": matches!(name, "set" | "clear" | "endpoint" | "clear-endpoint" | "value" | "weekday" | "date" | "candidate" | "candidate-reasoning-effort" | "clear-candidate-reasoning-effort" | "model"),
-                "switch": matches!(name, "new-codex" | "all-day" | "last" | "gateway" | "empty-values" | "cancel-active" | "no-browser" | "key-stdin"),
+                "switch": matches!(name, "new-codex" | "all-day" | "last" | "gateway" | "empty-values" | "no-browser" | "key-stdin"),
             }))
         }).collect();
         json!({
@@ -1051,7 +1051,6 @@ pub fn validate(r: &Request) -> Result<()> {
                 | "last"
                 | "gateway"
                 | "empty-values"
-                | "cancel-active"
                 | "no-browser"
         ) && values.as_slice() != ["true"]
         {

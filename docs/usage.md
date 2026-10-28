@@ -497,6 +497,13 @@ pre-cutover CLI (`tmax gateway stop`, then `tmax web stop`) or its existing Web
 controls to perform the explicit stops before starting the current executable;
 the new CLI will not take over or terminate an incompatible daemon.
 
+To update tmax, replace the executable and run `tmax gateway restart`. Restart
+recycles the daemon process from the on-disk executable: in-flight requests are
+cancelled (never drained, replayed, or refused), ownership is released, the
+replacement process starts with the current saved settings, and a Web listener
+that was running is restored. `tmax gateway stop` likewise cancels in-flight
+requests instead of refusing while they are active.
+
 The gateway is a plain model provider for its callers: any request bearing the
 shared key is routed and forwarded unchanged, whatever client sends it and
 whether or not it carries complete conversation context. It accepts
