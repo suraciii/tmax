@@ -632,7 +632,9 @@ For qualified Pi and OMP concrete selections, known effective model context/outp
 limits, reasoning capability, and supported text/image input metadata are written
 using the versioned native schema. False values remain false; unknown metadata is
 not manufactured, and an unrepresentable explicit token limit blocks before native
-writes. Alias metadata is not copied from whichever candidate currently wins.
+writes. Alias metadata is not copied from whichever candidate currently wins: an
+alias row carries a context/output limit only when every candidate's effective
+facts declare the same value, so disagreement or a gap leaves that limit unset.
 `model add`, `agent inspect`, and `agent apply` report `fact_gap`/`fact_gaps`
 when a model has no catalog or declared reasoning-effort or context-limit fact:
 the native entry stays bare for those fields, and a static surface such as DSH

@@ -204,6 +204,7 @@ pub(crate) fn alias_metadata(
 ) -> Result<Value> {
     let mut common: Option<Vec<String>> = None;
     let mut common_input = CommonInput::Unseen;
+    let mut candidate_limits: Vec<[Option<u64>; 2]> = Vec::new();
     // Include every configured candidate: eligibility and priority are transient,
     // while native selectors persist until the next explicit application.
     for candidate in &alias.candidates {
@@ -212,6 +213,13 @@ pub(crate) fn alias_metadata(
         let projection =
             catalog::effective_from_snapshot(metadata, provider, Some((model_id, model)))?;
         common_input.include(declared_input(&projection["effective"]));
+        let effective_limit = |field: &str| {
+            projection["effective"]
+                .pointer(&format!("/limit/{field}"))
+                .and_then(Value::as_u64)
+                .filter(|v| *v > 0)
+        };
+        candidate_limits.push([effective_limit("context"), effective_limit("output")]);
         let values = if let Some(fixed) = alias.candidate_reasoning_effort.get(candidate) {
             // A fixed upstream value bypasses the model map, including a map
             // whose input has the same name as this fixed value.
@@ -239,6 +247,22 @@ pub(crate) fn alias_metadata(
     };
     if let Some(input) = common_input.values() {
         effective["modalities"] = json!({"input": input});
+    }
+    // A limit is projected only when every candidate's effective facts carry
+    // the same value; disagreement or any gap leaves the alias limit unset so
+    // unknown capacities are never invented.
+    let mut limit = json!({});
+    for (field, pick) in [("context", 0usize), ("output", 1usize)] {
+        let mut values = candidate_limits.iter().map(|pair| pair[pick]);
+        if let Some(first) = values.next()
+            && first.is_some()
+            && values.all(|v| v == first)
+        {
+            limit[field] = json!(first);
+        }
+    }
+    if limit.as_object().is_some_and(|m| !m.is_empty()) {
+        effective["limit"] = limit;
     }
     Ok(effective)
 }
@@ -434,6 +458,30 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn alias_limits_project_only_when_every_candidate_agrees() {
+        let (config, mut snapshot, alias) = fixture();
+        let models = &mut snapshot.providers.get_mut("directory").unwrap()["models"];
+        // Candidate a declares a context limit; candidate b does not.
+        models["a"]["limit"] = json!({"context": 500000, "output": 128000});
+        let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+        assert!(effective.get("limit").is_none(), "{effective}");
+
+        // Agreement projects both declared limits.
+        snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["limit"] =
+            json!({"context": 500000, "output": 128000});
+        let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+        assert_eq!(
+            effective["limit"],
+            json!({"context": 500000, "output": 128000})
+        );
+
+        snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["limit"] =
+            json!({"context": 400000, "output": 128000});
+        let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+        assert_eq!(effective["limit"], json!({"output": 128000}));
     }
 
     #[test]
