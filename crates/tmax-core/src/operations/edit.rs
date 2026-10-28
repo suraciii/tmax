@@ -217,6 +217,41 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     let candidate_text = toml::to_string(&root).map_err(|_| error())?;
     let mut candidate = config::parse(&candidate_text)?;
     crate::reasoning::validate_saved(store, &candidate)?;
+    if path == "model add" {
+        let qualified = operand(r, 0)?;
+        let (provider_id, model_id) = config::qualified(qualified)?;
+        if let Some(provider) = candidate.providers.get(provider_id)
+            && let Some(model) = provider.models.get(model_id)
+        {
+            let snapshot = crate::catalog::read(store, "accepted")?;
+            let projection = crate::catalog::effective_from_snapshot(
+                snapshot.as_ref(),
+                provider,
+                Some((model_id, model)),
+            )?;
+            let effective = &projection["effective"];
+            let mut missing = Vec::new();
+            if crate::reasoning::effort_values(effective).is_none()
+                && effective.get("reasoning").and_then(Json::as_bool) != Some(false)
+            {
+                missing.push("reasoning_efforts");
+            }
+            if effective
+                .pointer("/limit/context")
+                .is_none_or(Json::is_null)
+            {
+                missing.push("limit.context");
+            }
+            if !missing.is_empty() {
+                data["fact_gap"] = json!({
+                    "code":"model_fact_gap",
+                    "model":qualified,
+                    "missing":missing,
+                    "message":"No catalog or declared fact supplies the missing fields; native entries for this model stay bare for them. Declare model overrides (tmax model update / tmax model reasoning) or accept the degraded entry.",
+                });
+            }
+        }
+    }
     if path == "gateway remove" {
         let state = crate::service::status(store).await?;
         if !matches!(

@@ -162,6 +162,7 @@ mod pi_omp;
 #[cfg(test)]
 mod test_support;
 
+pub(super) use capabilities::native_completion;
 pub(super) use capabilities::projection_view;
 pub(super) use credentials::resolve_handoff;
 
@@ -343,7 +344,8 @@ mod tests {
                     "unavailable"
                 }
             );
-            assert_eq!(unknown["input"]["fields"], json!({}));
+            assert_eq!(unknown["limits"]["state"], "unavailable");
+            assert_eq!(unknown["limits"]["reason_code"], "limits_unknown");
             let empty = json!({"modalities":{"input":[]}});
             let view = projection_view(agent, "chat-completions", &empty).unwrap();
             match agent {
@@ -387,6 +389,16 @@ mod tests {
             }
         }
         let effective = json!({"modalities":{"input":["text","image","audio","video"]}});
+        let partial_limits = json!({"modalities":{"input":["text"]},"limit":{"context":1000}});
+        assert_eq!(
+            projection_view("pi", "responses", &partial_limits).unwrap()["limits"],
+            json!({"state":"partial","reason_code":"limits_unknown","fields":{"contextWindow":1000,"maxTokens":null},"omitted":[]})
+        );
+        let known_limits = json!({"limit":{"context":1000,"output":128}});
+        assert_eq!(
+            projection_view("dsh", "responses", &known_limits).unwrap()["limits"],
+            json!({"state":"projected","reason_code":null,"fields":{"contextWindow":1000,"maxTokens":128},"omitted":[]})
+        );
         for agent in ["pi", "omp", "dsh", "hermes"] {
             let view = projection_view(agent, "responses", &effective).unwrap();
             assert_eq!(view["input"]["state"], "partial");

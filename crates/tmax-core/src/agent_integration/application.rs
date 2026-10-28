@@ -3,7 +3,7 @@ use super::{
     adapters::{self, File, desired_fields_with_ownership, inline_credential},
     document::{self, Format},
     installation::{version, version_blocker, version_warnings},
-    planning::{entries, projection_view},
+    planning::{entries, fact_gap_warnings, projection_view},
     recovery::{
         Capture, Field, FileRecord, INDEX, Index, Payload, Record, baseline, conflicts,
         decode_payload, field_hash, owner, partial, protect_payload, prune_empty_parents,
@@ -110,6 +110,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         None
     };
     let (mut entries, secret_refs) = entries(store, config, id, target, &path, dry_run).await?;
+    let fact_gaps = fact_gap_warnings(target, &entries);
     let files = adapters::build(target, &path, &entries);
     for entry in &mut entries {
         if let Some(key) = &mut entry.key {
@@ -199,7 +200,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         {
             for field in &old.fields {
                 if field_hash(document::get(&current, &field.path)) != field.after_hash {
-                    return Err(Error::new("native_conflict","An owned native setting changed after application; inspect it before apply or restore").field(field.path.join(".")));
+                    return Err(Error::new("native_conflict","An owned native setting changed after application; inspect it before apply or restore, or accept the current native state with agent recovery accept").field(field.path.join(".")));
                 }
             }
         }
@@ -242,7 +243,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     }
     if dry_run {
         return Ok(
-            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
+            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
         );
     }
     let installed = version(&target.agent, &path).await;
@@ -253,7 +254,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     }
     if desired_unchanged {
         return Ok(
-            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"warnings":version_warnings(&installed),"native_reload":"still_required_or_unknown","effective":"not_verified"}),
+            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"warnings":version_warnings(&installed),"fact_gaps":fact_gaps,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
         );
     }
     adapters::resolve_handoff(&target.agent, &mut files, |reference| {
@@ -542,7 +543,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         let _ = secrets::remove(store, &old.payload_ref);
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent)}),
+        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&installed),"fact_gaps":fact_gaps,"precedence":adapters::precedence(&target.agent)}),
     )
 }
 
@@ -806,6 +807,130 @@ mod tests {
                 );
             }
         }
+    }
+    #[tokio::test]
+    async fn accept_rebaselines_native_rewrites_and_retains_credential_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let path = directory.path().join("native");
+        fs::create_dir(&path).unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "omp".into();
+        target.default = None;
+        let original =
+            json!({"defaultProvider":"existing","providers":{"unrelated":{"models":{"keep":{}}}}});
+        let filename = "models.yml";
+        fs::write(
+            path.join(filename),
+            serde_yaml::to_string(&original).unwrap(),
+        )
+        .unwrap();
+        let reference = secrets::put(&store, "provider:p", b"synthetic-rewrite-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target.clone());
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let applied = apply(&store, &config, "managed", false).await.unwrap();
+        assert_eq!(applied["_code"], "awaiting_native_reload");
+        let gaps = applied["fact_gaps"].as_array().unwrap();
+        assert!(gaps.iter().any(|gap| {
+            gap["model"] == "first"
+                && gap["entry"] == "local"
+                && gap["agent_self_completion"] == "undocumented"
+                && gap["missing"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("reasoning_efforts"))
+                && gap["missing"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("limit.context"))
+        }));
+        // The tool enriches its own rewritten entry; apply must refuse to
+        // clobber the later native edit.
+        let model_path = vec![
+            "providers".to_owned(),
+            "local".to_owned(),
+            "models".to_owned(),
+        ];
+        let written = fs::read_to_string(path.join(filename)).unwrap();
+        let value = document::parse(&written, Format::Yaml).unwrap();
+        let mut models = document::get(&value, &model_path)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone();
+        models[0]["contextWindow"] = json!(1050000);
+        models[0]["thinking"] = json!({"mode": "effort", "efforts": ["low", "high"]});
+        let enriched = document::set(
+            &written,
+            Format::Yaml,
+            &model_path,
+            Some(&Value::Array(models)),
+        )
+        .unwrap();
+        fs::write(path.join(filename), &enriched).unwrap();
+        assert_eq!(
+            apply(&store, &config, "managed", false)
+                .await
+                .unwrap_err()
+                .code,
+            "native_conflict"
+        );
+        assert_eq!(fs::read_to_string(path.join(filename)).unwrap(), enriched);
+        // Accept re-baselines the record to the current native state without
+        // releasing the credential artifact.
+        let accept = crate::Request {
+            command: vec!["agent".into(), "recovery".into(), "accept".into()],
+            operands: vec!["managed".into()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let accepted = super::super::recovery::recovery(&store, &accept)
+            .await
+            .unwrap();
+        assert_eq!(accepted["state"], "accepted");
+        assert_eq!(accepted["credential_ownership"], "retained");
+        assert_eq!(accepted["native_writes"], false);
+        let reapplied = apply(&store, &config, "managed", false).await.unwrap();
+        assert_eq!(reapplied["_code"], "awaiting_native_reload");
+        assert!(path.read_dir().unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("tmax-")
+        }));
+        // Restoration now returns to the accepted baseline, not the pre-tmax
+        // original.
+        let index: Index = store.read_json(INDEX).unwrap();
+        super::super::recovery::restore(&store, &index.records.last().unwrap().id, false)
+            .await
+            .unwrap();
+        let restored = document::parse(
+            &fs::read_to_string(path.join(filename)).unwrap(),
+            Format::Yaml,
+        )
+        .unwrap();
+        assert_eq!(
+            restored["providers"]["local"]["models"][0]["contextWindow"],
+            json!(1050000)
+        );
     }
     #[test]
     fn hermes_inline_handoff_resolves_only_on_execution_and_tracks_key_replacement() {

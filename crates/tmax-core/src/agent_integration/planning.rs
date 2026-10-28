@@ -71,9 +71,11 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     }
     let mut pending = None;
     let mut native_projection = None;
+    let mut fact_gaps = Vec::new();
     if available {
         let plan = match entries(store, config, id, target, &path, true).await {
             Ok((entries, references)) => {
+                fact_gaps = fact_gap_warnings(target, &entries);
                 native_projection = Some(projection_view(target, &entries));
                 adapters::build(target, &path, &entries)
                     .and_then(|files| pending_native_changes(target, &files, &references, record))
@@ -107,7 +109,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"warnings":version_warnings(&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"effective_state":"native_reload_and_inference_not_verified","blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -137,6 +139,40 @@ pub(super) fn projection_view(target: &AgentTarget, entries: &[Entry]) -> Vec<Va
             })
         })
         .collect()
+}
+
+/// Visible model-fact gaps for one target: models whose native entry will
+/// stay bare because no catalog or declared fact supplies them.
+pub(super) fn fact_gap_warnings(target: &AgentTarget, entries: &[Entry]) -> Vec<Value> {
+    let completion = adapters::native_completion(&target.agent);
+    let mut warnings = Vec::new();
+    for entry in entries {
+        for (id, projection) in &entry.model_projection {
+            let mut missing = Vec::new();
+            if projection.get("reason_code").and_then(Value::as_str)
+                == Some("reasoning_options_unavailable")
+            {
+                missing.push("reasoning_efforts");
+            }
+            if projection
+                .pointer("/limits/fields/contextWindow")
+                .is_none_or(Value::is_null)
+            {
+                missing.push("limit.context");
+            }
+            if !missing.is_empty() {
+                warnings.push(json!({
+                    "code":"model_fact_gap",
+                    "entry":entry.name,
+                    "model":id,
+                    "missing":missing,
+                    "agent_self_completion":completion,
+                    "message":"No catalog or declared fact supplies the missing fields; the native entry stays bare for them. Declare model overrides or accept the degraded entry.",
+                }));
+            }
+        }
+    }
+    warnings
 }
 
 pub(super) async fn entries(

@@ -1020,13 +1020,17 @@ fn agent_commands() -> Command {
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local provider-entry name.")), true, true));
     let recovery = Command::new("recovery")
-        .about("Inspect, restore, or explicitly discard protected native-change recovery records.")
+        .about("Inspect, accept, or explicitly discard protected native-change recovery records.")
         .subcommand(leaf("list", "List retained recovery handles and paths, optionally scoped to one target.", "Includes records for removed targets. Does not expose credentials.\n\nExit: 0 when inventory read completes.\nExample: tmax agent recovery list --target pi-main")
             .arg(value("target", "TARGET", "Optional declared target filter.")))
         .subcommand(leaf("inspect", "Inspect ownership, target identity, affected files, and safe recovery actions.", "A recovery handle is not a target ID; reused target IDs do not select predecessor records.\n\nExit: 0 when safe metadata is available.\nExample: tmax agent recovery inspect RECORD")
             .arg(required_pos(1, "RECORD", "Returned native-recovery handle.")))
         .subcommand(mutation(leaf("discard", "Discard one native recovery record without native writes or credential deletion.", "Protected restore information is retained until restore completes or it is explicitly discarded.\n\nExit: 0 when discarded; 3 for current safety blocker; 4 for deletion failure.\nExample: tmax agent recovery discard RECORD --dry-run")
-            .arg(required_pos(1, "RECORD", "Returned native-recovery handle.")), true, false));
+            .arg(required_pos(1, "RECORD", "Returned native-recovery handle.")), true, false))
+        .subcommand(mutation(leaf("accept", "Accept the current native state as the owned recovery baseline.", "Re-baselines every owned field of one retained record to the current native values: later applies overwrite from this baseline and restore returns to it. No native write, no credential deletion; credential artifacts stay owned unlike discard. Resolves native_conflict after the tool rewrote its own configuration.\n\nExit: 0 when accepted; 3 for safety blocker; 4 for metadata failure.\nExample: tmax agent recovery accept pi-main --dry-run")
+            .arg(positional(1, "TARGET", "Declared target ID or an exact recovery handle.").conflicts_with("recovery"))
+            .arg(value("recovery", "RECORD", "Exact retained recovery handle.").conflicts_with("__operand_1"))
+            .group(ArgGroup::new("accept_handle").args(["__operand_1", "recovery"]).required(true)), true, false));
     let inspect = leaf("inspect", "Inspect a declared target or an explicit undeclared native scope without importing it.", "Declared inspection reports native entries/sources, precedence, supported roles/requirements, effective auth/model use, desired/applied/effective differences, blockers, and recovery. Undeclared scope requires --agent and --path together and never registers/imports configuration. Inspection is not proof of paid inference.\n\nExit: 0 when inspect completes, including unknown evidence; 2 for invalid scope syntax.\nExample: tmax agent inspect pi-main")
         .arg(agent_value("agent", "Agent for an explicit undeclared native scope.").requires("path").conflicts_with("__operand_1"))
         .arg(value("path", "PATH", "Native scope path for undeclared inspection; DSH requires the existing DSH_HOME root, not a profile directory.").requires("agent").conflicts_with("__operand_1"))

@@ -60,6 +60,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     if path == "agent recovery list"
         || path == "agent recovery inspect"
         || path == "agent recovery discard"
+        || path == "agent recovery accept"
     {
         return crate::agent_integration::recovery(store, r).await;
     }
