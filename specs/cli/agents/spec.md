@@ -223,7 +223,9 @@ application before writes, but remains inspectable.
 Each projection also has an independent `limits` projection with `state`
 (`projected`, `partial`, or `unavailable`), `reason_code` (`limits_unknown`
 unless projected), and `fields` (`contextWindow`/`maxTokens`, null when that
-limit has no catalog or declared fact). Unknown limits are never invented.
+limit has no catalog or declared fact). Unknown limits are never invented. An
+alias selection carries a limit only when every candidate's effective facts
+declare the same value; disagreement or any gap leaves that alias limit unset.
 
 `fact_gaps` accompanies `native_projection` in `agent inspect`, `agent apply`
 results, and `agent apply --dry-run`: one entry per model whose reasoning

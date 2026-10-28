@@ -688,7 +688,17 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
             .find(|target| target["target"] == "aliases")
             .unwrap();
         assert_eq!(aliases["models"].as_array().unwrap().len(), 2);
-        assert_eq!(aliases["native_application"], "unchanged");
+        // Candidates no longer agree on the context limit, so the alias rows
+        // lose their projected limit and must be reapplied.
+        assert_eq!(aliases["native_application"], "reapply_required");
+        let alias_context = aliases["native_changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|change| change["path"] == "models.explicit.contextWindow")
+            .unwrap();
+        assert_eq!(alias_context["before"], 200000);
+        assert_eq!(alias_context["after"], Value::Null);
         assert_eq!(aliases["route_metadata"], "revalidation_required");
     }
 
@@ -723,8 +733,18 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
             .iter()
             .find(|target| target["target"] == "aliases")
             .unwrap();
-        assert_eq!(aliases["native_application"], "unchanged");
-        assert_eq!(aliases["native_changes"], json!([]));
+        // The non-winning candidate's context change breaks the candidates'
+        // limit agreement, so the alias rows lose their projected limit.
+        assert_eq!(aliases["native_application"], "reapply_required");
+        assert!(
+            aliases["native_changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|change| change["path"] == "models.explicit.contextWindow"
+                    && change["before"] == json!(200000)
+                    && change["after"].is_null())
+        );
 
         new.providers.get_mut("directory").unwrap()["models"]["a"]["reasoning_options"] =
             json!([{"type":"effort","values":["low"]}]);
@@ -750,7 +770,7 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
         assert_eq!(aliases["native_application"], "reapply_required");
         assert_eq!(aliases["blockers"], json!([]));
         let changes = aliases["native_changes"].as_array().unwrap();
-        assert_eq!(changes.len(), 2);
+        assert_eq!(changes.len(), 4);
         for alias in ["explicit", "alternate"] {
             let change = changes
                 .iter()
@@ -760,6 +780,15 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
             assert_eq!(change["before"], "high");
             assert_eq!(change["boundary"], "native_write");
             assert_eq!(change["resource"]["id"], "aliases");
+        }
+        for alias in ["explicit", "alternate"] {
+            let change = changes
+                .iter()
+                .find(|change| change["path"] == format!("models.{alias}.contextWindow"))
+                .unwrap();
+            assert_eq!(change["kind"], "remove");
+            assert_eq!(change["before"], 200000);
+            assert_eq!(change["boundary"], "native_write");
         }
         assert_eq!(read(&store, "accepted").unwrap().unwrap().revision, "old");
 
@@ -776,7 +805,7 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
         assert_eq!(aliases["native_application"], "reapply_required");
         assert_eq!(aliases["blockers"], json!([]));
         let changes = aliases["native_changes"].as_array().unwrap();
-        assert_eq!(changes.len(), 2);
+        assert_eq!(changes.len(), 4);
         for alias in ["explicit", "alternate"] {
             let change = changes
                 .iter()
@@ -785,6 +814,14 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
             assert_eq!(change["kind"], "replace");
             assert_eq!(change["before"], json!({"low":"low","high":"high"}));
             assert_eq!(change["after"], false);
+        }
+        for alias in ["explicit", "alternate"] {
+            let change = changes
+                .iter()
+                .find(|change| change["path"] == format!("models.{alias}.contextWindow"))
+                .unwrap();
+            assert_eq!(change["kind"], "remove");
+            assert_eq!(change["before"], 200000);
         }
     }
 
