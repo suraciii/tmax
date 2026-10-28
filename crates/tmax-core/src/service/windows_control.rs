@@ -1,4 +1,4 @@
-//! Same-user, local-only Windows transport for the existing resident protocol.
+//! Same-user, local-only Windows transport for the existing daemon protocol.
 use super::{control::CONTROL_SECONDS, failure};
 use crate::{Result, storage::Store};
 use sha2::{Digest, Sha256};
@@ -86,7 +86,7 @@ unsafe extern "system" {
 }
 fn identity_error() -> crate::Error {
     failure(
-        "resident_identity_unavailable",
+        "daemon_identity_unavailable",
         "Cannot establish same-user Windows control peer identity; no control action performed",
     )
 }
@@ -173,7 +173,7 @@ pub(super) struct Peer {
 }
 impl Peer {
     pub(super) async fn wait_for_exit(self) -> Result<()> {
-        // Web operations call the same resident through private RPC. A process
+        // Web operations call the same daemon through private RPC. A process
         // cannot wait for its own exit; external CLI callers provide this last
         // process/namespace completion boundary instead.
         if self.pid == std::process::id() {
@@ -191,14 +191,14 @@ impl Peer {
         .await
         .map_err(|_| {
             failure(
-                "resident_control_failed",
-                "Cannot await Windows resident completion",
+                "daemon_control_failed",
+                "Cannot await Windows daemon completion",
             )
         })?;
         if completed != 0 {
             return Err(failure(
-                "resident_control_failed",
-                "Windows resident did not complete endpoint release within its finite shutdown deadline",
+                "daemon_control_failed",
+                "Windows daemon did not complete endpoint release within its finite shutdown deadline",
             ));
         }
         Ok(())
@@ -234,16 +234,16 @@ pub(super) async fn connect(store: &Store) -> Result<Option<Client>> {
             Err(error) if error.raw_os_error() == Some(231) => {
                 if tokio::time::Instant::now() >= deadline {
                     return Err(failure(
-                        "resident_identity_unavailable",
-                        "Windows resident control endpoint remained busy within its finite connection deadline",
+                        "daemon_identity_unavailable",
+                        "Windows daemon control endpoint remained busy within its finite connection deadline",
                     ));
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Err(_) => {
                 return Err(failure(
-                    "resident_identity_unavailable",
-                    "Cannot connect to the Windows resident control endpoint; no takeover attempted",
+                    "daemon_identity_unavailable",
+                    "Cannot connect to the Windows daemon control endpoint; no takeover attempted",
                 ));
             }
         }
@@ -281,7 +281,7 @@ fn create(name: &str, sid: &str, first: bool) -> Result<Server> {
     };
     unsafe { ServerOptions::new().first_pipe_instance(first).reject_remote_clients(true).create_with_security_attributes_raw(name, (&mut attributes as *mut SecurityAttributes).cast()) }
         .map(Server)
-        .map_err(|_| failure("endpoint_occupied", "Windows resident control endpoint is unavailable or already owned; no fallback or takeover attempted"))
+        .map_err(|_| failure("endpoint_occupied", "Windows daemon control endpoint is unavailable or already owned; no fallback or takeover attempted"))
 }
 
 pub(super) struct Listener {
@@ -299,8 +299,8 @@ impl Listener {
     pub(super) async fn accept(&mut self) -> Result<Server> {
         self.pending.connect().await.map_err(|_| {
             failure(
-                "resident_control_failed",
-                "Windows resident control accept failed",
+                "daemon_control_failed",
+                "Windows daemon control accept failed",
             )
         })?;
         // Keep the namespace continuously owned, including while an accepted

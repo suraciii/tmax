@@ -61,7 +61,7 @@ an assistant or an approval/workflow system.
 | One provider serves several native protocols | Treat one catalog URL as every protocol's base or split credentials across providers | Share [integration endpoint resolution](../integrations/spec.md#endpoint-resolution); custom bases are explicit per protocol |
 | A protocol family includes stateful auxiliary operations | Forward arbitrary paths or build a resource directory | Qualify [finite operations and original resource bindings](../integrations/spec.md#supported-operations-and-resource-identity); reject unsupported use |
 | Terminal and service environments differ | Inherit ambient proxy variables or silently fall back direct | One explicit [outbound policy](spec.md#outbound-network-policy), separate from native-agent networking |
-| Multiple callers or an executable upgrade encounter a live service | Take over, restart, or pick another port automatically | Reuse a compatible [resident owner](spec.md#resident-service-identity); report incompatible or unidentified ownership |
+| Multiple callers or an executable upgrade encounter a live service | Take over, restart, or pick another port automatically | Reuse a compatible [daemon owner](spec.md#daemon-service-identity); report incompatible or unidentified ownership |
 | Local state may need external recovery | Add backup bundles, snapshots, sync, and a retirement workflow | Bound [system-backup responsibilities](spec.md#backup-and-restoration-boundary); leave independent local operations and user-owned uninstall separate |
 | Several consumers need the same refreshed login | Let each refresh independently or schedule background refresh | Coordinate [one refresh per authorization generation](spec.md#credential-refresh-coordination) with guarded publication and an independent deadline |
 
@@ -107,7 +107,7 @@ gateway mappings require no model alias or duplicated route definition. The cont
 is in [Model selection](../model-routing/spec.md).
 
 The local service owns the Web interface and the optional gateway listener. CLI-only
-configuration operations also work without a resident service. Both paths share
+configuration operations also work without a daemon service. Both paths share
 the authoritative text configuration and serialize mutations of the same targets.
 Current-user-restricted secret files and runtime records are not competing
 configuration authorities. The [product contract](spec.md#configuration-authority)
@@ -375,9 +375,9 @@ mechanisms as model-selection rules. Credential acquisition has a separate
 deadline from connection setup and inference streaming. A shared HTTP client
 must not leak its connection/credential deadline into an inference lifetime.
 
-Resident ownership coordination is separate from inference admission and native
-application. The [service-identity contract](spec.md#resident-service-identity)
-requires one current owner before any resident state is mutated. Ownership
+Daemon ownership coordination is separate from inference admission and native
+application. The [service-identity contract](spec.md#daemon-service-identity)
+requires one current owner before any daemon state is mutated. Ownership
 records are evidence to validate, not permission to kill a process or reuse a
 stale PID. Stopping inference does not remove the management surface.
 

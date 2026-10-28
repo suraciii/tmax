@@ -22,7 +22,7 @@ pub(super) async fn secret_inventory(store: &Store) -> Result<Value> {
             Ok(Some(f)) => reference_view(&f.config, reference),
             Ok(None) => json!({"state":"unreferenced","resources":[],"reason_code":null}),
             Err(_) => {
-                json!({"state":"unknown","resources":[],"reason_code":"resident_identity_unavailable"})
+                json!({"state":"unknown","resources":[],"reason_code":"daemon_identity_unavailable"})
             }
         };
         let native = crate::agent_integration::secret_references(store, reference)?;

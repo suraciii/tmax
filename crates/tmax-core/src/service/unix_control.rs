@@ -1,4 +1,4 @@
-//! Unix endpoint ownership and peer qualification for the resident protocol.
+//! Unix endpoint ownership and peer qualification for the daemon protocol.
 use super::failure;
 use crate::{Result, storage::Store};
 use std::{
@@ -6,14 +6,14 @@ use std::{
     path::PathBuf,
 };
 pub(super) fn socket_path(store: &Store) -> PathBuf {
-    store.root.join("resident.sock")
+    store.root.join("daemon.sock")
 }
 pub(super) fn validate_control_path(path: &std::path::Path) -> Result<()> {
     std::os::unix::net::SocketAddr::from_pathname(path).map_err(|error| {
         failure(
-            "resident_control_path_invalid",
+            "daemon_control_path_invalid",
             &format!(
-                "Resident control socket path '{}' is not representable on this Unix platform: {error}. Use an OS account with a home that permits this socket path; tmax does not relocate its store or use an alternate endpoint",
+                "Daemon control socket path '{}' is not representable on this Unix platform: {error}. Use an OS account with a home that permits this socket path; tmax does not relocate its store or use an alternate endpoint",
                 path.display()
             ),
         )
@@ -30,7 +30,7 @@ pub(super) async fn connect(store: &Store) -> Result<Option<Client>> {
         Ok(meta) if meta.file_type().is_socket() && meta.uid() == unsafe { libc::geteuid() } => {}
         _ => {
             return Err(failure(
-                "resident_identity_unavailable",
+                "daemon_identity_unavailable",
                 "Control endpoint is not an inspectable owned Unix socket; no takeover attempted",
             ));
         }
@@ -46,8 +46,8 @@ pub(super) async fn connect(store: &Store) -> Result<Option<Client>> {
             Ok(None)
         }
         Err(_) => Err(failure(
-            "resident_identity_unavailable",
-            "Cannot connect to the resident control endpoint",
+            "daemon_identity_unavailable",
+            "Cannot connect to the daemon control endpoint",
         )),
     }
 }
@@ -55,14 +55,14 @@ pub(super) async fn connect(store: &Store) -> Result<Option<Client>> {
 pub(super) fn peer_pid(stream: &Client) -> Result<Option<u32>> {
     let peer = stream.peer_cred().map_err(|_| {
         failure(
-            "resident_identity_unavailable",
-            "Cannot establish resident peer identity",
+            "daemon_identity_unavailable",
+            "Cannot establish daemon peer identity",
         )
     })?;
     if peer.uid() != unsafe { libc::geteuid() } {
         return Err(failure(
-            "resident_identity_unavailable",
-            "Resident control peer is not this authority owner",
+            "daemon_identity_unavailable",
+            "Daemon control peer is not this authority owner",
         ));
     }
     Ok(peer.pid().map(|pid| pid as u32))
@@ -83,14 +83,14 @@ impl Listener {
         if let Ok(meta) = std::fs::symlink_metadata(&path) {
             if !meta.file_type().is_socket() || meta.uid() != unsafe { libc::geteuid() } {
                 return Err(failure(
-                    "resident_identity_unavailable",
+                    "daemon_identity_unavailable",
                     "Refusing to replace an unidentified control endpoint",
                 ));
             }
             match Client::connect(&path).await {
                 Ok(_) => {
                     return Err(failure(
-                        "resident_identity_unavailable",
+                        "daemon_identity_unavailable",
                         "Control endpoint is occupied without matching ownership; no takeover",
                     ));
                 }
@@ -102,14 +102,14 @@ impl Listener {
                 {
                     std::fs::remove_file(&path).map_err(|_| {
                         failure(
-                            "resident_identity_unavailable",
+                            "daemon_identity_unavailable",
                             "Cannot remove this authority's stale socket",
                         )
                     })?;
                 }
                 Err(_) => {
                     return Err(failure(
-                        "resident_identity_unavailable",
+                        "daemon_identity_unavailable",
                         "Cannot establish control endpoint availability",
                     ));
                 }
@@ -123,8 +123,8 @@ impl Listener {
         })?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|_| {
             failure(
-                "resident_identity_unavailable",
-                "Cannot protect resident socket",
+                "daemon_identity_unavailable",
+                "Cannot protect daemon socket",
             )
         })?;
         Ok(Self { listener, path })
@@ -134,15 +134,15 @@ impl Listener {
             .accept()
             .await
             .map(|(stream, _)| stream)
-            .map_err(|_| failure("resident_control_failed", "Resident control accept failed"))
+            .map_err(|_| failure("daemon_control_failed", "Daemon control accept failed"))
     }
     pub(super) fn release(self) -> Result<()> {
         let Self { listener, path } = self;
         drop(listener);
         std::fs::remove_file(path).map_err(|_| {
             failure(
-                "resident_control_failed",
-                "Cannot release owned resident socket",
+                "daemon_control_failed",
+                "Cannot release owned daemon socket",
             )
         })
     }

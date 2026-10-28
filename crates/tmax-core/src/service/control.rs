@@ -1,11 +1,12 @@
-//! Qualified resident protocol, bounded exchanges, and management clients.
+//! Qualified daemon protocol, bounded exchanges, and management clients.
 #[cfg(unix)]
 use super::control_transport::{socket_path, validate_control_path};
 #[cfg(windows)]
 use super::windows_startup;
 use super::{
-    address, control_transport, failure,
-    resident::{Shared, absent, resident_control},
+    address, control_transport,
+    daemon::{Shared, absent, daemon_control},
+    failure,
     startup::{autostart, autostart_status},
 };
 use crate::{Request, Result, config::Config, gateway::Runtime, storage::Store};
@@ -60,25 +61,25 @@ async fn rpc_with_candidate(
         let Some(identity) = rpc_exchange(store, "status", None, None, None, None).await? else {
             return Ok(None);
         };
-        if identity["resident"]["reason_code"] == "resident_stopping" {
+        if identity["daemon"]["reason_code"] == "daemon_stopping" {
             return Err(failure(
-                "resident_stopping",
-                "The identified resident is completing an explicit stop; wait for that stop's result before starting again",
+                "daemon_stopping",
+                "The identified daemon is completing an explicit stop; wait for that stop's result before starting again",
             ));
         }
-        if identity["resident"]["discovery_state"] != "compatible" {
+        if identity["daemon"]["discovery_state"] != "compatible" {
             return Err(failure(
-                "resident_incompatible",
-                "Use the running resident's compatible CLI or Web controls before starting this executable",
+                "daemon_incompatible",
+                "Use the running daemon's compatible CLI or Web controls before starting this executable",
             ));
         }
         Some(
-            identity["resident"]["identity"]["process_instance"]
+            identity["daemon"]["identity"]["process_instance"]
                 .as_str()
                 .ok_or_else(|| {
                     failure(
-                        "resident_identity_unavailable",
-                        "Resident process instance is unavailable",
+                        "daemon_identity_unavailable",
+                        "Daemon process instance is unavailable",
                     )
                 })?
                 .to_owned(),
@@ -138,14 +139,14 @@ async fn rpc_exchange(
     .await
     .map_err(|_| {
         failure(
-            "resident_identity_unavailable",
-            "Resident control did not complete within its finite deadline",
+            "daemon_identity_unavailable",
+            "Daemon control did not complete within its finite deadline",
         )
     })?
     .map_err(|_| {
         failure(
-            "resident_identity_unavailable",
-            "Resident control exchange failed",
+            "daemon_identity_unavailable",
+            "Daemon control exchange failed",
         )
     })?;
     // Windows handlers retain ownership until the fully-read client closes,
@@ -153,8 +154,8 @@ async fn rpc_exchange(
     drop(stream);
     let reply: Reply = serde_json::from_slice(&result).map_err(|_| {
         failure(
-            "resident_identity_unavailable",
-            "Endpoint did not return a recognized resident identity",
+            "daemon_identity_unavailable",
+            "Endpoint did not return a recognized daemon identity",
         )
     })?;
     if reply.challenge != challenge
@@ -166,15 +167,15 @@ async fn rpc_exchange(
         || expected_process.is_some_and(|expected| expected != reply.process)
     {
         return Err(failure(
-            "resident_identity_unavailable",
-            "Resident identity challenge, authority, or process did not match",
+            "daemon_identity_unavailable",
+            "Daemon identity challenge, authority, or process did not match",
         ));
     }
     let incompatible = reply.protocol != MANAGEMENT_PROTOCOL;
     if incompatible && action != "status" {
         return Err(failure(
-            "resident_incompatible",
-            "Resident management protocol is incompatible; use its compatible CLI or Web to stop it before starting this executable",
+            "daemon_incompatible",
+            "Daemon management protocol is incompatible; use its compatible CLI or Web to stop it before starting this executable",
         ));
     }
     let mut value = reply.result?;
@@ -183,16 +184,16 @@ async fn rpc_exchange(
     {
         peer.wait_for_exit().await?;
     }
-    if let Some(resident) = value.get_mut("resident") {
-        resident["caller_version"] = json!(env!("CARGO_PKG_VERSION"));
-        resident["version_relation"] = json!(if reply.version == env!("CARGO_PKG_VERSION") {
+    if let Some(daemon) = value.get_mut("daemon") {
+        daemon["caller_version"] = json!(env!("CARGO_PKG_VERSION"));
+        daemon["version_relation"] = json!(if reply.version == env!("CARGO_PKG_VERSION") {
             "same"
         } else {
             "different"
         });
         if incompatible {
-            resident["discovery_state"] = json!("incompatible");
-            resident["reason_code"] = json!("management_protocol_mismatch");
+            daemon["discovery_state"] = json!("incompatible");
+            daemon["reason_code"] = json!("management_protocol_mismatch");
         }
     }
     Ok(Some(value))
@@ -212,12 +213,12 @@ pub async fn status(store: &Store) -> Result<Value> {
         Ok(None) => absent(),
         Err(e) => {
             let mut value = absent();
-            value["resident"]["discovery_state"] = json!(if e.code == "resident_incompatible" {
+            value["daemon"]["discovery_state"] = json!(if e.code == "daemon_incompatible" {
                 "incompatible"
             } else {
                 "unidentified"
             });
-            value["resident"]["reason_code"] = json!(e.code);
+            value["daemon"]["reason_code"] = json!(e.code);
             value
         }
     };
@@ -255,37 +256,37 @@ pub(crate) async fn loaded_with_metadata(
     }
     let config: Config = serde_json::from_value(value["configuration"].clone()).map_err(|_| {
         failure(
-            "resident_identity_unavailable",
-            "Resident loaded configuration is not recognized",
+            "daemon_identity_unavailable",
+            "Daemon loaded configuration is not recognized",
         )
     })?;
     let revision = value["revision"]
         .as_str()
         .ok_or_else(|| {
             failure(
-                "resident_identity_unavailable",
-                "Resident loaded revision unavailable",
+                "daemon_identity_unavailable",
+                "Daemon loaded revision unavailable",
             )
         })?
         .to_owned();
     let document = toml::to_string(&config)
         .map_err(|_| {
             failure(
-                "resident_identity_unavailable",
+                "daemon_identity_unavailable",
                 "Cannot project loaded configuration",
             )
         })?
         .parse()
         .map_err(|_| {
             failure(
-                "resident_identity_unavailable",
+                "daemon_identity_unavailable",
                 "Cannot project loaded document",
             )
         })?;
     let metadata = serde_json::from_value(value["metadata"].clone()).map_err(|_| {
         failure(
-            "resident_identity_unavailable",
-            "Resident loaded metadata is not recognized",
+            "daemon_identity_unavailable",
+            "Daemon loaded metadata is not recognized",
         )
     })?;
     Ok(Some((
@@ -350,7 +351,7 @@ pub(crate) async fn browser_login(store: &Store, request: &Request) -> Result<Va
         .await?
         .ok_or_else(|| {
             failure(
-                "resident_required",
+                "daemon_required",
                 "Open tmax Web before starting or inspecting browser sign-in",
             )
         })
@@ -384,12 +385,12 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
         return autostart(store, enabled, request.dry_run).await;
     }
     if group == "history" && action == "clear" && request.dry_run {
-        return Ok(rpc(store,"control",Some(request.clone()),None).await?.unwrap_or_else(||json!({"dry_run":true,"snapshot_count":0,"retained_in_progress":0,"coverage":"no_resident_history"})));
+        return Ok(rpc(store,"control",Some(request.clone()),None).await?.unwrap_or_else(||json!({"dry_run":true,"snapshot_count":0,"retained_in_progress":0,"coverage":"no_daemon_history"})));
     }
     if request.dry_run {
         let before = status(store).await?;
         let mut blockers = Vec::new();
-        let discovery = before["resident"]["discovery_state"]
+        let discovery = before["daemon"]["discovery_state"]
             .as_str()
             .unwrap_or("unavailable");
         #[cfg(unix)]
@@ -402,7 +403,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             validate_control_path(&socket_path(store))?;
         }
         if !matches!(discovery, "absent" | "compatible") {
-            blockers.push(json!({"code":"resident_identity_unavailable","state":discovery}));
+            blockers.push(json!({"code":"daemon_identity_unavailable","state":discovery}));
         }
         let active = before["active_requests"].as_u64().unwrap_or(0);
         if group == "gateway"
@@ -414,7 +415,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
         }
         let reused = group == "gateway"
             && action == "start"
-            && before["resident"]["inference"]["listen"].is_string();
+            && before["daemon"]["inference"]["listen"].is_string();
         if group == "gateway" && matches!(action, "start" | "restart") && !reused {
             let file = crate::config::load(store)?;
             if file.config.gateway.is_none() {
@@ -429,7 +430,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
                 .and_then(|values| values.first())
         {
             address(listen, false)?;
-            if before["resident"]["web"]["listen"]
+            if before["daemon"]["web"]["listen"]
                 .as_str()
                 .is_some_and(|actual| actual != listen)
             {
@@ -437,7 +438,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             }
         }
         return Ok(
-            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"resident":before["resident"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::gateway::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
+            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"daemon":before["daemon"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::gateway::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
         );
     }
     if let Some(value) = rpc(store, "control", Some(request.clone()), None).await? {
@@ -449,7 +450,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
     }
     if group == "history" || group == "usage" {
         return Ok(
-            json!({"snapshot_state":"absent","coverage":{"prior_process_coverage":"unavailable"},"records":[],"reason_code":"no_resident_history"}),
+            json!({"snapshot_state":"absent","coverage":{"prior_process_coverage":"unavailable"},"records":[],"reason_code":"no_daemon_history"}),
         );
     }
     if matches!((group, action), ("gateway", "stop") | ("web", "stop")) {
@@ -461,7 +462,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
     ) {
         return Err(failure(
             "unsupported_operation",
-            "Unknown resident control operation",
+            "Unknown daemon control operation",
         ));
     }
     #[cfg(unix)]
@@ -471,8 +472,8 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
         .await?
         .ok_or_else(|| {
             failure(
-                "resident_identity_unavailable",
-                "Detached resident did not establish its control endpoint",
+                "daemon_identity_unavailable",
+                "Detached daemon did not establish its control endpoint",
             )
         })
         .and_then(|v| maybe_browser(v, request))
@@ -482,7 +483,7 @@ fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
     if request.command.first().is_some_and(|v| v == "web")
         && request.command.get(1).is_some_and(|v| v == "open")
         && !request.arguments.contains_key("no-browser")
-        && let Some(url) = value["resident"]["web"]["url"].as_str()
+        && let Some(url) = value["daemon"]["web"]["url"].as_str()
     {
         #[cfg(windows)]
         let opened = windows_startup::open_browser(url);
@@ -503,19 +504,19 @@ fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
 async fn launch(store: &Store) -> Result<()> {
     use std::os::unix::process::CommandExt;
     validate_control_path(&socket_path(store))?;
-    let _launch = store.lock("resident-launch")?;
+    let _launch = store.lock("daemon-launch")?;
     if rpc(store, "status", None, None).await?.is_some() {
         return Ok(());
     }
     let executable = std::env::current_exe().map_err(|_| {
         failure(
-            "resident_launch_failed",
+            "daemon_launch_failed",
             "Cannot locate the current executable",
         )
     })?;
     let mut command = Command::new(executable);
     command
-        .arg("__resident")
+        .arg("__daemon")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -529,8 +530,8 @@ async fn launch(store: &Store) -> Result<()> {
     }
     let child = command.spawn().map_err(|_| {
         failure(
-            "resident_launch_failed",
-            "Cannot start the detached resident executable",
+            "daemon_launch_failed",
+            "Cannot start the detached daemon executable",
         )
     })?;
     wait_for_owner(store, child).await
@@ -548,45 +549,45 @@ async fn wait_for_owner(store: &Store, mut child: std::process::Child) -> Result
         }
         if child
             .try_wait()
-            .map_err(|_| failure("resident_launch_failed", "Cannot inspect launched resident"))?
+            .map_err(|_| failure("daemon_launch_failed", "Cannot inspect launched daemon"))?
             .is_some()
         {
             return Err(failure(
-                "resident_launch_failed",
-                "Detached resident exited before establishing ownership",
+                "daemon_launch_failed",
+                "Detached daemon exited before establishing ownership",
             ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Err(failure(
-        "resident_launch_failed",
-        "Resident startup did not establish identity within five seconds; inspect endpoint and executable compatibility",
+        "daemon_launch_failed",
+        "Daemon startup did not establish identity within five seconds; inspect endpoint and executable compatibility",
     ))
 }
 #[cfg(windows)]
 async fn launch(store: &Store) -> Result<()> {
     use std::os::windows::process::CommandExt;
-    let _launch = store.lock("resident-launch")?;
+    let _launch = store.lock("daemon-launch")?;
     if rpc(store, "status", None, None).await?.is_some() {
         return Ok(());
     }
     let executable = std::env::current_exe().map_err(|_| {
         failure(
-            "resident_launch_failed",
+            "daemon_launch_failed",
             "Cannot locate the current executable",
         )
     })?;
     let mut command = Command::new(executable);
     command
-        .arg("__resident")
+        .arg("__daemon")
         .creation_flags(0x00000008 | 0x00000200)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = command.spawn().map_err(|_| {
         failure(
-            "resident_launch_failed",
-            "Cannot start the detached Windows resident executable",
+            "daemon_launch_failed",
+            "Cannot start the detached Windows daemon executable",
         )
     })?;
     wait_for_owner(store, child).await
@@ -611,30 +612,30 @@ pub(super) async fn serve_control(
     .map_err(|_| failure("control_failed", "Control request could not be read"))?;
     let mut bytes = Zeroizing::new(bytes);
     let mut call: Call = serde_json::from_slice(&bytes)
-        .map_err(|_| failure("invalid_argument", "Malformed resident control request"))?;
+        .map_err(|_| failure("invalid_argument", "Malformed daemon control request"))?;
     bytes.zeroize();
-    let mut resident = state.lock().await;
-    if call.action != "status" && call.expected_process.as_deref() != Some(resident.process()) {
+    let mut daemon = state.lock().await;
+    if call.action != "status" && call.expected_process.as_deref() != Some(daemon.process()) {
         return Err(failure(
-            "resident_identity_unavailable",
-            "Resident changed after discovery; no control action performed",
+            "daemon_identity_unavailable",
+            "Daemon changed after discovery; no control action performed",
         ));
     }
     let final_stop = call.action == "control" && call.request.as_ref().is_some_and(|request| matches!(request.command.as_slice(), [surface, action] if matches!(surface.as_str(), "gateway" | "web") && action == "stop"));
-    let stopping = resident.shutdown().is_stopping();
+    let stopping = daemon.shutdown().is_stopping();
     let result = if stopping && call.action != "status" && !final_stop {
         Err(failure(
-            "resident_stopping",
-            "The identified resident is completing an explicit stop; no new state change was performed",
+            "daemon_stopping",
+            "The identified daemon is completing an explicit stop; no new state change was performed",
         ))
-    } else if call.authority != resident.store().root {
+    } else if call.authority != daemon.store().root {
         Err(failure(
-            "resident_identity_unavailable",
-            "Management authority does not match this resident",
+            "daemon_identity_unavailable",
+            "Management authority does not match this daemon",
         ))
     } else if call.protocol != MANAGEMENT_PROTOCOL {
         Err(failure(
-            "resident_incompatible",
+            "daemon_incompatible",
             "Use a CLI compatible with the running service or its Web controls",
         ))
     } else {
@@ -645,15 +646,15 @@ pub(super) async fn serve_control(
                     .as_ref()
                     .ok_or_else(|| failure("invalid_arguments", "Missing login request"))?;
                 crate::operations::commands::validate(request)?;
-                crate::agent_integration::browser_login::command(resident.store(), request)
+                crate::agent_integration::browser_login::command(daemon.store(), request)
             }
-            "status" => Ok(resident.view()),
-            "loaded" => Ok(resident.loaded_view()),
-            "activate" => resident.activate(call.revision.as_deref()).await,
-            "preview_activation" => resident.preview_activation(call.candidate.as_ref()),
+            "status" => Ok(daemon.view()),
+            "loaded" => Ok(daemon.loaded_view()),
+            "activate" => daemon.activate(call.revision.as_deref()).await,
+            "preview_activation" => daemon.preview_activation(call.candidate.as_ref()),
             "control" => {
                 if let Some(request) = call.request.take() {
-                    resident_control(&state, &mut resident, request).await
+                    daemon_control(&state, &mut daemon, request).await
                 } else {
                     Err(failure(
                         "invalid_argument",
@@ -661,33 +662,30 @@ pub(super) async fn serve_control(
                     ))
                 }
             }
-            _ => Err(failure(
-                "unsupported_operation",
-                "Unknown resident operation",
-            )),
+            _ => Err(failure("unsupported_operation", "Unknown daemon operation")),
         }
     };
-    let shutdown = resident.shutdown().clone();
+    let shutdown = daemon.shutdown().clone();
     let wait_for_release = final_stop && result.is_ok() && shutdown.is_stopping();
     let mut reply = Reply {
         challenge: call.challenge.clone(),
-        authority: resident.store().root.clone(),
+        authority: daemon.store().root.clone(),
         protocol: MANAGEMENT_PROTOCOL.into(),
-        process: resident.process().to_owned(),
+        process: daemon.process().to_owned(),
         pid: std::process::id(),
         version: env!("CARGO_PKG_VERSION").into(),
         result,
     };
-    drop(resident);
+    drop(daemon);
     if wait_for_release {
         let release = shutdown.wait_released().await;
         if let Ok(value) = &mut reply.result {
-            value["resident_before"] = value["resident"].clone();
+            value["daemon_before"] = value["daemon"].clone();
             let absent = absent();
-            for field in ["resident", "gateway", "shared_key", "publication"] {
+            for field in ["daemon", "gateway", "shared_key", "publication"] {
                 value[field] = absent[field].clone();
             }
-            value["network"]["loaded"] = json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"effective":null,"reason_code":"resident_stopped"});
+            value["network"]["loaded"] = json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"effective":null,"reason_code":"daemon_stopped"});
             value["shutdown"] = json!({"ownership_released":true,"state":if release.is_ok(){"completed"}else{"incomplete"},"error":release.as_ref().err()});
             if release.is_err() {
                 value["_code"] = json!("runtime_blocked");
@@ -755,7 +753,7 @@ mod tests {
                 let error = control(&store, &Config::empty(), &request)
                     .await
                     .unwrap_err();
-                assert_eq!(error.code, "resident_control_path_invalid");
+                assert_eq!(error.code, "daemon_control_path_invalid");
                 assert!(
                     !store.root.exists(),
                     "blocked startup must not create locks or service state"

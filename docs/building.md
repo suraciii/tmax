@@ -50,7 +50,7 @@ The personal authority is resolved from the operating-system user account, not
 state is under that account's `~/.tmax`; native configuration and native-owned
 credential artifacts remain in their explicitly selected native scopes.
 
-Resident control uses Unix local sockets or local-only Windows named pipes with
+Daemon control uses Unix local sockets or local-only Windows named pipes with
 an explicit OS-user ACL and peer identity checks. Windows needs no separate
 daemon, service installation, or administrator setup: ordinary CLI and Web
 actions launch the detached executable. Browser launch uses the Windows system
@@ -70,10 +70,10 @@ Unsupported storage-format records return `storage_version_unsupported` or
 `provider key set` or replace the shared key with `gateway key replace`. Recovery
 contents in unsupported formats are unavailable to current recovery operations.
 
-Replacing the executable does not upgrade a running resident. This executable
+Replacing the executable does not upgrade a running daemon. This executable
 uses management protocol `tmax-control/5`; the Model identity and selected-model
-result cutover is incompatible with an older `tmax-control/4` resident. If the
-current CLI reports `resident_incompatible`, use
+result cutover is incompatible with an older `tmax-control/4` daemon. If the
+current CLI reports `daemon_incompatible`, use
 the running service's matching older executable to stop it explicitly:
 
 ```sh
@@ -88,7 +88,7 @@ Normal active-request stop protections still apply; resolve their reported
 blockers rather than assuming an executable replacement stopped inference.
 Start the upgraded gateway explicitly when wanted, using `tmax gateway start`.
 The new CLI does not take over, terminate, automatically restart, or send
-unsupported state-changing commands to an incompatible resident. Do not delete
+unsupported state-changing commands to an incompatible daemon. Do not delete
 or edit routing/session JSON to upgrade: supported historical operational records
 normalize internally while preserving identity tokens, retained evidence, and
 continuation blockers.
@@ -103,7 +103,7 @@ retains its native owner's platform-specific input and credential-storage rules.
 Windows source review and cross-compilation do not establish actual Windows
 startup, console, security-descriptor, or browser runtime behavior. Record those
 as unverified unless the corresponding Windows operations were exercised; the
-portable CI help/version smoke alone is not resident lifecycle evidence.
+portable CI help/version smoke alone is not daemon lifecycle evidence.
 
 Installed native agent versions, effective configuration precedence, and provider
 permission remain independent prerequisites. A successful parser/apply/restore

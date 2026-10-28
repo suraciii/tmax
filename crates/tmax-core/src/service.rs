@@ -9,7 +9,7 @@ mod control_transport;
 #[cfg(windows)]
 #[path = "service/windows_control.rs"]
 mod control_transport;
-mod resident;
+mod daemon;
 mod startup;
 #[cfg(not(windows))]
 mod unix_startup;
@@ -21,7 +21,7 @@ mod windows_web;
 
 pub use control::{activate, control, loaded, preview_activation, status};
 pub(crate) use control::{browser_login, loaded_with_metadata};
-pub use resident::run_resident;
+pub use daemon::run_daemon;
 pub use startup::{autostart, reconcile_autostart, run_autostart};
 
 fn failure(code: &str, message: &str) -> Error {

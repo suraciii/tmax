@@ -86,7 +86,7 @@ argv or helper files.
 | `provider login-status ID` | Read pending or retained status without upstream calls or token reads. |
 | `provider login-cancel ID --attempt ATTEMPT` | Cancel the exact attempt; a stale identifier cannot cancel a later attempt or undo a committed save. |
 
-These commands require a running Web resident, except effect-free start preview.
+These commands require a running Web daemon, except effect-free start preview.
 Start and cancel support dry-run. Only start accepts the configuration revision
 guard. The [browser sign-in contract](../../../integrations/codex-subscription/web-login.md)
 owns scope creation, phases, cancellation, timeout and identity boundaries. A

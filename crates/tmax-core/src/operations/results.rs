@@ -16,7 +16,7 @@ pub(super) fn success_response(operation: &str, dry_run: bool, mut data: Value) 
         "awaiting_native_reload"
         | "restart_required"
         | "runtime_blocked"
-        | "resident_incompatible"
+        | "daemon_incompatible"
         | "active_requests"
         | "inputs_changed"
         | "unsupported_source"
@@ -30,7 +30,7 @@ pub(super) fn success_response(operation: &str, dry_run: bool, mut data: Value) 
         | "native_version_unqualified"
         | "native_schema_incompatible"
         | "target_incomplete" => 3,
-        "ok" | "dry_run_ready" | "resident_reused" => 0,
+        "ok" | "dry_run_ready" | "daemon_reused" => 0,
         _ => 4,
     };
     let status = if dry_run && exit != 0 {
@@ -70,10 +70,10 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             | "unsupported_protected_input"
             | "unsupported_protected_output"
             | "target_incomplete"
-            | "resident_incompatible"
-            | "resident_stopping"
-            | "resident_identity_unavailable"
-            | "resident_control_path_invalid"
+            | "daemon_incompatible"
+            | "daemon_stopping"
+            | "daemon_identity_unavailable"
+            | "daemon_control_path_invalid"
             | "endpoint_occupied"
             | "endpoint_conflict"
             | "active_requests"

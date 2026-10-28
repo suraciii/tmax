@@ -83,13 +83,13 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     }
     if path == "status" {
         let file = config::load(store);
-        let resident = crate::service::status(store).await?;
+        let daemon = crate::service::status(store).await?;
         return Ok(match file {
             Ok(f) => {
-                json!({"config_path":store.root.join("tmax.toml"),"file_revision":f.revision,"configuration_state":if f.exists{"valid"}else{"absent"},"providers":f.config.providers.len(),"targets":f.config.agents.len(),"resident":resident})
+                json!({"config_path":store.root.join("tmax.toml"),"file_revision":f.revision,"configuration_state":if f.exists{"valid"}else{"absent"},"providers":f.config.providers.len(),"targets":f.config.agents.len(),"daemon":daemon})
             }
             Err(e) => {
-                json!({"config_path":store.root.join("tmax.toml"),"configuration_state":"invalid","reason_code":e.code,"field":e.field,"resident":resident,"next_action":"config reset or correct supported fields"})
+                json!({"config_path":store.root.join("tmax.toml"),"configuration_state":"invalid","reason_code":e.code,"field":e.field,"daemon":daemon,"next_action":"config reset or correct supported fields"})
             }
         });
     }
@@ -99,7 +99,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     if path == "secret cleanup" {
         return secret_commands::cleanup(store, r).await;
     }
-    // Reuse/stop controls consult the identified resident even when the saved file is invalid.
+    // Reuse/stop controls consult the identified daemon even when the saved file is invalid.
     if matches!(
         path.as_str(),
         "gateway start" | "gateway stop" | "web open" | "web stop"
@@ -335,7 +335,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
         store
-            .write_raw("resident.sock", b"not a resident endpoint")
+            .write_raw("daemon.sock", b"not a daemon endpoint")
             .unwrap();
         let add = request(
             &["provider", "add"],
@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(response.body["data"]["runtime"], "unavailable");
         assert_eq!(
             response.body["data"]["activation"]["reason_code"],
-            "resident_identity_unavailable"
+            "daemon_identity_unavailable"
         );
         assert!(response.body["data"]["loaded_revision_after"].is_null());
         let bytes = std::fs::read(store.root.join("tmax.toml")).unwrap();
@@ -400,8 +400,8 @@ mod tests {
             4
         );
         assert_eq!(
-            std::fs::read(store.root.join("resident.sock")).unwrap(),
-            b"not a resident endpoint"
+            std::fs::read(store.root.join("daemon.sock")).unwrap(),
+            b"not a daemon endpoint"
         );
     }
 
@@ -445,14 +445,14 @@ mod tests {
                 b"version=1\n[gateway]\nlisten='127.0.0.1:12345'\nkey_ref='retained'\n",
             )
             .unwrap();
-        store.write_raw("resident.sock", b"unidentified").unwrap();
+        store.write_raw("daemon.sock", b"unidentified").unwrap();
         let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
         assert_eq!(
             dispatch(&store, &request(&["gateway", "remove"], &[], &[]))
                 .await
                 .unwrap_err()
                 .code,
-            "resident_identity_unavailable"
+            "daemon_identity_unavailable"
         );
         assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), before);
     }
@@ -463,7 +463,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
         store.write_raw("tmax.toml", b"version=1\n[providers.p]\nintegration='deepseek'\n[providers.p.models.m]\n[providers.p.inputs.q]\nkind='quota'\nsource='manual'\nscope='weekly'\nmodels=['m']\nmax_age_seconds=60\n").unwrap();
-        store.write_raw("resident.sock", b"unidentified").unwrap();
+        store.write_raw("daemon.sock", b"unidentified").unwrap();
         let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
         let inspect = dispatch(
             &store,

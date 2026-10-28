@@ -27,7 +27,7 @@ them; success in one row must not supply success in another.
 | --- | --- |
 | Configuration | The sole authority `~/.tmax/tmax.toml`'s validation result and revision versus the loaded configuration and accepted metadata revisions. Saved, invalid, and saved-but-not-active settings must not appear active. A target with empty native providers/selections or no default is valid but incomplete for native application, not an invalid login source or a blocker for independent gateway inference. |
 | Native application | Not applied, applied, awaiting native reload, conflicted, blocked, or partially applied/recovery-required, with the affected target and applied revision. Written native settings are not proof of running-agent use. |
-| Process and listener | Actual resident identity, authority, executable/management compatibility, and inference/Web listener states under the [resident contract](../product/spec.md#resident-service-identity). Distinguish absent, identified compatible, incompatible, unidentified occupied endpoint, and unavailable evidence. A PID or a running Web interface does not prove inference availability or usable upstream authorization. |
+| Process and listener | Actual daemon identity, authority, executable/management compatibility, and inference/Web listener states under the [daemon contract](../product/spec.md#daemon-service-identity). Distinguish absent, identified compatible, incompatible, unidentified occupied endpoint, and unavailable evidence. A PID or a running Web interface does not prove inference availability or usable upstream authorization. |
 | Startup registration | Saved autostart intent versus this authority's actual OS registration, ownership, and latest reconciliation outcome. Drift is not a failed unrelated edit; explicit repair follows the [configuration contract](../configuration/spec.md#save-reload-and-apply). |
 | Effective agent state | The latest qualified evidence of the running target's native provider entries, each source and endpoint/model selection, and native configuration precedence. Applied files, a requested reload, or a reachable listener alone must not verify that effective state. Unsupported runtime inspection must remain unknown. |
 | Provider authentication | Configured authentication method and login source `auth.via`, when applicable, and locally known credential availability versus a qualified upstream authentication result. A secret reference, readable local secret file, or configured key must not become a verified upstream login. Unknown upstream account identity must remain unverified. |
@@ -323,7 +323,7 @@ session binding follows the
 not become a general durable request-history or input-history catalog.
 
 The implementation must select, measure, and document concrete finite
-record-count, resident-memory, and per-record bounds. CLI and Web must expose the
+record-count, daemon-memory, and per-record bounds. CLI and Web must expose the
 actual limits and retention/eviction policy; no numerical limit is fixed by this
 specification. Active records, dry-run assessment, and any execution-local clear
 snapshot must also fit bounded memory. Capacity eviction or diagnostic

@@ -17,14 +17,14 @@ pub(crate) async fn activate_saved(
     let status = crate::service::status(store).await;
     let (activation, loaded_revision) = match status {
         Ok(status) => {
-            let loaded_revision = status["resident"]["identity"]["loaded_revision"].clone();
-            let activation = match status["resident"]["discovery_state"].as_str() {
+            let loaded_revision = status["daemon"]["identity"]["loaded_revision"].clone();
+            let activation = match status["daemon"]["discovery_state"].as_str() {
                 Some("compatible") => crate::service::activate(store, config, revision)
                     .await
                     .unwrap_or_else(|error| json!({"activation":"failed","error":error})),
                 Some("absent") => json!({"activation":"not_running","revision":revision}),
                 _ => {
-                    json!({"activation":"unavailable","reason_code":status["resident"]["reason_code"],"discovery_state":status["resident"]["discovery_state"]})
+                    json!({"activation":"unavailable","reason_code":status["daemon"]["reason_code"],"discovery_state":status["daemon"]["discovery_state"]})
                 }
             };
             (activation, loaded_revision)
@@ -45,15 +45,15 @@ fn project_saved_activation(data: &mut Value, mut activation: Value, loaded_revi
     if let Some(code) = &outcome_code {
         activation["code"] = code.clone();
     }
-    // Discovery/transport failure can occur after the resident accepted the call.
+    // Discovery/transport failure can occur after the daemon accepted the call.
     // Its previous revision is a before-fact, not proof of the after-state.
     if matches!(
         activation["error"]["code"].as_str(),
         Some(
-            "resident_identity_unavailable"
-                | "resident_incompatible"
-                | "resident_stopping"
-                | "resident_control_path_invalid"
+            "daemon_identity_unavailable"
+                | "daemon_incompatible"
+                | "daemon_stopping"
+                | "daemon_control_path_invalid"
                 | "platform_unavailable"
         )
     ) {
@@ -332,7 +332,7 @@ mod tests {
         let mut data = json!({"save":"saved","file_revision":"new"});
         project_saved_activation(
             &mut data,
-            json!({"_code":"saved_not_active","activation":"failed","error":{"code":"resident_identity_unavailable"}}),
+            json!({"_code":"saved_not_active","activation":"failed","error":{"code":"daemon_identity_unavailable"}}),
             json!("old"),
         );
         assert_eq!(data["loaded_revision_before"], "old");

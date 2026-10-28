@@ -69,7 +69,7 @@ async fn handle_impl(store: &Store, saved: Option<&Config>, request: &Request) -
             &loaded_info
                 .as_ref()
                 .ok_or_else(|| {
-                    Error::new("no_loaded_snapshot", "No resident configuration is loaded")
+                    Error::new("no_loaded_snapshot", "No daemon configuration is loaded")
                 })?
                 .config
         }
@@ -77,7 +77,7 @@ async fn handle_impl(store: &Store, saved: Option<&Config>, request: &Request) -
     let config = if loaded {
         &loaded_info
             .as_ref()
-            .ok_or_else(|| Error::new("no_loaded_snapshot", "No resident configuration is loaded"))?
+            .ok_or_else(|| Error::new("no_loaded_snapshot", "No daemon configuration is loaded"))?
             .config
     } else {
         saved
