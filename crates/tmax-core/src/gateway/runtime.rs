@@ -82,22 +82,16 @@ impl Runtime {
     pub fn open(&self) {
         self.admission.lock().expect("admission mutex").enabled = true;
     }
-    pub fn stop(&self, force: bool) -> Result<usize> {
+    /// Close admission and cancel every active request. Stop never waits for
+    /// in-flight work: interruption is the contract for both stop and restart.
+    pub fn stop(&self) -> usize {
         let mut a = self.admission.lock().expect("admission mutex");
-        if !force && !a.active.is_empty() {
-            return Err(Error::new(
-                "active_requests",
-                "Requests are active; stop refused, or explicitly use --cancel-active",
-            ));
-        }
         a.enabled = false;
         let count = a.active.len();
-        if force {
-            for cancel in a.active.values() {
-                let _ = cancel.send(true);
-            }
+        for cancel in a.active.values() {
+            let _ = cancel.send(true);
         }
-        Ok(count)
+        count
     }
     pub(super) fn admit(self: &Arc<Self>, record: Record) -> Result<Flight> {
         let mut a = self.admission.lock().expect("admission mutex");
@@ -198,11 +192,14 @@ mod tests {
         assert!(
             matches!(runtime.admit(runtime.history.begin()),Err(error)if error.code=="local_capacity")
         );
-        assert!(runtime.stop(false).is_err());
+        // Stop never waits for in-flight work: it closes admission, cancels
+        // the active set, and reports how many were interrupted.
+        assert_eq!(runtime.stop(), ACTIVE_LIMIT);
         assert_eq!(runtime.active(), ACTIVE_LIMIT);
+        assert!(flights.iter().all(|flight| *flight.cancel.borrow()));
         drop(flights);
         assert_eq!(runtime.active(), 0);
-        assert_eq!(runtime.stop(false).unwrap(), 0);
+        assert_eq!(runtime.stop(), 0);
         assert!(runtime.admit(runtime.history.begin()).is_err());
         println!(
             "admission_measurement active_limit={} rejected_without_queue=true request_body_bound={} inspection_bound={} chunk_bound={}",

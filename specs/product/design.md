@@ -41,7 +41,7 @@ an assistant or an approval/workflow system.
 | Gateway lifetime must not follow an open browser | Couple inference to the UI or enable autostart implicitly | Explicit startup runs in the background; login autostart is opt-in and depends on secure credential availability |
 | Web is a local visual CLI | Add management accounts, pairing, or browser sessions | No Web authentication; trust local processes, retain loopback binding and browser-origin protections, and exclude remote publication |
 | Removing an object can strand its consumers | Cascade-delete references or choose replacement models | Reject unresolved references; explicit edits and existing restore operations keep changes understandable |
-| Stopping a gateway can interrupt paid work | Add a drain scheduler and automatic timeout | Refuse normal stop while requests are active; explicit force-stop reports interruption without replay |
+| Stopping a gateway can interrupt paid work | Add a drain scheduler and automatic timeout | Stop cancels in-flight requests and reports interruption without replay; no drain queue, force path, or timeout |
 | One person uses several local clients | Register clients and assign keys or model permissions | One shared gateway key and a model list derived from enabled definitions; native picker choices are not permissions |
 | Provider consoles expose unrelated billing controls | Mirror their wallets, budgets, and plan-management screens | Keep access management and scoped observations; link to the console for supplier-owned controls |
 | First use crosses several operations | Persist onboarding progress or infer a task plan | Help exposes capabilities and current facts; the calling agent chooses explicit operations without a workflow record |

@@ -574,12 +574,11 @@ CLI and Web provide stop and autostart controls. Stopping reports
 known affected targets and does not switch them to upstream access;
 independently configured clients cannot be enumerated reliably.
 
-Normal stop must refuse while requests are in flight and report the affected
-targets and active request count. An explicit force-stop cancels those requests
-as far as their transports allow and reports interruption; it must not replay
-them. Admission and stopping must be coordinated so a successful normal stop
-cannot interrupt a newly admitted request. There is no background drain queue
-or automatic force-stop timeout. Stopping does not change the autostart setting.
+Stop does not wait for in-flight work: it closes admission, cancels the active
+requests as far as their transports allow, reports the interrupted set, and
+never replays them. Admission and stopping must be coordinated so a successful
+stop cannot interrupt a newly admitted request. There is no background drain
+queue and no separate force path. Stopping does not change the autostart setting.
 
 Agent application state and gateway availability are independent. A stopped or
 blocked listener leaves native gateway configuration applied but unavailable;
@@ -697,10 +696,12 @@ configuration, or reapplying native files. Starting inference on a compatible
 management-only owner is an explicit listener start, not a second daemon.
 The management interface must remain usable when inference is stopped.
 When explicit stop operations leave both inference and Web stopped, the daemon
-must finish or cancel its owned background work safely and release ownership.
-Automatic input acquisition then follows its existing no-service state. An
-explicit listener restart remains one operation and must not release ownership
-between its stop and start boundaries.
+must cancel its owned background work and release ownership without waiting for
+it. Automatic input acquisition then follows its existing no-service state. An
+explicit restart recycles the daemon process, cancelling owned in-flight work,
+releasing ownership, and starting the replacement process from the on-disk
+executable so an updated binary serves; a Web listener that was running is
+restored on the replacement. Exactly one owner serves before and after.
 
 An incompatible service must be reported with the client and service versions
 and an explicit stop/start recovery action; the new client must not issue
@@ -996,7 +997,7 @@ versions and provider-authorized credentials where a provider request is needed:
 13. Keep an explicitly started gateway running after its launching terminal and Web
 session close. Exercise opt-in login startup with missing or unavailable
 credentials; do not claim readiness or add a fallback.
-    Refuse normal stop with active requests; explicit force-stop reports interruption.
+    Stop cancels in-flight requests and reports interruption; no separate force path.
     Preserve retained conversation destinations across a normal stop/start.
     An unrelated direct-configuration edit must not retry failed startup
     registration or fail solely because registration drift remains. Explicit

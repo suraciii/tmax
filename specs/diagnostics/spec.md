@@ -290,7 +290,7 @@ status or connection alone must not count as a completed inference when its
 stream fails or terminates without the required completion evidence.
 
 Once dispatch may have reached upstream, a timeout, lost connection, cancellation,
-or force-stop must retain unknown upstream execution or completion when the
+or stop must retain unknown upstream execution or completion when the
 transport cannot establish it. Local cancellation does not prove that upstream
 execution stopped or that no charge occurred. Missing or interrupted usage must
 remain unknown or partial, not zero usage or a known zero bill. Diagnostics must
@@ -406,7 +406,7 @@ retained diagnostic history. Record each attempted provider/model, HTTP status
 or transport reason, and final outcome without raw upstream error bodies,
 request content, or secrets. Bounded omissions remain explicit evidence gaps.
 Capture an attempt when dispatch begins, before its response headers arrive.
-Cancellation and force-stop finalize the pending attempt with an honest terminal
+Cancellation and stop finalize the pending attempt with an honest terminal
 outcome, not a lingering in-progress entry or a fabricated provider failure.
 Clearing or evicting history must not clear provider failure state, change quota
 facts, or move established destinations. Priority rules and current failure state

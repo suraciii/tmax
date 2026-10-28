@@ -406,13 +406,6 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             blockers.push(json!({"code":"daemon_identity_unavailable","state":discovery}));
         }
         let active = before["active_requests"].as_u64().unwrap_or(0);
-        if group == "gateway"
-            && matches!(action, "stop" | "restart")
-            && active > 0
-            && !request.arguments.contains_key("cancel-active")
-        {
-            blockers.push(json!({"code":"active_requests","active_count":active}));
-        }
         let reused = group == "gateway"
             && action == "start"
             && before["daemon"]["inference"]["listen"].is_string();
@@ -441,6 +434,9 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"daemon":before["daemon"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::gateway::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
         );
     }
+    if group == "gateway" && action == "restart" {
+        return restart_gateway(store).await;
+    }
     if let Some(value) = rpc(store, "control", Some(request.clone()), None).await? {
         return maybe_browser(value, request);
     }
@@ -456,10 +452,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
     if matches!((group, action), ("gateway", "stop") | ("web", "stop")) {
         return Ok(absent());
     }
-    if !matches!(
-        (group, action),
-        ("gateway", "start" | "restart") | ("web", "open")
-    ) {
+    if !matches!((group, action), ("gateway", "start") | ("web", "open")) {
         return Err(failure(
             "unsupported_operation",
             "Unknown daemon control operation",
@@ -477,6 +470,90 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             )
         })
         .and_then(|v| maybe_browser(v, request))
+}
+
+/// Recycle the daemon from the on-disk executable. In-flight requests are
+/// cancelled, exactly as an update expects: the replacement process serves the
+/// new binary, and a Web listener that was running is restored on the new owner.
+async fn restart_gateway(store: &Store) -> Result<Value> {
+    let before = status(store).await?;
+    let discoverable = before["daemon"]["discovery_state"].as_str() == Some("compatible");
+    let web_was = before["daemon"]["web"]["listen"]
+        .as_str()
+        .map(str::to_owned);
+    let mut interrupted = Value::Null;
+    if discoverable {
+        let mut stop = control_request("gateway", "stop");
+        // Pre-cutover daemons refuse to stop while requests are active unless
+        // the interruption is explicit; this argument is only an internal
+        // carrier for that one-time upgrade window, never a CLI option. The
+        // current daemon ignores it.
+        stop.arguments
+            .insert("cancel-active".into(), vec!["true".into()]);
+        if let Some(value) = rpc(store, "control", Some(stop), None).await? {
+            interrupted = value["interrupted_requests"].clone();
+        }
+        if web_was.is_some() {
+            let stop_web = control_request("web", "stop");
+            rpc(store, "control", Some(stop_web), None).await?;
+        }
+        wait_absent(store).await?;
+    }
+    #[cfg(unix)]
+    validate_control_path(&socket_path(store))?;
+    launch(store).await?;
+    let started = rpc(
+        store,
+        "control",
+        Some(control_request("gateway", "start")),
+        None,
+    )
+    .await?
+    .ok_or_else(|| {
+        failure(
+            "daemon_identity_unavailable",
+            "Detached daemon did not establish its control endpoint",
+        )
+    })?;
+    if web_was.is_some() {
+        let mut open = control_request("web", "open");
+        open.arguments
+            .insert("no-browser".into(), vec!["true".into()]);
+        rpc(store, "control", Some(open), None).await?;
+    }
+    Ok(json!({
+        "action":"restarted",
+        "recycled":true,
+        "interrupted_requests":interrupted,
+        "web":if web_was.is_some(){"restored"}else{"unchanged"},
+        "gateway":started["gateway"],
+        "daemon":started["daemon"],
+    }))
+}
+
+fn control_request(group: &str, action: &str) -> Request {
+    Request {
+        command: vec![group.into(), action.into()],
+        operands: Vec::new(),
+        arguments: std::collections::BTreeMap::new(),
+        dry_run: false,
+        if_revision: None,
+    }
+}
+
+/// A stop acknowledgement is a completion boundary; the previous daemon must
+/// already have released ownership before the replacement launches.
+async fn wait_absent(store: &Store) -> Result<()> {
+    for _ in 0..100 {
+        if rpc(store, "status", None, None).await?.is_none() {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    Err(failure(
+        "daemon_stopping",
+        "The previous daemon did not release ownership within the bounded restart window",
+    ))
 }
 
 fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {

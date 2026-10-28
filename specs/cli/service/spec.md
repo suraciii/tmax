@@ -97,19 +97,19 @@ follow [their independent lifecycle](../providers/authentication/spec.md#shared-
 | `gateway status` | Actual daemon/versions, inference/Web listeners, startup intent/drift/failure, shared-key readiness, derived publication, and safe bound-session conditions; native dependencies are not serving prerequisites. |
 | `web status` | Actual daemon/versions and management listener or explicit absence, independent of inference. |
 | `gateway start` | Reuse compatible running inference without reload, or validate saved config/shared key and start inference in the sole acquired daemon. No managed-target prerequisite, key provisioning, or native application. |
-| `gateway stop [--cancel-active]` | Stop inference, not Web. Refuse active work unless interruption is explicitly requested; report actual affected requests and only independently established targets. |
-| `gateway restart [--cancel-active]` | Explicit stop/start using current valid settings, including saved address change, without stopping Web/replacing the daemon. Same active-request rule. |
+| `gateway stop` | Stop inference, not Web. Cancel in-flight requests as transports allow and report the actual interrupted set; never wait for in-flight work. |
+| `gateway restart` | Recycle the daemon process from the on-disk executable: cancel in-flight work, release ownership, start the replacement with current valid settings (including saved address changes), and restore a Web listener that was running. Updates take effect on the next restart. |
 | `gateway autostart enable` | Save true and always reconcile per-user login-start registration; disclose missing or unavailable credential state. |
 | `gateway autostart disable` | Save false and always reconcile registration removal, not stop inference. |
 | `web open [--listen ADDRESS] [--no-browser]` | Start/reuse management in the sole compatible daemon, report actual URL, and open browser unless suppressed. Do not implicitly start inference or reload. |
 | `web stop` | Stop management only in the identified compatible daemon, not inference/native agents. |
 
 Mutations support dry-run; autostart saves accept the common file guard. Reads are
-effect-free. `--cancel-active` requests interruption scope, not human approval.
-Stop/restart serialize admission with the actual active set; normal successful stop
-cannot interrupt newly admitted work. Cancellation closes admission and reports
-the actual interrupted set without replay. Dry-run freezes/reserves nothing.
-Stop/restart changes neither startup intent nor retained conversation bindings.
+effect-free. Stop and restart serialize admission with the actual active set;
+successful stop cannot interrupt newly admitted work. Cancellation closes
+admission and reports the actual interrupted set without replay. Dry-run
+freezes/reserves nothing. Stop/restart changes neither startup intent nor
+retained conversation bindings.
 
 [Daemon identity](../../product/spec.md#daemon-service-identity) owns sole-config
 ownership, compatibility, and concurrent-start convergence. Discover/identify the
@@ -144,7 +144,7 @@ stop background inference; CLI completion never depends on Web availability.
 Examples: `tmax gateway configure --listen 127.0.0.1:17840`,
 `tmax gateway configure --clear autostart`, `tmax gateway start`,
 `tmax gateway key show`, `tmax gateway key replace`,
-`tmax gateway stop --dry-run`, `tmax gateway stop --cancel-active`, `tmax gateway restart`,
+`tmax gateway stop --dry-run`, `tmax gateway stop`, `tmax gateway restart`,
 `tmax gateway autostart enable`, `tmax gateway autostart disable`, `tmax gateway remove`,
 `tmax web open --no-browser`, `tmax web open --listen 127.0.0.1:17841`, and
 `tmax web stop`. Independent examples are not an automatic sequence.
