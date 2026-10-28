@@ -82,7 +82,7 @@ impl Runtime {
             public_id,
             protocol,
             session,
-            "resident",
+            "daemon",
         )
     }
     pub(crate) fn inspect_persisted_session(

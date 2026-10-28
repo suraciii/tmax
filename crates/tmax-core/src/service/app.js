@@ -83,7 +83,7 @@ async function refresh() {
   if (generation !== state.generation) return;
   state.errors=responses.flatMap((r,i) => r.status==='rejected'?[`${operations[i]}：${r.reason.message}`]:[]);
   const values=responses.map(r => r.status==='fulfilled'?r.value:null);
-  state.runtime=values[0]?.resident || null; state.config=values[1]?.configuration || null; state.revision=values[1]?.configuration_revision || null;
+  state.runtime=values[0]?.daemon || null; state.config=values[1]?.configuration || null; state.revision=values[1]?.configuration_revision || null;
   state.providers=values[2]?.providers ?? null; state.models=values[3]?.models ?? null; state.agents=values[4]?.agents ?? null; state.integrations=values[5]?.integrations || [];
   state.loaded=true;
   $('connection').innerHTML=`<span class="dot ${state.runtime?'':'off'}"></span>${state.runtime?'本地已连接':'连接不可用'}`;
@@ -118,7 +118,7 @@ function authBadge(provider) {
 }
 function renderOverview() {
   const providers=state.providers, models=state.models, agents=state.agents;
-  const running=state.runtime?.resident?.inference?.state==='running';
+  const running=state.runtime?.daemon?.inference?.state==='running';
   const ready=state.runtime?.gateway?.ready===true;
   const needsAuth=(providers || []).filter(p=>p.enabled && p.authentication==='not_configured');
   const configuredProviders=Object.entries(state.config.providers);
@@ -157,7 +157,7 @@ function renderAgents() {
 }
 function clearReveal() { revealGeneration++;const output=$('revealed'); if(output){output.textContent='';output.hidden=true;} }
 function renderGateway() {
-  const runtime=state.runtime; const gateway=state.config.gateway; const inference=runtime?.resident?.inference;
+  const runtime=state.runtime; const gateway=state.config.gateway; const inference=runtime?.daemon?.inference;
   const running=inference?.state==='running'; const address=inference?.url || (gateway?.listen?'http://'+gateway.listen:null);
   const configured=!!gateway;
   $('content').innerHTML=`<div class="grid-two">${panel('网关','供支持相同协议的应用连接',`<div class="service-status"><div class="status-symbol">${icon('gateway')}</div><div><h3>${!runtime?'状态未知':running?'网关运行中':configured?'已配置 · 未启动':'尚未配置'}</h3><p>${running?(runtime.gateway?.ready?'服务报告已就绪':'服务尚未就绪，请检查配置与授权'):'需要通过网关使用模型时，再启动服务。'}</p></div></div>${address?`<div class="big-address"><code>${escapeHtml(address)}</code>${button('复制','copy',address,'small','copy')}</div>`:notice('先设置本地监听地址，保存后会生成共享密钥。')}${`<div class="actions">${button(configured?(running?'停止网关':'启动网关'):'配置网关',configured?'operation':'gateway-configure',configured?(running?'gateway stop':'gateway start'):'','primary',running?'gateway':'arrow')}${configured?button('修改设置','gateway-configure','','','settings'):''}</div>`}`)}${panel('连接与授权','共享密钥仅在主动查看时显示',`<div class="detail-facts">${fact('已发布模型',runtime?.publication?.model_count ?? '未知')}${fact('进行中的请求',runtime?.active_requests ?? '未知')}${fact('登录时启动',runtime?.autostart?.login_enabled?'已注册':'未注册')}${fact('共享密钥状态',stateLabel(runtime?.shared_key?.loaded_state))}</div>${configured?`<div class="actions">${button('查看共享密钥','reveal','','','key')}${button('隐藏','hide-key','','small')}</div><div id="revealed" class="key-output mono" hidden></div>`:notice('配置网关后，可以在这里查看用于连接的共享密钥。')}`)}</div><div class="section-label"><h2>请求记录</h2>${button('读取记录','history','','small','history')}</div><div id="history-panel" class="panel">${empty('按需查看本地请求','仅记录经过此网关的请求，不包含直接连接流量，也不代表账户全部用量。',button('读取请求记录','history','','soft'),'history',true)}</div><div class="section-label"><h2>其他设置</h2></div><div class="actions">${button('登录时启动设置','autostart','','','settings')}${button('查看出站网络','operation','network show','','settings')}${button('网关高级操作','advanced','gateway','','settings')}</div>`;
@@ -376,7 +376,7 @@ const loginErrors = {
   login_failed:'Codex 未能完成登录。可重试，或改用设备码登录。',
   login_expired:'登录已超时，请重新开始。',
   login_unavailable:'无法连接 Codex 认证进程。请重试并检查本机 Codex 是否可运行。',
-  resident_required:'本地服务已停止，请重新打开 tmax Web。',
+  daemon_required:'本地服务已停止，请重新打开 tmax Web。',
 };
 async function codexLogin(id) {
   stopLoginPolling();

@@ -7,7 +7,7 @@ implementation details and verification results do not belong here.
 ## Crate and entrypoint boundaries
 
 - `tmax-cli` owns command grammar, offline help, presentation, and process exit.
-- `tmax-core` owns domain rules, operations, persistence, and the resident runtime.
+- `tmax-core` owns domain rules, operations, persistence, and the daemon runtime.
 - CLI and Web use the same core operation boundary. Neither presentation surface
   owns a separate business-policy implementation.
 - Configuration types, the command catalog, and editable-field definitions are
@@ -27,7 +27,7 @@ Paths below are relative to `crates/tmax-core/src/`.
 | `inputs.rs`, `inputs/` | Rule-input facts and shared provider/declaration lineage. |
 | `observations.rs` | Retained provider observations and acquisition attempts. |
 | `agent_integration.rs`, `agent_integration/` | Agent configuration, authentication ownership, and restoration. |
-| `service.rs`, `service/` | Resident ownership, management surfaces, and platform lifecycle integration. |
+| `service.rs`, `service/` | Daemon ownership, management surfaces, and platform lifecycle integration. |
 | `gateway.rs`, `gateway/` | Inference forwarding and retained session continuity. |
 | `storage.rs`, `secrets.rs`, `secrets/` | Local persistence and protected credential storage/channels. |
 | `diagnostics.rs` | Request evidence and history. |
@@ -50,10 +50,10 @@ private to the feature unless another feature has a concrete consumer.
 - `edit/document.rs`, `edit/fields.rs`, and `edit/references.rs` own document
   editing, editable-field definitions, and rename-reference transformations.
 
-### Resident service
+### Daemon service
 
 - `control.rs` owns the private management protocol and client/server coordination.
-- `resident.rs` owns the resident aggregate, activation, surfaces, and lifecycle.
+- `daemon.rs` owns the daemon aggregate, activation, surfaces, and lifecycle.
 - `web.rs` owns the browser-facing management boundary and its operation bridge.
 - `startup.rs` owns startup-intent coordination. Platform-specific control,
   startup, and Web modules own their OS integrations.

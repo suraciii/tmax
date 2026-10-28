@@ -2,8 +2,8 @@
 #[cfg(windows)]
 use super::windows_web;
 use super::{
+    daemon::{Shared, Surface},
     failure,
-    resident::{Shared, Surface},
 };
 use crate::{Request, Result};
 use axum::{
@@ -39,7 +39,7 @@ pub(super) async fn start(state: Shared, requested: Option<SocketAddr>) -> Resul
     let (listener, listener_closed) = windows_web::Listener::new(listener);
     let (shutdown, mut cancelled) = watch::channel(false);
     let web = WebState {
-        resident: state,
+        daemon: state,
         authority: actual.to_string(),
         origin: format!("http://{actual}"),
     };
@@ -64,7 +64,7 @@ pub(super) async fn start(state: Shared, requested: Option<SocketAddr>) -> Resul
 
 #[derive(Clone)]
 struct WebState {
-    resident: Shared,
+    daemon: Shared,
     authority: String,
     origin: String,
 }
@@ -111,8 +111,8 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
             .into_response(),
         ("GET", "/api/catalog") => axum::Json(crate::operations::catalog()).into_response(),
         ("GET", "/api/status") => {
-            let resident = web.resident.lock().await;
-            axum::Json(resident.view()).into_response()
+            let daemon = web.daemon.lock().await;
+            axum::Json(daemon.view()).into_response()
         }
         ("POST", "/api/execute") => {
             if parts
@@ -190,7 +190,7 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
             #[cfg(windows)]
             let final_stop =
                 if !request.dry_run && matches!(path.as_str(), "gateway stop" | "web stop") {
-                    Some(web.resident.lock().await.shutdown().clone())
+                    Some(web.daemon.lock().await.shutdown().clone())
                 } else {
                     None
                 };
@@ -235,15 +235,15 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
                 )
                     .into_response();
             }
-            let resident = web.resident.lock().await;
-            let config = match crate::config::load(resident.store()) {
+            let daemon = web.daemon.lock().await;
+            let config = match crate::config::load(daemon.store()) {
                 Ok(v) => v,
                 Err(e) => return axum::Json(json!({"error":e})).into_response(),
             };
             let Some(gateway) = config.config.gateway else {
                 return (StatusCode::CONFLICT, "Gateway not configured").into_response();
             };
-            match crate::secrets::get(resident.store(), &gateway.key_ref) {
+            match crate::secrets::get(daemon.store(), &gateway.key_ref) {
                 Ok(key) => match std::str::from_utf8(&key) {
                     Ok(key) => axum::Json(json!({"key":key})).into_response(),
                     Err(_) => (StatusCode::CONFLICT, "Key unavailable").into_response(),
@@ -327,7 +327,7 @@ fn protected_form_input(value: &str) -> Result<(std::io::PipeReader, crate::secr
 
 #[cfg(test)]
 mod tests {
-    use super::super::resident::{Resident, Shutdown};
+    use super::super::daemon::{Daemon, Shutdown};
     use super::*;
     use crate::{gateway::Runtime, storage::Store};
     use std::sync::Arc;
@@ -383,14 +383,14 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let store = Store::at(temporary.path().into());
         let runtime = Runtime::new(store.clone(), "test".into()).unwrap();
-        let resident = Arc::new(Mutex::new(Resident::new(
+        let daemon = Arc::new(Mutex::new(Daemon::new(
             store,
             "test".into(),
             runtime,
             Arc::new(Shutdown::new()),
         )));
         let web = WebState {
-            resident,
+            daemon,
             authority: "127.0.0.1:1234".into(),
             origin: "http://127.0.0.1:1234".into(),
         };

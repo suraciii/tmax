@@ -325,7 +325,7 @@ removed events, superseded heads, or past attempts.
 
 The [CLI input operations](../../cli/providers/inputs/spec.md#provider-input-operations) provide
 explicit refresh for one selected supported nonmanual channel, manual recording,
-clear, and read-only inspection. They work without a resident service and do not
+clear, and read-only inspection. They work without a daemon service and do not
 mutate authentication, desired configuration, native application, or startup.
 Dry runs inspect only permitted local inputs: no credentials, source read,
 publication, or scheduling effects. Inspection, priority preview, `--at`, and

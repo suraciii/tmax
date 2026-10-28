@@ -9,7 +9,7 @@ owns persistence, activation, and native-application boundaries. All commands us
 
 | Command | Result or requested boundary |
 | --- | --- |
-| `status` | Compact config path/revisions, resident/listener identity and versions, provider/target readiness counts, recovery conditions, and startup drift/failure. Return blockers and supported detail actions where needed. |
+| `status` | Compact config path/revisions, daemon/listener identity and versions, provider/target readiness counts, recovery conditions, and startup drift/failure. Return blockers and supported detail actions where needed. |
 | `config show [--state STATE]` | Redacted structured config and its revision. A missing loaded snapshot is explicit. |
 | `config validate` | Validate current saved config; separate syntax/type/reference errors from external availability. Missing config stays absent. |
 | `config reload [--if-revision REVISION] [--dry-run]` | Validate the entire saved file and activate it if the service runs, without rewriting it, applying native settings, signing in, or starting listeners. |

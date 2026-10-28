@@ -1,7 +1,7 @@
-# Network and resident-service commands
+# Network and daemon-service commands
 
 This child owns outbound network, gateway/Web configuration/lifecycle, and their
-results. [Product](../../product/spec.md) owns network coverage, resident identity,
+results. [Product](../../product/spec.md) owns network coverage, daemon identity,
 and listener independence. [Configuration](../../configuration/spec.md) owns
 saved fields and activation. Use [common CLI rules](../spec.md),
 [configuration changes](../configuration/spec.md), and [shared results](../results/spec.md).
@@ -28,7 +28,7 @@ or TLS-verification bypass.
 
 Execution validates/saves policy without contacting the proxy, starting services,
 or changing native networking. Report saved versus loaded state. Future independent
-CLI work uses validated saved policy; future resident work uses loaded policy;
+CLI work uses validated saved policy; future daemon work uses loaded policy;
 in-flight work retains its captured policy. Use `config reload` for pending or
 saved-but-not-active changes; compatible gateway/Web reuse never implicitly reloads.
 
@@ -77,7 +77,7 @@ last-acknowledged desired startup intent. Save/reload reconciles registration on
 when that accepted intent changes, not on mere revision change, drift, or prior
 registration failure. Acknowledge validated persisted intent independently of
 registration success, never unsaved values. Required reconciliation works without
-a resident and reports separately from save/activation; failure is incomplete.
+a daemon and reports separately from save/activation; failure is incomplete.
 
 Unchanged-intent unrelated edits/reloads neither retry/remove registration nor
 fail only for drift. Report `not_requested` plus drift/failed state and the repair
@@ -94,15 +94,15 @@ follow [their independent lifecycle](../providers/authentication/spec.md#shared-
 
 | Command | Result or requested boundary |
 | --- | --- |
-| `gateway status` | Actual resident/versions, inference/Web listeners, startup intent/drift/failure, shared-key readiness, derived publication, and safe bound-session conditions; native dependencies are not serving prerequisites. |
-| `web status` | Actual resident/versions and management listener or explicit absence, independent of inference. |
-| `gateway start` | Reuse compatible running inference without reload, or validate saved config/shared key and start inference in the sole acquired resident. No managed-target prerequisite, key provisioning, or native application. |
+| `gateway status` | Actual daemon/versions, inference/Web listeners, startup intent/drift/failure, shared-key readiness, derived publication, and safe bound-session conditions; native dependencies are not serving prerequisites. |
+| `web status` | Actual daemon/versions and management listener or explicit absence, independent of inference. |
+| `gateway start` | Reuse compatible running inference without reload, or validate saved config/shared key and start inference in the sole acquired daemon. No managed-target prerequisite, key provisioning, or native application. |
 | `gateway stop [--cancel-active]` | Stop inference, not Web. Refuse active work unless interruption is explicitly requested; report actual affected requests and only independently established targets. |
-| `gateway restart [--cancel-active]` | Explicit stop/start using current valid settings, including saved address change, without stopping Web/replacing the resident. Same active-request rule. |
+| `gateway restart [--cancel-active]` | Explicit stop/start using current valid settings, including saved address change, without stopping Web/replacing the daemon. Same active-request rule. |
 | `gateway autostart enable` | Save true and always reconcile per-user login-start registration; disclose missing or unavailable credential state. |
 | `gateway autostart disable` | Save false and always reconcile registration removal, not stop inference. |
-| `web open [--listen ADDRESS] [--no-browser]` | Start/reuse management in the sole compatible resident, report actual URL, and open browser unless suppressed. Do not implicitly start inference or reload. |
-| `web stop` | Stop management only in the identified compatible resident, not inference/native agents. |
+| `web open [--listen ADDRESS] [--no-browser]` | Start/reuse management in the sole compatible daemon, report actual URL, and open browser unless suppressed. Do not implicitly start inference or reload. |
+| `web stop` | Stop management only in the identified compatible daemon, not inference/native agents. |
 
 Mutations support dry-run; autostart saves accept the common file guard. Reads are
 effect-free. `--cancel-active` requests interruption scope, not human approval.
@@ -111,11 +111,11 @@ cannot interrupt newly admitted work. Cancellation closes admission and reports
 the actual interrupted set without replay. Dry-run freezes/reserves nothing.
 Stop/restart changes neither startup intent nor retained conversation bindings.
 
-[Resident identity](../../product/spec.md#resident-service-identity) owns sole-config
+[Daemon identity](../../product/spec.md#daemon-service-identity) owns sole-config
 ownership, compatibility, and concurrent-start convergence. Discover/identify the
-owner before effects. Compatible repeated start returns `resident_reused` with
+owner before effects. Compatible repeated start returns `daemon_reused` with
 actual process/versions, loaded revision, listener, and Web URL. Do not revalidate
-pending settings, restart, or assume caller version equals resident version.
+pending settings, restart, or assume caller version equals daemon version.
 Executable-version difference alone does not authorize replacement.
 
 Concurrent starts converge; a losing creator reuses the compatible identified
@@ -125,7 +125,7 @@ or choose a different port. Status may successfully report these conditions;
 lifecycle fails closed. Inference stop leaves Web usable for config repair. After
 explicit stops leave both surfaces stopped, shutdown/release follows Product;
 listener restart retains ownership. Incompatible recovery needs a compatible CLI
-or that resident's available Web controls before starting the new executable.
+or that daemon's available Web controls before starting the new executable.
 Next actions must not claim the incompatible current CLI can perform that stop.
 
 Autostart touches only tmax's per-user registration, never unrelated entries or
@@ -134,7 +134,7 @@ one, reuse management or allocate one initial OS-selected loopback port. Initial
 allocation is not fallback from conflict/occupation. An explicit mismatch with
 running Web is `endpoint_conflict`; an occupied requested endpoint is
 `endpoint_occupied`. Neither permits relocation/replacement. Report actual URL
-and resident identity; Web listen is ephemeral, not a persisted profile/field.
+and daemon identity; Web listen is ephemeral, not a persisted profile/field.
 
 Web has no login/pairing/password/token. Host/Origin rules follow
 [Product](../../product/spec.md#local-web-and-cli-experience). Opening Web needs
@@ -163,11 +163,11 @@ Examples: `tmax gateway configure --listen 127.0.0.1:17840`,
 
 Direct has null gateway fields. Gateway has validated URL, scheme `http`/`https`/`socks5`,
 host, and positive effective port including scheme default. An absent config file
-has the direct default; absent loaded state has no resident policy. Invalid or
+has the direct default; absent loaded state has no daemon policy. Invalid or
 unreadable config does not acquire a default effective policy.
 
 `network show` returns `data.state`, `data.snapshot_state`, `data.policy: NetworkView`,
-and `data.future_work_scope` (`independent_cli` for file or `resident` for loaded).
+and `data.future_work_scope` (`independent_cli` for file or `daemon` for loaded).
 `gateway status` exposes saved/loaded network detail as `data.network = {file, loaded}`
 when inspectable. Routine mutation/reload success summarizes policy and actual
 saved/loaded outcome rather than repeating both complete views. Full dry-run,
@@ -175,9 +175,9 @@ pending-activation impact, or failure returns relevant actual views and
 `data.network_candidate` separately from actual state. Dry-run does not change
 either. A URL is not proof of reachability.
 
-## Resident and listener data
+## Daemon and listener data
 
-Detailed status/lifecycle uses `ResidentView`: `discovery_state` (`absent`,
+Detailed status/lifecycle uses `DaemonView`: `discovery_state` (`absent`,
 `compatible`, `incompatible`, `unidentified`, or `unavailable`), string-or-null
 `reason_code`, `identity`, `inference`, and `web`. When version comparison matters,
 include `caller_version` and `version_relation` (`same`, `different`, or `unknown`).
@@ -191,19 +191,19 @@ PID reuse, not a credential or alternate config. Listener views are null or
 `{state, listen, url}`; state is `running`, `stopped`, or `unavailable`; address/URL
 are string-or-null. Web URL is actual management entry, not inferred from inference.
 
-`gateway status`/`web status` return `data.resident: ResidentView`; root `status` may
+`gateway status`/`web status` return `data.daemon: DaemonView`; root `status` may
 summarize the same actual facts with readiness counts and relevant detail actions.
-Lifecycle returns actual resident identity/listeners and
+Lifecycle returns actual daemon identity/listeners and
 `data.lifecycle = {surface, action, requested_listen, actual_listen}`. Surface is
 `inference` or `web`; action is `started`, `reused`, `stopped`, `restarted`, `none`,
 or `planned`; listen values are string-or-null. Include `planned_action` for dry-run
-and `resident_before` only when needed to explain partial effects or a change.
+and `daemon_before` only when needed to explain partial effects or a change.
 A routine success need not repeat before-state or unrelated metadata.
 
 Dry-run uses planned action and leaves actual views unchanged without reserving
-owner/address. Reuse exits 0 with `resident_reused` and discovered actual loaded
+owner/address. Reuse exits 0 with `daemon_reused` and discovered actual loaded
 revision/listeners, not saved values; activation/restart are not requested.
-`resident_incompatible`, `resident_identity_unavailable`, `endpoint_occupied`, and
+`daemon_incompatible`, `daemon_identity_unavailable`, `endpoint_occupied`, and
 `endpoint_conflict` block changes with exit 3 before effects. Return safe actual
 identity/versions and supported recovery, not force/takeover/port fallback.
 Partial start after a completed boundary retains the incomplete/failure result.
@@ -211,7 +211,7 @@ Partial start after a completed boundary retains the incomplete/failure result.
 Detailed `gateway status` additionally returns `data.shared_key = {file_reference,
 loaded_reference, loaded_state}`. References are safe strings or null; loaded
 state is `absent`, `ready`, or `unavailable`. Status reports retained loaded state
-without reading, resolving, or revealing a key. It returns actual resident evidence,
+without reading, resolving, or revealing a key. It returns actual daemon evidence,
 not fabricated success from a reference.
 `data.publication = {snapshot_state, model_count}` summarizes the loaded derived
 list; snapshot state uses common available/absent/unavailable values, and count

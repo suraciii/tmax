@@ -9,7 +9,7 @@ use super::windows_startup::reconcile;
 pub(super) use super::windows_startup::status as autostart_status;
 #[cfg(windows)]
 use super::{control::rpc, windows_startup};
-use super::{failure, resident::run_owner};
+use super::{daemon::run_owner, failure};
 #[cfg(windows)]
 use crate::Request;
 use crate::{Result, config::Config, storage::Store};
@@ -88,8 +88,8 @@ pub async fn run_autostart() -> Result<Value> {
         windows_startup::detach_console();
         let result = async {
             if let Some(current) = rpc(&store, "status", None, None).await? {
-                if current["resident"]["discovery_state"] != "compatible" {
-                    return Err(failure("resident_incompatible", "Autostart cannot control an incompatible resident; use its compatible CLI or Web controls"));
+                if current["daemon"]["discovery_state"] != "compatible" {
+                    return Err(failure("daemon_incompatible", "Autostart cannot control an incompatible daemon; use its compatible CLI or Web controls"));
                 }
                 let request = Request {
                     command: vec!["gateway".into(), "start".into()],
@@ -99,7 +99,7 @@ pub async fn run_autostart() -> Result<Value> {
                     if_revision: None,
                 };
                 let started = rpc(&store, "control", Some(request), None).await?
-                    .ok_or_else(|| failure("resident_identity_unavailable", "Resident disappeared before autostart control"))?;
+                    .ok_or_else(|| failure("daemon_identity_unavailable", "Daemon disappeared before autostart control"))?;
                 if started["gateway"]["ready"] != true {
                     return Err(failure("autostart_blocked", "Autostart did not establish ready inference; inspect stored key availability and endpoint state"));
                 }
@@ -128,7 +128,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let store = Store::at(temporary.path().into());
         assert_eq!(
-            status(&store).await.unwrap()["resident"]["discovery_state"],
+            status(&store).await.unwrap()["daemon"]["discovery_state"],
             "absent"
         );
         assert!(!store.root.exists());

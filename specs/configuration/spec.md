@@ -505,7 +505,7 @@ Effective `reasoning = false`, unknown metadata, toggle-only controls, and
 `config validate`, reload/start, override edits, and catalog adoption validate the
 corresponding effective declarations; an incompatible change is rejected, not
 silently dropped. Reload validates targets before routing reconciliation,
-autostart reconciliation, or resident activation, including when no resident runs.
+autostart reconciliation, or daemon activation, including when no daemon runs.
 
 Maps apply only inside the gateway, to concrete requests and alias candidates.
 Direct native entries retain upstream capabilities and are not given a translated
@@ -789,11 +789,11 @@ inference, apply native configuration, or test the proxy. Inspect saved and load
 policy independently; a saved policy is not evidence of an active or reachable transport.
 
 Independent CLI outbound work captures the policy from its validated current
-saved snapshot; an absent authority uses the documented direct default. Resident
+saved snapshot; an absent authority uses the documented direct default. Daemon
 outbound work captures the loaded snapshot's policy. Invalid or unreadable saved
 policy blocks work that needs it rather than silently selecting direct access.
-Successful activation changes the policy for future resident work. A save
-without a resident reports saved but not loaded. A failed activation retains the
+Successful activation changes the policy for future daemon work. A save
+without a daemon reports saved but not loaded. A failed activation retains the
 previous loaded policy and uses explicit reload for retry. Already started work
 retains its captured policy; settings never repoint an in-flight connection.
 Native agents retain ownership of their own networking.
@@ -877,7 +877,7 @@ it nor reserves that state for a later call.
 
 The OS registration belongs to tmax's sole authority. Remove or replace only
 tmax's owned registration; never overwrite an unrelated startup entry.
-Reconciliation requires no resident service and never starts the gateway. A startup
+Reconciliation requires no daemon service and never starts the gateway. A startup
 invocation must validate the current file and its enabled autostart setting before
 starting inference, so an obsolete registration cannot override a saved disable.
 
@@ -887,7 +887,7 @@ File persistence and service activation are separate boundaries:
 | --- | --- |
 | Ordinary desired-state edit; validation, persistence and required safety/identity effects complete | Successful saved change, independently of background runtime readiness. Attempt whole-file activation in a compatible running service, including a management-only service with no loaded snapshot. |
 | Background activation fails or requires restart | Keep the saved fact/revision, actual failure/warning and separately observed loaded-before revision. An unconfirmed loaded-after revision remains unknown; a concurrent writer may have activated another snapshot. Do not claim activation success or ask the caller to repeat a committed create. |
-| Resident discovery/loaded state cannot be established | Report runtime/activation unavailable and its reason, not stopped, absent, active, or an empty complete session-impact set. |
+| Daemon discovery/loaded state cannot be established | Report runtime/activation unavailable and its reason, not stopped, absent, active, or an empty complete session-impact set. |
 | Explicit reload/lifecycle/revocation/native/startup work or required safety/identity effect fails | Nonzero blocked/incomplete result with every completed save/credential/native effect retained. Never mask a requested failure as successful activation. |
 
 Listener-address changes require explicit restart; report known managed

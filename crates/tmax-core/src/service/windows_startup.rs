@@ -460,7 +460,7 @@ fn launch_outcome(error: Option<&Error>) -> Launch {
         Some(_) => (
             "failed",
             Some("autostart_failed"),
-            Some("Inspect configuration and resident status, then explicitly start gateway"),
+            Some("Inspect configuration and daemon status, then explicitly start gateway"),
         ),
     };
     // Only fixed safe categories are persisted, never error messages, fields,

@@ -272,7 +272,7 @@ uses only its configured candidates; its name supplies no candidate selection.
 Explanation data identifies `gateway`, `agent_target`, `agent_provider`, or
 `native_scope` context and reports `requested` as exactly `{id, protocol}`.
 
-`--state loaded` explains the resident loaded view, not pending saved edits. Model
+`--state loaded` explains the daemon loaded view, not pending saved edits. Model
 explanation does not retrieve secrets, sign in, run inference, reserve a session,
 or apply native files. It assesses only qualified local evidence; a readable tool
 or configured login does not verify native authentication, entitlement, or access.
@@ -474,13 +474,13 @@ is required.
 
 tmax resolves the OS account's home, not an override of the `HOME` environment
 variable. On Unix, a home that yields an unrepresentable control-socket pathname
-blocks startup with `resident_control_path_invalid`, the actual path, and the
-platform's representation error before launching a resident. Use an OS account
+blocks startup with `daemon_control_path_invalid`, the actual path, and the
+platform's representation error before launching a daemon. Use an OS account
 whose home permits that pathname; tmax does not relocate its store or fall back
 to a shorter endpoint. No listener, credentials, or native configuration are
 changed by this startup blocker.
 
-On Windows, the same commands launch a detached native resident with private
+On Windows, the same commands launch a detached native daemon with private
 same-user named-pipe control. `tmax web open` opens the system browser;
 `--no-browser` starts management without opening it. Closing the browser or
 launching terminal does not stop inference. `tmax gateway autostart enable` opts
@@ -491,11 +491,11 @@ secret files. Unsupported storage-format records return `storage_version_unsuppo
 `provider key set` or replace the shared key with `gateway key replace`. Recovery
 contents in unsupported formats are unavailable to current recovery operations.
 
-If the current CLI reports `resident_incompatible`, the resident is too old for
-this executable's management protocol. Use the running resident's matching
+If the current CLI reports `daemon_incompatible`, the daemon is too old for
+this executable's management protocol. Use the running daemon's matching
 pre-cutover CLI (`tmax gateway stop`, then `tmax web stop`) or its existing Web
 controls to perform the explicit stops before starting the current executable;
-the new CLI will not take over or terminate an incompatible resident.
+the new CLI will not take over or terminate an incompatible daemon.
 
 The gateway accepts same-protocol requests and forwards to the configured provider;
 it does not translate protocols. Configure a real provider credential before
@@ -731,7 +731,7 @@ through all three protocols, with direct and concrete gateway routes coexisting
 alongside a native user adapter. An isolated public apply–native request–restore
 run also passed with profiles unchanged. Synthetic gateway forwarding used a
 real isolated tmax router with harness-prepared native configuration. Separately,
-an installed release and matching resident passed public gateway apply and actual
+an installed release and matching daemon passed public gateway apply and actual
 DSH headless Chat Completions and Responses requests through stateless aliases
 to the selected OpenCode Go provider. The current managed native entry is `tmax`,
 using `openai-responses`. Freeing that name required explicit removal of obsolete

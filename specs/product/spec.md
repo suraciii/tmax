@@ -170,7 +170,7 @@ or cross-machine synchronization. Invalid-file recovery and native-change
 restoration are not backups of a complete working installation.
 
 Guidance for external system backups must identify `~/.tmax` as the tmax-owned
-state boundary. A consistent file copy requires stopping the resident service
+state boundary. A consistent file copy requires stopping the daemon service
 and all other tmax writers; copying only `tmax.toml` is not a complete backup.
 Secret-bearing backup copies require the same protection as their source.
 Secret and credential-bearing recovery files contain plaintext; copying them
@@ -682,9 +682,9 @@ use after dependencies are resolved; stored-secret cleanup remains explicit.
 Failures distinguish provisioning, save, activation, and native application.
 A generated but unreferenced key remains discoverable for explicit cleanup.
 
-### Resident service identity
+### Daemon service identity
 
-One `~/.tmax` authority may have only one resident service owner. CLI, Web, and
+One `~/.tmax` authority may have only one daemon service owner. CLI, Web, and
 autostart must identify the actual service, its authority, process identity,
 version, management compatibility, and current listener state before controlling
 or reusing it. A PID, port, or stale ownership record alone is insufficient proof.
@@ -694,9 +694,9 @@ conversation stores.
 A repeated start of an already-running compatible inference listener must return
 the existing process and actual state without restarting, reloading pending
 configuration, or reapplying native files. Starting inference on a compatible
-management-only owner is an explicit listener start, not a second resident.
+management-only owner is an explicit listener start, not a second daemon.
 The management interface must remain usable when inference is stopped.
-When explicit stop operations leave both inference and Web stopped, the resident
+When explicit stop operations leave both inference and Web stopped, the daemon
 must finish or cancel its owned background work safely and release ownership.
 Automatic input acquisition then follows its existing no-service state. An
 explicit listener restart remains one operation and must not release ownership
@@ -715,8 +715,8 @@ prerequisite instead of claiming that the incompatible client's stop can work.
 
 On Unix, the control socket pathname under the OS user's home must be
 representable by the platform's pathname Unix socket API. An unsupported path
-must produce an actionable `resident_control_path_invalid` blocker before
-resident launch or owner locks, child creation, or service initialization.
+must produce an actionable `daemon_control_path_invalid` blocker before
+daemon launch or owner locks, child creation, or service initialization.
 Dry-run reports this known blocker without effects. A path-representation failure
 is not endpoint occupation or an unidentified child-start failure. Do not
 relocate the store, shorten the path, or choose an alternate control endpoint.
@@ -759,7 +759,7 @@ permits another attempt, before response delivery and without moving retained se
 All tmax-owned outbound network operations must use one explicit global policy:
 direct access by default, or the configured HTTP/SOCKS proxy. This includes
 inference forwarding, credential refresh, catalog retrieval, provider
-observations, and public announcement acquisition. CLI and resident execution
+observations, and public announcement acquisition. CLI and daemon execution
 must use the same saved/loaded policy rules from the
 [configuration contract](../configuration/spec.md).
 
@@ -1084,7 +1084,7 @@ credentials; do not claim readiness or add a fallback.
     IDs without probing providers or creating a resource directory.
 32. Apply explicit global outbound policy consistently in CLI and service work;
     never inherit ambient gateway settings or fall back directly after gateway failure.
-33. Converge concurrent starts on one resident owner, reuse compatible active
+33. Converge concurrent starts on one daemon owner, reuse compatible active
     listeners without reloading, and reject incompatible or unidentified owners
     without automatic takeover, restart, or port changes.
 34. Coordinate tmax-owned refresh across consumers with a finite deadline and

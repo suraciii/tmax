@@ -44,7 +44,7 @@ named rules to be removed first.
 Refresh/record/clear are operational-data mutations with `--dry-run`, not config
 edits. A config revision is not a data revision. They require a valid saved
 declaration and recheck stable provider identity, authorization generation,
-declaration revision, and current-data revision at publication. Without a resident
+declaration revision, and current-data revision at publication. Without a daemon
 they persist under `~/.tmax` for later matching use. A saved/loaded declaration
 difference must report current runtime use or pending/non-use without activation.
 
@@ -157,7 +157,7 @@ neither source freshness nor priority recovery.
 
 Read-only list/inspect results include `runtime = {snapshot_state,
 configuration_revision, reason_code}`. Snapshot state is `available`, `absent`, or
-`unavailable`; unavailable resident discovery is not a stopped service or a known
+`unavailable`; unavailable daemon discovery is not a stopped service or a known
 missing loaded snapshot. File-state inspection retains its local declaration and
 saved data while qualifying `current_runtime_use` and acquisition as unavailable.
 Loaded-state reads without a retrievable snapshot report absence or unavailability

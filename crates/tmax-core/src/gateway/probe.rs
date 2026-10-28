@@ -1,4 +1,4 @@
-//! Explicit fixed-destination diagnostic requests, independent of resident startup.
+//! Explicit fixed-destination diagnostic requests, independent of daemon startup.
 use super::{response_observer::Observer, runtime::credential};
 use crate::{
     Error, Request, Result,
@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::time::Instant;
 
-/// Explicit paid, fixed-destination diagnostic request. It does not start a resident.
+/// Explicit paid, fixed-destination diagnostic request. It does not start a daemon.
 pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<Value> {
     let id = request
         .operands

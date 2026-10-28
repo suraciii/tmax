@@ -214,7 +214,7 @@ fn one_text_format_is_supported_before_or_after_the_command_path() {
 
 #[test]
 fn hidden_service_launchers_reject_extra_args() {
-    for launcher in ["__resident", "__autostart"] {
+    for launcher in ["__daemon", "__autostart"] {
         let output = tmax(&[launcher, "LAUNCH-SECRET-MUST-NOT-ECHO"]);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());

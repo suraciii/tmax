@@ -182,7 +182,7 @@ impl History {
         }
     }
     fn coverage(&self, state: &State) -> Value {
-        json!({"process_instance":self.process,"reset":state.reset,"process_started_at":self.started_at,"last_clear_at":state.cleared_at,"limits":{"records":RECORD_LIMIT,"record_bytes":RECORD_BYTES,"serialized_record_budget_bytes":HISTORY_BYTES,"resident_record_accounting_budget_bytes":HISTORY_BYTES,"accounting":"struct bytes plus string/vector capacities and conservative 256 bytes per JSON object entry"},"retention":"oldest terminal record evicted first; no disk history","retained_count":state.records.len(),"oldest":state.records.front().map(|r|r.received_at),"newest":state.records.back().map(|r|r.received_at),"evicted":state.evicted,"incomplete_capture":state.omitted,"prior_process_coverage":"unavailable","direct_traffic_coverage":"unobserved"})
+        json!({"process_instance":self.process,"reset":state.reset,"process_started_at":self.started_at,"last_clear_at":state.cleared_at,"limits":{"records":RECORD_LIMIT,"record_bytes":RECORD_BYTES,"serialized_record_budget_bytes":HISTORY_BYTES,"daemon_record_accounting_budget_bytes":HISTORY_BYTES,"accounting":"struct bytes plus string/vector capacities and conservative 256 bytes per JSON object entry"},"retention":"oldest terminal record evicted first; no disk history","retained_count":state.records.len(),"oldest":state.records.front().map(|r|r.received_at),"newest":state.records.back().map(|r|r.received_at),"evicted":state.evicted,"incomplete_capture":state.omitted,"prior_process_coverage":"unavailable","direct_traffic_coverage":"unobserved"})
     }
     pub fn view(&self, request: &Request) -> Result<Value> {
         let state = self.state.lock().expect("history mutex");
@@ -754,14 +754,14 @@ mod tests {
             h.update(record);
         }
         let state = h.state.lock().unwrap();
-        let resident = state.records.iter().map(record_memory).sum::<usize>();
+        let daemon = state.records.iter().map(record_memory).sum::<usize>();
         let serialized = state.records.iter().map(encoded_size).sum::<usize>();
-        assert!(resident <= HISTORY_BYTES);
+        assert!(daemon <= HISTORY_BYTES);
         assert!(serialized <= HISTORY_BYTES);
         println!(
-            "history_measurement records={} accounted_resident_bytes={} serialized_record_bytes={} per_record_bound={} total_record_bound={}",
+            "history_measurement records={} accounted_daemon_bytes={} serialized_record_bytes={} per_record_bound={} total_record_bound={}",
             state.records.len(),
-            resident,
+            daemon,
             serialized,
             RECORD_BYTES,
             HISTORY_BYTES

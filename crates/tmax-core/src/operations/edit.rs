@@ -255,15 +255,15 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     if path == "gateway remove" {
         let state = crate::service::status(store).await?;
         if !matches!(
-            state["resident"]["discovery_state"].as_str(),
+            state["daemon"]["discovery_state"].as_str(),
             Some("absent" | "compatible")
         ) {
             return Err(Error::new(
-                "resident_identity_unavailable",
-                "Establish resident identity before removing gateway settings; unknown runtime state is not a stopped listener",
+                "daemon_identity_unavailable",
+                "Establish daemon identity before removing gateway settings; unknown runtime state is not a stopped listener",
             ));
         }
-        if state["resident"]["inference"]["listen"].is_string() {
+        if state["daemon"]["inference"]["listen"].is_string() {
             return Err(Error::new(
                 "active_requests",
                 "Stop inference explicitly before removing gateway settings",

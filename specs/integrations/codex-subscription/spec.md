@@ -297,7 +297,7 @@ available result does not establish.
     forecast is scoped to its declared models and validity under the input
     contract; unsupported representations and failed reads do not become quota
     queries, recovered allowance, or fabricated dates. Manual registration stays
-    available without a resident service or credentials.
+    available without a daemon service or credentials.
 
 ## Sources and evidence status
 

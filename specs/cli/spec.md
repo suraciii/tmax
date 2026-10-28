@@ -102,8 +102,8 @@ without importing settings or credentials. State-selecting reads report
 `data.snapshot_state` as `available`, `absent`, or `unavailable`; a missing loaded
 snapshot is not an empty collection. Loaded reads retain the actual loaded view
 even when the saved file is invalid, without activating or repairing it.
-Local desired-state inspection and configuration previews require no resident
-service, credentials, or network. If resident discovery fails, return declared
+Local desired-state inspection and configuration previews require no daemon
+service, credentials, or network. If daemon discovery fails, return declared
 local data with loaded/runtime `unavailable` and its reason. Do not turn unknown
 loaded state or affected-session coverage into known absence or an empty complete
 set. Explicit runtime, refresh, revocation, and native effects retain their own

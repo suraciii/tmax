@@ -21,9 +21,9 @@ async fn main() -> ExitCode {
     }
     if argv
         .get(1)
-        .is_some_and(|arg| arg.as_os_str() == OsStr::new("__resident"))
+        .is_some_and(|arg| arg.as_os_str() == OsStr::new("__daemon"))
     {
-        return run_resident(&argv).await;
+        return run_daemon(&argv).await;
     }
 
     match run_management(argv).await {
@@ -32,15 +32,15 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_resident(argv: &[OsString]) -> ExitCode {
+async fn run_daemon(argv: &[OsString]) -> ExitCode {
     if argv.len() != 2 {
         eprintln!("Invalid internal service invocation.");
         return ExitCode::from(2);
     }
-    match service::run_resident().await {
+    match service::run_daemon().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => {
-            eprintln!("The resident service could not start.");
+            eprintln!("The daemon service could not start.");
             ExitCode::from(4)
         }
     }

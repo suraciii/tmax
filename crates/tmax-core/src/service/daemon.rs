@@ -79,7 +79,7 @@ impl Surface {
             while !*closed.borrow_and_update() {
                 closed.changed().await.map_err(|_| {
                     failure(
-                        "resident_control_failed",
+                        "daemon_control_failed",
                         "Cannot establish Web listener release",
                     )
                 })?;
@@ -91,7 +91,7 @@ impl Surface {
             self.task.abort();
             let _ = self.task.await;
             return Err(failure(
-                "resident_control_failed",
+                "daemon_control_failed",
                 "Web listener did not release within its finite shutdown deadline",
             ));
         }
@@ -136,8 +136,8 @@ impl Shutdown {
             }
             released.changed().await.map_err(|_| {
                 failure(
-                    "resident_control_failed",
-                    "Resident ownership release could not be established",
+                    "daemon_control_failed",
+                    "Daemon ownership release could not be established",
                 )
             })?;
         }
@@ -151,14 +151,14 @@ impl Shutdown {
             }
             complete.changed().await.map_err(|_| {
                 failure(
-                    "resident_control_failed",
+                    "daemon_control_failed",
                     "Cannot establish Windows control endpoint completion",
                 )
             })?;
         }
     }
 }
-pub(super) struct Resident {
+pub(super) struct Daemon {
     store: Store,
     process: String,
     runtime: Arc<Runtime>,
@@ -169,12 +169,12 @@ pub(super) struct Resident {
     key_state: String,
     shutdown: Arc<Shutdown>,
 }
-pub(super) type Shared = Arc<Mutex<Resident>>;
+pub(super) type Shared = Arc<Mutex<Daemon>>;
 
 pub(super) fn absent() -> Value {
-    json!({"resident":{"discovery_state":"absent","reason_code":null,"identity":null,"inference":null,"web":null},"gateway":{"ready":false,"listen":null,"key_ref":null,"config_revision":null},"shared_key":{"loaded_reference":null,"loaded_state":"absent"},"publication":{"snapshot_state":"absent","model_count":null},"limits":crate::gateway::limits(),"unmanaged_clients":"unknown"})
+    json!({"daemon":{"discovery_state":"absent","reason_code":null,"identity":null,"inference":null,"web":null},"gateway":{"ready":false,"listen":null,"key_ref":null,"config_revision":null},"shared_key":{"loaded_reference":null,"loaded_state":"absent"},"publication":{"snapshot_state":"absent","model_count":null},"limits":crate::gateway::limits(),"unmanaged_clients":"unknown"})
 }
-impl Resident {
+impl Daemon {
     pub(super) fn new(
         store: Store,
         process: String,
@@ -227,7 +227,7 @@ impl Resident {
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>();
             Ok(
-                json!({"state":"available","session_source":"resident","loaded_revision":self.loaded.as_ref().map(|(_, revision)|revision),"sessions":sessions,"listener":{"state":if restart{"restart_required"}else{"unchanged"},"managed_dependencies":managed,"unmanaged_clients":"unknown"}}),
+                json!({"state":"available","session_source":"daemon","loaded_revision":self.loaded.as_ref().map(|(_, revision)|revision),"sessions":sessions,"listener":{"state":if restart{"restart_required"}else{"unchanged"},"managed_dependencies":managed,"unmanaged_clients":"unknown"}}),
             )
         } else {
             Err(failure(
@@ -258,7 +258,7 @@ impl Resident {
         }
         let dependencies=self.loaded.as_ref().map(|(config,_)|config.agents.iter().filter(|(_,target)|target.providers.values().any(|entry|entry.gateway==Some(true))).map(|(id,_)|json!({"kind":"agent_target","id":id,"scope":"configured_gateway_entry","native_effective_state":"unknown"})).collect::<Vec<_>>()).unwrap_or_default();
         let stopping = self.shutdown.stopping.load(Ordering::Acquire);
-        json!({"resident":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("resident_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"gateway":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"limits":crate::gateway::limits(),"unmanaged_clients":"unknown"})
+        json!({"daemon":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("daemon_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"gateway":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"limits":crate::gateway::limits(),"unmanaged_clients":"unknown"})
     }
     pub(super) async fn activate(&mut self, revision: Option<&str>) -> Result<Value> {
         let loaded = crate::config::load(&self.store)?;
@@ -336,7 +336,7 @@ impl Resident {
                 .is_some_and(|(config, _)| config.gateway.is_some())
             && self.key_state != "ready";
         Ok(
-            json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"resident":view["resident"],"gateway":view["gateway"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Inspect stored shared-key availability; explicitly replace missing or unsupported key material")}else{Value::Null}}),
+            json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"daemon":view["daemon"],"gateway":view["gateway"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Inspect stored shared-key availability; explicitly replace missing or unsupported key material")}else{Value::Null}}),
         )
     }
     async fn start_inference(&mut self, restart: bool, force: bool) -> Result<Value> {
@@ -392,7 +392,7 @@ impl Resident {
                 Ok(listener) => listener,
                 Err(_) => {
                     return Ok(
-                        json!({"_code":"saved_not_active","lifecycle":{"surface":"inference","action":"stopped"},"interrupted_requests":interrupted,"error":{"code":"endpoint_occupied","message":"Inference stopped but requested endpoint could not be rebound; inspect conflict and explicitly start"},"resident":self.view()["resident"]}),
+                        json!({"_code":"saved_not_active","lifecycle":{"surface":"inference","action":"stopped"},"interrupted_requests":interrupted,"error":{"code":"endpoint_occupied","message":"Inference stopped but requested endpoint could not be rebound; inspect conflict and explicitly start"},"daemon":self.view()["daemon"]}),
                     );
                 }
             }
@@ -451,7 +451,7 @@ impl Resident {
         let mut value = self.view();
         value["lifecycle"] = json!({"surface":surface,"action":action,"requested_listen":requested.map(|v|v.to_string()),"actual_listen":if surface=="inference"{self.inference.as_ref()}else{self.web.as_ref()}.map(|v|v.address.to_string())});
         if action == "reused" {
-            value["outcome"] = json!("resident_reused");
+            value["outcome"] = json!("daemon_reused");
         }
         value
     }
@@ -463,14 +463,14 @@ impl Resident {
     }
 }
 
-pub async fn run_resident() -> Result<()> {
+pub async fn run_daemon() -> Result<()> {
     run_owner(false).await
 }
 #[cfg(unix)]
 pub(super) async fn run_owner(autostart: bool) -> Result<()> {
     let store = Store::discover()?;
     validate_control_path(&socket_path(&store))?;
-    let Some(ownership) = store.try_lock("resident-owner")? else {
+    let Some(ownership) = store.try_lock("daemon-owner")? else {
         return Ok(());
     };
     run_owned(store, ownership, autostart).await
@@ -479,11 +479,11 @@ pub(super) async fn run_owner(autostart: bool) -> Result<()> {
 #[cfg(windows)]
 pub(super) async fn run_owner(autostart: bool) -> Result<()> {
     let store = Store::discover()?;
-    let Some(ownership) = store.try_lock("resident-owner")? else {
+    let Some(ownership) = store.try_lock("daemon-owner")? else {
         return if autostart {
             Err(failure(
-                "resident_identity_unavailable",
-                "Resident ownership changed before autostart; inspect the actual owner before retrying",
+                "daemon_identity_unavailable",
+                "Daemon ownership changed before autostart; inspect the actual owner before retrying",
             ))
         } else {
             Ok(())
@@ -500,7 +500,7 @@ async fn run_owned(
     let process = Uuid::new_v4().to_string();
     let runtime = Runtime::new(store.clone(), process.clone())?;
     let shutdown = Arc::new(Shutdown::new());
-    let state = Arc::new(Mutex::new(Resident::new(
+    let state = Arc::new(Mutex::new(Daemon::new(
         store.clone(),
         process,
         runtime,
@@ -512,12 +512,12 @@ async fn run_owned(
             Ok(value) if value["gateway"]["ready"] == true => {
                 #[cfg(windows)]
                 if let Err(error) = windows_startup::record_launch(&store, None) {
-                    let mut resident = state.lock().await;
-                    let _ = resident.runtime.stop(true);
-                    if let Some(surface) = resident.inference.take() {
+                    let mut daemon = state.lock().await;
+                    let _ = daemon.runtime.stop(true);
+                    if let Some(surface) = daemon.inference.take() {
                         surface.stop().await;
                     }
-                    drop(resident);
+                    drop(daemon);
                     let _ = crate::inputs::deactivate(&store);
                     let _ = listener.release();
                     return Err(error);
@@ -546,7 +546,7 @@ async fn run_owned(
             biased;
             _ = shutdown.requested.notified() => break,
             _ = controls.join_next(), if !controls.is_empty() => {},
-            _=interval.tick()=>{if acquisition.as_ref().is_none_or(JoinHandle::is_finished){let captured={let resident=state.lock().await;resident.loaded.as_ref().map(|v|(resident.store.clone(),v.0.clone()))};if let Some((store,config))=captured {acquisition=Some(tokio::spawn(async move{let _=crate::inputs::automatic_tick(&store,&config).await;}));}}},
+            _=interval.tick()=>{if acquisition.as_ref().is_none_or(JoinHandle::is_finished){let captured={let daemon=state.lock().await;daemon.loaded.as_ref().map(|v|(daemon.store.clone(),v.0.clone()))};if let Some((store,config))=captured {acquisition=Some(tokio::spawn(async move{let _=crate::inputs::automatic_tick(&store,&config).await;}));}}},
             connection=listener.accept()=>{let stream=connection?;let Ok(slot)=connection_slots.clone().try_acquire_owned()else{drop(stream);continue};let state=state.clone();controls.spawn(async move{let _slot=slot;serve_control(state,stream).await});}
         }
     }
@@ -554,10 +554,10 @@ async fn run_owned(
         task.abort();
         let _ = task.await;
     }
-    let resident = state.lock().await;
-    let _ = resident.runtime.stop(true);
+    let daemon = state.lock().await;
+    let _ = daemon.runtime.stop(true);
     let inputs_released = crate::inputs::deactivate(&store);
-    drop(resident);
+    drop(daemon);
     let endpoint_released = listener.release();
     // A stop acknowledgement is a completion boundary, not a shutdown request.
     // No old runtime publication can follow release of the one owner lock.
@@ -586,25 +586,25 @@ async fn run_owned(
     released
 }
 
-pub(super) async fn resident_control(
+pub(super) async fn daemon_control(
     state: &Shared,
-    resident: &mut Resident,
+    daemon: &mut Daemon,
     request: Request,
 ) -> Result<Value> {
     let group = request.command.first().map(String::as_str).unwrap_or("");
     let action = request.command.get(1).map(String::as_str).unwrap_or("");
     let force = request.arguments.contains_key("cancel-active");
     match (group, action) {
-        ("gateway", "start") => resident.start_inference(false, force).await,
-        ("gateway", "restart") => resident.start_inference(true, force).await,
+        ("gateway", "start") => daemon.start_inference(false, force).await,
+        ("gateway", "restart") => daemon.start_inference(true, force).await,
         ("gateway", "stop") => {
-            let interrupted = resident.runtime.stop(force)?;
-            if let Some(surface) = resident.inference.take() {
+            let interrupted = daemon.runtime.stop(force)?;
+            if let Some(surface) = daemon.inference.take() {
                 surface.stop().await;
             }
-            let mut value = resident.lifecycle("inference", "stopped", None);
+            let mut value = daemon.lifecycle("inference", "stopped", None);
             value["interrupted_requests"] = json!(interrupted);
-            resident.maybe_shutdown();
+            daemon.maybe_shutdown();
             Ok(value)
         }
         ("web", "open") => {
@@ -614,27 +614,27 @@ pub(super) async fn resident_control(
                 .and_then(|v| v.first())
                 .map(|s| address(s, false))
                 .transpose()?;
-            if let Some(surface) = &resident.web {
+            if let Some(surface) = &daemon.web {
                 if requested.is_some_and(|v| v != surface.address) {
                     return Err(failure(
                         "endpoint_conflict",
                         "Web listener already runs at another address; explicitly stop it first",
                     ));
                 }
-                return Ok(resident.lifecycle("web", "reused", requested));
+                return Ok(daemon.lifecycle("web", "reused", requested));
             }
-            resident.web = Some(web::start(state.clone(), requested).await?);
-            Ok(resident.lifecycle("web", "started", requested))
+            daemon.web = Some(web::start(state.clone(), requested).await?);
+            Ok(daemon.lifecycle("web", "started", requested))
         }
         ("web", "stop") => {
-            if let Some(surface) = resident.web.take() {
+            if let Some(surface) = daemon.web.take() {
                 #[cfg(windows)]
-                surface.stop_web(&resident.shutdown).await?;
+                surface.stop_web(&daemon.shutdown).await?;
                 #[cfg(unix)]
                 surface.stop().await;
             }
-            let value = resident.lifecycle("web", "stopped", None);
-            resident.maybe_shutdown();
+            let value = daemon.lifecycle("web", "stopped", None);
+            daemon.maybe_shutdown();
             Ok(value)
         }
         ("model", "explain") => {
@@ -646,7 +646,7 @@ pub(super) async fn resident_control(
                 .is_some_and(|v| v == "loaded");
             let saved;
             let config = if loaded {
-                &resident
+                &daemon
                     .loaded
                     .as_ref()
                     .ok_or_else(|| {
@@ -657,19 +657,19 @@ pub(super) async fn resident_control(
                     })?
                     .0
             } else {
-                saved = crate::config::load(&resident.store)?;
+                saved = crate::config::load(&daemon.store)?;
                 &saved.config
             };
-            resident
+            daemon
                 .runtime
                 .inspect_session(config, id, protocol, session, loaded)
         }
-        ("history", "clear") => Ok(resident.runtime.history.clear(request.dry_run)),
-        ("history", _) => resident.runtime.history.view(&request),
-        ("usage", _) => Ok(resident.runtime.history.usage()),
+        ("history", "clear") => Ok(daemon.runtime.history.clear(request.dry_run)),
+        ("history", _) => daemon.runtime.history.view(&request),
+        ("usage", _) => Ok(daemon.runtime.history.usage()),
         _ => Err(failure(
             "unsupported_operation",
-            "Unsupported resident command",
+            "Unsupported daemon command",
         )),
     }
 }
@@ -701,7 +701,7 @@ mod tests {
             .write_json("catalog/accepted.json", &accepted)
             .unwrap();
         let runtime = Runtime::new(store.clone(), "advice".into()).unwrap();
-        let mut resident = Resident {
+        let mut daemon = Daemon {
             store: store.clone(),
             process: "advice".into(),
             runtime,
@@ -712,10 +712,10 @@ mod tests {
             key_state: "absent".into(),
             shutdown: Arc::new(Shutdown::new()),
         };
-        resident.activate(None).await.unwrap();
-        assert!(resident.runtime.snapshot.read().unwrap().is_none());
+        daemon.activate(None).await.unwrap();
+        assert!(daemon.runtime.snapshot.read().unwrap().is_none());
         assert_eq!(
-            resident.loaded_metadata.as_ref().unwrap().revision,
+            daemon.loaded_metadata.as_ref().unwrap().revision,
             "loaded-metadata"
         );
         store
@@ -728,12 +728,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            resident.loaded_metadata.as_ref().unwrap().revision,
+            daemon.loaded_metadata.as_ref().unwrap().revision,
             "loaded-metadata"
         );
-        resident.activate(None).await.unwrap();
+        daemon.activate(None).await.unwrap();
         assert_eq!(
-            resident.loaded_metadata.as_ref().unwrap().revision,
+            daemon.loaded_metadata.as_ref().unwrap().revision,
             "pending-metadata"
         );
     }
@@ -817,7 +817,7 @@ mod tests {
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
         let runtime = Runtime::new(store.clone(), "reuse".into()).unwrap();
-        let mut resident = Resident {
+        let mut daemon = Daemon {
             store: store.clone(),
             process: "reuse".into(),
             runtime,
@@ -828,19 +828,19 @@ mod tests {
             key_state: "absent".into(),
             shutdown: Arc::new(Shutdown::new()),
         };
-        let first = resident.start_inference(false, false).await.unwrap();
+        let first = daemon.start_inference(false, false).await.unwrap();
         assert_eq!(first["gateway"]["ready"], true);
         store
             .write_raw("tmax.toml", b"invalid pending configuration")
             .unwrap();
-        let repeated = resident.start_inference(false, false).await.unwrap();
+        let repeated = daemon.start_inference(false, false).await.unwrap();
         assert_eq!(repeated["lifecycle"]["action"], "reused");
         assert_eq!(
             repeated["gateway"]["config_revision"],
             first["gateway"]["config_revision"]
         );
-        resident.runtime.stop(false).unwrap();
-        resident.inference.take().unwrap().stop().await;
+        daemon.runtime.stop(false).unwrap();
+        daemon.inference.take().unwrap().stop().await;
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -891,7 +891,7 @@ mod tests {
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
         let owner_store = store.clone();
-        let ownership = store.try_lock("resident-owner").unwrap().unwrap();
+        let ownership = store.try_lock("daemon-owner").unwrap().unwrap();
         let first_owner = tokio::spawn(run_owned(owner_store, ownership, false));
         let first = ready(&store).await;
         let started = rpc(&store, "control", Some(request("start", false)), None)
@@ -918,21 +918,21 @@ mod tests {
             .unwrap();
         assert_eq!(stopped["interrupted_requests"], 1);
         assert_eq!(stopped["shutdown"]["ownership_released"], true);
-        assert_eq!(stopped["resident"]["discovery_state"], "absent");
+        assert_eq!(stopped["daemon"]["discovery_state"], "absent");
         // These assertions are immediate: no sleep, discovery retry, or process
         // exit polling may hide a premature stop acknowledgement.
         #[cfg(unix)]
         assert!(!socket_path(&store).exists());
         assert!(rpc(&store, "status", None, None).await.unwrap().is_none());
         let ownership = store
-            .try_lock("resident-owner")
+            .try_lock("daemon-owner")
             .unwrap()
             .expect("stop reply must release owner lock");
         let second_owner = tokio::spawn(run_owned(store.clone(), ownership, false));
         let second = ready(&store).await;
         assert_ne!(
-            first["resident"]["identity"]["process_instance"],
-            second["resident"]["identity"]["process_instance"]
+            first["daemon"]["identity"]["process_instance"],
+            second["daemon"]["identity"]["process_instance"]
         );
         let restarted = rpc(&store, "control", Some(request("start", false)), None)
             .await
