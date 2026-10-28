@@ -115,10 +115,13 @@ Help uses supported native roles, not invented ones.
 | `agent recovery list [--target TARGET]` | Recovery handles/paths under current-user-restricted `~/.tmax`, including removed targets, with restoration/conflict state and no credentials. |
 | `agent recovery inspect RECORD` | Ownership, target identity, affected files, and remaining safe actions. |
 | `agent recovery discard RECORD` | Delete that recovery information without native writes or credential deletion. |
+| `agent recovery accept TARGET\|--recovery RECORD` | Re-baseline one retained record's owned fields to the current native values: no native write, no credential deletion, credential ownership retained; later applies proceed from the accepted state and restore returns to it. |
 
-Apply/restore/discard support dry-run; reads do not. Recovery handles are not
+Apply/restore/discard/accept support dry-run; reads do not. Recovery handles are not
 target IDs; reused IDs do not select predecessor records. Exact-handle recovery
 works from the sole home with absent/invalid config without activating it.
+Accepting after a tool rewrote its own configuration is the explicit
+non-destructive alternative to restore and discard.
 
 Apply rejects missing required selections or unavailable credentials and known
 incompatible schemas. Pi, OMP, OpenCode, Hermes, and DSH do not require a default
@@ -216,6 +219,21 @@ Each projection also has an independent `input` projection with `state`,
 cannot be represented without changing its meaning). Top-level effort state
 does not conceal or override this input state. A blocked input projection blocks
 application before writes, but remains inspectable.
+
+Each projection also has an independent `limits` projection with `state`
+(`projected`, `partial`, or `unavailable`), `reason_code` (`limits_unknown`
+unless projected), and `fields` (`contextWindow`/`maxTokens`, null when that
+limit has no catalog or declared fact). Unknown limits are never invented.
+
+`fact_gaps` accompanies `native_projection` in `agent inspect`, `agent apply`
+results, and `agent apply --dry-run`: one entry per model whose reasoning
+efforts or context limit have no catalog or declared fact, carrying `entry`,
+`model`, `missing` (`reasoning_efforts`, `limit.context`), and
+`agent_self_completion` (`none` for static configuration surfaces such as DSH,
+`undocumented` elsewhere). It reports that the native entry stays bare for the
+missing fields; it does not block application. `model add` returns the same
+`fact_gap` object for the added model when the saved catalog snapshot supplies
+neither fact.
 
 
 A null `native_projection` means planning failed or is unavailable; `blockers`

@@ -151,7 +151,7 @@ pub(super) fn record_view(store: &Store, record: &Record) -> Value {
     let drift = field_drift(record, false);
     let protection = secrets::check_recovery(store, &record.payload_ref, &record.owner)
         .map(|_| "current_user_files");
-    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":protection.as_ref().ok(),"restore_available":protection.is_ok(),"storage_reason_code":protection.as_ref().err().map(|error|error.code.as_str()),"files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":if protection.is_ok(){json!(["agent restore --recovery","agent recovery discard"])}else{json!([])}})
+    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":protection.as_ref().ok(),"restore_available":protection.is_ok(),"storage_reason_code":protection.as_ref().err().map(|error|error.code.as_str()),"files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":if protection.is_ok(){json!(["agent restore --recovery","agent recovery accept","agent recovery discard"])}else{json!([])}})
 }
 pub(super) fn protect_payload(
     store: &Store,
@@ -412,7 +412,7 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
     if !conflicts.is_empty() {
         return Err(Error::new(
             "native_conflict",
-            "Owned native fields differ from both their captured originals and tmax writes; inspect recovery conflicts before restoration",
+            "Owned native fields differ from both their captured originals and tmax writes; restore them, or accept the current native state with agent recovery accept",
         ));
     }
     if dry_run {
@@ -497,7 +497,7 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
 
 pub async fn recovery(store: &Store, request: &Request) -> Result<Value> {
     let action = request.command.last().map(String::as_str).unwrap_or("");
-    let _lock = if action == "discard" && !request.dry_run {
+    let _lock = if matches!(action, "discard" | "accept") && !request.dry_run {
         Some(store.lock("native")?)
     } else {
         None
@@ -526,6 +526,92 @@ pub async fn recovery(store: &Store, request: &Request) -> Result<Value> {
                     Error::new("unknown_resource", "Native recovery handle is not retained")
                 })?;
             Ok(record_view(store, record))
+        }
+        "accept" => {
+            let requested = request
+                .arguments
+                .get("recovery")
+                .and_then(|v| v.first())
+                .cloned()
+                .or_else(|| request.operands.first().cloned())
+                .ok_or_else(|| {
+                    Error::new(
+                        "invalid_arguments",
+                        "An exact native recovery handle or target ID is required",
+                    )
+                })?;
+            let position = index
+                .records
+                .iter()
+                .position(|record| record.id == requested && record.state != "discarded")
+                .or_else(|| {
+                    let identity = owner(store, &requested).ok()?;
+                    index.records.iter().rposition(|r| {
+                        identity.as_deref() == Some(r.owner.as_str())
+                            && r.state != "restored"
+                            && r.state != "discarded"
+                    })
+                })
+                .ok_or_else(|| {
+                    Error::new(
+                        "unknown_resource",
+                        "No remaining native recovery belongs to this handle or target",
+                    )
+                })?;
+            let mut record = index.records[position].clone();
+            validate_record(&record)?;
+            if record.state == "restored" {
+                return Err(Error::new(
+                    "unknown_resource",
+                    "Native recovery was already restored; nothing to accept",
+                ));
+            }
+            secrets::check_recovery(store, &record.payload_ref, &record.owner)?;
+            let drift = field_drift(&record, false)?;
+            if request.dry_run {
+                return Ok(
+                    json!({"recovery":record.id,"target":record.target,"dry_run":true,"accept":"re-baseline owned fields to the current native state","conflicts":drift,"native_writes":false,"credentials_deleted":false,"credential_ownership":"retained"}),
+                );
+            }
+            let mut payload = decode_payload(store, &record)?;
+            for (file, capture) in record.files.iter_mut().zip(payload.files.iter_mut()) {
+                let text = read_native(&file.path)?;
+                let value = document::parse(text.as_deref().unwrap_or(""), file.format)?;
+                for field in file.fields.iter_mut() {
+                    let hash = field_hash(document::get(&value, &field.path));
+                    field.after_hash = hash.clone();
+                    field.before_hash = hash.clone();
+                    field.observed_hash = hash;
+                }
+                capture.baseline_values = file
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        (
+                            field.path.clone(),
+                            document::get(&value, &field.path).cloned(),
+                        )
+                    })
+                    .collect();
+                capture.before = text.clone();
+                capture.after = text.unwrap_or_default();
+                file.after_revision = revision(Some(&capture.after));
+            }
+            let accepted_ref =
+                protect_payload(store, &record.id, &record.owner, &record.target, &payload)?;
+            secrets::remove(store, &record.payload_ref)?;
+            record.payload_ref = accepted_ref;
+            record.state = "accepted".into();
+            let fields = record
+                .files
+                .iter()
+                .map(|file| file.fields.len())
+                .sum::<usize>();
+            index.records[position] = record.clone();
+            store.write_json(INDEX, &index)?;
+            Ok(
+                json!({"recovery":record.id,"target":record.target,"state":"accepted","re_baselined_fields":fields,"native_writes":false,"credentials_deleted":false,"credential_ownership":"retained","restoration_baseline":"current native state"}),
+            )
         }
         "discard" => {
             let id = request.operands.first().ok_or_else(|| {

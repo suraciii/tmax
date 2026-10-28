@@ -621,13 +621,23 @@ credential handoff. Unsupported storage-format key records return `storage_versi
 `storage_record_invalid` and remain unchanged; re-enter the key with
 `provider key set` before applying. Unsupported recovery contents are unavailable
 to current recovery operations. The `awaiting_native_reload` state means the native
-tool must reload/restart before the change is effective.
+tool must reload/restart before the change is effective. When the tool rewrites
+its own configuration and apply reports `native_conflict`, resolve it
+explicitly: `agent restore` reverts owned fields, or `agent recovery accept
+TARGET` re-baselines the retained record to the current native state without
+native writes, credential deletion, or losing credential ownership; apply then
+proceeds from the accepted state.
 
 For qualified Pi and OMP concrete selections, known effective model context/output
 limits, reasoning capability, and supported text/image input metadata are written
 using the versioned native schema. False values remain false; unknown metadata is
 not manufactured, and an unrepresentable explicit token limit blocks before native
 writes. Alias metadata is not copied from whichever candidate currently wins.
+`model add`, `agent inspect`, and `agent apply` report `fact_gap`/`fact_gaps`
+when a model has no catalog or declared reasoning-effort or context-limit fact:
+the native entry stays bare for those fields, and a static surface such as DSH
+completes none of them itself. Declare the facts with `model update` or
+`model reasoning`, or accept the degraded entry.
 See [versioned agent schemas](agents/README.md) for the distinct native fields,
 authentication precedence, scopes, and qualification limits.
 

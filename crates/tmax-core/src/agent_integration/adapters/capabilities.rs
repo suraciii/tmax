@@ -27,6 +27,27 @@ fn project_reasoning(
         }),
     }
 }
+fn project_limits(effective: &Value) -> Value {
+    let context = effective
+        .pointer("/limit/context")
+        .filter(|v| !v.is_null())
+        .cloned();
+    let output = effective
+        .pointer("/limit/output")
+        .filter(|v| !v.is_null())
+        .cloned();
+    let known = [&context, &output].iter().filter(|v| v.is_some()).count();
+    json!({
+        "state": match known {
+            2 => "projected",
+            1 => "partial",
+            _ => "unavailable",
+        },
+        "reason_code": if known == 2 { None } else { Some("limits_unknown") },
+        "fields": {"contextWindow": context, "maxTokens": output},
+        "omitted": [],
+    })
+}
 
 pub(in crate::agent_integration) fn projection_view(
     agent: &str,
@@ -56,8 +77,20 @@ pub(in crate::agent_integration) fn projection_view(
         };
         json!({"state":"unavailable","reason_code":reason,"fields":{},"omitted":[]})
     };
+    view["limits"] = project_limits(effective);
     view["input"] = project_input(agent, effective);
     Ok(view)
+}
+
+/// How far the target tool is known to complete unknown model facts itself.
+/// No agent's self-completion is a tmax contract; "none" marks a static
+/// configuration surface that keeps bare entries bare.
+pub(in crate::agent_integration) fn native_completion(agent: &str) -> &'static str {
+    match agent {
+        "dsh" => "none",
+        "pi" | "omp" | "opencode" | "hermes" | "codex" => "undocumented",
+        _ => "unknown",
+    }
 }
 
 fn project_input(agent: &str, effective: &Value) -> Value {
