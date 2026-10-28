@@ -13,10 +13,12 @@ operations, and [client identity](../spec.md#client-and-conversation-identity).
 [Product authentication](../../product/spec.md#providers-and-authentication),
 [endpoint resolution](../spec.md#endpoint-resolution), and
 [selection and continuity](../../model-routing/spec.md#selection-and-continuity)
-remain authoritative. This directory creates no runtime integration ID.
-A dedicated StepFun integration is not registered. Explicit
-[`custom`](../spec.md#custom-integration) transport supplies no StepFun account,
-subscription, quota, or rule-input acquisition capability.
+remain authoritative. The known integration `stepfun-token-plan` is
+registered. It declares one domestic region `default` with the two protocol
+bases in the table below and authentication method `api-key`. The models.dev
+metadata id `stepfun-step-plan` resolves to this integration. Registration
+adds no account, subscription, quota, or rule-input acquisition beyond the
+qualified read below.
 
 ## Authentication and product selection
 
@@ -37,10 +39,11 @@ authorizes fallback to the standard `/v1` API, another account, or another model
 ## Domestic endpoints and finite operations
 
 The [reasoning integration guide](https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api.md)
-establishes one domestic endpoint set. These source-qualified requirements are
-not an implemented known-integration region selector. Current custom setup must
-supply the exact base for each selected protocol. Direct and gateway routes must
-use the same product/protocol destination.
+establishes one domestic endpoint set. The known `stepfun-token-plan`
+integration resolves these source-qualified requirements from an explicit
+region or an exact known base; because there is a single region, a bare
+integration selection resolves them. Direct and gateway routes must use the
+same product/protocol destination.
 
 | Protocol | Exact base | Operation beneath base | Authentication and transport |
 | --- | --- | --- | --- |
@@ -63,9 +66,11 @@ beta feature. The actual Step route and native beta headers/features require
 separate provider runtime qualification.
 
 Each request must select `step-5-preview`. No Responses, model-discovery,
-identity, quota, balance, history, ID-only resource, file, batch, background,
+identity, balance, history, ID-only resource, file, batch, background,
 WebSocket, or audio operation is declared by this contract. A public API path,
-response ID, or permission for one operation must not widen this set.
+response ID, or permission for one operation must not widen this set. The
+declared quota operation is the plan usage read in the evidence section below;
+it is read-only, bounded, and display-only.
 
 The [model guide](https://platform.stepfun.com/docs/zh/guides/models/step-5-preview.md)
 documents a 1,000,000-token context, up to 64k output tokens, SSE, and function
@@ -110,14 +115,17 @@ shown; changing a User-Agent is not recovery.
 | [Token Plan pricing](https://platform.stepfun.com/docs/zh/step-plan/pricing.md) | Credit is allocated monthly, including quarterly/yearly prepayment. Unused period Credit expires without rollover. Additional Credit has separate validity and earliest-expiry consumption order. | Credit is not raw model tokens, remaining request count, PAYG balance, or a measured account snapshot. Public tier totals do not establish this provider's plan. |
 | [Pricing and adjustment announcement](https://platform.stepfun.com/docs/zh/announcements/step-plan-usage-adjustment.md) | Step 5 Preview has time-dependent Credit consumption; qualifying historical subscriptions can retain earlier terms. | The account's applicable terms, exact reset instant, renewal date, and completed replenishment are not inferred from a public schedule. |
 | [Official Pi guide](https://platform.stepfun.com/docs/zh/guides/developer/integrations/pi.md) | Directs the user to platform usage details to reconcile model and billing source. | A website dashboard is not an API-key-authenticated query contract or permission to use browser cookies. |
-| API-key current plan-quota read | No exact read-only Token Plan URL/method/auth/permission/ownership contract is qualified in the consulted official sources. | This is not a claim that no endpoint exists. Do not guess quota suffixes, call a generic balance/admin API, scrape website sessions, or use an unofficial collector to fill the gap. |
-| Units, reset, and freshness | Published Credit rules and locally observed inference tokens are separate evidence. | Account-wide usage, remaining Credit, source measurement time, precision, freshness/TTL, per-key coverage, and reset/exhaustion state remain unknown without a qualified observation source. |
+| API-key current plan-quota read | A read-only route `GET https://api.stepfun.com/step_plan/v1/usage` with the existing plan API key returned HTTP 200 on 2026-10-27 with `schema_version=1`, `scope personal_account`, a provider `observed_at_ms`, a `plan` object (`state`, `family`, `name`), and `quota` with `state=known`, `allowed=true`, one `credit_buckets` entry (`type subscription`, `total 8000000000`, `remaining 7771085440`, `resets_at_ms`, `expires_at_ms`), and empty `windows`. | The endpoint and wire shape are UNDOCUMENTED: absent from both official docs indexes and unreferenced by StepFun's own first-party CLI. Only the official pricing page corroborates the semantics (monthly Credit pool, expiry without rollover, tier totals; the total matches the Pro tier's 8000M). The observed values are account-specific, not this contract's terms. |
+| Required read posture | Parse with a `schema_version`-gated allowlist that fails closed on an unexpected version or shape. Retain decimal counters exactly. Do not retain a float `used_percent`. Empty `windows` mean that no rolling window is configured, never zero remaining. | Do not retain account or subscription identifiers. The provider `observed_at_ms` is the observation time; local retrieval time is not provider `asOf`. No Oasis-Token or console-session fallback exists or is needed. Do not guess quota suffixes, call a generic balance/admin API, scrape website sessions, or use an unofficial collector. |
+| Units, reset, and freshness | Published Credit rules and locally observed inference tokens are separate evidence. The qualified usage read supplies the selected account's observed counters only. | Credit precision, freshness/TTL, per-key coverage, and reset or exhaustion completion remain unknown. A single observed `credit_buckets` entry does not establish the bucket set, and the observed totals are not public tier terms. |
 
-Quota inspection must show unavailable or source-qualified unknown data with the
-[platform dashboard](https://platform.stepfun.com) link. Unknown quota must not
-become zero, exhaustion, a fabricated reset, or a routing veto. A local retrieval
-time is not provider `asOf`. Successful inference does not populate plan or
-account observations. No provider-source quota rule input is qualified under
+Quota inspection must show source-qualified data from the qualified usage read
+with the [platform dashboard](https://platform.stepfun.com) link for
+reconciliation. When that read fails or its shape changes, inspection shows
+unavailable or dated data. Unknown quota must not become zero, exhaustion, a
+fabricated reset, or a routing veto. A local retrieval time is not provider
+`asOf`. Successful inference does not populate plan or account observations.
+No provider-source quota rule input is qualified under
 [the shared input boundary](../spec.md#rule-input-capabilities).
 
 ## Failures and recovery
@@ -142,9 +150,11 @@ account observations. No provider-source quota rule input is qualified under
   operation or beta-feature entitlement.
 - Qualified streaming, tool-result, continuation, and auxiliary paths preserve
   selected plan access and truthful native identity without model/PAYG fallback.
-- Missing current plan-quota API qualification remains visibly unavailable with
-  a dashboard action. Inference usage cannot masquerade as remaining Credit or
-  enable an unsupported quota rule input.
+- Inference usage cannot masquerade as remaining Credit or enable an
+  unsupported quota rule input.
+- The qualified plan usage read publishes one bounded display observation per
+  refresh. It is not a rule input, its failure degrades to dated or unknown, and
+  empty windows never report zero remaining.
 
 ## Evidence and implementation boundary
 
@@ -167,5 +177,11 @@ capability overrides. A documented request-budget hook changed only existing
 `max_tokens` to 512; stock-default generation budgets remain unqualified.
 Native `thinking.type=disabled` was forwarded unchanged and accepted, but this
 does not prove that upstream reasoning was disabled or that other effort
-controls work. No other model/protocol, full capability suite, plan-quota read,
-or account-wide billing fact is qualified by that result.
+controls work. No other model/protocol, full capability suite, or account-wide
+billing fact is qualified by that result.
+
+One bounded read-only plan usage GET was performed on 2026-10-27 with the
+existing plan API key. It returned HTTP 200 and the shape recorded above. This
+qualifies no model, protocol, or inference capability, no account identity, and
+no schema version beyond the observed one. The endpoint remains undocumented;
+a representation change or failure must degrade to dated or unknown, not zero.

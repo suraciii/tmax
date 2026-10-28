@@ -11,10 +11,14 @@ operations. [Product authentication](../../product/spec.md#providers-and-authent
 and [selection and continuity](../../model-routing/spec.md#selection-and-continuity)
 remain authoritative.
 
-This directory is not a runtime integration ID. No dedicated GLM integration is
-registered. Explicit [`custom`](../spec.md#custom-integration) transport can carry
-an independently qualified request, but supplies no GLM account discovery,
-quota refresh, or provider-source rule input.
+The known integration `glm-coding-plan` is registered. It declares one domestic
+region `default` with the three protocol bases in the table below,
+authentication method `api-key`, and explicit-integration selection. Catalog or
+models.dev metadata must not auto-map a provider to it. A provider configured
+with international Z.ai bases stays on explicit
+[`custom`](../spec.md#custom-integration) transport. Registration adds no
+account discovery and no provider-source rule input; its quota operation
+publishes display observations only.
 
 ## Credentials and entitlement
 
@@ -44,10 +48,10 @@ Multiple keys or providers must not be treated as independent plan allowances.
 
 The [supported-tools endpoint table](https://docs.bigmodel.cn/cn/coding-plan/tool/others)
 publishes one domestic endpoint set. These are source-qualified product
-requirements, not a new registry region selector. A future known integration
-must use one finite domestic map; current custom setup requires each explicit
-protocol base under the [endpoint resolver](../spec.md#endpoint-resolution).
-Direct and gateway routes must select the same product/protocol destination.
+requirements that the known `glm-coding-plan` integration resolves through its
+single domestic region map. An explicit integration selection, or an exact known
+base, must resolve this map. Direct and gateway routes must select the same
+product/protocol destination.
 
 | Protocol | Published domestic base | Finite operation and authentication evidence |
 | --- | --- | --- |
@@ -60,6 +64,13 @@ adds no model-discovery, identity, history, file, ID-only resource, WebSocket,
 or background operation. In particular, the monitor origin must not be derived
 by modifying an inference URL. The separate quota evidence below does not grant
 permission for all monitor or public API endpoints.
+
+The finite quota operation is
+`GET https://open.bigmodel.cn/api/monitor/usage/quota/limit` with the selected
+plan key verbatim in `Authorization`, without a `Bearer` prefix. It is a
+non-inference observation operation under source contract
+`glm_monitor_quota_2026_10_28`. It is bounded and display-only; it supplies no
+normalized rule input.
 
 The [Responses compatibility guide](https://docs.bigmodel.cn/cn/guide/develop/responses/introduction.md)
 documents default `store=false`, stateful continuation through `store=true` and
@@ -102,6 +113,17 @@ configuration correction, or missing qualification identified.
 | [Vendor plugin source](https://github.com/zai-org/zai-coding-plugins/blob/main/plugins/glm-plan-usage/skills/usage-query-skill/scripts/query-usage.mjs) | Domestic unwindowed `GET https://open.bigmodel.cn/api/monitor/usage/quota/limit`; supplied key verbatim in `Authorization`, without adding `Bearer `. The source also sends `Accept-Language: en-US,en` and `Content-Type: application/json`. | This is vendor-client implementation evidence, not a general published API permission or stable tmax observation capability. It authorizes no inferred history/billing read. |
 | Raw monitor fields | Preserve source labels such as `type`, `unit`, `number`, `percentage`, `usage`, `currentValue`, `remaining`, and `nextResetTime` only with their qualification limits. | Numeric unit enums, counter units, percentage precision, and reset encoding are not established by the consulted sources. Do not identify unit `6` as weekly, convert a numeric reset into a contractual instant, or infer points from token labels. |
 | Monitor timing | Local retrieval time can date an observation. | No provider measurement timestamp, validity interval, TTL, or freshness guarantee is qualified. Retrieval time is not provider `asOf`. |
+| Runtime-qualified quota read | One bounded read on 2026-10-27 returned HTTP 200 with `success=true` and `code=200`, `level=max`, and three rows. Row 1: `TOKENS_LIMIT`, `unit=3`, `number=5`, `percentage=17`. Row 2: `TOKENS_LIMIT`, `unit=6`, `number=1`, `percentage=24`. Row 3: `TIME_LIMIT`, `unit=5`, `number=1`, with counters `usage=4000`, `currentValue=0`, `remaining=4000`. | One bounded qualification of the selected key's read. It establishes the wire shape for that response only. It establishes no versioned schema, account identity, team coverage, or stable representation. |
+
+A row's identity keys on its `type`, `unit`, and `number` together; no single
+field identifies a window. Percentages are provider-reported consumed integers,
+not local measurements or rule percentages. Counter unit enums, percentage
+precision, and the reset encoding (epoch milliseconds) stay unqualified. No
+token or point denominator is derivable from a percentage or a counter. The
+five-hour and weekly windows are shared across `glm-5.3` and `glm-5.3-flash`;
+an observation must not be duplicated per local model. The read qualifies
+display observations only, never normalized rule inputs. A failed or changed
+monitor representation must degrade to dated or unknown, not zero.
 
 The plugin labels every `TOKENS_LIMIT` row as five-hour token usage while ignoring
 `unit` and `number`. That label must not collapse distinct returned rows into one
@@ -137,6 +159,8 @@ follow the [time-rule contract](../../model-routing/spec.md#time-rules).
   auxiliary requests. Unsupported combinations fail closed without substitution.
 - Personal plan points, team policy, raw monitor fields, and local token usage
   remain distinct. Unknown monitor units/resets/freshness remain visible.
+- The monitor quota read publishes one bounded display observation per refresh.
+  It is not a rule input, and its failure degrades to dated or unknown.
 - A successful custom inference route cannot unlock GLM discovery, quota refresh,
   provider-source inputs, other models/protocols, or international endpoints.
 
@@ -152,5 +176,7 @@ Chat Completions transport for domestic **`glm-5.3-flash`**. Streaming, one tool
 round trip, and one continuation succeeded. The hook bounded the existing request
 budget; it did not change headers or native identity. This does not qualify stock
 native defaults, a built-in GLM integration, all models/protocols, or quota refresh.
-One authorized quota GET established only that supplied key's read succeeded;
-its account-specific values are not this contract and supply no schema guarantee.
+One authorized quota GET on 2026-10-27 established only that the selected plan
+key's monitor read succeeded; its account-specific values are not this contract
+and supply no schema guarantee. A successful quota read does not establish
+account identity, team coverage, or renewal facts.

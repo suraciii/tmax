@@ -23,6 +23,7 @@ and the invariants it protects.
   - [DeepSeek API](integrations/deepseek/spec.md) — stateless Responses, account balance, limits, and pricing evidence.
   - [Domestic GLM Coding Plan](integrations/glm-coding-plan/spec.md) — plan-key categories, approved clients, domestic protocol bases, and monitor evidence limits.
   - [StepFun Token Plan](integrations/stepfun-token-plan/spec.md) — dedicated plan paths, `step-5-preview`, truthful native clients, and Credit/quota boundaries.
+  - [MiniMax M Plan](integrations/minimax-m-plan/spec.md) — Subscription Key product boundaries, two regional Messages bases, and display-only quota observation limits.
 - [CLI](cli/spec.md) — common invocation, help, protected input, and dry runs.
   Command syntax and detailed results live with their owning capability:
   - [Configuration](cli/configuration/spec.md) — saved settings, reload, and invalid-file recovery.

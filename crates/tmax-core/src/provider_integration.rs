@@ -14,7 +14,14 @@ pub fn integration_id(provider: &Provider) -> Result<&str> {
     if let Some(id) = provider.integration.as_deref() {
         if matches!(
             id,
-            "custom" | "deepseek" | "opencode-go" | "codex-subscription" | "kimi-coding-plan"
+            "custom"
+                | "deepseek"
+                | "opencode-go"
+                | "codex-subscription"
+                | "kimi-coding-plan"
+                | "glm-coding-plan"
+                | "stepfun-token-plan"
+                | "minimax-m-plan"
         ) {
             return Ok(id);
         }
@@ -27,6 +34,7 @@ pub fn integration_id(provider: &Provider) -> Result<&str> {
         Some("opencode-go") => Ok("opencode-go"),
         Some("openai-codex") => Ok("codex-subscription"),
         Some("kimi-for-coding") | Some("kimi-code") => Ok("kimi-coding-plan"),
+        Some("stepfun-step-plan") => Ok("stepfun-token-plan"),
         _ => Err(Error::new(
             "invalid_configuration",
             "Explicit supported integration is required for this metadata selection",
@@ -81,6 +89,34 @@ pub fn regions(id: &str) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
                     ("responses", "https://api.kimi.ai/coding/v1"),
                     ("messages", "https://api.kimi.ai/coding/"),
                 ]),
+            ),
+        ],
+        "glm-coding-plan" => vec![(
+            "default",
+            map(&[
+                (
+                    "chat-completions",
+                    "https://open.bigmodel.cn/api/coding/paas/v4",
+                ),
+                ("responses", "https://open.bigmodel.cn/api/v1"),
+                ("messages", "https://open.bigmodel.cn/api/anthropic"),
+            ]),
+        )],
+        "stepfun-token-plan" => vec![(
+            "default",
+            map(&[
+                ("chat-completions", "https://api.stepfun.com/step_plan/v1"),
+                ("messages", "https://api.stepfun.com/step_plan"),
+            ]),
+        )],
+        "minimax-m-plan" => vec![
+            (
+                "global",
+                map(&[("messages", "https://api.minimax.io/anthropic")]),
+            ),
+            (
+                "china",
+                map(&[("messages", "https://api.minimaxi.com/anthropic")]),
             ),
         ],
         "custom" => vec![],
@@ -274,7 +310,10 @@ pub fn registry() -> Value {
             "deepseek",
             "opencode-go",
             "codex-subscription",
-            "kimi-coding-plan"
+            "kimi-coding-plan",
+            "glm-coding-plan",
+            "stepfun-token-plan",
+            "minimax-m-plan"
         ]
         .into_iter()
         .map(|id| inspect(id).expect("built-in integration"))
@@ -309,6 +348,28 @@ pub fn inspect(id: &str) -> Result<Value> {
     if id == "opencode-go" {
         operations.push(json!({"protocol":null,"method":"GET","path_template":"/zen/go/v1/usage","url":GO_USAGE_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":GO_USAGE_DESTINATION.source,"source_contract":GO_USAGE_DESTINATION.contract}));
     }
+    if id == "kimi-coding-plan" {
+        for (region, url) in [
+            ("china", KIMI_USAGE_DESTINATION.url),
+            ("overseas", "https://api.kimi.ai/coding/v1/usages"),
+        ] {
+            operations.push(json!({"region":region,"protocol":null,"method":"GET","path_template":"/usages","url":url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":KIMI_USAGE_DESTINATION.source,"source_contract":KIMI_USAGE_DESTINATION.contract,"authorization":"bearer"}));
+        }
+    }
+    if id == "glm-coding-plan" {
+        operations.push(json!({"region":"default","protocol":null,"method":"GET","path_template":"/api/monitor/usage/quota/limit","url":GLM_MONITOR_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":GLM_MONITOR_DESTINATION.source,"source_contract":GLM_MONITOR_DESTINATION.contract,"authorization":"raw_key"}));
+    }
+    if id == "stepfun-token-plan" {
+        operations.push(json!({"region":"default","protocol":null,"method":"GET","path_template":"/step_plan/v1/usage","url":STEPFUN_USAGE_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":STEPFUN_USAGE_DESTINATION.source,"source_contract":STEPFUN_USAGE_DESTINATION.contract,"authorization":"bearer"}));
+    }
+    if id == "minimax-m-plan" {
+        for (region, url) in [
+            ("global", MINIMAX_REMAINS_DESTINATION.url),
+            ("china", "https://api.minimaxi.com/v1/token_plan/remains"),
+        ] {
+            operations.push(json!({"region":region,"protocol":null,"method":"GET","path_template":"/v1/token_plan/remains","url":url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":MINIMAX_REMAINS_DESTINATION.source,"source_contract":MINIMAX_REMAINS_DESTINATION.contract,"authorization":"bearer"}));
+        }
+    }
     let auth = if id == "codex-subscription" {
         vec!["login"]
     } else if id == "kimi-coding-plan" {
@@ -317,7 +378,7 @@ pub fn inspect(id: &str) -> Result<Value> {
         vec!["api-key"]
     };
     Ok(
-        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"regions":r.into_iter().map(|(id,endpoints)|json!({"id":id,"endpoints":endpoints})).collect::<Vec<_>>(),"operations":operations},"login_sources":crate::agent_integration::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","Quota GET provides consumed-only percentages and reset announcements, with unqualified freshness and no priority-rule inputs; renewal remains unknown (Console or explicit manual information)" ]),"kimi-coding-plan"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),_=>json!([])}}),
+        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"regions":r.into_iter().map(|(id,endpoints)|json!({"id":id,"endpoints":endpoints})).collect::<Vec<_>>(),"operations":operations},"login_sources":crate::agent_integration::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","Quota GET provides consumed-only percentages and reset announcements, with unqualified freshness and no priority-rule inputs; renewal remains unknown (Console or explicit manual information)"]),"kimi-coding-plan"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),"glm-coding-plan"=>json!(["Domestic plan scope only; international z.ai bases are not interchangeable","Monitor quota rows keep raw labels with unqualified unit and reset encodings","No monitor field becomes a rule input, renewal fact, or per-model allowance copy"]),"stepfun-token-plan"=>json!(["Plan-route billing only; standard /v1 API fallback is prohibited","Usage read is runtime-qualified and undocumented; parsing fails closed on schema drift","step-5-preview is the only qualified model scope"]),"minimax-m-plan"=>json!(["Quota display is percent-only; counter units are unpublished","Status enums and zero totals never mean unlimited or no active plan","Regional hosts require explicit selection and are not interchangeable"]),_=>json!([])}}),
     )
 }
 pub async fn refresh(
@@ -331,10 +392,16 @@ pub async fn refresh(
 }
 
 /// The integration owns non-inference destinations; never derive these from a model base.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthStyle {
+    Bearer,
+    RawKey,
+}
 #[derive(Clone, Copy, Debug)]
 pub struct ObservationDestination<'a> {
     pub source: &'static str,
     pub url: &'a str,
+    pub auth: AuthStyle,
     pub contract: &'static str,
 }
 
@@ -342,32 +409,88 @@ const GO_USAGE_DESTINATION: ObservationDestination<'static> = ObservationDestina
     source: "go_usage_api",
     url: "https://opencode.ai/zen/go/v1/usage",
     contract: "opencode_go_usage_2026_10_23",
+    auth: AuthStyle::Bearer,
 };
 
 const DEEPSEEK_MODELS_DESTINATION: ObservationDestination<'static> = ObservationDestination {
     source: "official_models_api",
     url: "https://api.deepseek.com/models",
     contract: "deepseek_models_v1",
+    auth: AuthStyle::Bearer,
+};
+const KIMI_USAGE_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    source: "kimi_usage_api",
+    url: "https://api.kimi.com/coding/v1/usages",
+    contract: "kimi_coding_usage_2026_10_28",
+    auth: AuthStyle::Bearer,
+};
+const GLM_MONITOR_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    source: "glm_monitor_api",
+    url: "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+    contract: "glm_monitor_quota_2026_10_28",
+    auth: AuthStyle::RawKey,
+};
+const STEPFUN_USAGE_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    source: "stepfun_usage_api",
+    url: "https://api.stepfun.com/step_plan/v1/usage",
+    contract: "stepfun_usage_v1_2026_10_28",
+    auth: AuthStyle::Bearer,
+};
+const MINIMAX_REMAINS_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    source: "minimax_plan_remains_api",
+    url: "https://api.minimax.io/v1/token_plan/remains",
+    contract: "minimax_token_plan_remains_2026_10_28",
+    auth: AuthStyle::Bearer,
 };
 
 pub fn observation_destination(
     provider: &Provider,
     scope: &str,
 ) -> Result<Option<ObservationDestination<'static>>> {
-    resolve(provider)?;
+    let bases = resolve(provider)?;
     Ok(match (integration_id(provider)?, scope) {
         ("deepseek", "auth" | "quota") => Some(ObservationDestination {
             source: "official_balance_api",
             url: "https://api.deepseek.com/user/balance",
             contract: "deepseek_balance_v1",
+            auth: AuthStyle::Bearer,
         }),
         ("deepseek", "models") => Some(DEEPSEEK_MODELS_DESTINATION),
         ("opencode-go", "auth" | "models") => Some(ObservationDestination {
             source: "official_models_api",
             url: "https://opencode.ai/inference/go/v1/models",
             contract: "opencode_go_models_v1",
+            auth: AuthStyle::Bearer,
         }),
         ("opencode-go", "quota") => Some(GO_USAGE_DESTINATION),
+        ("kimi-coding-plan", "quota") => {
+            let overseas = bases
+                .get("chat-completions")
+                .is_some_and(|base| base == "https://api.kimi.ai/coding/v1");
+            Some(if overseas {
+                ObservationDestination {
+                    url: "https://api.kimi.ai/coding/v1/usages",
+                    ..KIMI_USAGE_DESTINATION
+                }
+            } else {
+                KIMI_USAGE_DESTINATION
+            })
+        }
+        ("glm-coding-plan", "quota") => Some(GLM_MONITOR_DESTINATION),
+        ("stepfun-token-plan", "quota") => Some(STEPFUN_USAGE_DESTINATION),
+        ("minimax-m-plan", "quota") => {
+            let china = bases
+                .get("messages")
+                .is_some_and(|base| base == "https://api.minimaxi.com/anthropic");
+            Some(if china {
+                ObservationDestination {
+                    url: "https://api.minimaxi.com/v1/token_plan/remains",
+                    ..MINIMAX_REMAINS_DESTINATION
+                }
+            } else {
+                MINIMAX_REMAINS_DESTINATION
+            })
+        }
         _ => None,
     })
 }
@@ -397,9 +520,20 @@ pub(crate) async fn acquire_observation(
                 "Selected key encoding is unusable",
             )
         })?;
-        let response = client(config)?
-            .get(destination.url)
-            .bearer_auth(key)
+        let request = client(config)?.get(destination.url);
+        let request = match destination.auth {
+            AuthStyle::Bearer => request.bearer_auth(key),
+            AuthStyle::RawKey => request.header(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(key).map_err(|_| {
+                    Error::new(
+                        "credential_unavailable",
+                        "Selected key encoding is unusable",
+                    )
+                })?,
+            ),
+        };
+        let response = request
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
@@ -411,7 +545,15 @@ pub(crate) async fn acquire_observation(
                 "Provider observation was rejected",
             ));
         }
-        let limit = if destination.source == GO_USAGE_DESTINATION.source {
+        let limit = if [
+            GO_USAGE_DESTINATION.source,
+            KIMI_USAGE_DESTINATION.source,
+            GLM_MONITOR_DESTINATION.source,
+            STEPFUN_USAGE_DESTINATION.source,
+            MINIMAX_REMAINS_DESTINATION.source,
+        ]
+        .contains(&destination.source)
+        {
             64 * 1024
         } else {
             4 * 1024 * 1024
@@ -442,6 +584,18 @@ pub(crate) fn normalize_observation(source: &str, body: &Value) -> Result<Value>
     }
     if source == GO_USAGE_DESTINATION.source {
         return normalize_go_usage(body);
+    }
+    if source == KIMI_USAGE_DESTINATION.source {
+        return normalize_kimi_usage(body);
+    }
+    if source == GLM_MONITOR_DESTINATION.source {
+        return normalize_glm_monitor(body);
+    }
+    if source == STEPFUN_USAGE_DESTINATION.source {
+        return normalize_stepfun_usage(body);
+    }
+    if source == MINIMAX_REMAINS_DESTINATION.source {
+        return normalize_minimax_remains(body);
     }
     if source != "official_models_api" {
         return Err(Error::new(
@@ -569,12 +723,352 @@ fn normalize_balance(body: &Value) -> Result<Value> {
     }
     Ok(json!({"is_available":available,"balance_infos":result}))
 }
+
+fn plain_str(value: &Value, max: usize) -> Option<&str> {
+    value
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control))
+}
+fn decimal_str<'a>(object: &'a serde_json::Map<String, Value>, field: &str) -> Option<&'a str> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|v| !v.starts_with('-') && crate::config::decimal(v))
+}
+fn reset_str<'a>(object: &'a serde_json::Map<String, Value>, field: &str) -> Option<&'a str> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|s| s.len() <= 64 && s.contains('T') && s.ends_with('Z'))
+        .filter(|s| crate::inputs::ExactInstant::parse(s).is_ok())
+}
+fn normalize_kimi_usage(body: &Value) -> Result<Value> {
+    let invalid = || {
+        Error::new(
+            "source_format_error",
+            "Kimi usage representation is unsupported",
+        )
+    };
+    let usage = body
+        .get("usage")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid)?;
+    let weekly = json!({
+        "limit": decimal_str(usage, "limit").ok_or_else(invalid)?,
+        "used": decimal_str(usage, "used").ok_or_else(invalid)?,
+        "remaining": decimal_str(usage, "remaining").ok_or_else(invalid)?,
+        "resetTime": reset_str(usage, "resetTime").ok_or_else(invalid)?,
+    });
+    let limits = body
+        .get("limits")
+        .and_then(Value::as_array)
+        .filter(|rows| rows.len() <= 8)
+        .ok_or_else(invalid)?;
+    let mut windows = Vec::with_capacity(limits.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for row in limits {
+        let row = row.as_object().ok_or_else(invalid)?;
+        let window = row
+            .get("window")
+            .and_then(Value::as_object)
+            .ok_or_else(invalid)?;
+        let duration = window
+            .get("duration")
+            .and_then(Value::as_u64)
+            .ok_or_else(invalid)?;
+        let time_unit =
+            plain_str(window.get("timeUnit").ok_or_else(invalid)?, 64).ok_or_else(invalid)?;
+        if !seen.insert(duration) {
+            return Err(invalid());
+        }
+        let detail = row
+            .get("detail")
+            .and_then(Value::as_object)
+            .ok_or_else(invalid)?;
+        // The live payload omits `used` from window details; retained fields
+        // keep their decimal-string form, and a row without limit, remaining,
+        // and resetTime is not a qualified window.
+        let mut detail_out = serde_json::Map::new();
+        for field in ["limit", "used", "remaining"] {
+            if detail.get(field).is_some() {
+                detail_out.insert(
+                    field.into(),
+                    json!(decimal_str(detail, field).ok_or_else(invalid)?),
+                );
+            }
+        }
+        detail_out.insert(
+            "resetTime".into(),
+            json!(reset_str(detail, "resetTime").ok_or_else(invalid)?),
+        );
+        if !detail_out.contains_key("limit") || !detail_out.contains_key("remaining") {
+            return Err(invalid());
+        }
+        windows.push(json!({
+            "window": {"duration": duration, "timeUnit": time_unit},
+            "detail": Value::Object(detail_out),
+        }));
+    }
+    Ok(json!({"usage":weekly,"limits":windows,
+        "counter_unit":"unqualified","reset_basis":"provider_timestamp"}))
+}
+fn normalize_glm_monitor(body: &Value) -> Result<Value> {
+    let invalid = || {
+        Error::new(
+            "source_format_error",
+            "GLM monitor quota representation is unsupported",
+        )
+    };
+    // HTTP 200 carries business errors; semantic success is the only gate.
+    if body.get("success").and_then(Value::as_bool) != Some(true)
+        || body.get("code").and_then(Value::as_i64) != Some(200)
+    {
+        return Err(Error::new(
+            "upstream_rejection",
+            "GLM monitor quota request was rejected",
+        ));
+    }
+    let data = body
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid)?;
+    let level = plain_str(data.get("level").ok_or_else(invalid)?, 64).ok_or_else(invalid)?;
+    let limits = data
+        .get("limits")
+        .and_then(Value::as_array)
+        .filter(|rows| !rows.is_empty() && rows.len() <= 16)
+        .ok_or_else(invalid)?;
+    let mut rows = Vec::with_capacity(limits.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for row in limits {
+        let row = row.as_object().ok_or_else(invalid)?;
+        let kind = row
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if !matches!(kind, "TOKENS_LIMIT" | "TIME_LIMIT" | "CREDIT_LIMIT") {
+            return Err(invalid());
+        }
+        let unit = row
+            .get("unit")
+            .and_then(Value::as_u64)
+            .ok_or_else(invalid)?;
+        let number = row
+            .get("number")
+            .and_then(Value::as_u64)
+            .ok_or_else(invalid)?;
+        if !seen.insert((kind, unit, number)) {
+            return Err(invalid());
+        }
+        let mut out = serde_json::Map::new();
+        out.insert("type".into(), json!(kind));
+        out.insert("unit".into(), json!(unit));
+        out.insert("number".into(), json!(number));
+        if let Some(percent) = row.get("percentage") {
+            out.insert(
+                "percentage".into(),
+                json!(percent.as_u64().ok_or_else(invalid)?),
+            );
+        }
+        let mut counters = 0;
+        for field in ["usage", "currentValue", "remaining"] {
+            if let Some(value) = row.get(field) {
+                out.insert(field.into(), json!(value.as_u64().ok_or_else(invalid)?));
+                counters += 1;
+            }
+        }
+        // A row must carry the provider percentage or the complete counter
+        // triple; a partial triple never becomes a partial fact.
+        if counters != 0 && counters != 3 {
+            return Err(invalid());
+        }
+        if !out.contains_key("percentage") && counters == 0 {
+            return Err(invalid());
+        }
+        if let Some(reset) = row.get("nextResetTime") {
+            out.insert(
+                "nextResetTime".into(),
+                json!(reset.as_u64().ok_or_else(invalid)?),
+            );
+        }
+        rows.push(Value::Object(out));
+    }
+    Ok(
+        json!({"success":true,"code":200,"data":{"level":level,"limits":rows},
+        "percent_basis":"consumed","percent_precision":"integer_rounded",
+        "counter_unit":"unqualified","reset_encoding":"epoch_milliseconds_unqualified"}),
+    )
+}
+fn normalize_stepfun_usage(body: &Value) -> Result<Value> {
+    let invalid = || {
+        Error::new(
+            "source_format_error",
+            "StepFun plan usage representation is unsupported",
+        )
+    };
+    // The payload declares its own contract version; an unexpected version
+    // fails closed instead of parsing optimistically.
+    if body.get("schema_version").and_then(Value::as_i64) != Some(1) {
+        return Err(invalid());
+    }
+    let scope = plain_str(body.get("scope").ok_or_else(invalid)?, 64).ok_or_else(invalid)?;
+    let observed_at_ms = body
+        .get("observed_at_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid)?;
+    let plan = body
+        .get("plan")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid)?;
+    let quota = body
+        .get("quota")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid)?;
+    if quota.get("state").and_then(Value::as_str) != Some("known")
+        || quota.get("allowed").and_then(Value::as_bool) != Some(true)
+        || quota
+            .get("reason")
+            .is_some_and(|reason| reason != &Value::Null)
+    {
+        return Err(Error::new(
+            "observation_failed",
+            "Upstream quota state is not known",
+        ));
+    }
+    // Only the empty no-rolling-window condition is qualified; a populated
+    // windows array has unqualified semantics and must not pass silently.
+    let windows = quota
+        .get("windows")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    if !windows.is_empty() {
+        return Err(invalid());
+    }
+    let buckets = quota
+        .get("credit_buckets")
+        .and_then(Value::as_array)
+        .filter(|rows| !rows.is_empty() && rows.len() <= 8)
+        .ok_or_else(invalid)?;
+    let mut credit_buckets = Vec::with_capacity(buckets.len());
+    for bucket in buckets {
+        let bucket = bucket.as_object().ok_or_else(invalid)?;
+        let kind = plain_str(bucket.get("type").ok_or_else(invalid)?, 32).ok_or_else(invalid)?;
+        let total = decimal_str(bucket, "total").ok_or_else(invalid)?;
+        let remaining = decimal_str(bucket, "remaining").ok_or_else(invalid)?;
+        let mut out = serde_json::Map::new();
+        out.insert("type".into(), json!(kind));
+        out.insert("total".into(), json!(total));
+        out.insert("remaining".into(), json!(remaining));
+        for field in ["resets_at_ms", "expires_at_ms"] {
+            if let Some(value) = bucket.get(field) {
+                out.insert(field.into(), json!(value.as_u64().ok_or_else(invalid)?));
+            }
+        }
+        credit_buckets.push(Value::Object(out));
+    }
+    let mut plan_out = serde_json::Map::new();
+    for field in ["state", "family", "name"] {
+        if let Some(value) = plan.get(field).and_then(|value| plain_str(value, 128)) {
+            plan_out.insert(field.into(), json!(value));
+        }
+    }
+    if let Some(expires) = plan
+        .get("subscription")
+        .and_then(Value::as_object)
+        .and_then(|sub| sub.get("expires_at_ms"))
+        .and_then(Value::as_u64)
+    {
+        plan_out.insert("subscription".into(), json!({"expires_at_ms": expires}));
+    }
+    if plan_out.is_empty() {
+        return Err(invalid());
+    }
+    Ok(
+        json!({"schema_version":1,"scope":scope,"observed_at_ms":observed_at_ms,
+        "plan":Value::Object(plan_out),
+        "quota":{"state":"known","allowed":true,"credit_buckets":credit_buckets,"windows":[]},
+        "percent_basis":"counters_exact","identity_fields":"not_retained"}),
+    )
+}
+fn normalize_minimax_remains(body: &Value) -> Result<Value> {
+    let invalid = || {
+        Error::new(
+            "source_format_error",
+            "MiniMax plan allowance representation is unsupported",
+        )
+    };
+    let base = body
+        .get("base_resp")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid)?;
+    // HTTP 200 carries business errors; base_resp.status_code is the only
+    // qualified success signal.
+    if base.get("status_code").and_then(Value::as_i64) != Some(0) {
+        return Err(Error::new(
+            "upstream_rejection",
+            "MiniMax plan allowance request was rejected",
+        ));
+    }
+    let remains = body
+        .get("model_remains")
+        .and_then(Value::as_array)
+        .filter(|rows| !rows.is_empty() && rows.len() <= 16)
+        .ok_or_else(invalid)?;
+    let mut rows = Vec::with_capacity(remains.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for row in remains {
+        let row = row.as_object().ok_or_else(invalid)?;
+        let name = plain_str(row.get("model_name").ok_or_else(invalid)?, 64).ok_or_else(invalid)?;
+        if !seen.insert(name) {
+            return Err(invalid());
+        }
+        let mut out = serde_json::Map::new();
+        out.insert("model_name".into(), json!(name));
+        let mut percent = false;
+        for field in [
+            "current_interval_remaining_percent",
+            "current_weekly_remaining_percent",
+        ] {
+            if let Some(value) = row.get(field) {
+                out.insert(field.into(), json!(value.as_u64().ok_or_else(invalid)?));
+                percent = true;
+            }
+        }
+        // Count fields carry unpublished units and historically ambiguous
+        // semantics; they are not retained. A row without either remaining
+        // percent is not a qualified allowance fact.
+        if !percent {
+            return Err(invalid());
+        }
+        for field in [
+            "current_interval_status",
+            "current_weekly_status",
+            "start_time",
+            "end_time",
+            "weekly_start_time",
+            "weekly_end_time",
+            "remains_time",
+        ] {
+            if let Some(value) = row.get(field) {
+                out.insert(field.into(), json!(value.as_u64().ok_or_else(invalid)?));
+            }
+        }
+        rows.push(Value::Object(out));
+    }
+    Ok(json!({"base_resp":{"status_code":0},"model_remains":rows,
+        "percent_basis":"remaining","counter_fields":"not_retained",
+        "status_semantics":"uninterpreted","window_bounds_encoding":"epoch_milliseconds",
+        "reset_semantics":"unqualified"}))
+}
 pub fn dashboard(id: &str) -> &'static str {
     match id {
         "deepseek" => "https://platform.deepseek.com/",
         "opencode-go" => "https://opencode.ai/console",
         "codex-subscription" => "https://chatgpt.com/codex/settings/usage",
         "kimi-coding-plan" => "https://www.kimi.com/code/console",
+        "glm-coding-plan" => "https://www.bigmodel.cn/coding-plan/personal/usage",
+        "stepfun-token-plan" => "https://platform.stepfun.com",
+        "minimax-m-plan" => "https://platform.minimax.io/console/usage",
         _ => "",
     }
 }
@@ -991,5 +1485,467 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn new_integrations_resolve_declared_maps_and_scope_regions() {
+        let glm = Provider {
+            integration: Some("glm-coding-plan".into()),
+            ..Default::default()
+        };
+        let bases = resolve(&glm).unwrap();
+        assert_eq!(bases["messages"], "https://open.bigmodel.cn/api/anthropic");
+        assert_eq!(bases["responses"], "https://open.bigmodel.cn/api/v1");
+        assert_eq!(bases.len(), 3);
+        let stepfun = Provider {
+            integration: Some("stepfun-token-plan".into()),
+            ..Default::default()
+        };
+        let bases = resolve(&stepfun).unwrap();
+        assert_eq!(
+            bases["chat-completions"],
+            "https://api.stepfun.com/step_plan/v1"
+        );
+        assert_eq!(bases["messages"], "https://api.stepfun.com/step_plan");
+        assert!(!bases.contains_key("responses"));
+        assert_eq!(
+            integration_id(&Provider {
+                metadata: Some("stepfun-step-plan".into()),
+                ..Default::default()
+            })
+            .unwrap(),
+            "stepfun-token-plan"
+        );
+        let mut minimax = Provider {
+            integration: Some("minimax-m-plan".into()),
+            ..Default::default()
+        };
+        assert!(resolve(&minimax).is_err());
+        minimax.region = Some("global".into());
+        assert_eq!(
+            resolve(&minimax).unwrap()["messages"],
+            "https://api.minimax.io/anthropic"
+        );
+        minimax.region = Some("china".into());
+        assert_eq!(
+            resolve(&minimax).unwrap()["messages"],
+            "https://api.minimaxi.com/anthropic"
+        );
+    }
+
+    #[test]
+    fn quota_destinations_follow_selected_region_and_declare_auth_style() {
+        let mut kimi = Provider {
+            integration: Some("kimi-coding-plan".into()),
+            ..Default::default()
+        };
+        kimi.region = Some("china".into());
+        assert_eq!(
+            observation_destination(&kimi, "quota")
+                .unwrap()
+                .unwrap()
+                .url,
+            "https://api.kimi.com/coding/v1/usages"
+        );
+        kimi.region = Some("overseas".into());
+        assert_eq!(
+            observation_destination(&kimi, "quota")
+                .unwrap()
+                .unwrap()
+                .url,
+            "https://api.kimi.ai/coding/v1/usages"
+        );
+        let glm = Provider {
+            integration: Some("glm-coding-plan".into()),
+            ..Default::default()
+        };
+        let glm_quota = observation_destination(&glm, "quota").unwrap().unwrap();
+        assert_eq!(
+            glm_quota.url,
+            "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
+        );
+        assert_eq!(glm_quota.auth, AuthStyle::RawKey);
+        assert!(observation_destination(&glm, "auth").unwrap().is_none());
+        let mut minimax = Provider {
+            integration: Some("minimax-m-plan".into()),
+            ..Default::default()
+        };
+        minimax.region = Some("china".into());
+        assert_eq!(
+            observation_destination(&minimax, "quota")
+                .unwrap()
+                .unwrap()
+                .url,
+            "https://api.minimaxi.com/v1/token_plan/remains"
+        );
+        minimax.region = Some("global".into());
+        assert_eq!(
+            observation_destination(&minimax, "quota")
+                .unwrap()
+                .unwrap()
+                .url,
+            "https://api.minimax.io/v1/token_plan/remains"
+        );
+        let stepfun = Provider {
+            integration: Some("stepfun-token-plan".into()),
+            ..Default::default()
+        };
+        let stepfun_quota = observation_destination(&stepfun, "quota").unwrap().unwrap();
+        assert_eq!(
+            stepfun_quota.url,
+            "https://api.stepfun.com/step_plan/v1/usage"
+        );
+        assert_eq!(stepfun_quota.auth, AuthStyle::Bearer);
+        for id in [
+            "kimi-coding-plan",
+            "glm-coding-plan",
+            "stepfun-token-plan",
+            "minimax-m-plan",
+        ] {
+            let declaration = inspect(id).unwrap();
+            assert_eq!(declaration["provider_input_capabilities"], json!([]));
+            assert!(
+                declaration["endpoint_support"]["operations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|op| op["purpose"] == "quota"
+                        && op["method"] == "GET"
+                        && op.get("authorization").is_some()),
+                "{id} must declare its quota operation with an authorization style"
+            );
+        }
+    }
+
+    fn kimi_usage_body() -> Value {
+        json!({
+            "usage": {"limit":"100","used":"20","remaining":"80","resetTime":"2026-10-29T15:42:16.495050Z"},
+            "limits": [
+                {"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
+                 "detail":{"limit":"100","remaining":"100","resetTime":"2026-10-28T04:42:16.495050Z"}}
+            ],
+            "usages": {"limit_5h":{"used_ratio":0.4341,"reset_time":"2026-10-27T18:42:15Z"}},
+            "booster_wallet": {"status":"STATUS_DISABLED","userId":"must-not-retain"}
+        })
+    }
+    #[test]
+    fn kimi_usage_keeps_reported_counters_and_drops_unqualified_or_identity_fields() {
+        let normalized = normalize_observation("kimi_usage_api", &kimi_usage_body()).unwrap();
+        assert_eq!(normalized["usage"]["remaining"], json!("80"));
+        assert_eq!(
+            normalized["usage"]["resetTime"],
+            json!("2026-10-29T15:42:16.495050Z")
+        );
+        assert_eq!(normalized["limits"][0]["window"]["duration"], json!(300));
+        assert_eq!(
+            normalized["limits"][0]["window"]["timeUnit"],
+            json!("TIME_UNIT_MINUTE")
+        );
+        assert_eq!(normalized["limits"][0]["detail"]["remaining"], json!("100"));
+        assert!(normalized["limits"][0]["detail"].get("used").is_none());
+        assert_eq!(normalized["counter_unit"], json!("unqualified"));
+        assert!(normalized.get("usages").is_none());
+        assert!(normalized.get("booster_wallet").is_none());
+        assert_eq!(
+            normalize_observation("kimi_usage_api", &normalized).unwrap(),
+            normalized
+        );
+        let mut duplicate = kimi_usage_body();
+        let repeated_row = duplicate["limits"][0].clone();
+        duplicate["limits"]
+            .as_array_mut()
+            .unwrap()
+            .push(repeated_row);
+        assert_eq!(
+            normalize_observation("kimi_usage_api", &duplicate)
+                .unwrap_err()
+                .code,
+            "source_format_error"
+        );
+        let mutations: [fn(&mut Value); 4] = [
+            |b| b["usage"]["limit"] = json!("-1"),
+            |b| b["usage"]["resetTime"] = json!("2026-10-29 15:42:16Z"),
+            |b| {
+                b["limits"][0]["detail"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("remaining");
+            },
+            |b| b["limits"][0]["window"]["duration"] = json!(0.5),
+        ];
+        for mutate in mutations {
+            let mut body = kimi_usage_body();
+            mutate(&mut body);
+            assert_eq!(
+                normalize_observation("kimi_usage_api", &body)
+                    .unwrap_err()
+                    .code,
+                "source_format_error"
+            );
+        }
+    }
+
+    fn glm_monitor_body() -> Value {
+        json!({"code":200,"success":true,"msg":"ok","data":{"level":"max","limits":[
+            {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":17,"nextResetTime":1793128801192u64},
+            {"type":"TOKENS_LIMIT","unit":6,"number":1,"percentage":24,"nextResetTime":1793161879984u64},
+            {"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":0,"remaining":4000,"percentage":0,"nextResetTime":1795231968998u64,"usageDetails":[{"modelCode":"must-not-retain"}]}
+        ]}})
+    }
+    #[test]
+    fn glm_monitor_preserves_raw_rows_without_inventing_semantics() {
+        let normalized = normalize_observation("glm_monitor_api", &glm_monitor_body()).unwrap();
+        assert_eq!(normalized["data"]["level"], json!("max"));
+        let rows = normalized["data"]["limits"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["type"], json!("TOKENS_LIMIT"));
+        assert_eq!(rows[0]["unit"], json!(3));
+        assert_eq!(rows[0]["number"], json!(5));
+        assert_eq!(rows[0]["percentage"], json!(17));
+        assert_eq!(rows[0]["nextResetTime"], json!(1793128801192u64));
+        assert_eq!(rows[2]["remaining"], json!(4000));
+        assert_eq!(rows[2]["currentValue"], json!(0));
+        assert_eq!(normalized["percent_basis"], json!("consumed"));
+        assert_eq!(normalized["counter_unit"], json!("unqualified"));
+        assert!(rows[2].get("usageDetails").is_none());
+        assert_eq!(
+            normalize_observation("glm_monitor_api", &normalized).unwrap(),
+            normalized
+        );
+        // A business error rides an HTTP 200; it is a rejection, not quota.
+        let rejected = json!({"code":1315,"success":false,"msg":"wrong product","data":{"level":"max","limits":[]}});
+        assert_eq!(
+            normalize_observation("glm_monitor_api", &rejected)
+                .unwrap_err()
+                .code,
+            "upstream_rejection"
+        );
+        let mut format_errors = vec![
+            json!({"success":true,"code":200,"data":{"level":"max","limits":[]}}),
+            json!({"success":true,"code":200,"data":{"level":"max","limits":[
+                {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":12000,"currentValue":1438}
+            ]}}),
+        ];
+        let mut unknown_type = glm_monitor_body();
+        unknown_type["data"]["limits"][0]["type"] = json!("FUTURE_LIMIT");
+        format_errors.push(unknown_type);
+        let mut duplicate = glm_monitor_body();
+        let repeated_row = duplicate["data"]["limits"][0].clone();
+        duplicate["data"]["limits"]
+            .as_array_mut()
+            .unwrap()
+            .push(repeated_row);
+        format_errors.push(duplicate);
+        let mut float_percent = glm_monitor_body();
+        float_percent["data"]["limits"][0]["percentage"] = json!(17.5);
+        format_errors.push(float_percent);
+        for body in format_errors {
+            assert_eq!(
+                normalize_observation("glm_monitor_api", &body)
+                    .unwrap_err()
+                    .code,
+                "source_format_error"
+            );
+        }
+        // A complete counter triple without percentage stays qualified.
+        let mut counters_only = glm_monitor_body();
+        counters_only["data"]["limits"][2]
+            .as_object_mut()
+            .unwrap()
+            .remove("percentage");
+        let normalized = normalize_observation("glm_monitor_api", &counters_only).unwrap();
+        assert!(normalized["data"]["limits"][2].get("percentage").is_none());
+    }
+
+    fn stepfun_usage_body() -> Value {
+        json!({
+            "account": {"id":"acct-must-not-retain"},
+            "observed_at_ms": 1793138236124u64,
+            "plan": {"state":"known","family":"token","name":"Token-Pro","subscription":{"id":"sub-must-not-retain","expires_at_ms":1798618579000u64}},
+            "quota": {"state":"known","allowed":true,"reason":null,"windows":[],
+                      "credit_buckets":[{"type":"subscription","total":"8000000000","remaining":"7771085440","used_percent":2.8614319999999998,"resets_at_ms":1795114271000u64,"expires_at_ms":1798664379000u64}]},
+            "schema_version": 1,
+            "scope": "personal_account"
+        })
+    }
+    #[test]
+    fn stepfun_usage_is_schema_gated_and_retains_exact_counters_only() {
+        let normalized = normalize_observation("stepfun_usage_api", &stepfun_usage_body()).unwrap();
+        assert_eq!(normalized["schema_version"], json!(1));
+        assert_eq!(normalized["observed_at_ms"], json!(1793138236124u64));
+        assert_eq!(normalized["plan"]["name"], json!("Token-Pro"));
+        assert_eq!(
+            normalized["quota"]["credit_buckets"][0]["remaining"],
+            json!("7771085440")
+        );
+        assert_eq!(
+            normalized["quota"]["credit_buckets"][0]["resets_at_ms"],
+            json!(1795114271000u64)
+        );
+        assert_eq!(normalized["percent_basis"], json!("counters_exact"));
+        assert!(
+            normalized["quota"]["credit_buckets"][0]
+                .get("used_percent")
+                .is_none()
+        );
+        let text = normalized.to_string();
+        assert!(!text.contains("acct-must-not-retain"));
+        assert!(!text.contains("sub-must-not-retain"));
+        assert_eq!(
+            normalize_observation("stepfun_usage_api", &normalized).unwrap(),
+            normalized
+        );
+        let mut unknown_state = stepfun_usage_body();
+        unknown_state["quota"]["state"] = json!("unknown");
+        assert_eq!(
+            normalize_observation("stepfun_usage_api", &unknown_state)
+                .unwrap_err()
+                .code,
+            "observation_failed"
+        );
+        let mut format_errors = Vec::new();
+        let mut version = stepfun_usage_body();
+        version["schema_version"] = json!(2);
+        format_errors.push(version);
+        let mut windows = stepfun_usage_body();
+        windows["quota"]["windows"] = json!([{"unqualified":"row"}]);
+        format_errors.push(windows);
+        let mut exponent = stepfun_usage_body();
+        exponent["quota"]["credit_buckets"][0]["total"] = json!("8e9");
+        format_errors.push(exponent);
+        let mut rejected_state = stepfun_usage_body();
+        rejected_state["quota"]["reason"] = json!("paused");
+        assert_eq!(
+            normalize_observation("stepfun_usage_api", &rejected_state)
+                .unwrap_err()
+                .code,
+            "observation_failed"
+        );
+        for body in format_errors {
+            assert_eq!(
+                normalize_observation("stepfun_usage_api", &body)
+                    .unwrap_err()
+                    .code,
+                "source_format_error"
+            );
+        }
+    }
+
+    fn minimax_remains_body() -> Value {
+        json!({"base_resp":{"status_code":0,"status_msg":"success"},"model_remains":[
+            {"model_name":"general","start_time":1793124132831u64,"end_time":1793142132831u64,"remains_time":17999502,
+             "current_interval_total_count":0,"current_interval_usage_count":0,"current_interval_remaining_percent":100,"current_interval_status":1,
+             "weekly_start_time":1793068800000u64,"weekly_end_time":1793587200000u64,"weekly_remains_time":44694902,
+             "current_weekly_total_count":0,"current_weekly_usage_count":0,"current_weekly_remaining_percent":100,"current_weekly_status":3},
+            {"model_name":"video","current_interval_remaining_percent":100,"current_interval_status":3,
+             "current_weekly_remaining_percent":100,"current_weekly_status":3}
+        ]})
+    }
+    #[test]
+    fn minimax_remains_keep_percent_rows_and_never_interpret_status_or_counts() {
+        let normalized =
+            normalize_observation("minimax_plan_remains_api", &minimax_remains_body()).unwrap();
+        let rows = normalized["model_remains"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["model_name"], json!("general"));
+        assert_eq!(rows[0]["current_interval_remaining_percent"], json!(100));
+        assert_eq!(rows[0]["current_interval_status"], json!(1));
+        assert_eq!(rows[0]["start_time"], json!(1793124132831u64));
+        assert_eq!(rows[0]["end_time"], json!(1793142132831u64));
+        assert_eq!(rows[0]["weekly_start_time"], json!(1793068800000u64));
+        assert_eq!(rows[0]["weekly_end_time"], json!(1793587200000u64));
+        assert_eq!(rows[0]["remains_time"], json!(17999502));
+        assert!(rows[0].get("current_interval_total_count").is_none());
+        assert!(rows[0].get("weekly_remains_time").is_none());
+        assert_eq!(normalized["percent_basis"], json!("remaining"));
+        assert_eq!(normalized["counter_fields"], json!("not_retained"));
+        assert_eq!(
+            normalize_observation("minimax_plan_remains_api", &normalized).unwrap(),
+            normalized
+        );
+        let rejected = json!({"base_resp":{"status_code":2057,"status_msg":"not token plan token"},"model_remains":[]});
+        assert_eq!(
+            normalize_observation("minimax_plan_remains_api", &rejected)
+                .unwrap_err()
+                .code,
+            "upstream_rejection"
+        );
+        let mut format_errors = Vec::new();
+        let mut duplicate = minimax_remains_body();
+        let repeated_row = duplicate["model_remains"][0].clone();
+        duplicate["model_remains"]
+            .as_array_mut()
+            .unwrap()
+            .push(repeated_row);
+        format_errors.push(duplicate);
+        let mut no_percent = minimax_remains_body();
+        no_percent["model_remains"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("current_interval_remaining_percent");
+        no_percent["model_remains"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("current_weekly_remaining_percent");
+        format_errors.push(no_percent);
+        format_errors.push(json!({"base_resp":{"status_code":0},"model_remains":[]}));
+        for body in format_errors {
+            assert_eq!(
+                normalize_observation("minimax_plan_remains_api", &body)
+                    .unwrap_err()
+                    .code,
+                "source_format_error"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn glm_monitor_transport_sends_raw_authorization_header() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::at(dir.path().into());
+        let owner = crate::secrets::owner_tag(&store, "provider", "glm-test").unwrap();
+        let key_ref = crate::secrets::put(&store, &owner, b"synthetic-glm-key").unwrap();
+        let provider = Provider {
+            integration: Some("glm-coding-plan".into()),
+            auth: Some(crate::config::Auth::ApiKey { key_ref }),
+            ..Default::default()
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = glm_monitor_body().to_string();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0 && request.len() + count <= 8192);
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+            assert!(request.starts_with("get /api/monitor/usage/quota/limit http/1.1\r\n"));
+            assert!(request.contains("\r\nauthorization: synthetic-glm-key\r\n"));
+            assert!(!request.contains("bearer"));
+            let response = format!(
+                "HTTP/1.1 200 fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+        let url = format!("http://{address}/api/monitor/usage/quota/limit");
+        let destination = ObservationDestination {
+            url: &url,
+            ..GLM_MONITOR_DESTINATION
+        };
+        let result = acquire_observation(&store, &Config::empty(), &provider, destination).await;
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        let acquired = result.unwrap();
+        assert_eq!(acquired.status, 200);
+        assert_eq!(acquired.data["data"]["level"], json!("max"));
     }
 }

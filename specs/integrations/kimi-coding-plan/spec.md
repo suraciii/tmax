@@ -195,16 +195,32 @@ Quota inspection must preserve the actual windows and reset information
 reported for the selected membership, not infer them from a plan name or a
 fixed plan-generation classification. Renewal, expiry, quota reset, and native
 credential expiry remain separate facts. Local traffic is not account-wide
-membership usage.
+membership usage. Renewal and reset completion remain unknown; a quota read
+reports windows, not renewal.
 
 The [Console](https://www.kimi.com/code/console) and
 [Subscription quota page](https://www.kimi.com/membership/subscription?tab=quota)
-provide user-facing membership and quota information. These interfaces do not
-establish a supported machine-readable subscription, quota, or renewal API for
-tmax. Without a qualified source, inspection must show those facts as unknown,
-provide the relevant dashboard link, and retain optional user-maintained
-subscription information. It must not scrape browser sessions or import CLI
-tokens to fill those fields.
+provide user-facing membership and quota information. They do not establish a
+subscription-management or renewal API for tmax. Inspection keeps the dashboard
+links and optional user-maintained subscription information.
+
+The integration's quota operation is
+`GET {selected regional coding base}/usages`: `https://api.kimi.com/coding/v1/usages`
+for `china` and `https://api.kimi.ai/coding/v1/usages` for `overseas`. It sends
+the selected membership key in `Authorization: Bearer`. One bounded read on
+2026-10-27 returned HTTP 200 with a weekly usage object and separate window
+limits (five-hour and weekly) carrying provider-reported limit/remaining
+counters and reset timestamps. This read is a non-inference observation
+operation; no inference was issued to obtain it.
+
+The read preserves the provider's actual windows and reset values verbatim. The
+counter unit is unpublished, so counters must not be labeled requests or tokens.
+Overlapping legacy and new fields in the response must not be counted as two
+allowances. The shared membership allowance is not multiplied per local
+provider or key. The read qualifies display observations only, never renewal
+facts or rule inputs. A failed or changed representation degrades to dated or
+unknown, not zero. tmax must not scrape browser sessions or import CLI tokens
+to fill quota fields.
 
 The membership documentation also describes Extra Usage, managed by the user
 in the upstream Console or Subscription page, not by tmax. Included quota
@@ -257,10 +273,11 @@ inventing an error code or converting it into zero quota.
   qualification. Documented direct key access does not imply relay approval.
   The route cannot require spoofing or account sharing to work.
 - Usage inspection preserves shared membership allowance and the selected
-  membership's actual quota windows. Unsupported subscription, quota, renewal,
-  or reset facts remain unknown with dashboard links and optional user-maintained
-  subscription information. Local traffic cannot masquerade as account-wide
-  usage. Included quota exhaustion alone does not establish routing ineligibility.
+  membership's actual quota windows. Quota-window facts are observable through
+  the qualified regional usage read; renewal and reset completion remain
+  unknown with dashboard links and optional user-maintained subscription
+  information. Local traffic cannot masquerade as account-wide usage. Included
+  quota exhaustion alone does not establish routing ineligibility.
 - The documented failure classes remain distinguishable even when they share
   HTTP 401 or 403. Recovery identifies the actual key, entitlement, window,
   temporary membership check, native login source, or risk-control problem without
@@ -291,7 +308,11 @@ HTTP statuses and terminal upstream request history were not collected because
 the acceptance harness used an incorrect history filter. Native completion is
 not a substitute for that missing evidence. This bounded single-user relay
 result does not establish vendor relay authorization, account identity, plan,
-quota, renewal, or native OAuth forwarding. No quota HTTP read was performed.
+quota, renewal, or native OAuth forwarding. No inference was issued during the
+quota read. One bounded quota HTTP read was performed on **2026-10-27**
+against the selected regional coding base; it was a non-inference GET that
+returned the window limits recorded above. It establishes no schema version,
+no counter unit, no renewal fact, and no rule-input capability.
 Supported agent-version ranges remain unset. Qualification records must follow
 the [shared support contract](../spec.md#support-contract) and keep provider,
 agent, and runtime evidence separate.

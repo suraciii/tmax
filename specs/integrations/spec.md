@@ -258,7 +258,8 @@ instance; two local instances of the same product use the same contract.
 | Kimi Coding Plan | [Kimi Coding Plan](kimi-coding-plan/spec.md) | Membership versus platform access, regional endpoints, native login, usage restrictions, and shared allowance |
 | Official DeepSeek API | [DeepSeek API](deepseek/spec.md) | Stateless Responses, balance and account-limit semantics, and pricing-calendar evidence |
 | Domestic GLM Coding Plan | [GLM Coding Plan](glm-coding-plan/spec.md) | Domestic plan keys, approved tools, protocol-specific authorization, and unqualified monitor-field semantics |
-| StepFun Step Plan Token Plan | [StepFun Token Plan](stepfun-token-plan/spec.md) | Dedicated plan paths, `step-5-preview` scope, monthly Credit, and unavailable plan-quota API qualification |
+| StepFun Step Plan Token Plan | [StepFun Token Plan](stepfun-token-plan/spec.md) | Dedicated plan paths, `step-5-preview` scope, monthly Credit, and undocumented plan usage read |
+| MiniMax M Plan | [MiniMax M Plan](minimax-m-plan/spec.md) | Regional plan hosts, shared `general` allowance pool, percent-only quota display, and unpublished counter semantics |
 
 Each provider contract must define:
 

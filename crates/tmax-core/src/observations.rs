@@ -111,7 +111,13 @@ fn valid_data(source: Option<&str>, data: &Value) -> bool {
             provider_integration::normalize_observation("official_balance_api", data)
                 .is_ok_and(|normalized| normalized == *data)
         }
-        Some("go_usage_api") => provider_integration::normalize_observation("go_usage_api", data)
+        Some(
+            source @ ("go_usage_api"
+            | "kimi_usage_api"
+            | "glm_monitor_api"
+            | "stepfun_usage_api"
+            | "minimax_plan_remains_api"),
+        ) => provider_integration::normalize_observation(source, data)
             .is_ok_and(|normalized| normalized == *data),
         Some("official_models_api") => {
             let Some(models) = data.get("models").and_then(Value::as_array) else {
@@ -429,7 +435,14 @@ fn temporal_applicability(
         } else {
             Some("source_validity_unavailable")
         },
-        as_of: if source == Some("go_usage_api") {
+        as_of: if matches!(
+            source,
+            Some("go_usage_api")
+                | Some("kimi_usage_api")
+                | Some("glm_monitor_api")
+                | Some("stepfun_usage_api")
+                | Some("minimax_plan_remains_api")
+        ) {
             None
         } else {
             Some(fact.observed_at)
@@ -471,6 +484,7 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
     let mut scopes = Vec::with_capacity(SCOPES.len());
     let mut balance = None;
     let mut go_usage = None;
+    let mut plan_usage: Option<(&str, &Fact)> = None;
     for scope in SCOPES {
         let b = binding(&runtime, config, provider, scope)?;
         let head = b.as_ref().and_then(|b| heads.heads.get(&signature(b)));
@@ -487,24 +501,40 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
             go_usage = head
                 .filter(|h| h.binding.source.as_deref() == Some("go_usage_api"))
                 .and_then(|h| h.fact.as_ref());
+            plan_usage = head
+                .filter(|h| {
+                    matches!(
+                        h.binding.source.as_deref(),
+                        Some(
+                            "kimi_usage_api"
+                                | "glm_monitor_api"
+                                | "stepfun_usage_api"
+                                | "minimax_plan_remains_api",
+                        )
+                    )
+                })
+                .and_then(|h| Some((h.binding.source.as_deref()?, h.fact.as_ref()?)));
         }
         scopes.push(render_scope(head, scope, b.is_some(), &at));
     }
-    let billing_fact = balance.or(go_usage);
-    let billing_source = if go_usage.is_some() {
+    let billing_fact = balance.or(go_usage).or(plan_usage.map(|(_, fact)| fact));
+    let billing_source = if balance.is_some() {
+        "official_balance_api"
+    } else if go_usage.is_some() {
         "go_usage_api"
     } else {
-        "official_balance_api"
+        plan_usage.map_or("", |(source, _)| source)
     };
+    let integration = provider_integration::integration_id(p)?;
     Ok(
         json!({"provider":provider,"account_identity":null,"observations":scopes,
-        "billing":{"kind":if provider_integration::integration_id(p)?=="deepseek"{"api_balance"}else if provider_integration::integration_id(p)?=="opencode-go"{"go_allowance"}else{"unknown"},
+        "billing":{"kind":match integration{"deepseek"=>"api_balance","opencode-go"=>"go_allowance","kimi-coding-plan"|"glm-coding-plan"|"stepfun-token-plan"|"minimax-m-plan"=>"plan_allowance",_=>"unknown"},
             "state":if billing_fact.is_some(){"observed"}else{"unknown"},"observation":billing_fact,
             "freshness":temporal_applicability(billing_fact,Some(billing_source),&at),
             "subscription":p.subscription,"account_identity":null,
             "shared_upstream_limits":"unknown; providers may share upstream account limits",
-            "aggregation":"not_performed","renewal":"unknown","reset":if go_usage.is_some(){"announced"}else{"unknown"},
-            "dashboard":provider_integration::dashboard(provider_integration::integration_id(p)?)}}),
+            "aggregation":"not_performed","renewal":"unknown","reset":if go_usage.is_some(){"announced"}else if plan_usage.is_some(){"provider_reported"}else{"unknown"},
+            "dashboard":provider_integration::dashboard(integration)}}),
     )
 }
 
@@ -1313,5 +1343,54 @@ mod tests {
         assert_eq!(result["checks"][0]["outcome"], "not_executed");
         assert!(result["checks"][0]["reason_code"].is_null());
         assert!(!store.path(STATE).unwrap().exists());
+    }
+    #[test]
+    fn plan_quota_projection_reports_plan_kind_without_invented_freshness() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().to_path_buf());
+        let mut config = Config::empty();
+        config.providers.insert(
+            "kimi-a".into(),
+            config::Provider {
+                integration: Some("kimi-coding-plan".into()),
+                region: Some("china".into()),
+                auth: Some(config::Auth::ApiKey {
+                    key_ref: "key-kimi-a".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        let captured = capture(&store, &config, "kimi-a", "quota").unwrap();
+        let fact = AcquiredObservation {
+            status: 200,
+            data: provider_integration::normalize_observation(
+                "kimi_usage_api",
+                &json!({
+                    "usage": {"limit":"100","used":"20","remaining":"80","resetTime":"2026-10-29T15:42:16.495050Z"},
+                    "limits": [{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
+                        "detail":{"limit":"100","used":"43","remaining":"57","resetTime":"2026-10-27T18:42:16.495050Z"}}]
+                }),
+            )
+            .unwrap(),
+        };
+        commit(&store, &captured, Ok(fact)).unwrap();
+        let after = inspect(&store, &config, "kimi-a").unwrap();
+        assert_eq!(after["billing"]["kind"], "plan_allowance");
+        assert_eq!(after["billing"]["state"], "observed");
+        assert_eq!(after["billing"]["reset"], "provider_reported");
+        assert_eq!(after["billing"]["renewal"], "unknown");
+        assert_eq!(after["billing"]["freshness"]["state"], "unqualified");
+        assert!(after["billing"]["freshness"]["as_of"].is_null());
+        assert_eq!(
+            after["billing"]["observation"]["data"]["usage"]["remaining"],
+            "80"
+        );
+        let quota = &after["observations"][2];
+        assert_eq!(quota["source"], "kimi_usage_api");
+        assert!(quota["freshness"]["as_of"].is_null());
     }
 }
