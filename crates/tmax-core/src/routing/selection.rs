@@ -91,10 +91,9 @@ fn eligibility(
         _ => None,
     }
 }
-/// The unchanged native request and its qualified client requirements.
+/// Request-scoped native client requirements. Routing never inspects content.
 #[derive(Clone, Copy)]
 pub struct RequestRequirements<'a> {
-    pub body: &'a crate::gateway::RequestFacts,
     pub native: &'a crate::gateway::NativeRequirements,
 }
 
@@ -104,7 +103,6 @@ pub(crate) struct Advice<'a> {
 
 enum SelectionView<'a> {
     Saved {
-        body: Option<&'a crate::gateway::RequestFacts>,
         context: Option<&'a Advice<'a>>,
     },
     Loaded {
@@ -127,10 +125,9 @@ fn decision(
     exact_at: &inputs::ExactInstant,
     view: SelectionView<'_>,
 ) -> Result<(Value, Option<Selection>)> {
-    let (snapshot, body, native, context, excluded_providers) = match view {
-        SelectionView::Saved { body, context } => (
+    let (snapshot, native, context, excluded_providers) = match view {
+        SelectionView::Saved { context } => (
             Cow::Owned(Snapshot::capture(store, config)),
-            body,
             None,
             context,
             None,
@@ -141,7 +138,6 @@ fn decision(
             context,
         } => (
             Cow::Owned(Snapshot::capture_loaded(store, config, metadata)),
-            request.map(|request| request.body),
             request.map(|request| request.native),
             context,
             None,
@@ -152,7 +148,6 @@ fn decision(
             excluded_providers,
         } => (
             Cow::Borrowed(snapshot),
-            Some(request.body),
             Some(request.native),
             None,
             Some(excluded_providers),
@@ -213,11 +208,6 @@ fn decision(
                     inventory.as_ref(),
                     identity.as_ref().map(|ids| ids.0.as_str()),
                 )
-            })
-            .or_else(|| {
-                body.and_then(|body| {
-                    crate::gateway::ranking_mismatch(p, &name, m, snapshot.metadata(), body)
-                })
             })
             .or_else(|| native.and_then(|native| crate::gateway::native_mismatch(p, native)));
         let observed_unavailability = if reason.is_none()
@@ -313,10 +303,7 @@ pub(crate) fn explain_native(
         protocol,
         at,
         &exact_at,
-        SelectionView::Saved {
-            body: None,
-            context,
-        },
+        SelectionView::Saved { context },
     )
     .map(|(evidence, _)| evidence)
 }
@@ -334,10 +321,7 @@ pub fn select(
         protocol,
         at,
         &inputs::ExactInstant::from_chrono(at),
-        SelectionView::Saved {
-            body: None,
-            context: None,
-        },
+        SelectionView::Saved { context: None },
     )?;
     selection.ok_or_else(|| {
         Error::new(
@@ -374,7 +358,6 @@ pub fn select_request(
     id: &str,
     protocol: &str,
     at: DateTime<Utc>,
-    body: &crate::gateway::RequestFacts,
 ) -> Result<Selection> {
     let (evidence, selection) = decision(
         store,
@@ -383,10 +366,7 @@ pub fn select_request(
         protocol,
         at,
         &inputs::ExactInstant::from_chrono(at),
-        SelectionView::Saved {
-            body: Some(body),
-            context: None,
-        },
+        SelectionView::Saved { context: None },
     )?;
     selection.ok_or_else(|| request_unavailable(&evidence))
 }

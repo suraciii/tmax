@@ -13,14 +13,12 @@ pub struct RequestFacts {
     pub normalization_required: bool,
     pub(crate) tool_use: bool,
     pub(crate) thinking_enabled: bool,
-    pub(crate) thinking_disabled: bool,
     pub(crate) temperature: bool,
     pub(crate) structured: bool,
     pub(crate) input_modalities: BTreeSet<&'static str>,
     pub(crate) output_modalities: BTreeSet<String>,
     pub(crate) reasoning_effort: Effort,
     pub(crate) nested_effort: Effort,
-    pub(crate) reasoning_invalid: bool,
     pub(crate) remote_state: bool,
     pub(crate) unbound_resources: bool,
     pub(crate) background: bool,
@@ -44,9 +42,6 @@ impl Effort {
             Self::String(value) => Some(value),
             _ => None,
         }
-    }
-    pub(crate) fn present(&self) -> bool {
-        !matches!(self, Self::Missing)
     }
 }
 
@@ -113,14 +108,12 @@ impl RequestFacts {
                 || messages.tools
                 || input.function_calls,
             thinking_enabled: matches!(thinking.field("type").atom, Atom::Enabled | Atom::Adaptive),
-            thinking_disabled: thinking.field("type").atom == Atom::Disabled,
             temperature: root.take("temperature").nonnull(),
             structured: format.atom == Atom::JsonSchema,
             input_modalities: modalities,
             output_modalities: root.take("modalities").strings,
             reasoning_effort: top_effort,
             nested_effort,
-            reasoning_invalid: !matches!(reasoning.kind, Kind::Missing | Kind::Null | Kind::Object),
             remote_state: previous.nonnull()
                 || conversation.nonnull()
                 || background.kind == Kind::True

@@ -205,10 +205,12 @@ async fn go_identity_rejections_retain_exact_history_reason_without_dispatch() {
             "native_session_required",
         ));
     }
-    cases.extend([
-        ("/v1/responses", json!({"model":"p/m","input":[{"role":"user","content":"x"}],"store":false}), qualified.clone(), "native_session_required"),
-        ("/v1/chat/completions", json!({"model":"p/m","messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"test","parameters":{"type":"object"}}}]}), qualified, "tools_incompatible"),
-    ]);
+    cases.push((
+        "/v1/responses",
+        json!({"model":"p/m","input":[{"role":"user","content":"x"}],"store":false}),
+        qualified,
+        "native_session_required",
+    ));
     let mut expected = Vec::new();
     for (path, body, headers, reason) in cases {
         let mut request = axum::http::Request::builder()
@@ -310,30 +312,13 @@ async fn effort_maps_reach_upstream_without_fallback_or_omitted_effort_synthesis
                 .insert("authorization", "Bearer test-local-key".parse().unwrap());
             request
         };
-        let rejected = forward(State(runtime.clone()), make_request(&body)).await;
-        assert_eq!(rejected.status(), StatusCode::CONFLICT);
-        assert!(received.try_recv().is_err());
-        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
-        let mut query = Request {
-            command: vec!["history".into(), "list".into()],
-            operands: vec![],
-            arguments: BTreeMap::new(),
-            dry_run: false,
-            if_revision: None,
-        };
-        let listed = runtime.history.view(&query).unwrap();
-        query.command[1] = "inspect".into();
-        query.operands = vec![listed["records"][0]["request"].as_str().unwrap().into()];
-        let record = runtime.history.view(&query).unwrap();
-        assert_eq!(record["record"]["qualified_model"], "p/m");
-        assert_eq!(
-            record["record"]["reason_code"],
-            "reasoning_effort_incompatible"
-        );
-        assert_eq!(
-            record["record"]["decision"]["effort_resolution"]["input_effort"],
-            "max"
-        );
+        let forwarded = forward(State(runtime.clone()), make_request(&body)).await;
+        assert_eq!(forwarded.status(), StatusCode::OK);
+        to_bytes(forwarded.into_body(), 4096).await.unwrap();
+        let actual = received.recv().await.unwrap();
+        let mut expected = body.clone();
+        expected["model"] = json!("m");
+        assert_eq!(actual, expected);
 
         let previous = config.clone();
         config

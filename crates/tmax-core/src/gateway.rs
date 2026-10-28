@@ -3,7 +3,6 @@
 use serde_json::{Value, json};
 
 mod bindings;
-mod capabilities;
 mod client_identity;
 mod errors;
 mod forwarding;
@@ -30,26 +29,6 @@ pub const REQUEST_BYTES: usize = 512 * 1024 * 1024;
 pub const INSPECTION_BYTES: usize = 64 * 1024;
 pub const FORWARD_CHUNK_BYTES: usize = 16 * 1024;
 pub const CREDENTIAL_SECONDS: u64 = 10;
-
-pub fn capability_mismatch(
-    provider: &crate::config::Provider,
-    model_id: &str,
-    model: &crate::config::Model,
-    metadata: Option<&crate::catalog::Snapshot>,
-    body: &RequestFacts,
-    effort: Option<(&str, &str)>,
-) -> Option<&'static str> {
-    capabilities::mismatch(provider, model_id, model, metadata, body, effort)
-}
-pub(crate) fn ranking_mismatch(
-    provider: &crate::config::Provider,
-    model_id: &str,
-    model: &crate::config::Model,
-    metadata: Option<&crate::catalog::Snapshot>,
-    body: &RequestFacts,
-) -> Option<&'static str> {
-    capabilities::ranking_mismatch(provider, model_id, model, metadata, body)
-}
 
 pub fn limits() -> Value {
     json!({"active_requests":ACTIVE_LIMIT,"request_body_bytes":REQUEST_BYTES,"response_inspection_bytes":INSPECTION_BYTES,"downstream_chunk_bytes":FORWARD_CHUNK_BYTES,"credential_acquisition_seconds":CREDENTIAL_SECONDS,"waiting_queue":0,"inference_total_timeout":null,"inference_idle_timeout":null,"history_records":crate::diagnostics::RECORD_LIMIT,"history_record_bytes":crate::diagnostics::RECORD_BYTES})

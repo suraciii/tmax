@@ -65,7 +65,7 @@ fn presence_type_and_structured_format_precedence_are_preserved() {
     ] {
         let facts = RequestFacts::parse(&serde_json::to_vec(&body).unwrap()).unwrap();
         assert_eq!(
-            facts.reasoning_effort.present(),
+            !matches!(facts.reasoning_effort, Effort::Missing),
             body.get("reasoning_effort").is_some()
         );
         assert_eq!(
@@ -165,7 +165,7 @@ fn raw_value_token_remains_an_opaque_native_extension() {
 }
 
 #[test]
-fn fixed_effort_bypasses_malformed_scalar_but_not_response_container() {
+fn malformed_effort_is_forwarded_unchanged_and_fixed_effort_still_applies() {
     let model = crate::config::Model::default();
     for (protocol, body) in [
         ("chat-completions", json!({"reasoning_effort":42})),
@@ -173,35 +173,17 @@ fn fixed_effort_bypasses_malformed_scalar_but_not_response_container() {
     ] {
         let facts = RequestFacts::from_value(body).unwrap();
         assert_eq!(
-            crate::reasoning::resolve(&model, protocol, &facts, None)
-                .unwrap_err()
-                .code,
-            "reasoning_parameter_invalid"
+            crate::reasoning::resolve(&model, protocol, &facts, None),
+            None
         );
         assert_eq!(
-            crate::reasoning::resolve(&model, protocol, &facts, Some("high")).unwrap(),
+            crate::reasoning::resolve(&model, protocol, &facts, Some("high")),
             Some("high")
         );
     }
-    let malformed =
-        RequestFacts::from_value(json!({"reasoning":42,"thinking":{"type":"disabled"}})).unwrap();
+    let malformed = RequestFacts::from_value(json!({"reasoning":42})).unwrap();
     assert_eq!(
-        crate::reasoning::resolve(&model, "responses", &malformed, Some("high"))
-            .unwrap_err()
-            .code,
-        "reasoning_parameter_invalid"
-    );
-    assert_eq!(
-        crate::reasoning::request_mismatch("responses", &malformed, "high"),
-        Some("reasoning_parameter_invalid")
-    );
-    let disabled = RequestFacts::from_value(json!({"thinking":{"type":"disabled"}})).unwrap();
-    assert_eq!(
-        crate::reasoning::request_mismatch("chat-completions", &disabled, "high"),
-        Some("reasoning_toggle_conflict")
-    );
-    assert_eq!(
-        crate::reasoning::request_mismatch("chat-completions", &disabled, "none"),
-        None
+        crate::reasoning::resolve(&model, "responses", &malformed, Some("high")),
+        Some("high")
     );
 }

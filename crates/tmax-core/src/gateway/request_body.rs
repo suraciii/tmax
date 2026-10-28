@@ -26,16 +26,19 @@ pub(super) fn rewrite(
         Some(effort) => !same_string(object.0.get("reasoning_effort").copied(), effort)?,
         None => false,
     };
-    let reasoning = match response_effort {
-        Some(_) => match object.0.get("reasoning") {
-            Some(raw) if raw.get() != "null" => serde_json::from_str(raw.get())?,
-            _ => RawObject::default(),
+    let (reasoning, response_changed) = match response_effort {
+        Some(effort) => match object.0.get("reasoning") {
+            Some(raw) if raw.get() == "null" => (RawObject::default(), true),
+            Some(raw) if raw.get().starts_with('{') => {
+                let reasoning: RawObject = serde_json::from_str(raw.get())?;
+                let changed = !same_string(reasoning.0.get("effort").copied(), effort)?;
+                (reasoning, changed)
+            }
+            // A nonobject value is preserved unchanged; no effort is injected.
+            Some(_) => (RawObject::default(), false),
+            None => (RawObject::default(), true),
         },
-        None => RawObject::default(),
-    };
-    let response_changed = match response_effort {
-        Some(effort) => !same_string(reasoning.0.get("effort").copied(), effort)?,
-        None => false,
+        None => (RawObject::default(), false),
     };
     if !model_changed && !chat_changed && !response_changed && !normalize {
         drop(reasoning);

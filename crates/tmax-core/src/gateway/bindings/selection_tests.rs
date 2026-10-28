@@ -2,6 +2,28 @@ use super::*;
 use crate::gateway::test_support::{fixture, native_headers, publish, test_snapshot};
 use std::time::Duration;
 
+/// Choose through the alias with a fresh timestamp and client identity.
+fn choose_fresh(
+    runtime: &Runtime,
+    config: &Config,
+    label: &str,
+    protocol: &str,
+    body: &Value,
+) -> Choice {
+    let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+    let headers = native_headers(at);
+    runtime
+        .choose(
+            &test_snapshot(config, label),
+            "dynamic",
+            protocol,
+            body,
+            &headers,
+            at + chrono::Duration::milliseconds(1),
+        )
+        .unwrap()
+}
+
 #[test]
 fn protocol_eligibility_uses_provider_endpoints_not_model_identity() {
     let (_temporary, runtime, config) = fixture();
@@ -133,7 +155,7 @@ fn context_free_selection_does_not_wait_for_session_bindings() {
 }
 
 #[test]
-fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols() {
+fn effort_mapping_applies_on_the_selected_backend_for_both_protocols() {
     for protocol in ["chat-completions", "responses"] {
         let (_temporary, runtime, original) = fixture();
         let mut config = original.clone();
@@ -173,7 +195,7 @@ fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols()
         };
         let max = request(Some("max"));
         let mut evidence = Value::Null;
-        let error = runtime
+        let choice = runtime
             .choose_recorded(
                 &test_snapshot(&config, "unmapped"),
                 ("dynamic", protocol),
@@ -182,15 +204,14 @@ fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols()
                 at,
                 &mut evidence,
             )
-            .err()
             .unwrap();
-        assert_eq!(error.code, "reasoning_effort_incompatible");
-        assert_eq!(evidence["selection"]["qualified_model"], "p/m");
+        // An effort outside the declared values is forwarded unchanged.
+        assert_eq!(choice.selection.provider, "p");
+        assert_eq!(choice.effort, None);
         assert_eq!(
             evidence["effort_resolution"],
             json!({"input_effort":"max","upstream_effort":"max","source":"identity"})
         );
-        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
 
         let previous = config.clone();
         config
@@ -206,6 +227,15 @@ fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols()
                 BTreeMap::from([("max".into(), "high".into())]),
             );
         publish(&runtime, &previous, &config, "mapped");
+        let mapped = choose_fresh(&runtime, &config, "mapped", protocol, &max);
+        assert_eq!(mapped.effort.as_deref(), Some("high"));
+        assert_eq!(
+            mapped.selection.evidence["effort_resolution"]["source"],
+            "map"
+        );
+
+        // A map target the model does not declare is still a user-declared
+        // rewrite; the upstream decides whether it is acceptable.
         let mut invalid = config.clone();
         invalid
             .providers
@@ -219,182 +249,15 @@ fn effort_mapping_validates_selected_backend_before_binding_for_both_protocols()
             .unwrap()
             .insert("max".into(), "unsupported".into());
         publish(&runtime, &config, &invalid, "invalid-target");
-        assert_eq!(
-            runtime
-                .choose(
-                    &test_snapshot(&invalid, "invalid-target"),
-                    "dynamic",
-                    protocol,
-                    &max,
-                    &headers,
-                    at
-                )
-                .err()
-                .unwrap()
-                .code,
-            "reasoning_effort_incompatible"
-        );
-        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
-        publish(&runtime, &invalid, &config, "mapped-restored");
+        let unmapped = choose_fresh(&runtime, &invalid, "invalid-target", protocol, &max);
+        assert_eq!(unmapped.effort.as_deref(), Some("unsupported"));
+
         let mut conflict = max.clone();
         conflict["thinking"] = json!({"type":"disabled"});
-        assert_eq!(
-            runtime
-                .choose(
-                    &test_snapshot(&config, "fresh-conflict"),
-                    "dynamic",
-                    protocol,
-                    &conflict,
-                    &headers,
-                    at
-                )
-                .err()
-                .unwrap()
-                .code,
-            "reasoning_toggle_conflict"
-        );
-        assert!(runtime.bindings.lock().unwrap().entries.is_empty());
-
-        let mapped = runtime
-            .choose(
-                &test_snapshot(&config, "mapped"),
-                "dynamic",
-                protocol,
-                &max,
-                &headers,
-                at,
-            )
-            .unwrap();
-        assert_eq!(mapped.selection.provider, "p");
-        assert_eq!(mapped.effort.as_deref(), Some("high"));
-        assert_eq!(
-            mapped.selection.evidence["effort_resolution"],
-            json!({"input_effort":"max","upstream_effort":"high","source":"map"})
-        );
-        publish(&runtime, &config, &invalid, "retained-invalid-target");
-        assert_eq!(
-            runtime
-                .choose(
-                    &test_snapshot(&invalid, "retained-invalid-target"),
-                    "dynamic",
-                    protocol,
-                    &max,
-                    &headers,
-                    at
-                )
-                .err()
-                .unwrap()
-                .code,
-            "reasoning_effort_incompatible"
-        );
-        assert_eq!(runtime.bindings.lock().unwrap().entries.len(), 1);
-        assert!(
-            runtime
-                .bindings
-                .lock()
-                .unwrap()
-                .entries
-                .values()
-                .all(|binding| binding.blocked.is_none())
-        );
-        publish(&runtime, &invalid, &config, "retained-target-restored");
-        let mut removed = config.clone();
-        removed
-            .providers
-            .get_mut("p")
-            .unwrap()
-            .models
-            .get_mut("m")
-            .unwrap()
-            .effort_map
-            .clear();
-        publish(&runtime, &config, &removed, "removed-mapping");
-        assert_eq!(
-            runtime
-                .choose(
-                    &test_snapshot(&removed, "removed-mapping"),
-                    "dynamic",
-                    protocol,
-                    &max,
-                    &headers,
-                    at
-                )
-                .err()
-                .unwrap()
-                .code,
-            "reasoning_effort_incompatible"
-        );
-        publish(&runtime, &removed, &config, "restored-mapping");
-        assert_eq!(
-            runtime
-                .choose(
-                    &test_snapshot(&config, "restored-mapping"),
-                    "dynamic",
-                    protocol,
-                    &max,
-                    &headers,
-                    at
-                )
-                .unwrap()
-                .selection
-                .provider,
-            "p"
-        );
-        assert_eq!(mapped.effort.as_deref(), Some("high"));
-        if protocol == "responses" {
-            assert_eq!(max["reasoning"], json!({"summary":"auto","effort":"max"}));
-        }
-
-        let previous = config.clone();
-        config
-            .providers
-            .get_mut("q")
-            .unwrap()
-            .models
-            .get_mut("m")
-            .unwrap()
-            .priority = 100;
-        publish(&runtime, &previous, &config, "reranked");
-        for effort in [Some("low"), Some("high"), None] {
-            let retained = runtime
-                .choose(
-                    &test_snapshot(&config, "reranked"),
-                    "dynamic",
-                    protocol,
-                    &request(effort),
-                    &headers,
-                    at,
-                )
-                .unwrap();
-            assert_eq!(retained.selection.provider, "p");
-            assert_eq!(
-                retained.selection.evidence["selection_reason"],
-                "retained_destination"
-            );
-            assert_eq!(retained.effort, None);
-            assert_eq!(
-                retained.selection.evidence["effort_resolution"]["upstream_effort"],
-                json!(effort)
-            );
-        }
-        let mut conflict = request(Some("max"));
-        conflict["thinking"] = json!({"type":"disabled"});
-        assert_eq!(
-            runtime
-                .choose(
-                    &test_snapshot(&config, "toggle-conflict"),
-                    "dynamic",
-                    protocol,
-                    &conflict,
-                    &headers,
-                    at
-                )
-                .err()
-                .unwrap()
-                .code,
-            "reasoning_toggle_conflict"
-        );
-        assert_eq!(runtime.bindings.lock().unwrap().entries.len(), 1);
+        publish(&runtime, &invalid, &config, "mapped-restored");
+        let decorated = choose_fresh(&runtime, &config, "fresh-conflict", protocol, &conflict);
+        assert_eq!(decorated.selection.provider, "p");
+        assert_eq!(decorated.effort.as_deref(), Some("high"));
     }
 }
 
@@ -417,21 +280,12 @@ fn fixed_effort_precedes_mapping_and_retained_requests_never_reroute() {
         }]);
     }
     publish(&runtime, &original, &config, "effort-capabilities");
-    let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
     let body = json!({"messages":[{"role":"user","content":"x"}],"reasoning_effort":"max"});
-    let first = runtime
-        .choose(
-            &test_snapshot(&config, "no-override"),
-            "dynamic",
-            "chat-completions",
-            &body,
-            &native_headers(at),
-            at,
-        )
-        .err()
-        .unwrap();
-    assert_eq!(first.code, "reasoning_effort_incompatible");
-    assert!(runtime.bindings.lock().unwrap().entries.is_empty());
+    let undeclared = choose_fresh(&runtime, &config, "no-override", "chat-completions", &body);
+    assert_eq!(undeclared.selection.provider, "p");
+    assert_eq!(undeclared.effort, None);
+    let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+
     let previous = config.clone();
     config
         .providers
@@ -508,74 +362,24 @@ fn fixed_effort_precedes_mapping_and_retained_requests_never_reroute() {
         retained_evidence["original_decision"]["selection"]["candidate_reasoning_effort"],
         "high"
     );
+    // A thinking toggle next to the effort is forwarded, not judged.
     let conflict =
         json!({"messages":[{"role":"user","content":"x"}],"thinking":{"type":"disabled"}});
-    assert_eq!(
-        runtime
-            .choose(
-                &test_snapshot(&config, "conflict"),
-                "dynamic",
-                "chat-completions",
-                &conflict,
-                &headers,
-                next
-            )
-            .err()
-            .unwrap()
-            .code,
-        "reasoning_toggle_conflict"
-    );
-    let previous = config.clone();
-    config.model_aliases[0]
-        .candidate_reasoning_effort
-        .insert("p/m".into(), "max".into());
-    publish(&runtime, &previous, &config, "unsupported");
-    assert_eq!(
-        runtime
-            .choose(
-                &test_snapshot(&config, "unsupported"),
-                "dynamic",
-                "chat-completions",
-                &body,
-                &headers,
-                next
-            )
-            .err()
-            .unwrap()
-            .code,
-        "reasoning_effort_incompatible"
-    );
-    let previous = config.clone();
-    config
-        .providers
-        .get_mut("p")
-        .unwrap()
-        .models
-        .get_mut("m")
-        .unwrap()
-        .overrides
-        .reasoning_options = Some(vec![crate::config::ReasoningOption {
-        r#type: "toggle".into(),
-        values: None,
-    }]);
-    publish(&runtime, &previous, &config, "toggle-only");
-    assert_eq!(
-        runtime
-            .choose(
-                &test_snapshot(&config, "toggle-only"),
-                "dynamic",
-                "chat-completions",
-                &body,
-                &headers,
-                next
-            )
-            .err()
-            .unwrap()
-            .code,
-        "reasoning_effort_unavailable"
-    );
+    let decorated = runtime
+        .choose(
+            &test_snapshot(&config, "conflict"),
+            "dynamic",
+            "chat-completions",
+            &conflict,
+            &headers,
+            next,
+        )
+        .unwrap();
+    assert_eq!(decorated.selection.provider, "p");
+    assert_eq!(decorated.effort.as_deref(), Some("low"));
     assert_eq!(body["reasoning_effort"], "max");
 }
+
 #[test]
 fn arbitrary_aliases_use_only_explicit_members_across_calendar_boundaries() {
     let (_temporary, runtime, original) = fixture();
@@ -681,10 +485,10 @@ fn arbitrary_aliases_use_only_explicit_members_across_calendar_boundaries() {
 }
 
 #[test]
-fn request_capabilities_filter_before_alias_ranking() {
+fn request_capabilities_never_filter_alias_ranking() {
     let (_temporary, runtime, config) = fixture();
-    let mut supported = config.clone();
-    supported
+    let mut declared = config.clone();
+    declared
         .providers
         .get_mut("p")
         .unwrap()
@@ -693,7 +497,7 @@ fn request_capabilities_filter_before_alias_ranking() {
         .unwrap()
         .overrides
         .tool_call = Some(false);
-    supported
+    declared
         .providers
         .get_mut("q")
         .unwrap()
@@ -702,14 +506,14 @@ fn request_capabilities_filter_before_alias_ranking() {
         .unwrap()
         .overrides
         .tool_call = Some(true);
-    publish(&runtime, &config, &supported, "capabilities");
+    publish(&runtime, &config, &declared, "capabilities");
     let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
     let headers = native_headers(at);
     let body = json!({"messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"test","parameters":{"type":"object"}}}],"temperature":0,"extension":{"enabled":false}});
     let original = body.clone();
     let choice = runtime
         .choose(
-            &test_snapshot(&supported, "capabilities"),
+            &test_snapshot(&declared, "capabilities"),
             "dynamic",
             "chat-completions",
             &body,
@@ -717,18 +521,19 @@ fn request_capabilities_filter_before_alias_ranking() {
             at + chrono::Duration::milliseconds(1),
         )
         .unwrap();
-    assert_eq!(choice.selection.provider, "q");
+    // Configured priority decides; declarations never exclude a candidate.
+    assert_eq!(choice.selection.provider, "p");
     assert!(
         runtime
             .choose(
-                &test_snapshot(&supported, "capabilities"),
+                &test_snapshot(&declared, "capabilities"),
                 "p/m",
                 "chat-completions",
                 &body,
                 &headers,
                 at + chrono::Duration::milliseconds(1)
             )
-            .is_err()
+            .is_ok()
     );
     assert_eq!(body, original);
 }

@@ -1,5 +1,4 @@
 use super::{
-    capabilities,
     client_identity::{NativeRequirements, client_contract},
     native_context,
     runtime::{Runtime, Snapshot},
@@ -360,10 +359,7 @@ impl Runtime {
             public_id,
             protocol,
             now,
-            crate::routing::RequestRequirements {
-                body,
-                native: &native,
-            },
+            crate::routing::RequestRequirements { native: &native },
             identities,
             attempted,
         )?;
@@ -515,34 +511,12 @@ fn selected_request(
     evidence["effort_resolution"] =
         json!({"input_effort":input,"upstream_effort":null,"source":source});
     *evidence_out = safe_evidence(evidence);
-    let resolved = crate::reasoning::resolve(model, protocol, body, fixed)?;
+    let resolved = crate::reasoning::resolve(model, protocol, body, fixed);
     evidence["effort_resolution"]["upstream_effort"] = json!(resolved);
     *evidence_out = safe_evidence(evidence);
-    if let Some(effort) = resolved
-        && let Some(reason) = crate::reasoning::request_mismatch(protocol, body, effort)
-    {
-        return Err(Error::new(
-            reason,
-            "Request reasoning controls conflict with the resolved effort",
-        ));
-    }
     let explicit = fixed.is_some() || mapped;
     let effort = resolved.filter(|effort| explicit && Some(*effort) != input);
-    if let Some(reason) = capabilities::selected_mismatch(
-        provider,
-        model_id,
-        model,
-        snapshot.metadata.as_deref(),
-        body,
-        resolved,
-        explicit,
-    ) {
-        return Err(Error::new(
-            reason,
-            "Request effort or controls are incompatible with the selected model; no reassignment",
-        ));
-    }
-    crate::provider_integration::check_request(provider, protocol, body)?;
+    crate::provider_integration::check_request(provider, protocol)?;
     Ok(effort.map(str::to_owned))
 }
 
