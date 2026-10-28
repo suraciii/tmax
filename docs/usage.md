@@ -656,10 +656,12 @@ completes none of them itself. Declare the facts with `model update` or
 See [versioned agent schemas](agents/README.md) for the distinct native fields,
 authentication precedence, scopes, and qualification limits.
 
-Model capability limits are not generation budgets. Native sampling, thinking
-effort, and requested output settings remain owned by the native agent; applying
-metadata does not cap a request to make a capability rejection pass. Use the
-agent's supported request controls when deliberately bounding an authorized probe.
+Model capability limits are not generation budgets, and the gateway does not
+police request parameters against them. Native sampling, thinking effort, output
+budgets, tool use, structured output, and modalities stay owned by the native
+agent and travel to the upstream unchanged; the upstream clamps or rejects them
+with its own error. Use the agent's supported request controls when deliberately
+bounding an authorized probe.
 
 ```sh
 tmax agent restore "$TARGET"
