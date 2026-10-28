@@ -199,6 +199,33 @@ authorization or exhausted quota. Inference still needs its own qualified model,
 protocol, client identity, and conversation session; a successful usage read does
 not prove that path.
 
+## Plan quota observations
+
+The plan integrations `kimi-coding-plan`, `glm-coding-plan`,
+`stepfun-token-plan`, and `minimax-m-plan` each own one bounded read-only
+quota GET beside their inference endpoints. Select the integration (and, for
+Kimi and MiniMax, the region) explicitly, then refresh the quota scope:
+
+```sh
+tmax provider add glm-a --integration glm-coding-plan
+tmax provider refresh glm-a --scope quota
+tmax provider inspect glm-a
+```
+
+Observations are display-only. They publish raw provider-reported counters,
+percents, and reset values with their unit or encoding left unqualified; they
+never create priority-rule inputs, and one successful HTTP read does not prove
+plan entitlement or account identity. Unknown quota stays unknown, a failed
+refresh retains the last dated fact instead of clearing it, and retrieval time
+is not a provider measurement time. Each integration keeps its own boundary in
+its contract: [Kimi](../specs/integrations/kimi-coding-plan/spec.md#membership-quota-and-renewal),
+[GLM](../specs/integrations/glm-coding-plan/spec.md#allowance-and-monitor-evidence),
+[StepFun](../specs/integrations/stepfun-token-plan/spec.md#credit-and-quota-evidence),
+and [MiniMax](../specs/integrations/minimax-m-plan/spec.md#quota-observation).
+Providers on `custom` integration, such as a console-only plan, have no
+qualified quota source; record manual subscription information instead of
+scraping browser sessions.
+
 ## Local Overview and evidence
 
 The Web Overview groups the provider and agent evidence already available through

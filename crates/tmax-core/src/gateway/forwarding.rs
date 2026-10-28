@@ -323,7 +323,10 @@ pub(super) async fn forward(
             ))
             .body(outgoing);
         if protocol == "messages"
-            && crate::provider_integration::integration_id(provider).ok() != Some("opencode-go")
+            && !matches!(
+                crate::provider_integration::integration_id(provider).ok(),
+                Some("opencode-go") | Some("minimax-m-plan")
+            )
         {
             outbound = outbound.header("x-api-key", key);
         } else {
