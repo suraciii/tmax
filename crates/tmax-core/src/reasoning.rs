@@ -84,42 +84,31 @@ pub(crate) fn input_metadata(
     metadata
 }
 
-/// Return the selected backend's upstream effort, borrowing existing request/config data.
+/// Resolve the upstream effort value on the already selected destination.
+/// Unknown shapes and values are forwarded unchanged; the upstream decides.
 pub(crate) fn resolve<'a>(
     model: &'a crate::config::Model,
     protocol: &str,
     body: &'a RequestFacts,
     fixed: Option<&'a str>,
-) -> Result<Option<&'a str>> {
-    if protocol == "responses" && body.reasoning_invalid {
-        return Err(Error::new(
-            "reasoning_parameter_invalid",
-            "Responses reasoning must be an object or null",
-        ));
-    }
+) -> Option<&'a str> {
     if !matches!(protocol, "chat-completions" | "responses") {
-        return Ok(None);
+        return None;
     }
     let value = body.effort(protocol);
     if let Some(effort) = fixed {
-        return Ok(Some(effort));
+        return Some(effort);
     }
     if matches!(value, Effort::Missing | Effort::Null) {
-        return Ok(None);
+        return None;
     }
-    let input = value.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
-        Error::new(
-            "reasoning_parameter_invalid",
-            "Reasoning effort must be a nonempty string or null",
-        )
-    })?;
-    Ok(Some(
+    value.as_str().filter(|text| !text.is_empty()).map(|input| {
         model
             .effort_map
             .get(protocol)
             .and_then(|map| map.get(input))
-            .map_or(input, String::as_str),
-    ))
+            .map_or(input, String::as_str)
+    })
 }
 
 enum CommonInput {
@@ -344,26 +333,6 @@ pub(crate) fn validate(config: &Config, metadata: Option<&catalog::Snapshot>) ->
         }
     }
     Ok(())
-}
-
-pub(crate) fn request_mismatch(
-    protocol: &str,
-    body: &RequestFacts,
-    effort: &str,
-) -> Option<&'static str> {
-    if !matches!(protocol, "chat-completions" | "responses") {
-        return Some("candidate_reasoning_protocol_unsupported");
-    }
-    if protocol == "responses" && body.reasoning_invalid {
-        return Some("reasoning_parameter_invalid");
-    }
-    if effort != "none" && body.thinking_disabled {
-        return Some("reasoning_toggle_conflict");
-    }
-    if effort == "none" && body.thinking_enabled {
-        return Some("reasoning_toggle_conflict");
-    }
-    None
 }
 
 #[cfg(test)]
@@ -813,12 +782,9 @@ mod tests {
         );
         let body = RequestFacts::from_value(json!({"reasoning":{"effort":"max","summary":"auto"}}))
             .unwrap();
+        assert_eq!(resolve(&model, "responses", &body, None), Some("high"));
         assert_eq!(
-            resolve(&model, "responses", &body, None).unwrap(),
-            Some("high")
-        );
-        assert_eq!(
-            resolve(&model, "responses", &body, Some("low")).unwrap(),
+            resolve(&model, "responses", &body, Some("low")),
             Some("low")
         );
         assert_eq!(
@@ -827,8 +793,7 @@ mod tests {
                 "chat-completions",
                 &RequestFacts::from_value(json!({"reasoning_effort":"max"})).unwrap(),
                 None
-            )
-            .unwrap(),
+            ),
             Some("max")
         );
         for body in [
@@ -837,7 +802,7 @@ mod tests {
             json!({"reasoning":{"effort":null}}),
         ] {
             let body = RequestFacts::from_value(body).unwrap();
-            assert_eq!(resolve(&model, "responses", &body, None).unwrap(), None);
+            assert_eq!(resolve(&model, "responses", &body, None), None);
         }
         assert_eq!(
             resolve(
@@ -845,10 +810,8 @@ mod tests {
                 "responses",
                 &RequestFacts::from_value(json!({"reasoning":{"effort":42}})).unwrap(),
                 None
-            )
-            .unwrap_err()
-            .code,
-            "reasoning_parameter_invalid"
+            ),
+            None
         );
     }
 }

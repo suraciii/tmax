@@ -164,10 +164,10 @@ Resolve effort only on the selected backend, in this precedence order:
 2. Otherwise, map a supplied caller-facing input if an explicit model entry exists.
 3. Otherwise, preserve the input unchanged (identity); omission stays omitted.
 
-Mapped and fixed targets require positive effective effort declarations. Identity
-requests retain the existing unknown-metadata behavior: reject known mismatches,
-but do not fabricate support or reject solely because metadata is unknown. Map
-targets are actual upstream values, never another dictionary key to resolve.
+Configured mapped and fixed targets require positive effective effort
+declarations at save time; at request time no resolved or supplied value is
+compared with declared metadata. Map targets are actual upstream values, never
+another dictionary key to resolve.
 Removing a map restores identity; it does not disable that input. Only serialize
 the selected native effort field when a fixed or mapped value supplies or changes
 it; preserve unrelated, unknown, and omitted fields.
@@ -187,28 +187,28 @@ effort vocabulary.
 | Capability declaration | Require an effective `reasoning_options` entry with `type = "effort"` and explicit `values` containing the exact configured value; effective `reasoning = false` rejects it. `reasoning = true`, absent values, and toggle-only controls are not effort declarations. |
 | Save, dry-run, reload/start, or catalog adoption | Validate against the corresponding accepted or proposed effective metadata, honoring explicit model metadata overrides. Reject an unsupported choice before credential provisioning or native sign-in/out effects, without saving it or adopting incompatible catalog metadata. No live inference qualification is required or inferred. |
 | Other controls | Do not inject thinking toggles, reasoning budgets, sampling, output limits, or arbitrary fields. Preserve unknown native extensions. |
-| Conflicting thinking toggle | Reject positive effort with `thinking.type = "disabled"`, or effort `none` with enabled/adaptive thinking. Do not silently enable thinking or discard the toggle. |
-| Retained session | Use its unchanged destination and the current admission snapshot's configured effort. Effort edits do not rerank, replay, or rewrite its original selection evidence. A request incompatibility rejects that request without moving it. |
+| Conflicting thinking toggle | Forward it unchanged beside the resolved effort. The upstream decides whether the combination is acceptable; do not silently enable thinking or discard the toggle. |
+| Retained session | Use its unchanged destination and the current admission snapshot's configured effort. Effort edits do not rerank, replay, or rewrite its original selection evidence. A request never moves or fails because of declared capabilities. |
 
 | Native protocol | Effort field and preservation boundary |
 | --- | --- |
-| Chat Completions | `reasoning_effort`; a present non-string effort is malformed unless a fixed candidate value replaces it. Preserve all unrelated fields. |
-| Responses | `reasoning.effort`; a present non-string effort is malformed unless fixed candidate effort replaces it. Preserve other members of `reasoning`. A nonobject, nonnull `reasoning` value is incompatible and must not be discarded, even for a fixed override. |
+| Chat Completions | `reasoning_effort`; a present non-string effort is forwarded unchanged unless a fixed candidate value replaces it. Preserve all unrelated fields. |
+| Responses | `reasoning.effort`; a present non-string effort is forwarded unchanged unless fixed candidate effort replaces it. Preserve other members of `reasoning`. A nonobject, nonnull `reasoning` value is left untouched, even when a fixed effort exists. |
 | Messages | Configured model maps and candidate effort are unsupported and rejected explicitly; do not translate a thinking budget/toggle or assume a provider's effort encoding. Unconfigured requests retain existing forwarding behavior. |
 
-### Backend-stable effort admission
+### Backend-stable effort resolution
 
-Known incompatibilities with limits, non-effort request parameters, or required
-capabilities may exclude candidates before a new alias selection or reject a
-fixed/retained destination. **Effort is explicitly excluded from that filtering
-and reranking.** For one coherent routing snapshot, continuity context, and other
-request constraints, changing only effort must select the same backend or reject.
-Choose a new backend using the other constraints and existing priorities, or keep
-the retained destination, then resolve and validate effort on that backend only.
-Reject an incompatible or malformed effort before publishing a new binding and
-before upstream dispatch. Do not retry, fall back, rerank, silently downgrade,
-or move an existing conversation because of effort. Existing bindings and their
-original decision evidence remain unchanged by a rejected request.
+The gateway forwards requests; it does not police their content. Candidate
+exclusion is limited to configuration state (a disabled provider, model, or
+alias), missing authorization, an unsupported protocol endpoint, a provider
+already attempted by alias fallback, native client-identity requirements, and
+observed availability. Declared limits, capabilities, parameters, and effort
+values never exclude a candidate and never reject a request: an undeclared or
+otherwise unknown value is forwarded unchanged, and the upstream answers with
+its own truthful error. **Effort resolution happens only on the selected
+backend**, so changing effort never reranks, retries, downgrades, or moves an
+existing conversation. Existing bindings and their original decision evidence
+are unaffected by request content.
 
 Diagnostics distinguish caller input, upstream value, source (`fixed`, `map`,
 `identity`, or `omitted`), and selected backend under the
@@ -514,10 +514,11 @@ Model-alias IDs and derived concrete model IDs must be unambiguous within each
 native-protocol scope. Reject a collision when applying configuration, not by
 silently choosing one interpretation at request time. The same public ID on another
 protocol is separately qualified, not evidence of protocol translation. Each
-candidate must expose the incoming protocol and satisfy the capability contract.
-After concrete model lookup, resolve its protocol endpoint through the
+candidate must expose the incoming protocol; request content never filters
+candidates. After concrete model lookup, resolve its protocol endpoint through
+the
 [shared integration authority](../integrations/spec.md#endpoint-resolution) and
-require its declared operation, transport, and protocol-specific limits.
+require that endpoint to exist for the incoming protocol.
 
 Every candidate identifies its provider and authorization; there is no later
 account selector. A shared catalog entry, model-family name, or similar upstream ID must
@@ -584,10 +585,10 @@ Pending file settings must not supply facts under a different loaded definition.
    candidate only for a new selection, never silent movement of an existing
    session. Concrete access keeps its specified model regardless of any
    model's priority-rule result.
-4. Resolve and validate effort on the selected destination before publishing a
-   new binding or dispatching. A mismatch rejects without retry or replacement,
-   including while selection is unbound. Use the selected model's provider
-   authorization. If non-effort eligibility changes before dispatch, revalidate
+4. Resolve effort (fixed value, then explicit map, then identity) on the
+   selected destination before publishing a new binding or dispatching. An
+   undeclared or unknown value is forwarded unchanged; it neither rejects nor
+   replaces the destination. Use the selected model's provider authorization. If non-effort eligibility changes before dispatch, revalidate
    the fixed model or select again among the alias's eligible candidates only
    while the selection is unbound.
    Any repeated selection captures a new coherent snapshot and instant; it must

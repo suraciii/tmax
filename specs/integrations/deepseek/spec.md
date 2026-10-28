@@ -130,10 +130,13 @@ Unsupported parameters can be silently ignored. The documented response object's
 A client that sends complete required input history can qualify for direct or
 same-protocol gateway use. This must include the prior tool calls and tool outputs
 needed for the next turn. A client that relies on server-stored history or
-background execution must be blocked for those semantics, even if its first
-request succeeds. tmax must not reconstruct missing history, strip unsupported
-fields to claim success, invent a conversation service, or translate protocols
-to make that client appear compatible.
+background execution is documented as incompatible with this endpoint: the
+client must not select it, and tmax does not claim those semantics in native
+configuration. At request time the gateway still forwards the client's request
+unchanged, exactly as the upstream would receive it directly; it does not
+reconstruct missing history, strip unsupported fields to claim success, invent a
+conversation service, or translate protocols to make that client appear
+compatible.
 
 Qualification must cover streamed output, tool-call round trips, reasoning data
 required on later turns, and the actual client's continuation behavior. DeepSeek's

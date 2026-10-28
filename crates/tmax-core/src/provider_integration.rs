@@ -1,5 +1,4 @@
 //! Provider integration for upstream model services.
-use crate::gateway::RequestFacts;
 use crate::{
     Error, Result,
     config::{Config, PROTOCOLS, Provider},
@@ -250,23 +249,11 @@ pub fn inference_protocol(method: &str, path: &str, query: Option<&str>) -> Opti
 pub fn protocols(provider: &Provider) -> Result<Vec<String>> {
     Ok(resolve(provider)?.into_keys().collect())
 }
-pub fn check_request(provider: &Provider, protocol: &str, body: &RequestFacts) -> Result<()> {
-    if protocol == "responses" && body.background {
-        return Err(Error::new(
-            "capability_incompatible",
-            "Background execution is not a declared operation for this integration",
-        ));
-    }
+pub fn check_request(provider: &Provider, protocol: &str) -> Result<()> {
     if !resolve(provider)?.contains_key(protocol) {
         return Err(Error::new(
             "endpoint_unavailable",
             "This provider has no endpoint for the requested native protocol",
-        ));
-    }
-    if integration_id(provider)? == "deepseek" && protocol == "responses" && body.deepseek_state {
-        return Err(Error::new(
-            "capability_incompatible",
-            "Official DeepSeek Responses requires complete independent input history and does not support server-state or background semantics",
         ));
     }
     Ok(())

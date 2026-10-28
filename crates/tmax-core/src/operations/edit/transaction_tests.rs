@@ -45,7 +45,7 @@ async fn effort_map_mutations_upsert_isolate_protocols_and_restore_identity() {
     let body =
         crate::gateway::RequestFacts::from_value(json!({"reasoning_effort":"xhigh"})).unwrap();
     assert_eq!(
-        crate::reasoning::resolve(model, "chat-completions", &body, None).unwrap(),
+        crate::reasoning::resolve(model, "chat-completions", &body, None),
         Some("xhigh")
     );
     let bytes = std::fs::read(store.root.join("tmax.toml")).unwrap();
@@ -176,8 +176,7 @@ async fn effort_maps_follow_provider_and_model_renames_and_clear_only_selected_p
             "chat-completions",
             &crate::gateway::RequestFacts::from_value(json!({"reasoning_effort":"xhigh"})).unwrap(),
             None,
-        )
-        .unwrap(),
+        ),
         Some("xhigh")
     );
 }

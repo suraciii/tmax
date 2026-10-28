@@ -118,9 +118,6 @@ impl<'a> Snapshot<'a> {
             .as_ref()
             .map(|snapshot| snapshot.revision.as_str())
     }
-    pub(crate) fn metadata(&self) -> Option<&crate::catalog::Snapshot> {
-        self.metadata.as_deref()
-    }
     pub(crate) fn input_revision(&self, provider: &str, input: &str) -> Value {
         let b = self
             .view
