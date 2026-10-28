@@ -16,7 +16,8 @@ pub struct NativeRequirements {
     pub client: NativeClient,
     pub go_session: bool,
     /// Whether the client named a session at all, qualified or not. A client
-    /// that named one, even unusably, must be rejected rather than attributed.
+    /// that named one, even unusably, must not be attributed: the gateway never
+    /// overrides a session identity a request tried to supply.
     pub unattributed: bool,
 }
 impl NativeRequirements {

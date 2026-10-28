@@ -17,9 +17,6 @@ pub(super) fn safe_message(code: &str) -> &'static str {
         "local_capacity" => "Local capacity unavailable; request was not dispatched",
         "request_too_large" => "Request exceeds the local body limit",
         "authentication_failed" => "Current shared gateway key required",
-        "independent_context_required" => {
-            "This alias requires a qualified client with complete independent context and no upstream-owned continuation state"
-        }
         "gateway_identity_prerequisite" => {
             "Codex gateway use requires managed-policy permission and qualified native authorization identity; direct native access remains independent"
         }
