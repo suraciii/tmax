@@ -32,6 +32,33 @@ pub(super) fn safe_message(code: &str) -> &'static str {
         "upstream_transport_failed" => {
             "Upstream transport failed; execution or completion may be unknown"
         }
+        "tools_incompatible" => {
+            "No candidate for this model accepts tool use; the request was not dispatched"
+        }
+        "reasoning_incompatible" => {
+            "No candidate for this model supports reasoning; disable it or select another model"
+        }
+        "reasoning_effort_incompatible" => {
+            "No candidate for this model supports the requested reasoning effort"
+        }
+        "reasoning_effort_unavailable" => {
+            "This model publishes no reasoning effort selector; remove the effort or select another model"
+        }
+        "temperature_incompatible" => {
+            "No candidate for this model accepts a temperature value; the request was not dispatched"
+        }
+        "structured_output_incompatible" => {
+            "No candidate for this model supports the requested structured output format"
+        }
+        "input_modality_incompatible" => {
+            "No candidate for this model accepts the request's input modalities (for example images or audio)"
+        }
+        "output_modality_incompatible" => {
+            "No candidate for this model produces the requested output modalities"
+        }
+        "metadata_unavailable" => {
+            "The selected model's effective capability metadata is unavailable; no upstream dispatch"
+        }
         _ => "Request unavailable at the indicated stage; inspect local request metadata",
     }
 }
