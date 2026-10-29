@@ -525,6 +525,15 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
     } else {
         plan_usage.map_or("", |(source, _)| source)
     };
+    let plan_has_reset = plan_usage.is_some_and(|(source, fact)| {
+        source != "kimi_usage_api"
+            || fact.data["usage"].get("resetTime").is_some()
+            || fact.data["limits"].as_array().is_some_and(|windows| {
+                windows
+                    .iter()
+                    .any(|window| window["detail"].get("resetTime").is_some())
+            })
+    });
     let integration = provider_integration::integration_id(p)?;
     Ok(
         json!({"provider":provider,"account_identity":null,"observations":scopes,
@@ -533,7 +542,7 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
             "freshness":temporal_applicability(billing_fact,Some(billing_source),&at),
             "subscription":p.subscription,"account_identity":null,
             "shared_upstream_limits":"unknown; providers may share upstream account limits",
-            "aggregation":"not_performed","renewal":"unknown","reset":if go_usage.is_some(){"announced"}else if plan_usage.is_some(){"provider_reported"}else{"unknown"},
+            "aggregation":"not_performed","renewal":"unknown","reset":if go_usage.is_some(){"announced"}else if plan_has_reset{"provider_reported"}else{"unknown"},
             "dashboard":provider_integration::dashboard(integration)}}),
     )
 }
@@ -1392,5 +1401,43 @@ mod tests {
         let quota = &after["observations"][2];
         assert_eq!(quota["source"], "kimi_usage_api");
         assert!(quota["freshness"]["as_of"].is_null());
+
+        let captured = capture(&store, &config, "kimi-a", "quota").unwrap();
+        let partial = AcquiredObservation {
+            status: 200,
+            data: provider_integration::normalize_observation(
+                "kimi_usage_api",
+                &json!({"usage":{"limit":"100","used":"100"}}),
+            )
+            .unwrap(),
+        };
+        commit(&store, &captured, Ok(partial)).unwrap();
+        let current = inspect(&store, &config, "kimi-a").unwrap();
+        assert_eq!(current["billing"]["reset"], "unknown");
+        assert_eq!(
+            current["billing"]["observation"]["data"]["usage"],
+            json!({"limit":"100","used":"100"})
+        );
+        assert_eq!(
+            current["observations"][2]["latest_attempt"]["outcome"],
+            "completed"
+        );
+
+        let captured = capture(&store, &config, "kimi-a", "quota").unwrap();
+        let unusable = provider_integration::normalize_observation(
+            "kimi_usage_api",
+            &json!({"usage":{"remaining":"invalid"}}),
+        )
+        .map(|data| AcquiredObservation { status: 200, data });
+        commit(&store, &captured, unusable).unwrap();
+        let after_failure = inspect(&store, &config, "kimi-a").unwrap();
+        assert_eq!(
+            after_failure["billing"]["observation"],
+            current["billing"]["observation"]
+        );
+        assert_eq!(
+            after_failure["observations"][2]["latest_attempt"]["outcome"],
+            "failed"
+        );
     }
 }

@@ -213,14 +213,31 @@ limits (five-hour and weekly) carrying provider-reported limit/remaining
 counters and reset timestamps. This read is a non-inference observation
 operation; no inference was issued to obtain it.
 
-The read preserves the provider's actual windows and reset values verbatim. The
-counter unit is unpublished, so counters must not be labeled requests or tokens.
-Overlapping legacy and new fields in the response must not be counted as two
-allowances. The shared membership allowance is not multiplied per local
-provider or key. The read qualifies display observations only, never renewal
-facts or rule inputs. A failed or changed representation degrades to dated or
-unknown, not zero. tmax must not scrape browser sessions or import CLI tokens
-to fill quota fields.
+The counter unit is unpublished, so counters must not be labeled requests or
+tokens. Overlapping legacy and new fields must not be counted as two allowances.
+The shared membership allowance is not multiplied per local provider or key.
+The read qualifies display observations only, never renewal facts or rule inputs.
+tmax must not scrape browser sessions or import CLI tokens to fill quota fields.
+
+### Tolerant quota reads
+
+The weekly `usage` object and each `limits` row are independent sources of
+partial information. Missing fields do not imply zero or invalidate other fields.
+
+| Returned information | Observable behavior |
+| --- | --- |
+| Recognizable `limit`, `used`, or `remaining` decimal-string counter | Preserve the exact reported string independently; any one counter is useful. Do not require the other counters or calculate missing values. |
+| Missing, null, negative, or otherwise unrecognized counter | Leave that field unknown without rejecting other counters or windows. Preserve explicit zero. |
+| Recognizable `resetTime` | Preserve the reported timestamp independently. An absent or unusable reset does not discard valid counters. A reset alone is not an allowance observation. |
+| Missing or unusable `usage`, `limits`, or individual row | Continue reading the other sources; omit rows with no recognizable counters. |
+| Partial window description | Preserve recognizable `duration` and `timeUnit` fields independently; leave the rest unknown. Do not infer window scope, merge repeated descriptions, or sum their counters. |
+| Unknown or identity/billing-control fields | Ignore them; retain only the qualified allowance fields. |
+| At least one recognizable counter | Publish the new partial observation through the existing CLI and Web detail surfaces. Missing fields remain absent, not copied from an older observation. |
+| Request failure, unreadable JSON, or no recognizable counters anywhere | Report refresh failure and retain the previous dated observation. Do not report zero allowance or disable inference. |
+
+The existing bounded read and deadline still apply; no complete-response schema
+or fixed number of windows is required. Source, retrieval time, and unknown
+freshness remain visible for partial observations.
 
 The membership documentation also describes Extra Usage, managed by the user
 in the upstream Console or Subscription page, not by tmax. Included quota

@@ -226,6 +226,13 @@ Providers on `custom` integration, such as a console-only plan, have no
 qualified quota source; record manual subscription information instead of
 scraping browser sessions.
 
+Kimi quota reads preserve partial information: a missing or unusable counter,
+reset timestamp, or window description does not discard other readable counters
+or windows. Missing values remain unknown and are not filled from an older
+observation or calculated as zero. A response with no readable allowance counters
+still reports a failed refresh and retains the previous dated observation. See
+the [Kimi tolerant-read contract](../specs/integrations/kimi-coding-plan/spec.md#tolerant-quota-reads).
+
 ## Local Overview and evidence
 
 The Web Overview groups the provider and agent evidence already available through
