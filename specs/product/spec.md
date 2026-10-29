@@ -570,6 +570,8 @@ saving settings, or applying native configuration does not start inference.
 Closing the browser does not stop it. User-login autostart is optional and
 disabled until enabled; startup uses the current user's secret files. Missing or
 unavailable credentials produce an actionable blocked state, not false readiness.
+The [supervised-service contract](../service/spec.md) owns native process recovery,
+explicit-stop suppression, platform limits, and migration from detached owners.
 CLI and Web provide stop and autostart controls. Stopping reports
 known affected targets and does not switch them to upstream access;
 independently configured clients cannot be enumerated reliably.
@@ -708,7 +710,9 @@ and an explicit stop/start recovery action; the new client must not issue
 unsupported state-changing commands. Replacing the executable does not replace
 the running service. Its normal stop protections still apply. An unidentified
 process occupying the endpoint is a conflict, not a tmax instance to take over.
-There is no automatic restart, takeover, termination, or alternate-port search.
+Identity or version mismatch must not trigger automatic restart, takeover,
+termination, or alternate-port search. Recovery of an already-owned supervised
+process follows the [service contract](../service/spec.md#recovery-and-readiness).
 Recovery uses a CLI compatible with the running service, or its still-available
 Web controls, to perform the existing explicit stops before starting the new
 executable. If no compatible control surface is available, report that missing
@@ -1002,6 +1006,8 @@ credentials; do not claim readiness or add a fallback.
     An unrelated direct-configuration edit must not retry failed startup
     registration or fail solely because registration drift remains. Explicit
     autostart controls reconcile tmax's registration without changing unrelated entries.
+    Exercise the [supervised-service acceptance boundary](../service/spec.md#acceptance-boundary)
+    for client-independent recovery, stop suppression, and platform limitations.
 14. Create two providers from one models.dev metadata entry without duplicating
     its complete definition. Override provider and individual-model fields in one
     instance, restore inheritance by removing overrides, and leave the other

@@ -875,11 +875,15 @@ boolean already has the requested value. A dry run may report required
 reconciliation from current intent and registration state but neither performs
 it nor reserves that state for a later call.
 
-The OS registration belongs to tmax's sole authority. Remove or replace only
-tmax's owned registration; never overwrite an unrelated startup entry.
-Reconciliation requires no daemon service and never starts the gateway. A startup
-invocation must validate the current file and its enabled autostart setting before
-starting inference, so an obsolete registration cannot override a saved disable.
+The OS login-start registration belongs to tmax's sole authority. Remove or
+replace only tmax's owned registration; never overwrite an unrelated entry.
+Reconciliation requires no daemon service and never starts the gateway.
+Disabling login startup must not stop current listeners or remove their process
+supervision. An owned service definition may remain without a login trigger.
+A login-start invocation must validate the current file and its enabled autostart
+setting before requesting inference, so an obsolete registration cannot override
+a saved disable. Explicit starts and recovery of a current activation are
+independent of this boolean under the [service contract](../service/spec.md).
 
 File persistence and service activation are separate boundaries:
 

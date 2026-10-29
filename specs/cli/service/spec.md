@@ -6,6 +6,8 @@ and listener independence. [Configuration](../../configuration/spec.md) owns
 saved fields and activation. Use [common CLI rules](../spec.md),
 [configuration changes](../configuration/spec.md), and [shared results](../results/spec.md).
 [Probes/history](diagnostics/spec.md) have a separate command contract.
+[Supervised service](../../service/spec.md) owns native-manager startup, crash
+recovery, stop suppression, and existing-installation cutover.
 
 ## Outbound network configuration
 
@@ -81,9 +83,10 @@ a daemon and reports separately from save/activation; failure is incomplete.
 
 Unchanged-intent unrelated edits/reloads neither retry/remove registration nor
 fail only for drift. Report `not_requested` plus drift/failed state and the repair
-value, without starting inference. Startup validates current config and enabled
-intent; stale OS registration cannot override disabled intent. Missing or
+value, without starting inference. Login startup validates current config and
+enabled intent; stale registration cannot override disabled intent. Missing or
 unavailable credentials block readiness, not an insecure fallback or a false ready state.
+Current-activation recovery is independent of login-start intent.
 
 Upstream credential changes on reload/start/restart use
 [replacement safety](../providers/authentication/spec.md#authorization-replacement),
@@ -96,13 +99,13 @@ follow [their independent lifecycle](../providers/authentication/spec.md#shared-
 | --- | --- |
 | `gateway status` | Actual daemon/versions, inference/Web listeners, startup intent/drift/failure, shared-key readiness, derived publication, and safe bound-session conditions; native dependencies are not serving prerequisites. |
 | `web status` | Actual daemon/versions and management listener or explicit absence, independent of inference. |
-| `gateway start` | Reuse compatible running inference without reload, or validate saved config/shared key and start inference in the sole acquired daemon. No managed-target prerequisite, key provisioning, or native application. |
-| `gateway stop` | Stop inference, not Web. Cancel in-flight requests as transports allow and report the actual interrupted set; never wait for in-flight work. |
-| `gateway restart` | Recycle the daemon process from the on-disk executable: cancel in-flight work, release ownership, start the replacement with current valid settings (including saved address changes), and restore a Web listener that was running. Updates take effect on the next restart. |
-| `gateway autostart enable` | Save true and always reconcile per-user login-start registration; disclose missing or unavailable credential state. |
-| `gateway autostart disable` | Save false and always reconcile registration removal, not stop inference. |
-| `web open [--listen ADDRESS] [--no-browser]` | Start/reuse management in the sole compatible daemon, report actual URL, and open browser unless suppressed. Do not implicitly start inference or reload. |
-| `web stop` | Stop management only in the identified compatible daemon, not inference/native agents. |
+| `gateway start` | Reuse compatible running inference without reload, or validate saved config/shared key and start inference in the sole owner. New processes use native supervision independently of autostart; success requires actual readiness. No managed-target prerequisite, key provisioning, or native application. |
+| `gateway stop` | Stop inference, not Web, and suppress its pending recovery even while the process is absent. Cancel in-flight requests as transports allow and report the actual interrupted set; never wait for in-flight work. |
+| `gateway restart` | Recycle through the native manager from the on-disk executable; explicitly transition a compatible unsupervised owner after preflight. Cancel in-flight work, release ownership, start inference with current valid settings (including saved address changes), and restore a requested Web listener. Report success only after requested listeners are ready. |
+| `gateway autostart enable` | Save true and always reconcile per-user login activation; disclose credential and session limitations without starting inference. |
+| `gateway autostart disable` | Save false and always reconcile removal of login activation, not current inference or its supervision. |
+| `web open [--listen ADDRESS] [--no-browser]` | Start/reuse management in the sole compatible daemon, using native supervision for a new process; report its ready URL and open the browser unless suppressed. Do not implicitly start inference or reload. |
+| `web stop` | Stop management and suppress its pending recovery, not inference/native agents. If neither listener remains requested, disarm process recovery and release ownership. |
 
 Mutations support dry-run; autostart saves accept the common file guard. Reads are
 effect-free. Stop and restart serialize admission with the actual active set;
@@ -124,12 +127,15 @@ block effects. Never kill/take over an unknown owner/socket, start a second vers
 or choose a different port. Status may successfully report these conditions;
 lifecycle fails closed. Inference stop leaves Web usable for config repair. After
 explicit stops leave both surfaces stopped, shutdown/release follows Product;
-listener restart retains ownership. Incompatible recovery needs a compatible CLI
+supervision must not undo that stop. An explicit gateway restart replaces the
+process while preserving sole ownership. Incompatible recovery needs a compatible CLI
 or that daemon's available Web controls before starting the new executable.
 Next actions must not claim the incompatible current CLI can perform that stop.
 
-Autostart touches only tmax's per-user registration, never unrelated entries or
-immediate inference startup. A Web address is numeric loopback plus port. Without
+Autostart touches only tmax's per-user login activation and any required owned
+definition, never unrelated entries or current listener state. A retained service
+definition with login activation disabled is not autostart drift.
+A Web address is numeric loopback plus port. Without
 one, reuse management or allocate one initial OS-selected loopback port. Initial
 allocation is not fallback from conflict/occupation. An explicit mismatch with
 running Web is `endpoint_conflict`; an occupied requested endpoint is
@@ -148,6 +154,35 @@ Examples: `tmax gateway configure --listen 127.0.0.1:17840`,
 `tmax gateway autostart enable`, `tmax gateway autostart disable`, `tmax gateway remove`,
 `tmax web open --no-browser`, `tmax web open --listen 127.0.0.1:17841`, and
 `tmax web stop`. Independent examples are not an automatic sequence.
+
+### Supervision outcomes
+
+Existing lifecycle syntax and configuration fields are unchanged.
+Service-definition preparation and manager control belong to `gateway_lifecycle`
+or `web_entry`, not `autostart`, unless login activation was requested.
+Dry-run must disclose required definition changes, supervision transfer,
+interrupted work, and locally observable manager blockers without performing them.
+It must not reserve a manager job or change a recovery generation.
+
+| Condition | Result |
+| --- | --- |
+| Existing compatible unsupervised owner reused | Existing success/reuse result with supervision explicitly inactive and a supported transition action; no hidden recycle |
+| Unsupported manager or unavailable required user session before effects | Exit 3 with `service_manager_unavailable` and the specific platform reason; no detached fallback |
+| Definition belongs to another authority/application | Exit 3 with `service_registration_conflict`; leave it unchanged |
+| Manager permission or I/O operation fails | Exit 4 with `service_control_failed`, completed effects, and safe external permission guidance; no automatic elevation |
+| Requested listener does not become ready before its deadline | Exit 4 with `service_readiness_failed`; report actual listener/manager state and request withdrawal or uncertain partial effects |
+| Recovery exhausts native attempts or meets a permanent blocker | Status succeeds as a read, exposing the cause and explicit start/restart action rather than readiness |
+| Web requests replacement of its own supervised process | `service_restart_requested` with `status: pending` acknowledges the request, not readiness; delivery can be interrupted by process exit |
+
+Existing identity, configuration, credential, and endpoint codes retain their
+own meanings when more specific than the manager result.
+A successful stop requires confirmed stop suppression, not merely a delivered
+signal. No failure may silently report a queued start as cancelled.
+Web restart acknowledgement contains `old_process_instance`,
+`restart_completion: pending_reconnect`, and a finite
+`reconnect_deadline_seconds`. It is not a persisted operation or replay token.
+The UI observes the replacement without submitting the mutation again.
+CLI restart retains synchronous readiness completion.
 
 ## Network-policy data
 
@@ -221,3 +256,28 @@ Known native dependencies use resource references in `data.dependencies` when
 relevant; `data.unmanaged_clients = "unknown"` never claims complete client
 enumeration. Shared key availability/serving readiness are independent of
 native selection/default readiness and of whether any Agent is registered.
+
+### Supervision data
+
+Detailed gateway/Web status and affected lifecycle results include
+`data.supervision` independently of `data.daemon` and `data.autostart`.
+Root status and Web must summarize the same facts without equating running,
+supervised, ready, or enabled-for-login.
+
+| Field | Meaning |
+| --- | --- |
+| `manager` | `systemd_user`, `launchd_user`, `windows_task`, `none`, or null when unknown |
+| `registration` | `owned`, `absent`, `conflict`, or `unavailable`; installation alone is not active supervision |
+| `state` | `supervised`, `unsupervised`, `starting`, `recovering`, `stopped`, `blocked`, `failed`, or `unavailable`; `supervised` requires verified ownership of the actual daemon process |
+| `process_owned` | Boolean-or-null; associates the native manager's observed process with the daemon's qualified peer identity |
+| `reason_code` | Controlled safe cause or null; use the specific platform/session/blocker reason |
+| `requested` | `{inference, web}` with boolean-or-null values for current-activation requests, not observed listener readiness |
+| `recovery` | `{attempts, limit, retry_delay_seconds, last_exit_code}`; values are nonnegative numbers or null where unknown, except signed exit code; attempts and limit are integers |
+| `session` | `{scope, survives_logout}`; scope is `user_manager`, `user_login`, or null, and survival is boolean-or-null based on evidence, not inferred from installation |
+
+`data.autostart` continues to describe saved login-start intent and its actual
+registration separately. Unknown manager/process evidence must not become
+`stopped`, `unsupervised`, or disabled login startup.
+Recovery timing describes the native policy, not a guarantee of upstream service
+availability. Detailed failure results include the existing next-action form.
+

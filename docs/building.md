@@ -51,13 +51,19 @@ state is under that account's `~/.tmax`; native configuration and native-owned
 credential artifacts remain in their explicitly selected native scopes.
 
 Daemon control uses Unix local sockets or local-only Windows named pipes with
-an explicit OS-user ACL and peer identity checks. Windows needs no separate
-daemon, service installation, or administrator setup: ordinary CLI and Web
-actions launch the detached executable. Browser launch uses the Windows system
-browser. Opt-in Windows login startup uses only tmax's owned current-user Run
-value; Linux uses `systemctl --user` and tmax's owned unit. Missing session
-services or unavailable credentials remain visible blockers; they do not trigger
-implicit inference startup or route fallback.
+an explicit OS-user ACL and peer identity checks. New processes require a native
+user supervisor: reachable systemd user manager on Linux, a launchd GUI user
+domain on macOS, or current-user Task Scheduler on Windows.
+Ordinary lifecycle commands prepare tmax's owned definition and start through
+that manager; there is no separate install command or detached fallback.
+Login triggers remain independent of current execution and crash recovery.
+Commands do not elevate privileges, enable linger, or change account-wide session
+policy. Missing session services and unavailable credentials remain visible
+blockers rather than implicit inference startup or route fallback.
+Unowned native definition overrides, including systemd drop-ins, return a
+registration conflict; tmax does not remove or override them.
+Browser launch uses the platform browser; use `--no-browser` for headless Web entry.
+See [service usage](usage.md#gateway-only-access) for lifecycle and qualification scope.
 
 The tmax store keeps API keys and credential-bearing recovery data as plaintext
 under `~/.tmax`. Unix uses mode-0600 files and mode-0700 directories; Windows
@@ -71,10 +77,10 @@ Unsupported storage-format records return `storage_version_unsupported` or
 contents in unsupported formats are unavailable to current recovery operations.
 
 Replacing the executable does not upgrade a running daemon. This executable
-uses management protocol `tmax-control/5`; the Model identity and selected-model
-result cutover is incompatible with an older `tmax-control/4` daemon. If the
-current CLI reports `daemon_incompatible`, use
-the running service's matching older executable to stop it explicitly:
+uses management protocol `tmax-control/6`; supervised lifecycle coordination is
+incompatible with `tmax-control/5` and earlier clients and daemons. If the current
+CLI reports `daemon_incompatible`, use the running service's matching older
+executable to stop it explicitly:
 
 ```sh
 /path/to/previous/tmax gateway stop

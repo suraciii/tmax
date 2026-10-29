@@ -23,7 +23,7 @@ to stdout and errors to stderr. Offline help/version remain text, not envelopes.
 | `schema_version` | Integer `1`; incompatible implemented-envelope changes require a new version. |
 | `operation` | Canonical command-path string, or null when parsing cannot establish it. |
 | `code` | Stable machine-readable outcome independent of message wording. |
-| `status` | `success`, `dry_run`, `blocked`, `incomplete`, `error`, or `cancelled`. |
+| `status` | `success`, `dry_run`, `blocked`, `incomplete`, `error`, or `cancelled`; Web self-restart alone may acknowledge `pending` under the [service contract](../service/spec.md#supervision-outcomes). Pending never establishes readiness or completed lifecycle. |
 | `data` | Compact command-specific object, or null. Unknown facts are null or explicitly qualified. |
 
 Include these fields only when relevant; do not require empty arrays or unavailable

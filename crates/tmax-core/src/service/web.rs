@@ -111,8 +111,11 @@ async fn web_request(State(web): State<WebState>, request: axum::extract::Reques
             .into_response(),
         ("GET", "/api/catalog") => axum::Json(crate::operations::catalog()).into_response(),
         ("GET", "/api/status") => {
-            let daemon = web.daemon.lock().await;
-            axum::Json(daemon.view()).into_response()
+            let store = web.daemon.lock().await.store().clone();
+            match super::control::status(&store).await {
+                Ok(value) => axum::Json(value).into_response(),
+                Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({"error":error}))).into_response(),
+            }
         }
         ("POST", "/api/execute") => {
             if parts

@@ -501,8 +501,9 @@ The key file is plaintext, not encrypted. `gateway start` is a separate explicit
 lifecycle action. Provider-key setup prompts invisibly on an attached terminal
 or accepts `--key-stdin`; the Web form contains a provider-key field. Use explicit
 key input for automation, never argv, environment, or
-ordinary configuration files. Neither the CLI nor Web requires a daemon
-installation. Provision the shared key to a client only through the qualified
+ordinary configuration files. CLI and Web need no separate installation command.
+New background processes require a reachable native user service manager.
+Provision the shared key to a client only through the qualified
 `gateway key show` delivery flow. Ordinary inspection does not reveal it. All
 current-key holders share the same published model list; no client registration
 is required.
@@ -515,12 +516,24 @@ whose home permits that pathname; tmax does not relocate its store or fall back
 to a shorter endpoint. No listener, credentials, or native configuration are
 changed by this startup blocker.
 
-On Windows, the same commands launch a detached native daemon with private
-same-user named-pipe control. `tmax web open` opens the system browser;
-`--no-browser` starts management without opening it. Closing the browser or
-launching terminal does not stop inference. `tmax gateway autostart enable` opts
-into current-user login startup, and `disable` removes only tmax's owned startup
-entry without stopping the gateway. Startup reads the same current-user-restricted
+New processes run in a native supervised user job: systemd on Linux, launchd on
+macOS, or Task Scheduler on Windows. The job runs the foreground daemon for its
+whole lifetime. Windows control remains a private same-user named pipe.
+`tmax web open` opens the system browser; `--no-browser` starts management without
+opening it. Closing the browser or launching terminal does not stop inference.
+The manager can recover an unexpected process exit without a connected client.
+Recovery restores only still-requested listeners at their acknowledged addresses.
+It never replays interrupted inference.
+
+`tmax gateway autostart enable` opts into future user-manager/login activation.
+`disable` removes that activation without stopping current listeners or removing
+their supervision. A retained definition with login startup disabled is normal.
+No command implicitly enables Linux linger, elevates privileges, or installs a
+machine-wide service. Logout survival depends on the actual user-manager session.
+An unavailable manager returns `service_manager_unavailable`; it does not fall
+back to a detached process. `gateway status` reports `supervision`, `autostart`,
+and actual listener readiness as independent facts.
+Startup reads the same current-user-restricted
 secret files. Unsupported storage-format records return `storage_version_unsupported` or
 `storage_record_invalid` and remain unchanged. Re-enter the provider key with
 `provider key set` or replace the shared key with `gateway key replace`. Recovery
@@ -538,6 +551,36 @@ cancelled (never drained, replayed, or refused), ownership is released, the
 replacement process starts with the current saved settings, and a Web listener
 that was running is restored. `tmax gateway stop` likewise cancels in-flight
 requests instead of refusing while they are active.
+
+Stopping inference leaves Web available, including after a later process crash.
+Stopping the last requested listener disarms recovery for the current activation.
+During queued recovery, stop still records suppression before it reports success.
+Invalid saved settings, a missing shared key, or a conflicting address block
+inference; they do not justify a tight restart loop or a different port.
+A saved inference address change requires explicit restart, even after a crash.
+Malformed recovery metadata requires explicit lifecycle repair rather than guessed
+listener requests; restarting with no identifiable live Web owner does not guess
+the missing Web address. Open Web explicitly afterward when needed.
+
+The Web restart action first acknowledges a pending request because its HTTP
+process must exit. After acknowledgement, the page reconnects and reports
+completion only after a new process instance serves the requested listeners.
+Without acknowledgement, the outcome remains unknown; refresh status rather than
+resubmitting or treating an unrelated process replacement as this request's success.
+CLI restart waits for readiness before returning success.
+
+Recovery is bounded to five starts in its attempt window. Linux and macOS request
+a two-second native restart delay with a sixty-second window; Windows uses the
+Task Scheduler minimum sixty-second delay and a five-minute attempt window.
+Application readiness has a separate fifteen-second deadline after manager start.
+Native command deadlines remain independent of inference lifetime.
+Inspect `supervision.recovery` for observed attempts and the actual native delay.
+
+Linux local smoke exercised repeated start, client-independent crash recovery,
+inference stop followed by Web-only recovery, queued-stop suppression, independent
+login activation, CLI restart, and actual browser restart/reconnection.
+Windows cross-compilation is not native Task Scheduler qualification.
+macOS launchd and Windows login-session recovery still require native-host evidence.
 
 The gateway is a plain model provider for its callers: any request bearing the
 shared key is routed and forwarded unchanged, whatever client sends it and

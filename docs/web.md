@@ -74,9 +74,13 @@ page makes no external font, image, or script requests.
   effort. Runtime overlays remain outside tmax's ownership. See the
   [DSH reference](agents/dsh.md) for evidence limits; historical profile-path
   checks do not establish current home-wide, multi-profile behavior.
-- **Gateway** shows the listener, shared-key state, and current-process request
-  history. Configure, start, stop, and change login startup explicitly. Revealed
-  keys disappear on hide, navigation, page exit, or switching away from the tab.
+- **Gateway** shows listener readiness, native process supervision, login-start
+  registration, shared-key state, and current-process request history separately.
+  Configure, start, stop, and change login startup explicitly. A stopped inference
+  listener stays stopped during Web-only process recovery. Restart reconnects the
+  page and verifies a new ready process before displaying completion; it never
+  automatically resubmits a mutation after connection loss. Revealed keys disappear
+  on hide, navigation, page exit, or switching away from the tab.
 
 The redesigned workspace uses Simplified Chinese labels and retains stable IDs,
 protocol names, and command names. It uses the same backend operations and local

@@ -190,11 +190,15 @@ pub(crate) fn storage_error() -> Error {
 }
 
 pub(crate) fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
+    read_optional_bounded(path, usize::MAX)
+}
+
+pub(crate) fn read_optional_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>> {
     check_ancestors(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
     nofollow(&mut options);
-    let mut file = match options.open(path) {
+    let file = match options.open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(storage_error()),
@@ -210,8 +214,22 @@ pub(crate) fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
             return Err(storage_error());
         }
     }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|_| storage_error())?;
+    if metadata.len() > limit as u64 {
+        return Err(Error::new(
+            "storage_limit_exceeded",
+            "Stored metadata exceeds its supported size",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| storage_error())?;
+    if bytes.len() > limit {
+        return Err(Error::new(
+            "storage_limit_exceeded",
+            "Stored metadata exceeds its supported size",
+        ));
+    }
     Ok(Some(bytes))
 }
 
