@@ -7,6 +7,9 @@ and the invariants it protects.
   instances, authentication, billing, independent configuration and gateway capabilities, and acceptance.
 - [Product design](product/design.md) — ownership, native provider entries, configuration
   safety, operation boundaries, and native-protocol forwarding.
+- [Supervised service](service/spec.md) — native process recovery, explicit-stop
+  suppression, independent login startup, and platform qualification;
+  [service design](service/design.md) owns lifecycle coordination and cutover.
 - [Configuration](configuration/spec.md) — `~/.tmax` persistence schema, metadata
   overrides, secret references, and activation; [persisted-format example](configuration/example.toml).
 - [Model selection](model-routing/spec.md) — models.dev metadata, concrete model

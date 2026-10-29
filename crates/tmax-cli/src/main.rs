@@ -15,15 +15,9 @@ async fn main() -> ExitCode {
     let argv: Vec<OsString> = std::env::args_os().collect();
     if argv
         .get(1)
-        .is_some_and(|arg| arg.as_os_str() == OsStr::new("__autostart"))
+        .is_some_and(|arg| arg.as_os_str() == OsStr::new("__service"))
     {
-        return run_autostart(&argv).await;
-    }
-    if argv
-        .get(1)
-        .is_some_and(|arg| arg.as_os_str() == OsStr::new("__daemon"))
-    {
-        return run_daemon(&argv).await;
+        return run_service(&argv).await;
     }
 
     match run_management(argv).await {
@@ -32,29 +26,16 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_daemon(argv: &[OsString]) -> ExitCode {
+async fn run_service(argv: &[OsString]) -> ExitCode {
     if argv.len() != 2 {
         eprintln!("Invalid internal service invocation.");
         return ExitCode::from(2);
     }
-    match service::run_daemon().await {
+    match service::run_service().await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(_) => {
-            eprintln!("The daemon service could not start.");
-            ExitCode::from(4)
-        }
-    }
-}
-async fn run_autostart(argv: &[OsString]) -> ExitCode {
-    if argv.len() != 2 {
-        eprintln!("Invalid internal service invocation.");
-        return ExitCode::from(2);
-    }
-    match service::run_autostart().await {
-        Ok(_result) => ExitCode::SUCCESS,
-        Err(_) => {
-            eprintln!("The configured gateway could not start from autostart.");
-            ExitCode::from(4)
+        Err(error) => {
+            eprintln!("The supervised service could not start: {}.", error.code);
+            ExitCode::from(service::service_exit_code(&error))
         }
     }
 }

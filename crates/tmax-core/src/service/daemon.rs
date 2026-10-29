@@ -3,12 +3,10 @@
 use super::control::CONTROL_SECONDS;
 #[cfg(unix)]
 use super::control_transport::{socket_path, validate_control_path};
-#[cfg(windows)]
-use super::windows_startup;
 use super::{
     address,
     control::{MANAGEMENT_PROTOCOL, retained_session_arguments, serve_control},
-    control_transport, failure, web,
+    control_transport, failure, supervisor, web,
 };
 #[cfg(windows)]
 use crate::Error;
@@ -106,6 +104,7 @@ impl Surface {
 pub(super) struct Shutdown {
     requested: Notify,
     stopping: AtomicBool,
+    restart: AtomicBool,
     released: watch::Sender<Option<Result<()>>>,
     #[cfg(windows)]
     endpoints_drained: watch::Sender<Option<Result<()>>>,
@@ -116,11 +115,17 @@ impl Shutdown {
     pub(super) fn is_stopping(&self) -> bool {
         self.stopping.load(Ordering::Acquire)
     }
+    pub(super) fn request_restart(&self) {
+        self.restart.store(true, Ordering::Release);
+        self.stopping.store(true, Ordering::Release);
+        self.requested.notify_one();
+    }
     pub(super) fn new() -> Self {
         let (released, _) = watch::channel(None);
         Self {
             requested: Notify::new(),
             stopping: AtomicBool::new(false),
+            restart: AtomicBool::new(false),
             released,
             #[cfg(windows)]
             endpoints_drained: watch::channel(None).0,
@@ -202,6 +207,9 @@ impl Daemon {
     pub(super) fn shutdown(&self) -> &Arc<Shutdown> {
         &self.shutdown
     }
+    pub(super) fn runtime_stop(&self) -> usize {
+        self.runtime.stop()
+    }
     pub(super) fn loaded_view(&self) -> Value {
         json!({"configuration":self.loaded.as_ref().map(|v|&v.0),"revision":self.loaded.as_ref().map(|v|&v.1),"metadata":self.loaded_metadata.as_deref()})
     }
@@ -258,7 +266,7 @@ impl Daemon {
         }
         let dependencies=self.loaded.as_ref().map(|(config,_)|config.agents.iter().filter(|(_,target)|target.providers.values().any(|entry|entry.gateway==Some(true))).map(|(id,_)|json!({"kind":"agent_target","id":id,"scope":"configured_gateway_entry","native_effective_state":"unknown"})).collect::<Vec<_>>()).unwrap_or_default();
         let stopping = self.shutdown.stopping.load(Ordering::Acquire);
-        json!({"daemon":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("daemon_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"gateway":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"limits":crate::gateway::limits(),"unmanaged_clients":"unknown"})
+        json!({"daemon":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("daemon_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"gateway":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"limits":crate::gateway::limits(),"unmanaged_clients":"unknown","supervision":supervisor::local_view(&self.store,&self.process)})
     }
     pub(super) async fn activate(&mut self, revision: Option<&str>) -> Result<Value> {
         let loaded = crate::config::load(&self.store)?;
@@ -339,7 +347,7 @@ impl Daemon {
             json!({"_code":if blocked{json!("runtime_blocked")}else{Value::Null},"activation":"active","revision":self.loaded.as_ref().map(|v|&v.1),"serving_state":if self.inference.is_none(){"stopped"}else if self.key_state=="ready"{"ready"}else{"blocked"},"impact":changes,"daemon":view["daemon"],"gateway":view["gateway"],"shared_key":view["shared_key"],"next_action":if blocked{json!("Inspect stored shared-key availability; explicitly replace missing or unsupported key material")}else{Value::Null}}),
         )
     }
-    async fn start_inference(&mut self) -> Result<Value> {
+    async fn start_inference(&mut self, expected: Option<SocketAddr>) -> Result<Value> {
         if let Some(listener) = self.inference.as_ref() {
             if listener.task.is_finished() {
                 return Err(failure(
@@ -357,6 +365,12 @@ impl Daemon {
             )
         })?;
         let requested = address(&gateway.listen, false)?;
+        if expected.is_some_and(|value| value != requested) {
+            return Err(failure(
+                "restart_required",
+                "Saved inference address differs from the acknowledged service address; explicitly restart to adopt it",
+            ));
+        }
         // Validate cold-start credentials before touching an existing listener.
         let key = crate::gateway::credential(self.store.clone(), gateway.key_ref.clone()).await?;
         if key.is_empty() {
@@ -459,38 +473,38 @@ impl Daemon {
     }
 }
 
-pub async fn run_daemon() -> Result<()> {
-    run_owner(false).await
-}
-#[cfg(unix)]
-pub(super) async fn run_owner(autostart: bool) -> Result<()> {
+pub async fn run_service() -> Result<()> {
     let store = Store::discover()?;
+    #[cfg(unix)]
     validate_control_path(&socket_path(&store))?;
-    let Some(ownership) = store.try_lock("daemon-owner")? else {
+    let Some(activation) = supervisor::enter(&store).await? else {
         return Ok(());
     };
-    run_owned(store, ownership, autostart).await
-}
-
-#[cfg(windows)]
-pub(super) async fn run_owner(autostart: bool) -> Result<()> {
-    let store = Store::discover()?;
     let Some(ownership) = store.try_lock("daemon-owner")? else {
-        return if autostart {
+        return if super::control::rpc(&store, "status", None, None)
+            .await?
+            .is_some()
+        {
+            Ok(())
+        } else {
             Err(failure(
                 "daemon_identity_unavailable",
-                "Daemon ownership changed before autostart; inspect the actual owner before retrying",
+                "The existing owner could not be identified; no second daemon was started",
             ))
-        } else {
-            Ok(())
         };
     };
-    run_owned(store, ownership, autostart).await
+    let activation_id = activation.activation.clone();
+    let generation = activation.generation;
+    let result = run_owned(store.clone(), ownership, Some(activation)).await;
+    if let Err(error) = &result {
+        let _ = supervisor::record_exit(&store, &activation_id, generation, error);
+    }
+    result
 }
 async fn run_owned(
     store: Store,
     ownership: crate::storage::LockGuard,
-    autostart: bool,
+    activation: Option<supervisor::Activation>,
 ) -> Result<()> {
     let mut listener = control_transport::Listener::bind(&store).await?;
     let process = Uuid::new_v4().to_string();
@@ -502,34 +516,49 @@ async fn run_owned(
         runtime,
         shutdown.clone(),
     )));
-    if autostart {
-        let result = state.lock().await.start_inference().await;
-        match result {
-            Ok(value) if value["gateway"]["ready"] == true => {
-                #[cfg(windows)]
-                if let Err(error) = windows_startup::record_launch(&store, None) {
-                    let mut daemon = state.lock().await;
-                    let _ = daemon.runtime.stop();
-                    if let Some(surface) = daemon.inference.take() {
-                        surface.stop().await;
+    if let Some(activation) = activation {
+        let _guard = supervisor::state_lock(&store)?;
+        let record = supervisor::current(&store, &activation)?;
+        let mut daemon = state.lock().await;
+        let mut blocked = None;
+        if record.requested.inference {
+            match daemon.start_inference(record.inference_listen).await {
+                Ok(value) if value["gateway"]["ready"] == true => {}
+                Ok(_) => {
+                    blocked = Some(failure(
+                        "service_readiness_failed",
+                        "Inference did not become ready",
+                    ))
+                }
+                Err(error) => blocked = Some(error),
+            }
+        }
+        if record.requested.web {
+            match web::start(state.clone(), record.web_listen).await {
+                Ok(surface) => daemon.web = Some(surface),
+                Err(error) => {
+                    if blocked.is_none() {
+                        blocked = Some(error);
                     }
-                    drop(daemon);
-                    let _ = crate::inputs::deactivate(&store);
-                    let _ = listener.release();
-                    return Err(error);
                 }
             }
-            Ok(_) => {
-                let _ = listener.release();
-                return Err(failure(
-                    "autostart_blocked",
-                    "Autostart did not establish a ready inference listener; inspect saved intent, stored key availability, and endpoint state",
-                ));
-            }
-            Err(error) => {
-                let _ = listener.release();
-                return Err(error);
-            }
+        }
+        supervisor::acknowledge(
+            &store,
+            record,
+            daemon.process(),
+            daemon.inference.as_ref().map(|v| v.address),
+            daemon.web.as_ref().map(|v| v.address),
+            blocked.as_ref(),
+        )?;
+        if daemon.inference.is_none() && daemon.web.is_none() {
+            let _ = crate::inputs::deactivate(&store);
+            let _ = listener.release();
+            return if let Some(error) = blocked {
+                Err(error)
+            } else {
+                Ok(())
+            };
         }
     }
     let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -579,7 +608,15 @@ async fn run_owned(
             }
         }
     }
-    released
+    released?;
+    if shutdown.restart.load(Ordering::Acquire) {
+        Err(failure(
+            "service_restart_requested",
+            "The native manager must start the recorded replacement",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) async fn daemon_control(
@@ -587,10 +624,74 @@ pub(super) async fn daemon_control(
     daemon: &mut Daemon,
     request: Request,
 ) -> Result<Value> {
+    if !matches!(request.command.as_slice(), [group, action] if matches!((group.as_str(),action.as_str()),("gateway","start"|"stop")|("web","open"|"stop")))
+    {
+        return daemon_control_inner(state, daemon, request).await;
+    }
+    let coordinated = supervisor::read(daemon.store())?
+        .filter(|record| record.process.as_deref() == Some(daemon.process()));
+    let _guard = coordinated
+        .as_ref()
+        .map(|_| supervisor::state_lock(daemon.store()))
+        .transpose()?;
+    let mut record = coordinated
+        .as_ref()
+        .map(|record| supervisor::current(daemon.store(), record))
+        .transpose()?;
+    if let Some(record) = &mut record {
+        let allowed = match request.command.as_slice() {
+            [group, action] if group == "gateway" && action == "start" => {
+                record.requested.inference
+            }
+            [group, action] if group == "web" && action == "open" => record.requested.web,
+            _ => true,
+        };
+        if !allowed {
+            return Err(failure(
+                "inputs_changed",
+                "A newer lifecycle operation stopped this listener before startup",
+            ));
+        }
+        if request.command[1] == "stop" {
+            record.advance()?;
+            if request.command[0] == "gateway" {
+                record.requested.inference = false;
+                record.inference_listen = None;
+            } else {
+                record.requested.web = false;
+                record.web_listen = None;
+            }
+            supervisor::save(daemon.store(), record)?;
+        }
+    }
+    let result = daemon_control_inner(state, daemon, request).await;
+    if let Some(record) = record {
+        supervisor::acknowledge(
+            daemon.store(),
+            record,
+            daemon.process(),
+            daemon.inference.as_ref().map(|v| v.address),
+            daemon.web.as_ref().map(|v| v.address),
+            result.as_ref().err(),
+        )?;
+    }
+    result
+}
+
+async fn daemon_control_inner(
+    state: &Shared,
+    daemon: &mut Daemon,
+    request: Request,
+) -> Result<Value> {
     let group = request.command.first().map(String::as_str).unwrap_or("");
     let action = request.command.get(1).map(String::as_str).unwrap_or("");
     match (group, action) {
-        ("gateway", "start") => daemon.start_inference().await,
+        ("gateway", "start") => {
+            let expected = supervisor::read(daemon.store())?
+                .filter(|record| record.process.as_deref() == Some(daemon.process()))
+                .and_then(|record| record.inference_listen);
+            daemon.start_inference(expected).await
+        }
         ("gateway", "stop") => {
             let interrupted = daemon.runtime.stop();
             if let Some(surface) = daemon.inference.take() {
@@ -822,12 +923,12 @@ mod tests {
             key_state: "absent".into(),
             shutdown: Arc::new(Shutdown::new()),
         };
-        let first = daemon.start_inference().await.unwrap();
+        let first = daemon.start_inference(None).await.unwrap();
         assert_eq!(first["gateway"]["ready"], true);
         store
             .write_raw("tmax.toml", b"invalid pending configuration")
             .unwrap();
-        let repeated = daemon.start_inference().await.unwrap();
+        let repeated = daemon.start_inference(None).await.unwrap();
         assert_eq!(repeated["lifecycle"]["action"], "reused");
         assert_eq!(
             repeated["gateway"]["config_revision"],
@@ -879,7 +980,7 @@ mod tests {
             .unwrap();
         let owner_store = store.clone();
         let ownership = store.try_lock("daemon-owner").unwrap().unwrap();
-        let first_owner = tokio::spawn(run_owned(owner_store, ownership, false));
+        let first_owner = tokio::spawn(run_owned(owner_store, ownership, None));
         let first = ready(&store).await;
         let started = rpc(&store, "control", Some(request("start")), None)
             .await
@@ -915,7 +1016,7 @@ mod tests {
             .try_lock("daemon-owner")
             .unwrap()
             .expect("stop reply must release owner lock");
-        let second_owner = tokio::spawn(run_owned(store.clone(), ownership, false));
+        let second_owner = tokio::spawn(run_owned(store.clone(), ownership, None));
         let second = ready(&store).await;
         assert_ne!(
             first["daemon"]["identity"]["process_instance"],

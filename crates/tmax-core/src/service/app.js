@@ -49,10 +49,10 @@ const dateValue = value => typeof value === 'string' ? value : value?.$__toml_pr
 const modelConfig = id => { const slash=id.indexOf('/'); return state.config?.providers?.[id.slice(0,slash)]?.models?.[id.slice(slash+1)]; };
 const isSuccess = response => response?.exit_code === 0 && ['success','dry_run'].includes(response.body?.status);
 
-async function http(path, payload) {
+async function http(path, payload, signal) {
   let response;
   try {
-    response = await fetch(path, {method:payload === undefined?'GET':'POST', credentials:'omit', cache:'no-store', headers:payload === undefined?{}:{'Content-Type':'application/json'}, body:payload === undefined?undefined:JSON.stringify(payload)});
+    response = await fetch(path, {method:payload === undefined?'GET':'POST', credentials:'omit', cache:'no-store', signal, headers:payload === undefined?{}:{'Content-Type':'application/json'}, body:payload === undefined?undefined:JSON.stringify(payload)});
   } catch (_) { throw new Error('无法连接本地服务。请检查 tmax 是否仍在运行；如果刚提交了修改，请刷新确认结果后再操作。'); }
   const text = await response.text();
   let value;
@@ -62,9 +62,32 @@ async function http(path, payload) {
   return value;
 }
 async function execute(operation, operands=[], args={}, options={}) {
-  const value = await http('/api/execute', {request:{command:operation.split(' '), operands, arguments:args, dry_run:!!options.preview, if_revision:options.revision ?? null}, key:options.preview?null:options.key || null});
+  const restarting=operation==='gateway restart' && !options.preview;
+  const value=await http('/api/execute', {request:{command:operation.split(' '), operands, arguments:args, dry_run:!!options.preview, if_revision:options.revision ?? null}, key:options.preview?null:options.key || null});
   if (!Number.isInteger(value.exit_code) || value.body?.schema_version !== 1 || value.body?.operation !== operation || typeof value.body?.status !== 'string' || !Object.hasOwn(value.body, 'data')) throw new Error('本地服务返回了无法识别的结果，请刷新重试。');
+  if (restarting && value.body.status==='pending') return waitForRestart(value.body.data.old_process_instance, value.body.data.reconnect_deadline_seconds);
   return value;
+}
+
+async function waitForRestart(previous, seconds) {
+  if (!previous) throw new Error('无法确认原进程身份；请运行 tmax gateway status 检查实际状态。');
+  const duration=Number.isFinite(seconds) ? seconds : (state.runtime?.supervision?.recovery?.retry_delay_seconds ?? 2)+45;
+  const deadline=Date.now()+duration*1000;
+  toast('重启已请求，正在等待新进程就绪；不会重复提交重启。');
+  while (Date.now()<deadline) {
+    let actual;
+    try { actual=await http('/api/status',undefined,AbortSignal.timeout(Math.max(1,deadline-Date.now()))); } catch (_) {}
+    if (actual?.daemon?.identity?.process_instance && actual.daemon.identity.process_instance!==previous) {
+      if (actual.gateway?.ready===true && actual.daemon.web?.state==='running') {
+        return {exit_code:0,body:{schema_version:1,operation:'gateway restart',code:'ok',status:'success',data:{...actual,restart_completion:'verified_new_process'}}};
+      }
+      if (['blocked','failed'].includes(actual.supervision?.state)) {
+        return {exit_code:4,body:{schema_version:1,operation:'gateway restart',code:'service_readiness_failed',status:'incomplete',data:actual}};
+      }
+    }
+    await new Promise(resolve=>setTimeout(resolve,250));
+  }
+  throw new Error('尚未确认新进程就绪；不要重复提交。请运行 tmax gateway status 检查阻塞原因。');
 }
 async function read(operation, operands=[], args={}) {
   const response = await execute(operation, operands, args);
@@ -160,7 +183,10 @@ function renderGateway() {
   const runtime=state.runtime; const gateway=state.config.gateway; const inference=runtime?.daemon?.inference;
   const running=inference?.state==='running'; const address=inference?.url || (gateway?.listen?'http://'+gateway.listen:null);
   const configured=!!gateway;
-  $('content').innerHTML=`<div class="grid-two">${panel('网关','供支持相同协议的应用连接',`<div class="service-status"><div class="status-symbol">${icon('gateway')}</div><div><h3>${!runtime?'状态未知':running?'网关运行中':configured?'已配置 · 未启动':'尚未配置'}</h3><p>${running?(runtime.gateway?.ready?'服务报告已就绪':'服务尚未就绪，请检查配置与授权'):'需要通过网关使用模型时，再启动服务。'}</p></div></div>${address?`<div class="big-address"><code>${escapeHtml(address)}</code>${button('复制','copy',address,'small','copy')}</div>`:notice('先设置本地监听地址，保存后会生成共享密钥。')}${`<div class="actions">${button(configured?(running?'停止网关':'启动网关'):'配置网关',configured?'operation':'gateway-configure',configured?(running?'gateway stop':'gateway start'):'','primary',running?'gateway':'arrow')}${configured?button('修改设置','gateway-configure','','','settings'):''}</div>`}`)}${panel('连接与授权','共享密钥仅在主动查看时显示',`<div class="detail-facts">${fact('已发布模型',runtime?.publication?.model_count ?? '未知')}${fact('进行中的请求',runtime?.active_requests ?? '未知')}${fact('登录时启动',runtime?.autostart?.login_enabled?'已注册':'未注册')}${fact('共享密钥状态',stateLabel(runtime?.shared_key?.loaded_state))}</div>${configured?`<div class="actions">${button('查看共享密钥','reveal','','','key')}${button('隐藏','hide-key','','small')}</div><div id="revealed" class="key-output mono" hidden></div>`:notice('配置网关后，可以在这里查看用于连接的共享密钥。')}`)}</div><div class="section-label"><h2>请求记录</h2>${button('读取记录','history','','small','history')}</div><div id="history-panel" class="panel">${empty('按需查看本地请求','仅记录经过此网关的请求，不包含直接连接流量，也不代表账户全部用量。',button('读取请求记录','history','','soft'),'history',true)}</div><div class="section-label"><h2>其他设置</h2></div><div class="actions">${button('登录时启动设置','autostart','','','settings')}${button('查看出站网络','operation','network show','','settings')}${button('网关高级操作','advanced','gateway','','settings')}</div>`;
+  $('content').innerHTML=`<div class="grid-two">${panel('网关','供支持相同协议的应用连接',`<div class="service-status"><div class="status-symbol">${icon('gateway')}</div><div><h3>${!runtime?'状态未知':running?'网关运行中':configured?'已配置 · 未启动':'尚未配置'}</h3><p>${running?(runtime.gateway?.ready?'服务报告已就绪':'服务尚未就绪，请检查配置与授权'):'需要通过网关使用模型时，再启动服务。'}</p></div></div>${address?`<div class="big-address"><code>${escapeHtml(address)}</code>${button('复制','copy',address,'small','copy')}</div>`:notice('先设置本地监听地址，保存后会生成共享密钥。')}${`<div class="actions">${button(configured?(running?'停止网关':'启动网关'):'配置网关',configured?'operation':'gateway-configure',configured?(running?'gateway stop':'gateway start'):'','primary',running?'gateway':'arrow')}${configured?button('修改设置','gateway-configure','','','settings'):''}</div>`}`)}${panel('连接与授权','共享密钥仅在主动查看时显示',`<div class="detail-facts">${fact('已发布模型',runtime?.publication?.model_count ?? '未知')}${fact('进行中的请求',runtime?.active_requests ?? '未知')}${fact('登录时启动',runtime?.autostart?.login_enabled===true?'已注册':runtime?.autostart?.login_enabled===false?'未注册':'无法确认')}${fact('共享密钥状态',stateLabel(runtime?.shared_key?.loaded_state))}</div>${configured?`<div class="actions">${button('查看共享密钥','reveal','','','key')}${button('隐藏','hide-key','','small')}</div><div id="revealed" class="key-output mono" hidden></div>`:notice('配置网关后，可以在这里查看用于连接的共享密钥。')}`)}</div><div class="section-label"><h2>请求记录</h2>${button('读取记录','history','','small','history')}</div><div id="history-panel" class="panel">${empty('按需查看本地请求','仅记录经过此网关的请求，不包含直接连接流量，也不代表账户全部用量。',button('读取请求记录','history','','soft'),'history',true)}</div><div class="section-label"><h2>其他设置</h2></div><div class="actions">${button('登录时启动设置','autostart','','','settings')}${button('查看出站网络','operation','network show','','settings')}${button('网关高级操作','advanced','gateway','','settings')}</div>`;
+  const supervision=runtime?.supervision;
+  const supervisionNames={supervised:'已由系统托管',unsupervised:'当前进程未托管',starting:'正在启动',recovering:'正在自动恢复',stopped:'已停止',blocked:'需要处理',failed:'恢复失败',unavailable:'无法确认'};
+  $('content').insertAdjacentHTML('beforeend',panel('系统托管','进程恢复、网关就绪和登录启动是独立状态',`<div class="detail-facts">${fact('托管状态',supervisionNames[supervision?.state] || '未知')}${fact('系统管理器',supervision?.manager || '未知')}${fact('退出登录后继续运行',supervision?.session?.survives_logout===true?'已确认支持':supervision?.session?.survives_logout===false?'当前会话不支持':'尚未确认')}${fact('最近阻塞原因',supervision?.reason_code || '无已报告阻塞')}</div>${running?`<div class="actions">${button('重启服务','operation','gateway restart','','refresh')}</div>`:''}${supervision?detail(supervision,'查看托管与恢复详情'):''}`));
 }
 
 function openDialog(title, body, eyebrow='WORKSPACE') {
@@ -657,9 +683,9 @@ const operandLabels={'Provider ID':'接入 ID','Qualified model':'具体模型�
 const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','gateway autostart enable':'启用登录时启动','gateway autostart disable':'关闭登录时启动','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除接入','model remove':'移除模型','model alias remove':'移除模型别名','provider refresh':'查询上游信息','provider login':'登录接入','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
 const operationEffects={
   'skill install':'将 tmax 使用说明安装到本机技能目录，供编程工具读取。可先预览目标路径；不会修改模型配置。',
-  'gateway start':'启动本地网关。请确认监听地址与接入授权已配置。',
-  'gateway stop':'停止网关会停止接受新请求。仍有进行中的请求时，正常停止会被拒绝。',
-  'gateway restart':'重新加载配置并重启网关监听。进行中的请求受服务端保护。',
+  'gateway start':'启动本地网关；新进程由系统托管，确认就绪后才报告成功。不会启用登录自启动。',
+  'gateway stop':'停止推理并取消进行中的请求，不会重放；管理页面继续运行，自动恢复不会重新打开已停止的推理。',
+  'gateway restart':'更换网关进程并取消进行中的请求。页面会重新连接，确认新进程就绪后才报告完成。',
   'agent apply':'将已保存的模型选择应用到此工具的原生配置。可先预览涉及的文件与影响。',
   'agent restore':'恢复由 tmax 管理的原生更改，保留其他修改；存在冲突时会阻止覆盖。',
   'provider remove':'移除此接入的已保存设置。若仍被引用，操作会被拒绝；不会注销上游账户。',

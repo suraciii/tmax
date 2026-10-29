@@ -38,7 +38,7 @@ an assistant or an approval/workflow system.
 | Quota/reset conditions must compose with existing calendars | Add an expression language or silently sum adjustments | Named ordered signal rules replace the score before the existing calendar fallback; keep finite typed predicates |
 | Rule evidence can come from a source or the user's agent | Merge conflicting values or infer trust from timestamps | One explicitly selected source per scoped input; source changes invalidate current facts |
 | Facts change while requests run | Fetch evidence on the inference path or create a scheduler service | Explicit refresh plus opt-in acquisition in the existing local service; admission reads a coherent fact snapshot |
-| Gateway lifetime must not follow an open browser | Couple inference to the UI or enable autostart implicitly | Explicit startup runs in the background; login autostart is opt-in and depends on secure credential availability |
+| Gateway lifetime must not follow a client | Client-driven relaunch, a tmax watchdog, or implicit login autostart | [Native supervision](../service/design.md) owns process recovery; explicit listener requests and opt-in login activation remain separate |
 | Web is a local visual CLI | Add management accounts, pairing, or browser sessions | No Web authentication; trust local processes, retain loopback binding and browser-origin protections, and exclude remote publication |
 | Removing an object can strand its consumers | Cascade-delete references or choose replacement models | Reject unresolved references; explicit edits and existing restore operations keep changes understandable |
 | Stopping a gateway can interrupt paid work | Add a drain scheduler and automatic timeout | Stop cancels in-flight requests and reports interruption without replay; no drain queue, force path, or timeout |
@@ -380,6 +380,8 @@ application. The [service-identity contract](spec.md#daemon-service-identity)
 requires one current owner before any daemon state is mutated. Ownership
 records are evidence to validate, not permission to kill a process or reuse a
 stale PID. Stopping inference does not remove the management surface.
+Native-manager ownership and recovery coordination follow the
+[service design](../service/design.md); they must not bypass these identity checks.
 
 ## Observations and local operations
 

@@ -1,4 +1,4 @@
-//! One detached owner per authority, with independent inference and Web lifecycles.
+//! One supervised owner per authority, with independent inference and Web lifecycles.
 use crate::{Error, Result};
 use std::net::SocketAddr;
 
@@ -11,18 +11,17 @@ mod control_transport;
 mod control_transport;
 mod daemon;
 mod startup;
-#[cfg(not(windows))]
-mod unix_startup;
+mod supervised_control;
+mod supervisor;
 mod web;
-#[cfg(windows)]
-mod windows_startup;
 #[cfg(windows)]
 mod windows_web;
 
 pub use control::{activate, control, loaded, preview_activation, status};
 pub(crate) use control::{browser_login, loaded_with_metadata};
-pub use daemon::run_daemon;
-pub use startup::{autostart, reconcile_autostart, run_autostart};
+pub use daemon::run_service;
+pub use startup::{autostart, reconcile_autostart};
+pub use supervisor::service_exit_code;
 
 fn failure(code: &str, message: &str) -> Error {
     Error::new(code, message)

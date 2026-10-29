@@ -30,10 +30,12 @@ pub(super) fn success_response(operation: &str, dry_run: bool, mut data: Value) 
         | "native_version_unqualified"
         | "native_schema_incompatible"
         | "target_incomplete" => 3,
-        "ok" | "dry_run_ready" | "daemon_reused" => 0,
+        "ok" | "dry_run_ready" | "daemon_reused" | "service_restart_requested" => 0,
         _ => 4,
     };
-    let status = if dry_run && exit != 0 {
+    let status = if code == "service_restart_requested" {
+        "pending"
+    } else if dry_run && exit != 0 {
         "blocked"
     } else if let Some(status) = data
         .get("_status")
@@ -74,6 +76,8 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             | "daemon_stopping"
             | "daemon_identity_unavailable"
             | "daemon_control_path_invalid"
+            | "service_manager_unavailable"
+            | "service_registration_conflict"
             | "endpoint_occupied"
             | "endpoint_conflict"
             | "active_requests"

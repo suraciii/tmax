@@ -55,8 +55,11 @@ private to the feature unless another feature has a concrete consumer.
 - `control.rs` owns the private management protocol and client/server coordination.
 - `daemon.rs` owns the daemon aggregate, activation, surfaces, and lifecycle.
 - `web.rs` owns the browser-facing management boundary and its operation bridge.
-- `startup.rs` owns startup-intent coordination. Platform-specific control,
-  startup, and Web modules own their OS integrations.
+- `supervisor.rs` owns versioned activation requests, recovery fencing, and qualified
+  manager/process evidence. `supervised_control.rs` coordinates serialized lifecycle effects.
+- `startup.rs` owns login-intent coordination. Native supervisor modules own
+  systemd, launchd, or Task Scheduler definitions, activation, and process control.
+  Platform-specific control and Web modules retain their transport responsibilities.
 
 ### Model selection
 

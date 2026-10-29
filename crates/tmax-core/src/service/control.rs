@@ -2,7 +2,7 @@
 #[cfg(unix)]
 use super::control_transport::{socket_path, validate_control_path};
 #[cfg(windows)]
-use super::windows_startup;
+use super::windows_web;
 use super::{
     address, control_transport,
     daemon::{Shared, absent, daemon_control},
@@ -12,16 +12,14 @@ use super::{
 use crate::{Request, Result, config::Config, gateway::Runtime, storage::Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{
-    path::PathBuf,
-    process::{Command, Stdio},
-    time::Duration,
-};
+#[cfg(not(windows))]
+use std::process::{Command, Stdio};
+use std::{path::PathBuf, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
-pub(super) const MANAGEMENT_PROTOCOL: &str = "tmax-control/5";
+pub(super) const MANAGEMENT_PROTOCOL: &str = "tmax-control/6";
 const CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
 const CONTROL_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 pub(super) const CONTROL_SECONDS: u64 = 30;
@@ -179,6 +177,15 @@ async fn rpc_exchange(
         ));
     }
     let mut value = reply.result?;
+    if let Some(identity) = value.pointer("/daemon/identity").filter(|v| !v.is_null())
+        && (identity["pid"].as_u64() != Some(u64::from(reply.pid))
+            || identity["process_instance"].as_str() != Some(reply.process.as_str()))
+    {
+        return Err(failure(
+            "daemon_identity_unavailable",
+            "Nested daemon identity did not match the qualified process peer",
+        ));
+    }
     #[cfg(windows)]
     if value["shutdown"]["ownership_released"] == true && value["shutdown"]["state"] == "completed"
     {
@@ -223,6 +230,7 @@ pub async fn status(store: &Store) -> Result<Value> {
         }
     };
     value["autostart"]=autostart_status(store).unwrap_or_else(|error|json!({"snapshot_state":"unavailable","reason_code":error.code,"reconciliation":"not_requested","repair":"gateway autostart enable|disable"}));
+    value["supervision"] = super::supervisor::view(store, &value["daemon"]).await;
     match crate::config::load(store) {
         Ok(file) => {
             value["shared_key"]["file_reference"] =
@@ -430,12 +438,25 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
                 blockers.push(json!({"code":"endpoint_conflict"}));
             }
         }
+        if matches!(
+            (group, action),
+            ("gateway", "start" | "restart") | ("web", "open")
+        ) && (discovery == "absent" || action == "restart")
+            && let Err(error) = super::supervisor::probe(store).await
+        {
+            blockers.push(json!(error));
+        }
         return Ok(
-            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"daemon":before["daemon"],"planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::gateway::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
+            json!({"_code":if blockers.is_empty(){Value::Null}else{json!("runtime_blocked")},"dry_run":true,"daemon":before["daemon"],"supervision":before["supervision"],"service_definition":if reused{"unchanged"}else{"prepare_owned_if_needed"},"recovery_generation":"unchanged","planned_action":if reused{"reused"}else{"planned"},"operation":request.command,"blockers":blockers,"active_requests":active,"limits":crate::gateway::limits(),"endpoint_availability":"not_reserved_or_probed","credential_readiness":"not_resolved","reservation":false,"secret_reads":false}),
         );
     }
-    if group == "gateway" && action == "restart" {
-        return restart_gateway(store).await;
+    if matches!(
+        (group, action),
+        ("gateway", "start" | "stop" | "restart") | ("web", "open" | "stop")
+    ) {
+        return super::supervised_control::control(store, config, request)
+            .await
+            .and_then(|value| maybe_browser(value, request));
     }
     if let Some(value) = rpc(store, "control", Some(request.clone()), None).await? {
         return maybe_browser(value, request);
@@ -449,110 +470,9 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             json!({"snapshot_state":"absent","coverage":{"prior_process_coverage":"unavailable"},"records":[],"reason_code":"no_daemon_history"}),
         );
     }
-    if matches!((group, action), ("gateway", "stop") | ("web", "stop")) {
-        return Ok(absent());
-    }
-    if !matches!((group, action), ("gateway", "start") | ("web", "open")) {
-        return Err(failure(
-            "unsupported_operation",
-            "Unknown daemon control operation",
-        ));
-    }
-    #[cfg(unix)]
-    validate_control_path(&socket_path(store))?;
-    launch(store).await?;
-    rpc(store, "control", Some(request.clone()), None)
-        .await?
-        .ok_or_else(|| {
-            failure(
-                "daemon_identity_unavailable",
-                "Detached daemon did not establish its control endpoint",
-            )
-        })
-        .and_then(|v| maybe_browser(v, request))
-}
-
-/// Recycle the daemon from the on-disk executable. In-flight requests are
-/// cancelled, exactly as an update expects: the replacement process serves the
-/// new binary, and a Web listener that was running is restored on the new owner.
-async fn restart_gateway(store: &Store) -> Result<Value> {
-    let before = status(store).await?;
-    let discoverable = before["daemon"]["discovery_state"].as_str() == Some("compatible");
-    let web_was = before["daemon"]["web"]["listen"]
-        .as_str()
-        .map(str::to_owned);
-    let mut interrupted = Value::Null;
-    if discoverable {
-        let mut stop = control_request("gateway", "stop");
-        // Pre-cutover daemons refuse to stop while requests are active unless
-        // the interruption is explicit; this argument is only an internal
-        // carrier for that one-time upgrade window, never a CLI option. The
-        // current daemon ignores it.
-        stop.arguments
-            .insert("cancel-active".into(), vec!["true".into()]);
-        if let Some(value) = rpc(store, "control", Some(stop), None).await? {
-            interrupted = value["interrupted_requests"].clone();
-        }
-        if web_was.is_some() {
-            let stop_web = control_request("web", "stop");
-            rpc(store, "control", Some(stop_web), None).await?;
-        }
-        wait_absent(store).await?;
-    }
-    #[cfg(unix)]
-    validate_control_path(&socket_path(store))?;
-    launch(store).await?;
-    let started = rpc(
-        store,
-        "control",
-        Some(control_request("gateway", "start")),
-        None,
-    )
-    .await?
-    .ok_or_else(|| {
-        failure(
-            "daemon_identity_unavailable",
-            "Detached daemon did not establish its control endpoint",
-        )
-    })?;
-    if web_was.is_some() {
-        let mut open = control_request("web", "open");
-        open.arguments
-            .insert("no-browser".into(), vec!["true".into()]);
-        rpc(store, "control", Some(open), None).await?;
-    }
-    Ok(json!({
-        "action":"restarted",
-        "recycled":true,
-        "interrupted_requests":interrupted,
-        "web":if web_was.is_some(){"restored"}else{"unchanged"},
-        "gateway":started["gateway"],
-        "daemon":started["daemon"],
-    }))
-}
-
-fn control_request(group: &str, action: &str) -> Request {
-    Request {
-        command: vec![group.into(), action.into()],
-        operands: Vec::new(),
-        arguments: std::collections::BTreeMap::new(),
-        dry_run: false,
-        if_revision: None,
-    }
-}
-
-/// A stop acknowledgement is a completion boundary; the previous daemon must
-/// already have released ownership before the replacement launches.
-async fn wait_absent(store: &Store) -> Result<()> {
-    for _ in 0..100 {
-        if rpc(store, "status", None, None).await?.is_none() {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
     Err(failure(
-        "daemon_stopping",
-        "The previous daemon did not release ownership within the bounded restart window",
+        "unsupported_operation",
+        "Unknown daemon control operation",
     ))
 }
 
@@ -563,7 +483,7 @@ fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
         && let Some(url) = value["daemon"]["web"]["url"].as_str()
     {
         #[cfg(windows)]
-        let opened = windows_startup::open_browser(url);
+        let opened = windows_web::open_browser(url);
         #[cfg(not(windows))]
         let opened = Command::new("xdg-open")
             .arg(url)
@@ -575,99 +495,6 @@ fn maybe_browser(mut value: Value, request: &Request) -> Result<Value> {
         value["browser"] = json!({"opened":opened,"reason_code":if opened{Value::Null}else{json!("browser_launcher_unavailable")}});
     }
     Ok(value)
-}
-
-#[cfg(unix)]
-async fn launch(store: &Store) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    validate_control_path(&socket_path(store))?;
-    let _launch = store.lock("daemon-launch")?;
-    if rpc(store, "status", None, None).await?.is_some() {
-        return Ok(());
-    }
-    let executable = std::env::current_exe().map_err(|_| {
-        failure(
-            "daemon_launch_failed",
-            "Cannot locate the current executable",
-        )
-    })?;
-    let mut command = Command::new(executable);
-    command
-        .arg("__daemon")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    unsafe {
-        command.pre_exec(move || {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let child = command.spawn().map_err(|_| {
-        failure(
-            "daemon_launch_failed",
-            "Cannot start the detached daemon executable",
-        )
-    })?;
-    wait_for_owner(store, child).await
-}
-
-async fn wait_for_owner(store: &Store, mut child: std::process::Child) -> Result<()> {
-    // Bounded startup handshake, not a restart/retry policy. The one child either
-    // establishes its owned endpoint or returns an actionable incomplete result.
-    for _ in 0..100 {
-        if rpc(store, "status", None, None).await?.is_some() {
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-            return Ok(());
-        }
-        if child
-            .try_wait()
-            .map_err(|_| failure("daemon_launch_failed", "Cannot inspect launched daemon"))?
-            .is_some()
-        {
-            return Err(failure(
-                "daemon_launch_failed",
-                "Detached daemon exited before establishing ownership",
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    Err(failure(
-        "daemon_launch_failed",
-        "Daemon startup did not establish identity within five seconds; inspect endpoint and executable compatibility",
-    ))
-}
-#[cfg(windows)]
-async fn launch(store: &Store) -> Result<()> {
-    use std::os::windows::process::CommandExt;
-    let _launch = store.lock("daemon-launch")?;
-    if rpc(store, "status", None, None).await?.is_some() {
-        return Ok(());
-    }
-    let executable = std::env::current_exe().map_err(|_| {
-        failure(
-            "daemon_launch_failed",
-            "Cannot locate the current executable",
-        )
-    })?;
-    let mut command = Command::new(executable);
-    command
-        .arg("__daemon")
-        .creation_flags(0x00000008 | 0x00000200)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let child = command.spawn().map_err(|_| {
-        failure(
-            "daemon_launch_failed",
-            "Cannot start the detached Windows daemon executable",
-        )
-    })?;
-    wait_for_owner(store, child).await
 }
 
 pub(super) async fn serve_control(
@@ -727,6 +554,13 @@ pub(super) async fn serve_control(
             }
             "status" => Ok(daemon.view()),
             "loaded" => Ok(daemon.loaded_view()),
+            "restart_process" => {
+                let mut value = daemon.view();
+                value["interrupted_requests"] = json!(daemon.runtime_stop());
+                daemon.shutdown().request_restart();
+                value["_code"] = json!("service_restart_requested");
+                Ok(value)
+            }
             "activate" => daemon.activate(call.revision.as_deref()).await,
             "preview_activation" => daemon.preview_activation(call.candidate.as_ref()),
             "control" => {

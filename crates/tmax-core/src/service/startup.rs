@@ -1,148 +1,103 @@
-//! Persisted startup intent and the platform registration policy.
-#[cfg(not(windows))]
-use super::unix_startup::reconcile;
-#[cfg(not(windows))]
-pub(super) use super::unix_startup::status as autostart_status;
-#[cfg(windows)]
-use super::windows_startup::reconcile;
-#[cfg(windows)]
-pub(super) use super::windows_startup::status as autostart_status;
-#[cfg(windows)]
-use super::{control::rpc, windows_startup};
-use super::{daemon::run_owner, failure};
-#[cfg(windows)]
-use crate::Request;
+//! Saved login intent is independent of current native process supervision.
+use super::{failure, supervisor};
 use crate::{Result, config::Config, storage::Store};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[derive(Default, Serialize, Deserialize)]
+struct Startup {
+    acknowledged: Option<bool>,
+    last_outcome: Option<String>,
+    last_attempt: Option<chrono::DateTime<chrono::Utc>>,
+    // Retain legacy ownership evidence until the platform retires its old entry.
+    #[serde(flatten)]
+    retained: std::collections::BTreeMap<String, Value>,
+}
+
+pub(super) fn autostart_status(store: &Store) -> Result<Value> {
+    let state: Startup = store.read_json("autostart.json")?;
+    let mut value = supervisor::login_status(store)?;
+    value["saved_intent"] = json!(
+        crate::config::load(store)
+            .ok()
+            .and_then(|v| v.config.gateway.map(|v| v.autostart))
+    );
+    value["acknowledged_intent"] = json!(state.acknowledged);
+    value["last_outcome"] = json!(state.last_outcome);
+    value["last_attempt"] = json!(state.last_attempt);
+    value["reconciliation"] = json!("not_requested");
+    value["repair"] = json!("gateway autostart enable|disable");
+    Ok(value)
+}
+
 pub async fn reconcile_autostart(store: &Store, config: &Config, dry_run: bool) -> Result<Value> {
-    if dry_run {
-        return reconcile(
-            store,
-            config
-                .gateway
-                .as_ref()
-                .is_some_and(|gateway| gateway.autostart),
-            true,
-            false,
-        )
-        .await;
+    let enabled = config.gateway.as_ref().is_some_and(|v| v.autostart);
+    if !dry_run {
+        let persisted = crate::config::load(store)?;
+        if serde_json::to_value(&persisted.config).ok() != serde_json::to_value(config).ok() {
+            return Err(failure(
+                "inputs_changed",
+                "Autostart reconciliation accepts only current validated persisted intent",
+            ));
+        }
     }
-    let persisted = crate::config::load(store)?;
-    if serde_json::to_value(&persisted.config).ok() != serde_json::to_value(config).ok() {
-        return Err(failure(
-            "inputs_changed",
-            "Autostart reconciliation accepts only current validated persisted intent",
-        ));
-    }
-    reconcile(
-        store,
-        persisted
-            .config
-            .gateway
-            .as_ref()
-            .is_some_and(|p| p.autostart),
-        false,
-        false,
-    )
-    .await
+    reconcile(store, enabled, dry_run, false).await
 }
 pub async fn autostart(store: &Store, enabled: bool, dry_run: bool) -> Result<Value> {
-    let loaded = crate::config::load(store)?;
-    if loaded.config.gateway.is_none() {
-        return Err(failure(
+    let file = crate::config::load(store)?;
+    let gateway = file.config.gateway.as_ref().ok_or_else(|| {
+        failure(
             "gateway_unconfigured",
             "Configure gateway before changing autostart",
-        ));
-    }
-    if !dry_run
-        && loaded
-            .config
-            .gateway
-            .as_ref()
-            .map(|gateway| gateway.autostart)
-            != Some(enabled)
-    {
+        )
+    })?;
+    if !dry_run && gateway.autostart != enabled {
         return Err(failure(
             "inputs_changed",
-            "Explicit registration reconciliation requires the requested intent to be already validated and persisted",
+            "Explicit registration reconciliation requires validated persisted intent",
         ));
     }
     reconcile(store, enabled, dry_run, true).await
 }
-
-/// Invoked only by owned OS registration. Disabled saved intent is authoritative.
-pub async fn run_autostart() -> Result<Value> {
-    let store = Store::discover()?;
-    let loaded = crate::config::load(&store)?;
-    if !loaded.config.gateway.as_ref().is_some_and(|p| p.autostart) {
-        return Ok(json!({"autostart":"disabled","started":false}));
+async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> Result<Value> {
+    let state: Startup = store.read_json("autostart.json")?;
+    let unchanged = |state: &Startup| {
+        state.acknowledged == Some(enabled) || state.acknowledged.is_none() && !enabled
+    };
+    if !force && unchanged(&state) {
+        return autostart_status(store);
     }
-    #[cfg(unix)]
-    {
-        run_owner(true).await?;
-        Ok(json!({"autostart":"stopped"}))
-    }
-    #[cfg(windows)]
-    {
-        windows_startup::detach_console();
-        let result = async {
-            if let Some(current) = rpc(&store, "status", None, None).await? {
-                if current["daemon"]["discovery_state"] != "compatible" {
-                    return Err(failure("daemon_incompatible", "Autostart cannot control an incompatible daemon; use its compatible CLI or Web controls"));
-                }
-                let request = Request {
-                    command: vec!["gateway".into(), "start".into()],
-                    operands: Vec::new(),
-                    arguments: Default::default(),
-                    dry_run: false,
-                    if_revision: None,
-                };
-                let started = rpc(&store, "control", Some(request), None).await?
-                    .ok_or_else(|| failure("daemon_identity_unavailable", "Daemon disappeared before autostart control"))?;
-                if started["gateway"]["ready"] != true {
-                    return Err(failure("autostart_blocked", "Autostart did not establish ready inference; inspect stored key availability and endpoint state"));
-                }
-                windows_startup::record_launch(&store, None)?;
-                return Ok(json!({"autostart":"reused","started":true}));
-            }
-            run_owner(true).await?;
-            Ok(json!({"autostart":"stopped"}))
-        }.await;
-        if let Err(error) = &result {
-            // Preserve the startup failure if safe outcome recording also fails.
-            let _ = windows_startup::record_launch(&store, Some(error));
-        }
-        result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::control::status;
-    #[cfg(unix)]
-    use super::super::unix_startup::registration_path;
-    use super::*;
-    #[tokio::test]
-    async fn absent_status_and_disabled_unacknowledged_intent_create_nothing() {
-        let temporary = tempfile::tempdir().unwrap();
-        let store = Store::at(temporary.path().into());
-        assert_eq!(
-            status(&store).await.unwrap()["daemon"]["discovery_state"],
-            "absent"
+    if dry_run {
+        let prerequisite = supervisor::probe(store).await.err();
+        return Ok(
+            json!({"dry_run":true,"enabled":enabled,"registration":"planned","supervision":"unchanged","starts_inference":false,"blockers":prerequisite.into_iter().collect::<Vec<_>>()}),
         );
-        assert!(!store.root.exists());
-        let result = reconcile(&store, false, false, false).await.unwrap();
-        assert_eq!(result["reconciliation"], "not_requested");
-        assert!(!store.root.exists());
-        #[cfg(unix)]
-        {
-            let unit = registration_path(&store);
-            crate::storage::atomic_write(&unit, b"foreign startup unit").unwrap();
-            let result = reconcile(&store, false, false, false).await.unwrap();
-            assert_eq!(result["registration"], "conflict");
-            assert_eq!(std::fs::read(&unit).unwrap(), b"foreign startup unit");
-            assert!(!store.root.exists());
-        }
     }
+    let _guard = supervisor::lifecycle_lock(store).await?;
+    let mut state: Startup = store.read_json("autostart.json")?;
+    if !force && unchanged(&state) {
+        return autostart_status(store);
+    }
+    state.acknowledged = Some(enabled);
+    state.last_attempt = Some(chrono::Utc::now());
+    state.last_outcome = Some("pending".into());
+    store.write_json("autostart.json", &state)?;
+    let result = async {
+        let manager = supervisor::probe(store).await?;
+        supervisor::initialize(store, &manager)?;
+        supervisor::login(store, enabled).await
+    }
+    .await;
+    state.last_outcome = Some(
+        if result.is_ok() {
+            "reconciled"
+        } else {
+            "failed"
+        }
+        .into(),
+    );
+    let metadata = store.write_json("autostart.json", &state);
+    Ok(
+        json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"error":result.err(),"outcome_recording_error":metadata.err(),"status":autostart_status(store).ok(),"repair":"gateway autostart enable|disable","current_listeners":"unchanged"}),
+    )
 }
