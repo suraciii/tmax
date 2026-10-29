@@ -552,6 +552,9 @@ replacement process starts with the current saved settings, and a Web listener
 that was running is restored. `tmax gateway stop` likewise cancels in-flight
 requests instead of refusing while they are active.
 
+Repeated `gateway start` and compatible `web open` reuse the identified listener,
+return `daemon_reused`, and do not reload pending saved settings.
+
 Stopping inference leaves Web available, including after a later process crash.
 Stopping the last requested listener disarms recovery for the current activation.
 During queued recovery, stop still records suppression before it reports success.

@@ -461,7 +461,7 @@ impl Daemon {
         let mut value = self.view();
         value["lifecycle"] = json!({"surface":surface,"action":action,"requested_listen":requested.map(|v|v.to_string()),"actual_listen":if surface=="inference"{self.inference.as_ref()}else{self.web.as_ref()}.map(|v|v.address.to_string())});
         if action == "reused" {
-            value["outcome"] = json!("daemon_reused");
+            value["_code"] = json!("daemon_reused");
         }
         value
     }
@@ -930,6 +930,7 @@ mod tests {
             .unwrap();
         let repeated = daemon.start_inference(None).await.unwrap();
         assert_eq!(repeated["lifecycle"]["action"], "reused");
+        assert_eq!(repeated["_code"], "daemon_reused");
         assert_eq!(
             repeated["gateway"]["config_revision"],
             first["gateway"]["config_revision"]
