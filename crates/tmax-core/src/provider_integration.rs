@@ -722,81 +722,54 @@ fn decimal_str<'a>(object: &'a serde_json::Map<String, Value>, field: &str) -> O
         .and_then(Value::as_str)
         .filter(|v| !v.starts_with('-') && crate::config::decimal(v))
 }
-fn reset_str<'a>(object: &'a serde_json::Map<String, Value>, field: &str) -> Option<&'a str> {
-    object
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|s| s.len() <= 64 && s.contains('T') && s.ends_with('Z'))
-        .filter(|s| crate::inputs::ExactInstant::parse(s).is_ok())
-}
-fn normalize_kimi_usage(body: &Value) -> Result<Value> {
-    let invalid = || {
-        Error::new(
-            "source_format_error",
-            "Kimi usage representation is unsupported",
-        )
+fn kimi_usage_fields(value: &Value) -> serde_json::Map<String, Value> {
+    let mut fields = serde_json::Map::new();
+    let Some(object) = value.as_object() else {
+        return fields;
     };
-    let usage = body
-        .get("usage")
-        .and_then(Value::as_object)
-        .ok_or_else(invalid)?;
-    let weekly = json!({
-        "limit": decimal_str(usage, "limit").ok_or_else(invalid)?,
-        "used": decimal_str(usage, "used").ok_or_else(invalid)?,
-        "remaining": decimal_str(usage, "remaining").ok_or_else(invalid)?,
-        "resetTime": reset_str(usage, "resetTime").ok_or_else(invalid)?,
-    });
-    let limits = body
-        .get("limits")
-        .and_then(Value::as_array)
-        .filter(|rows| rows.len() <= 8)
-        .ok_or_else(invalid)?;
-    let mut windows = Vec::with_capacity(limits.len());
-    let mut seen = std::collections::BTreeSet::new();
-    for row in limits {
-        let row = row.as_object().ok_or_else(invalid)?;
-        let window = row
-            .get("window")
-            .and_then(Value::as_object)
-            .ok_or_else(invalid)?;
-        let duration = window
-            .get("duration")
-            .and_then(Value::as_u64)
-            .ok_or_else(invalid)?;
-        let time_unit =
-            plain_str(window.get("timeUnit").ok_or_else(invalid)?, 64).ok_or_else(invalid)?;
-        if !seen.insert(duration) {
-            return Err(invalid());
+    for field in ["limit", "used", "remaining"] {
+        if let Some(counter) = decimal_str(object, field) {
+            fields.insert(field.into(), json!(counter));
         }
-        let detail = row
-            .get("detail")
-            .and_then(Value::as_object)
-            .ok_or_else(invalid)?;
-        // The live payload omits `used` from window details; retained fields
-        // keep their decimal-string form, and a row without limit, remaining,
-        // and resetTime is not a qualified window.
-        let mut detail_out = serde_json::Map::new();
-        for field in ["limit", "used", "remaining"] {
-            if detail.get(field).is_some() {
-                detail_out.insert(
-                    field.into(),
-                    json!(decimal_str(detail, field).ok_or_else(invalid)?),
-                );
-            }
-        }
-        detail_out.insert(
-            "resetTime".into(),
-            json!(reset_str(detail, "resetTime").ok_or_else(invalid)?),
-        );
-        if !detail_out.contains_key("limit") || !detail_out.contains_key("remaining") {
-            return Err(invalid());
-        }
-        windows.push(json!({
-            "window": {"duration": duration, "timeUnit": time_unit},
-            "detail": Value::Object(detail_out),
-        }));
     }
-    Ok(json!({"usage":weekly,"limits":windows,
+    // A reset alone cannot replace a previously useful allowance observation.
+    if !fields.is_empty()
+        && let Some(reset) = object
+            .get("resetTime")
+            .and_then(Value::as_str)
+            .filter(|reset| crate::inputs::ExactInstant::parse(reset).is_ok())
+    {
+        fields.insert("resetTime".into(), json!(reset));
+    }
+    fields
+}
+
+fn normalize_kimi_usage(body: &Value) -> Result<Value> {
+    let usage = kimi_usage_fields(&body["usage"]);
+    let mut windows = Vec::new();
+    if let Some(limits) = body.get("limits").and_then(Value::as_array) {
+        for row in limits {
+            let detail = kimi_usage_fields(&row["detail"]);
+            if detail.is_empty() {
+                continue;
+            }
+            let mut window = serde_json::Map::new();
+            if let Some(duration) = row["window"]["duration"].as_u64() {
+                window.insert("duration".into(), json!(duration));
+            }
+            if let Some(unit) = plain_str(&row["window"]["timeUnit"], 64) {
+                window.insert("timeUnit".into(), json!(unit));
+            }
+            windows.push(json!({"window": window, "detail": detail}));
+        }
+    }
+    if usage.is_empty() && windows.is_empty() {
+        return Err(Error::new(
+            "source_format_error",
+            "Kimi usage contains no recognizable allowance counters",
+        ));
+    }
+    Ok(json!({"usage":usage,"limits":windows,
         "counter_unit":"unqualified","reset_basis":"provider_timestamp"}))
 }
 fn normalize_glm_monitor(body: &Value) -> Result<Value> {
@@ -1637,36 +1610,86 @@ mod tests {
             normalize_observation("kimi_usage_api", &normalized).unwrap(),
             normalized
         );
-        let mut duplicate = kimi_usage_body();
-        let repeated_row = duplicate["limits"][0].clone();
-        duplicate["limits"]
-            .as_array_mut()
-            .unwrap()
-            .push(repeated_row);
+    }
+
+    #[test]
+    fn kimi_partial_counters_remain_unknown_instead_of_becoming_zero() {
+        for usage in [
+            json!({"limit":"100","used":"100"}),
+            json!({"limit":"100","used":"28"}),
+            json!({"used":"0"}),
+            json!({"remaining":"0"}),
+            json!({"remaining":"9007199254740993.000000000000000001"}),
+        ] {
+            let mut reported = usage.clone();
+            reported["resetTime"] = json!("not-a-timestamp");
+            let normalized = normalize_kimi_usage(&json!({"usage":reported})).unwrap();
+            assert_eq!(normalized["usage"], usage);
+            assert_eq!(normalized["limits"], json!([]));
+            assert_eq!(normalize_kimi_usage(&normalized).unwrap(), normalized);
+        }
+        let normalized = normalize_kimi_usage(&json!({
+            "usage": {"limit":"-1","used":null,"remaining":"72",
+                "resetTime":"2026-10-29T23:42:16+08:00"},
+            "limits": "unrecognized"
+        }))
+        .unwrap();
         assert_eq!(
-            normalize_observation("kimi_usage_api", &duplicate)
-                .unwrap_err()
-                .code,
-            "source_format_error"
+            normalized["usage"],
+            json!({
+                "remaining":"72","resetTime":"2026-10-29T23:42:16+08:00"
+            })
         );
-        let mutations: [fn(&mut Value); 4] = [
-            |b| b["usage"]["limit"] = json!("-1"),
-            |b| b["usage"]["resetTime"] = json!("2026-10-29 15:42:16Z"),
-            |b| {
-                b["limits"][0]["detail"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("remaining");
-            },
-            |b| b["limits"][0]["window"]["duration"] = json!(0.5),
-        ];
-        for mutate in mutations {
-            let mut body = kimi_usage_body();
-            mutate(&mut body);
+    }
+
+    #[test]
+    fn kimi_windows_survive_bad_neighbors_and_incomplete_descriptions() {
+        let normalized = normalize_kimi_usage(&json!({
+            "usage": false,
+            "limits": [
+                null,
+                {"detail":{"limit":"bad","used":null}},
+                {"window":{"duration":0.5,"timeUnit":"TIME_UNIT_MINUTE"},
+                 "detail":{"limit":"-1","remaining":"0","resetTime":"invalid"}},
+                {"window":{"duration":300},"detail":{"used":"43"}},
+                {"window":{"duration":300},"detail":{"remaining":"57"}}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(normalized["usage"], json!({}));
+        assert_eq!(
+            normalized["limits"],
+            json!([
+                {"window":{"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"remaining":"0"}},
+                {"window":{"duration":300},"detail":{"used":"43"}},
+                {"window":{"duration":300},"detail":{"remaining":"57"}}
+            ])
+        );
+        assert_eq!(normalize_kimi_usage(&normalized).unwrap(), normalized);
+
+        let windows: Vec<_> = (1..=12)
+            .map(|duration| {
+                json!({
+                    "window":{"duration":duration,"timeUnit":"TIME_UNIT_MINUTE"},
+                    "detail":{"used":duration.to_string()}
+                })
+            })
+            .collect();
+        let normalized = normalize_kimi_usage(&json!({"limits":windows})).unwrap();
+        assert_eq!(normalized["limits"], json!(windows));
+    }
+
+    #[test]
+    fn kimi_rejects_responses_without_any_recognizable_allowance() {
+        for body in [
+            Value::Null,
+            json!({"booster_wallet":{"remaining":"100"}}),
+            json!({"usage":{"resetTime":"2026-10-29T15:42:16Z"}}),
+            json!({"usage":{"limit":"-1","used":null,"remaining":"bad"},
+                "limits":[null,{"detail":{"remaining":false}}]}),
+        ] {
             assert_eq!(
-                normalize_observation("kimi_usage_api", &body)
-                    .unwrap_err()
-                    .code,
+                normalize_kimi_usage(&body).unwrap_err().code,
                 "source_format_error"
             );
         }
