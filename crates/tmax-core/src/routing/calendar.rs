@@ -86,37 +86,23 @@ impl Window {
         if weekdays.is_some() == dates.is_some() {
             return Err(invalid("Choose exactly one of weekdays or explicit dates"));
         }
-        let all_day = window.all_day == Some(true);
-        let midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        let (start, end) = if all_day {
-            if window.start.is_some() || window.end.is_some() {
-                return Err(invalid("All-day windows forbid start and end"));
+        let (start, end, all_day) = match (&window.start, &window.end) {
+            (None, None) => (NaiveTime::MIN, NaiveTime::MIN, true),
+            (Some(start), Some(end)) => {
+                let start = time(start)?;
+                let end = time(end)?;
+                if start == end {
+                    return Err(invalid(
+                        "Start and end must differ; omit both for an all-day window",
+                    ));
+                }
+                (start, end, false)
             }
-            (midnight, midnight)
-        } else {
-            if window.all_day.is_some() {
+            _ => {
                 return Err(invalid(
-                    "A timed window omits all_day; all_day=false is invalid",
+                    "Provide both start and end, or omit both for an all-day window",
                 ));
             }
-            let start = time(
-                window
-                    .start
-                    .as_deref()
-                    .ok_or_else(|| invalid("Timed window requires start"))?,
-            )?;
-            let end = time(
-                window
-                    .end
-                    .as_deref()
-                    .ok_or_else(|| invalid("Timed window requires end"))?,
-            )?;
-            if start == end {
-                return Err(invalid(
-                    "Start and end must differ; use explicit all_day=true",
-                ));
-            }
-            (start, end)
         };
         let from = window.effective_from.as_ref().map(date).transpose()?;
         let until = window.effective_until.as_ref().map(date).transpose()?;
@@ -360,6 +346,67 @@ mod tests {
     use crate::{config::TimeWindow, inputs, routing::test_support::weekly};
     use chrono::NaiveDate;
     use chrono_tz::Tz;
+
+    #[test]
+    fn all_day_windows_stop_at_the_next_day_and_overlap_only_real_intervals() {
+        let friday = TimeWindow {
+            weekdays: Some(vec!["fri".into()]),
+            ..Default::default()
+        };
+        let friday = Window::parse(&friday).unwrap();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        assert!(!friday.contains(day.pred_opt().unwrap().and_hms_opt(23, 59, 59).unwrap()));
+        assert!(friday.contains(day.and_hms_opt(0, 0, 0).unwrap()));
+        assert!(friday.contains(day.and_hms_opt(23, 59, 59).unwrap()));
+        assert!(!friday.contains(day.succ_opt().unwrap().and_hms_opt(0, 0, 0).unwrap()));
+        assert!(friday.overlaps(
+            &Window::parse(&weekly("thu", "23:00", "01:00")).unwrap(),
+            chrono_tz::UTC,
+        ));
+        assert!(!friday.overlaps(
+            &Window::parse(&weekly("thu", "23:00", "00:00")).unwrap(),
+            chrono_tz::UTC,
+        ));
+        assert!(!friday.overlaps(
+            &Window::parse(&weekly("sat", "00:00", "01:00")).unwrap(),
+            chrono_tz::UTC,
+        ));
+
+        let date_window = |day| TimeWindow {
+            dates: Some(vec![toml::value::Date {
+                year: 2026,
+                month: 10,
+                day,
+            }]),
+            ..Default::default()
+        };
+        let friday = Window::parse(&date_window(23)).unwrap();
+        let saturday = Window::parse(&date_window(24)).unwrap();
+        assert!(!friday.overlaps(&saturday, chrono_tz::UTC));
+        assert!(friday.overlaps(&friday, chrono_tz::UTC));
+        assert!(!saturday.contains(day.and_hms_opt(23, 59, 59).unwrap()));
+        assert!(saturday.contains(day.succ_opt().unwrap().and_hms_opt(0, 0, 0).unwrap()));
+    }
+
+    #[test]
+    fn timed_windows_require_both_unequal_endpoints() {
+        for (start, end) in [(Some("08:00"), None), (None, Some("08:00"))] {
+            let window = TimeWindow {
+                weekdays: Some(vec!["mon".into()]),
+                start: start.map(str::to_owned),
+                end: end.map(str::to_owned),
+                ..Default::default()
+            };
+            let error = Window::parse(&window).err().unwrap();
+            assert_eq!(error.code, "invalid_calendar");
+            assert!(error.message.contains("both start and end"));
+        }
+        let error = Window::parse(&weekly("mon", "00:00", "00:00"))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "invalid_calendar");
+        assert!(error.message.contains("must differ"));
+    }
 
     #[test]
     fn nonexistent_calendar_intersections_do_not_overlap_real_instants() {

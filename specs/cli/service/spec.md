@@ -17,13 +17,12 @@ owns traffic coverage and failure behavior.
 
 | Command | Result or requested change |
 | --- | --- |
-| `network proxy URL` | Save proxy mode and exactly that URL, replacing the previous policy. |
+| `network proxy URL` | Save a network table containing exactly that proxy URL, replacing the previous policy. |
 | `network direct` | Remove the optional network table, the canonical saved direct representation. |
 | `network show [--state STATE]` | Inspect saved/loaded policy, default provenance, effective proxy address/port, and which future work consumes it. No connectivity or secret check. |
 
-Mutations support common dry-run/revision guards. A valid manually authored
-`mode = "direct"` remains accepted; it is not a separate CLI operation or state.
-Help lists `http`, `https`, and `socks5`, their default proxy ports, and SOCKS5
+Mutations support common dry-run/revision guards. Help lists `http`, `https`, and
+`socks5`, their default proxy ports, and SOCKS5
 proxy-side destination DNS. Userinfo/proxy-authentication inputs are unsupported.
 There is no provider override, bypass list, environment discovery, direct fallback,
 or TLS-verification bypass.
@@ -192,11 +191,11 @@ CLI restart retains synchronous readiness completion.
 | --- | --- |
 | `snapshot_state` | `available`, `absent`, or `unavailable` |
 | `configuration_revision` | Opaque string-or-null; known absent config is `absent` |
-| `configured` | Null for absent/unreadable optional table; otherwise validated optional `mode` and `proxy_url` fields |
+| `configured` | Null for absent/unreadable optional table; otherwise the validated `proxy_url` field |
 | `effective` | Null for unavailable/not-loaded policy; otherwise `{mode, proxy_url, proxy_scheme, proxy_host, proxy_port}` |
 | `reason_code` | Controlled string-or-null explaining default/absent/unavailable state |
 
-Direct has null gateway fields. Gateway has validated URL, scheme `http`/`https`/`socks5`,
+Direct has null proxy fields. Proxy mode has a validated URL, scheme `http`/`https`/`socks5`,
 host, and positive effective port including scheme default. An absent config file
 has the direct default; absent loaded state has no daemon policy. Invalid or
 unreadable config does not acquire a default effective policy.

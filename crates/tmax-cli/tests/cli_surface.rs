@@ -56,24 +56,41 @@ fn removed_unlock_options_are_rejected_as_unknown_and_redacted() {
 }
 
 #[test]
-fn invalid_enum_names_its_option_without_echoing_value() {
-    let output = tmax(&[
-        "provider",
-        "auth",
-        "set",
-        "safe-provider",
-        "--method",
-        "INVALID-METHOD-SECRET",
-        "--via",
-        "tmax",
-        "--format",
-        "json",
-    ]);
-    let response = json_error(&output);
-    assert_eq!(response["operation"], "provider auth set");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("--method"));
-    assert!(!stdout.contains("INVALID-METHOD-SECRET"));
+fn removed_dsl_operands_are_rejected_before_configuration_access() {
+    for args in [
+        vec!["provider", "add", "p", "--metadata", "RETIRED-OPERAND"],
+        vec!["provider", "add", "p", "--integration", "RETIRED-OPERAND"],
+        vec!["provider", "update", "p", "--region", "RETIRED-OPERAND"],
+        vec![
+            "provider",
+            "auth",
+            "set",
+            "p",
+            "--via",
+            "native",
+            "--method",
+            "RETIRED-OPERAND",
+        ],
+        vec![
+            "model",
+            "schedule",
+            "add",
+            "p/m",
+            "--priority",
+            "1",
+            "--weekday",
+            "mon",
+            "--all-day",
+        ],
+    ] {
+        let output = tmax(&args);
+        json_error(&output);
+        assert!(
+            !String::from_utf8(output.stdout)
+                .unwrap()
+                .contains("RETIRED-OPERAND")
+        );
+    }
 }
 
 #[test]

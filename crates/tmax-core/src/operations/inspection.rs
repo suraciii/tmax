@@ -146,10 +146,8 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
 }
 pub(crate) fn network_view(c: &Config, revision: &str, exists: bool, state: &str) -> Value {
     let n = c.network.as_ref();
-    let mode = n.map(|n| n.mode.as_str()).unwrap_or("direct");
-    let u = n
-        .and_then(|n| n.proxy_url.as_ref())
-        .and_then(|u| url::Url::parse(u).ok());
+    let mode = if n.is_some() { "proxy" } else { "direct" };
+    let u = n.and_then(|n| url::Url::parse(&n.proxy_url).ok());
     json!({"state":state,"snapshot_state":if exists{"available"}else{"absent"},"policy":{"snapshot_state":if exists{"available"}else{"absent"},"configuration_revision":revision,"configured":n,"effective":{"mode":mode,"proxy_url":u.as_ref().map(url::Url::as_str),"proxy_scheme":u.as_ref().map(url::Url::scheme),"proxy_host":u.as_ref().and_then(url::Url::host_str),"proxy_port":u.as_ref().and_then(|u|u.port().or_else(||match u.scheme(){"http"=>Some(80),"https"=>Some(443),"socks5"=>Some(1080),_=>None}))},"reason_code":if n.is_none(){json!("default_direct")}else{Value::Null}},"future_work_scope":if state=="loaded"{"daemon"}else{"independent_cli"}})
 }
 
@@ -178,7 +176,7 @@ pub(super) async fn provider_inspect(
     let endpoint = |c: &Config, revision: &str| -> Value {
         match c.providers.get(id) {
             Some(p) => {
-                json!({"snapshot_state":"available","configuration_revision":revision,"configured":{"region":p.region,"endpoints":p.endpoints},"resolution":crate::provider_integration::endpoint_view(p).ok(),"reason_code":null})
+                json!({"snapshot_state":"available","configuration_revision":revision,"configured":{"endpoints":p.endpoints},"resolution":crate::provider_integration::endpoint_view(p).ok(),"reason_code":null})
             }
             None => {
                 json!({"snapshot_state":"available","configuration_revision":revision,"configured":null,"resolution":null,"reason_code":"provider_missing"})
@@ -307,6 +305,31 @@ pub(super) fn agent_list(config: &Config) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn provider_inspection_reports_fixed_regional_destination_without_region_field() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=1\n[providers.p]\nintegration='minimax-cn-coding-plan'\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let file = config::load(&store).unwrap();
+        let request = Request {
+            command: vec!["provider".into(), "inspect".into()],
+            operands: vec!["p".into()],
+            arguments: Default::default(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let inspect = provider_inspect(&store, &file, &request).await.unwrap();
+        let endpoint = &inspect["endpoints"]["file"];
+        assert!(endpoint["configured"].get("region").is_none());
+        assert_eq!(endpoint["configured"]["endpoints"], json!({}));
+        assert_eq!(endpoint["resolution"]["source"], "integration");
+        assert_eq!(
+            endpoint["resolution"]["endpoints"]["messages"],
+            "https://api.minimaxi.com/anthropic"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn model_inspect_separates_gateway_maps_from_upstream_native_capabilities() {

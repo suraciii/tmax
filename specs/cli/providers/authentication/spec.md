@@ -19,7 +19,7 @@ protected storage and discoverability. Use [common CLI rules](../../spec.md),
 | Command | Requested boundary |
 | --- | --- |
 | `provider key set ID [--key-stdin \| --key-ref REF]` | Select supported API-key authentication. Read/store a new current-user-restricted plaintext key file, or save an existing qualified provider-owned reference without resolving its secret. Replace the auth table and remove old-method fields. |
-| `provider auth set ID --method login --via SOURCE [--session-ref REF]` | Declaratively replace the full auth table with explicit `via` and optional source-scoped session reference; no sign-in or credential import. |
+| `provider auth set ID --via SOURCE [--session-ref REF]` | Declaratively replace the full login-authentication table with explicit `via` and optional source-scoped session reference; no sign-in or credential import. |
 | `provider login ID [--via SOURCE]` | Select the source through [login source selection](#login-source-selection), execute qualified interactive sign-in, then attempt reference save/activation. |
 | `provider logout ID` | Sign out through the configured supported `via` and report affected native/shared scopes. Preserve provider/subscription declarations and identity comparison basis. |
 | `provider auth clear ID` | Remove active auth configuration, not stored keys, native sessions, or upstream access. |

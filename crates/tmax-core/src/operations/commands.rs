@@ -145,7 +145,7 @@ const COMMANDS: &[Command] = &[
         path: "provider add",
         min: 1,
         max: 1,
-        options: "metadata integration region endpoint set clear",
+        options: "endpoint set clear",
         mutation: true,
     },
     Command {
@@ -180,7 +180,7 @@ const COMMANDS: &[Command] = &[
         path: "provider auth set",
         min: 1,
         max: 1,
-        options: "method via session-ref",
+        options: "via session-ref",
         mutation: true,
     },
     Command {
@@ -376,14 +376,14 @@ const COMMANDS: &[Command] = &[
         path: "model schedule add",
         min: 1,
         max: 1,
-        options: "priority weekday date all-day start end effective-from effective-until",
+        options: "priority weekday date start end effective-from effective-until",
         mutation: true,
     },
     Command {
         path: "model schedule replace",
         min: 2,
         max: 2,
-        options: "priority weekday date all-day start end effective-from effective-until",
+        options: "priority weekday date start end effective-from effective-until",
         mutation: true,
     },
     Command {
@@ -418,14 +418,14 @@ const COMMANDS: &[Command] = &[
         path: "model rule add",
         min: 2,
         max: 2,
-        options: "input priority reset-within enabled remaining-at-least-percent weekday date all-day start end effective-from effective-until",
+        options: "input priority reset-within enabled remaining-at-least-percent weekday date start end effective-from effective-until",
         mutation: true,
     },
     Command {
         path: "model rule replace",
         min: 2,
         max: 2,
-        options: "input priority reset-within enabled remaining-at-least-percent weekday date all-day start end effective-from effective-until",
+        options: "input priority reset-within enabled remaining-at-least-percent weekday date start end effective-from effective-until",
         mutation: true,
     },
     Command {
@@ -896,7 +896,6 @@ pub fn catalog() -> Value {
                 "state" => vec!["file", "loaded"],
                 "snapshot" => vec!["accepted", "latest"],
                 "method" if c.path == "provider login-start" => vec!["browser", "device"],
-                "method" => vec!["login"],
                 "source" => vec!["manual", "provider", "codex-resets"],
                 "kind" if c.path.starts_with("provider input") => vec!["quota", "reset"],
                 "kind" => vec!["concrete", "alias"],
@@ -911,7 +910,7 @@ pub fn catalog() -> Value {
                 "fields": fields,
                 "field_types": field_types,
                 "repeatable": matches!(name, "set" | "clear" | "endpoint" | "clear-endpoint" | "value" | "weekday" | "date" | "candidate" | "candidate-reasoning-effort" | "clear-candidate-reasoning-effort" | "model"),
-                "switch": matches!(name, "new-codex" | "all-day" | "last" | "gateway" | "empty-values" | "no-browser" | "key-stdin"),
+                "switch": matches!(name, "new-codex" | "last" | "gateway" | "empty-values" | "no-browser" | "key-stdin"),
             }))
         }).collect();
         json!({
@@ -1047,7 +1046,6 @@ pub fn validate(r: &Request) -> Result<()> {
             "non-interactive"
                 | "new-codex"
                 | "key-stdin"
-                | "all-day"
                 | "last"
                 | "gateway"
                 | "empty-values"

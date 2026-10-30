@@ -545,15 +545,65 @@ fn choices(id: &str) -> Value {
         ..Provider::default()
     };
     match crate::provider_integration::integration_id(&p) {
-        Ok(id) => {
-            json!([{"integration":id,"endpoint_setup":if id=="kimi-coding-plan"{"region_or_known_base"}else{"singleton_default"}}])
-        }
+        Ok(id) => json!([{"integration":id,"endpoint_setup":"fixed"}]),
         Err(_) => json!([{"integration":"custom","endpoint_setup":"explicit_bases"}]),
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn catalog_choices_select_only_exact_regional_products() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_path_buf());
+        let ids = [
+            "kimi-code-plan-cn",
+            "kimi-code-plan-global",
+            "minimax-cn-coding-plan",
+            "minimax-coding-plan",
+            "kimi-for-coding",
+            "kimi-code",
+        ];
+        let snapshot = Snapshot {
+            revision: "test".into(),
+            source: "local fixture".into(),
+            retrieved_at: "2026-01-01T00:00:00Z".into(),
+            providers: ids
+                .iter()
+                .map(|id| (id.to_string(), json!({"name": id, "models": {}})))
+                .collect(),
+        };
+        store
+            .write_json("catalog/accepted.json", &snapshot)
+            .unwrap();
+        let request = Request {
+            command: vec!["catalog".into(), "providers".into()],
+            operands: vec![],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let result = handle(&store, &Config::empty(), &request).await.unwrap();
+        let providers = result["providers"].as_array().unwrap();
+        for id in ids {
+            let entry = providers.iter().find(|p| p["id"] == id).unwrap();
+            let expected = if id == "kimi-for-coding" || id == "kimi-code" {
+                "custom"
+            } else {
+                id
+            };
+            let setup = if expected == "custom" {
+                "explicit_bases"
+            } else {
+                "fixed"
+            };
+            assert_eq!(
+                entry["integration_choices"],
+                json!([{ "integration": expected, "endpoint_setup": setup }])
+            );
+        }
+    }
+
     #[test]
     fn merge_preserves_false_zero_and_array_replacement() {
         let mut base = json!({"limit":{"context":100,"output":50},"temperature":true,"modalities":{"input":["text","image"],"output":["text"]}});

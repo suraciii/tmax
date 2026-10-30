@@ -17,19 +17,6 @@ pub(super) fn mutate(
         "provider add" => {
             let id = operand(r, 0)?;
             let mut p = table();
-            for key in ["metadata", "integration", "region"] {
-                if let Some(v) = arg(r, key) {
-                    if args(r, "set")
-                        .as_chunks::<2>()
-                        .0
-                        .iter()
-                        .any(|p| p[0] == key)
-                    {
-                        return Err(error());
-                    }
-                    put(&mut p, &[key], string(v))?;
-                }
-            }
             apply_fields(&mut p, r, "provider")?;
             endpoints(&mut p, r)?;
             new_named(root, &["providers"], id, p)?;
@@ -115,9 +102,6 @@ pub(super) fn mutate(
             )?;
         }
         "provider auth set" => {
-            if required(r, "method")? != "login" {
-                return Err(error());
-            }
             let id = operand(r, 0)?;
             get(root, &["providers", id])?;
             let mut auth = table();

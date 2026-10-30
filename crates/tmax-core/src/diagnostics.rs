@@ -452,7 +452,6 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "time_window"
                 | "weekdays"
                 | "dates"
-                | "all_day"
                 | "start"
                 | "end"
                 | "effective_from"

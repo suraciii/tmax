@@ -51,7 +51,6 @@ pub struct Provider {
     pub integration: Option<String>,
     #[serde(default = "yes")]
     pub enabled: bool,
-    pub region: Option<String>,
     #[serde(default)]
     pub endpoints: BTreeMap<String, String>,
     #[serde(default)]
@@ -71,7 +70,6 @@ impl Default for Provider {
             metadata: None,
             integration: None,
             enabled: true,
-            region: None,
             endpoints: BTreeMap::new(),
             overrides: ProviderOverrides::default(),
             auth: None,
@@ -241,7 +239,6 @@ pub struct InterleavedField {
 pub struct TimeWindow {
     pub weekdays: Option<Vec<String>>,
     pub dates: Option<Vec<toml::value::Date>>,
-    pub all_day: Option<bool>,
     pub start: Option<String>,
     pub end: Option<String>,
     pub effective_from: Option<toml::value::Date>,
@@ -324,12 +321,7 @@ pub struct Gateway {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Network {
-    #[serde(default = "direct")]
-    pub mode: String,
-    pub proxy_url: Option<String>,
-}
-fn direct() -> String {
-    "direct".into()
+    pub proxy_url: String,
 }
 pub const PROTOCOLS: [&str; 3] = ["chat-completions", "responses", "messages"];
 pub fn qualified(name: &str) -> Result<(&str, &str)> {
@@ -573,8 +565,10 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
                 return Err(invalid(&format!("{path}.duration_seconds")));
             }
         }
-        let endpoints = crate::provider_integration::resolve(p)
-            .map_err(|_| invalid(&format!("{base}.endpoints")))?;
+        let endpoints = crate::provider_integration::resolve(p).map_err(|error| {
+            let field = format!("{base}.{}", error.field.as_deref().unwrap_or("endpoints"));
+            Error::new("invalid_configuration", &error.message).field(field)
+        })?;
         if let Some(auth) = &p.auth {
             match auth {
                 Auth::ApiKey { key_ref } => {
@@ -588,7 +582,10 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
                     let integration = crate::provider_integration::integration_id(p)?;
                     if via == "tmax"
                         || !config.agents.contains_key(via)
-                        || !matches!(integration, "codex-subscription" | "kimi-coding-plan")
+                        || !matches!(
+                            integration,
+                            "codex-subscription" | "kimi-code-plan-cn" | "kimi-code-plan-global"
+                        )
                         || session_ref.as_ref().is_some_and(|v| v.is_empty())
                     {
                         return Err(invalid(&format!("{base}.auth.via")));
@@ -821,27 +818,16 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         }
     }
     if let Some(n) = &config.network {
-        match n.mode.as_str() {
-            "direct" if n.proxy_url.is_none() => {}
-            "proxy" => {
-                let url = url::Url::parse(
-                    n.proxy_url
-                        .as_deref()
-                        .ok_or_else(|| invalid("network.proxy_url"))?,
-                )
-                .map_err(|_| invalid("network.proxy_url"))?;
-                if !matches!(url.scheme(), "http" | "https" | "socks5")
-                    || url.host_str().is_none()
-                    || !url.username().is_empty()
-                    || url.password().is_some()
-                    || !matches!(url.path(), "" | "/")
-                    || url.query().is_some()
-                    || url.fragment().is_some()
-                {
-                    return Err(invalid("network.proxy_url"));
-                }
-            }
-            _ => return Err(invalid("network.mode")),
+        let url = url::Url::parse(&n.proxy_url).map_err(|_| invalid("network.proxy_url"))?;
+        if !matches!(url.scheme(), "http" | "https" | "socks5")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || !matches!(url.path(), "" | "/")
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid("network.proxy_url"));
         }
     }
     Ok(())
@@ -972,7 +958,7 @@ mod tests {
     fn legacy_gateway_names_read_without_writes_and_save_canonically() {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::storage::Store::at(dir.path().into());
-        let text = "# personal settings\nversion=1\n[proxy]\nlisten='127.0.0.1:17840'\nkey_ref='retained-proxy-reference' # keep key\n[network]\nmode='proxy'\nproxy_url='http://127.0.0.1:8080'\n[agents.local]\nagent='pi'\nscope='/native'\n[agents.local.providers.proxy]\nproxy=true # keep source\n";
+        let text = "# personal settings\nversion=1\n[proxy]\nlisten='127.0.0.1:17840'\nkey_ref='retained-proxy-reference' # keep key\n[network]\nproxy_url='http://127.0.0.1:8080'\n[agents.local]\nagent='pi'\nscope='/native'\n[agents.local.providers.proxy]\nproxy=true # keep source\n";
         store.write_raw("tmax.toml", text.as_bytes()).unwrap();
         let loaded = load(&store).unwrap();
         assert_eq!(
@@ -1001,7 +987,10 @@ mod tests {
         assert!(saved.contains("# keep source"));
         assert!(saved.contains("# personal settings"));
         assert!(saved.contains("[agents.local.providers.proxy]"));
-        assert_eq!(parse(&saved).unwrap().network.unwrap().mode, "proxy");
+        assert_eq!(
+            parse(&saved).unwrap().network.unwrap().proxy_url,
+            "http://127.0.0.1:8080"
+        );
         assert_eq!(serde_json::to_value(parse(&saved).unwrap()).unwrap(), value);
     }
 
@@ -1043,8 +1032,33 @@ mod tests {
     }
     #[test]
     fn unknown_schedule_fields_reject() {
-        let s = "priority=1\nweekdays=['mon']\nall_day=true\nsecret='not-a-field'";
+        let s = "priority=1\nweekdays=['mon']\nsecret='not-a-field'";
         assert!(toml::from_str::<Schedule>(s).is_err());
+    }
+
+    #[test]
+    fn removed_network_and_calendar_fields_are_not_desired_configuration_aliases() {
+        for text in [
+            "version=1\n[network]\nmode='direct'\n",
+            "version=1\n[network]\nmode='proxy'\nproxy_url='http://127.0.0.1:8080'\n",
+            "version=1\n[network]\n",
+            "version=1\n[providers.p]\nintegration='deepseek'\n[providers.p.models.m]\ntimezone='Etc/UTC'\nschedule=[{priority=1,weekdays=['mon'],all_day=true}]\n",
+        ] {
+            assert_eq!(parse(text).unwrap_err().code, "invalid_configuration");
+        }
+    }
+
+    #[test]
+    fn region_and_unqualified_regional_integrations_are_not_desired_syntax() {
+        for text in [
+            "version=1\n[providers.p]\nintegration='deepseek'\nregion='default'\n",
+            "version=1\n[providers.p]\nintegration='kimi-code-plan-cn'\nregion='china'\n",
+            "version=1\n[providers.p]\nintegration='kimi-coding-plan'\n",
+            "version=1\n[providers.p]\nintegration='minimax-m-plan'\n",
+            "version=1\n[providers.p]\nmetadata='kimi-for-coding'\n",
+        ] {
+            assert_eq!(parse(text).unwrap_err().code, "invalid_configuration");
+        }
     }
     #[test]
     fn aliases_require_nonempty_unique_registered_concrete_candidates() {

@@ -59,11 +59,11 @@ others.
 
 The known map and finite HTTP inference operations are:
 
-| Region ID | Native protocol | Official upstream base | Declared operation beneath that base |
-| --- | --- | --- | --- |
-| `default` | `chat-completions` | `https://api.deepseek.com` | `POST /chat/completions`, with complete required message history |
-| `default` | `responses` | `https://api.deepseek.com` | `POST /responses`, with complete required input history and no server-state dependency |
-| `default` | `messages` | `https://api.deepseek.com/anthropic` | `POST /v1/messages`, with the supported message, thinking, and tool-result forms |
+| Native protocol | Official upstream base | Declared operation beneath that base |
+| --- | --- | --- |
+| `chat-completions` | `https://api.deepseek.com` | `POST /chat/completions`, with complete required message history |
+| `responses` | `https://api.deepseek.com` | `POST /responses`, with complete required input history and no server-state dependency |
+| `messages` | `https://api.deepseek.com/anthropic` | `POST /v1/messages`, with the supported message, thinking, and tool-result forms |
 
 The [shared endpoint resolver](../spec.md#endpoint-resolution) owns selection of
 this published endpoint set. Native configuration uses the selected map entry
@@ -262,7 +262,7 @@ success.
 - The official Codex Responses scenario appears as documented and conditional on
   actual version and feature qualification, not categorically incompatible or
   tmax-verified. Its shared native scope is visible before application.
-- Direct and gateway selections expose the same resolved region/protocol map,
+- Direct and gateway selections expose the same fixed protocol map,
   exact upstream base, and finite declared method/path operations. Chat
   Completions, Responses, and Anthropic Messages qualify independently; no
   cross-protocol translation or undeclared resource-operation passthrough is offered.

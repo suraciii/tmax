@@ -320,7 +320,6 @@ mod tests {
                             month: 10,
                             day: 23,
                         }]),
-                        all_day: Some(true),
                         ..Default::default()
                     },
                 },
@@ -395,7 +394,6 @@ mod tests {
                 month: 1,
                 day: 1,
             }]),
-            all_day: Some(true),
             ..Default::default()
         };
         provider.models.insert(

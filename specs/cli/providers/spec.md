@@ -13,7 +13,7 @@ own command contracts.
 | Command | Result |
 | --- | --- |
 | `integration list` | Compact stable integration IDs, protocols, endpoint-setup requirements, and authentication summaries. |
-| `integration inspect ID` | Regions, protocol bases/custom-base requirements, finite method/path operations and original-binding requirements, protocols/transports, authentication methods/login sources, supported input source/kind/scope/model coverage and normalized fields, noninteractive acquisition, restrictions, and known/unknown compatibility evidence. |
+| `integration inspect ID` | Fixed protocol bases/custom-base requirements, finite method/path operations and original-binding requirements, protocols/transports, authentication methods/login sources, supported input source/kind/scope/model coverage and normalized fields, noninteractive acquisition, restrictions, and known/unknown compatibility evidence. |
 | `provider list` | Compact IDs/names, enabled/authentication state, billing/quota freshness, and affected-target counts. |
 | `provider inspect ID` | File/loaded endpoints, configured/inherited/overridden/effective metadata and provenance, authentication `via`/known-or-unknown identity, model access, subscription/balance facts, input readiness, retained secret references, and file/loaded differences. |
 | `provider refresh ID --scope SCOPE` | Explicit qualified non-inference checks. `SCOPE` is `auth`, `models`, `quota`, or `all`; return each check/channel separately. Model discovery registers nothing. |
@@ -53,24 +53,23 @@ actual supported IDs instead of promising guessed integrations.
 
 | Command | Requested change |
 | --- | --- |
-| `provider add ID [--metadata CATALOG-ID] [--integration INTEGRATION] [--region REGION] [--endpoint P URL]... [EDIT]` | Create one instance, optionally without authentication, subscription, or models. Select metadata or an explicit supported integration and satisfy its endpoint requirements. |
+| `provider add ID [--endpoint P URL]... [EDIT]` | Create one instance, optionally without authentication, subscription, or models. Use `--set metadata` and `--set integration` for scalar selections; only custom integrations accept protocol bases. |
 | `provider update ID [--endpoint P URL]... [--clear-endpoint P]... [EDIT]` | Edit selected scalar fields/protocol entries, preserving other settings. At least one edit is required. |
 | `provider rename OLD NEW` | Rename the local ID and all dependent qualified references, preserving identity. |
 | `provider remove ID` | Remove contained settings after reference checks, with retained-secret/native disclosures. |
 | `provider failure-reset ID` | Explicitly clear this provider's current consecutive failure streak and fixed-priority override; preserve settings, history, bindings, and quota facts. Supports effect-free dry-run. |
 
-Add flags set their corresponding fields; setting the same field through `EDIT`
-is an error. Display names are independent of local IDs. `REGION` is an exact ID
-from the selected known integration. Its
-[endpoint rules](../../integrations/spec.md#endpoint-resolution) decide whether a
-singleton default suffices or an explicit region/known-base selector is required.
-Custom integrations require explicit protocol bases.
+Provider scalar selections use `EDIT` only. Display names are independent of local
+IDs. The integration ID selects one product and fixed destinations under the
+[endpoint rules](../../integrations/spec.md#endpoint-resolution).
+Custom integrations require explicit protocol bases; known integrations require
+no separate endpoint or region selector.
 
 `--endpoint P URL` adds/replaces exactly one `endpoints` entry; repeat for distinct
 protocols. `--clear-endpoint P` removes only that entry, not models or providers.
 Reject duplicate protocols and a set/clear pair for the same protocol. Use these
-operands, not scalar paths or serialized objects. Endpoint, region, and integration
-edits form one validated change; omitted entries remain unchanged. The
+operands, not scalar paths or serialized objects. Endpoint and integration edits
+form one validated change; omitted entries remain unchanged. The
 [endpoint schema](../../configuration/spec.md#provider-endpoints) owns selector
 validation and the meaning of an omitted custom base.
 
@@ -78,7 +77,6 @@ validation and the meaning of an omitted custom base.
 | --- | --- |
 | `metadata`, `integration` | Strings; clear removes the selection, subject to valid explicit integration/mapping requirements. Metadata change is not a rename. |
 | `enabled` | Boolean; clear restores true. |
-| `region` | Known-integration region string; clear removes the selector subject to resulting endpoint requirements. |
 | `overrides.name`, `overrides.doc` | Strings; clear restores inheritance. |
 | `subscription.plan`, `subscription.billing_period` | Strings; clear makes the manual fact unknown. |
 | `subscription.renewal_date`, `subscription.expiry_date` | Dates; clear means unknown. |
@@ -101,19 +99,18 @@ Authentication uses dedicated commands, not scalar auth edits.
 ```sh
 tmax provider update opencode-go --set subscription.charge.amount 20.00 --set subscription.charge.currency USD
 tmax provider update opencode-go --clear subscription.charge
-tmax provider add custom-gateway --integration custom --endpoint chat-completions https://gateway.example/openai/v1 --endpoint messages https://gateway.example/anthropic
+tmax provider add custom-gateway --set integration custom --endpoint chat-completions https://gateway.example/openai/v1 --endpoint messages https://gateway.example/anthropic
 tmax provider update custom-gateway --endpoint responses https://gateway.example/responses/v1
 tmax provider update custom-gateway --clear-endpoint responses
-tmax provider add deepseek-known --metadata deepseek --endpoint messages https://api.deepseek.com/anthropic
+tmax provider add deepseek-known --set metadata deepseek
 tmax provider inspect deepseek-known
 ```
 
 Prices are user-maintained, not live tariff claims. Custom URLs are illustrative
 caller-supplied bases, not verified services; `custom` defines finite operations.
-The DeepSeek example uses an exact known selector. Its omitted protocol entries
-come from that map, unlike omitted custom entries. Update region with
-`--set region REGION` or `--clear region`. Help shows actual registry region choices,
-singleton defaults, and multi-protocol setup where supported.
+The DeepSeek example uses its integration's complete fixed endpoint map, unlike
+omitted custom entries. Help lists exact product-qualified integration IDs and
+their supported protocol bases; there is no separate region selection.
 
 
 `provider inspect` includes `failure_state`: current streak, fixed override,
@@ -130,9 +127,8 @@ protocol's base.
 `EndpointSupport` contains:
 
 - `kind`: `known` or `custom`.
-- `setup`: `singleton_default`, `region_or_known_base`, or `explicit_bases`.
-- `regions`: `{id, endpoints: EndpointMap}[]` from the integration's map; empty for
-  custom integrations.
+- `setup`: `fixed` or `explicit_bases`.
+- `endpoints`: one fixed `EndpointMap` for a known integration, empty for custom.
 - `operations`: finite `{protocol, method, path_template,
   requires_original_binding}[]`, using declared operation strings and a boolean
   binding flag, not arbitrary request destinations.
@@ -146,13 +142,13 @@ replace registry qualification.
 
 `ProviderEndpointView` contains `snapshot_state` (`available`, `absent`, or
 `unavailable`), `configuration_revision` (string-or-null), `configured`
-(null or `{region: string-or-null, endpoints: EndpointMap}`), `resolution`
+(null or `{endpoints: EndpointMap}`), `resolution`
 (null or the object below), and string-or-null `reason_code`. Absent snapshot,
 missing provider, and unreadable data remain distinct, not empty resolutions.
 
-Resolution contains `kind` (`known` or `custom`), string-or-null `region`,
-`source` (`singleton_default`, `region`, `known_base`, `region_and_known_base`, or
-`explicit_bases`), `endpoints: EndpointMap`, and `unavailable_protocols: P[]`.
+Resolution contains `kind` (`known` or `custom`),
+`source` (`integration` or `explicit_bases`), `endpoints: EndpointMap`, and
+`unavailable_protocols: P[]`.
 A resolved base is config evidence, not connectivity/authentication/transport or
 continuation qualification.
 

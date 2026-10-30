@@ -340,7 +340,7 @@ mod tests {
         let add = request(
             &["provider", "add"],
             &["p"],
-            &[("integration", &["deepseek"])],
+            &[("set", &["integration", "deepseek"])],
         );
         let saved = dispatch(&store, &add).await.unwrap();
         let response = success_response("provider add", false, saved);
@@ -416,7 +416,7 @@ mod tests {
         let add = request(
             &["provider", "add"],
             &["p"],
-            &[("integration", &["deepseek"])],
+            &[("set", &["integration", "deepseek"])],
         );
         let data = dispatch(&store, &add).await.unwrap();
         let response = success_response("provider add", false, data);

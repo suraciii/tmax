@@ -99,7 +99,9 @@ impl Context<'_> {
                     "This exact native client lacks qualified per-conversation Go header coverage; pi 1.2.0, omp 18.12.6, Hermes 0.22.1, and OpenCode 2.0.28 have separately sourced direct paths",
                 ));
             }
-            if integration == "kimi-coding-plan" && self.agent == "hermes" && protocol == "messages"
+            if matches!(integration, "kimi-code-plan-cn" | "kimi-code-plan-global")
+                && self.agent == "hermes"
+                && protocol == "messages"
             {
                 return Err(Error::new(
                     "incompatible",

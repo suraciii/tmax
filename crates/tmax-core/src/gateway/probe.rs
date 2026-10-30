@@ -41,7 +41,7 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
     let integration = crate::provider_integration::integration_id(provider)?;
     if matches!(
         integration,
-        "codex-subscription" | "opencode-go" | "kimi-coding-plan"
+        "codex-subscription" | "opencode-go" | "kimi-code-plan-cn" | "kimi-code-plan-global"
     ) {
         return Err(Error::new(
             "native_identity_unqualified",
@@ -116,4 +116,42 @@ pub async fn probe(store: &Store, config: &Config, request: &Request) -> Result<
     Ok(
         json!({"qualified_model":id,"provider":provider_id,"protocol":protocol,"transport":transport,"observed_at":at,"source":"explicit_inference_probe","upstream_status":status,"result":if observer.success&&observer.complete{"completed"}else if !observer.success{"failed"}else{"unknown"},"duration_ms":started.elapsed().as_millis(),"usage":observer.usage,"usage_state":if observer.partial{"partial"}else if observer.usage.is_empty(){"unknown"}else{"reported"},"cost_risk":"May consume quota or incur unknown charges","account_identity":"unverified","quota":"unknown"}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Model, Provider};
+    use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn both_kimi_products_reject_unqualified_probes_before_dispatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_path_buf());
+        let request = Request {
+            command: vec!["gateway".into(), "probe".into()],
+            operands: vec!["p/m".into()],
+            arguments: BTreeMap::from([
+                ("protocol".into(), vec!["messages".into()]),
+                ("transport".into(), vec!["http".into()]),
+            ]),
+            dry_run: false,
+            if_revision: None,
+        };
+        for integration in ["kimi-code-plan-cn", "kimi-code-plan-global"] {
+            let mut config = Config::empty();
+            config.providers.insert(
+                "p".into(),
+                Provider {
+                    integration: Some(integration.into()),
+                    models: BTreeMap::from([("m".into(), Model::default())]),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                probe(&store, &config, &request).await.unwrap_err().code,
+                "native_identity_unqualified"
+            );
+        }
+    }
 }

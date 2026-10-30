@@ -92,9 +92,9 @@ API key is outside this integration.
 The known integration has one published endpoint set under the
 [shared endpoint resolver](../spec.md#endpoint-resolution):
 
-| Region ID | Native protocol | Upstream base |
-| --- | --- | --- |
-| `default` | `responses` | `https://chatgpt.com/backend-api/codex` |
+| Native protocol | Upstream base |
+| --- | --- |
+| `responses` | `https://chatgpt.com/backend-api/codex` |
 
 Codex's documented direct ChatGPT scenario uses this Codex/Responses backend.
 It is not a general Chat Completions or Anthropic Messages API. Model

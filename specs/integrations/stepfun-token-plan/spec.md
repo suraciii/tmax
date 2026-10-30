@@ -14,8 +14,8 @@ operations, and [client identity](../spec.md#client-and-conversation-identity).
 [endpoint resolution](../spec.md#endpoint-resolution), and
 [selection and continuity](../../model-routing/spec.md#selection-and-continuity)
 remain authoritative. The known integration `stepfun-token-plan` is
-registered. It declares one domestic region `default` with the two protocol
-bases in the table below and authentication method `api-key`. The models.dev
+registered. It declares one fixed domestic map with the two protocol bases below
+and authentication method `api-key`. The models.dev
 metadata id `stepfun-step-plan` resolves to this integration. Registration
 adds no account, subscription, quota, or rule-input acquisition beyond the
 qualified read below.
@@ -40,10 +40,8 @@ authorizes fallback to the standard `/v1` API, another account, or another model
 
 The [reasoning integration guide](https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api.md)
 establishes one domestic endpoint set. The known `stepfun-token-plan`
-integration resolves these source-qualified requirements from an explicit
-region or an exact known base; because there is a single region, a bare
-integration selection resolves them. Direct and gateway routes must use the
-same product/protocol destination.
+integration resolves these source-qualified requirements as one fixed protocol
+map. Direct and gateway routes must use the same product/protocol destination.
 
 | Protocol | Exact base | Operation beneath base | Authentication and transport |
 | --- | --- | --- | --- |

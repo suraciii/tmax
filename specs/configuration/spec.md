@@ -137,6 +137,15 @@ Canonical snapshots may persist only through existing guarded mutations. Neither
 normalization nor an unknown format authorizes clearing state or resetting a
 binding. Users must not need to edit or delete operational routing/session JSON.
 
+Retained snapshots may normalize former `network.mode` declarations to the
+presence or absence of a proxy URL, and former `all_day` fields to paired or
+omitted times. Historical endpoint selections may normalize to a product-qualified
+integration without changing resolved destinations. Invalid or ambiguous
+historical combinations fail closed. These conversions never accept the removed
+fields in desired configuration or change identities, authorization, or facts.
+An omitted historical network mode with no proxy URL also denotes direct access;
+canonical tables with a proxy URL retain their current proxy meaning.
+
 Historical provider child-identity maps normalize to `models`, selected/bound
 Model identities to `model_identity`, and captured selected names to
 `qualified_model`. Model removal/disablement blockers normalize to `model_removed`
@@ -144,6 +153,34 @@ and `model_disabled`; identity tie-break reasons normalize to
 `stable_model_identity`. Only known routing/evidence envelopes are normalized;
 arbitrary metadata and exact upstream model-ID maps are not rewritten. New
 operational writes and results use canonical names only.
+
+### Historical regional integration cutover
+
+Only retained operational snapshots accept the following historical selections:
+
+| Historical integration and region | Canonical integration |
+| --- | --- |
+| `kimi-coding-plan`, `china` | `kimi-code-plan-cn` |
+| `kimi-coding-plan`, `overseas` | `kimi-code-plan-global` |
+| `minimax-m-plan`, `china` | `minimax-cn-coding-plan` |
+| `minimax-m-plan`, `global` | `minimax-coding-plan` |
+
+For unchanged single-destination integrations, omit a former null or `default`
+region. Custom integrations accept only a former null region. An exact historical
+known-base selector may establish the same selection only when it matches one
+qualified endpoint set; a missing or conflicting regional selection fails closed.
+Local names, credentials, and the machine's location never supply the choice.
+
+Preserve model/provider identities, authorization generations, declaration/head
+revisions, retained sessions and blockers, and dated observations. Rebind an old
+observation only after validating its original record key, integration, and exact
+endpoint-contract fingerprint; preserve all facts and attempt metadata. Reject
+colliding canonical bindings instead of selecting or merging records. An input
+definition hash may change only when its old hash matches the same unchanged
+source definition. Reads perform no writes or credential access. Existing guarded
+mutations may persist canonical operational records. Desired configuration and
+catalog provider references are never rewritten by this read-time conversion.
+
 
 ### Invalid-authority recovery
 
@@ -214,7 +251,6 @@ Supported provider fields:
 | `metadata` | Optional exact models.dev provider key; omission means no catalog metadata inheritance |
 | `integration` | Optional supported tmax Provider integration ID; required when no qualified mapping exists for `metadata` |
 | `enabled` | Boolean, default true; false blocks new managed use |
-| `region` | Optional exact region ID from the selected known integration; invalid for a custom integration |
 | `endpoints` | Optional table from protocol name to exact absolute base-URL string; selection and completeness rules are below |
 | `overrides` | Provider metadata differences: optional string fields `name` and `doc`; never endpoint authority |
 | `auth` | Optional authentication table described below; omission means authentication not configured |
@@ -244,8 +280,8 @@ affected use, not incremental setup.
 
 ### Provider endpoints
 
-`region` and `endpoints` are provider settings, not metadata overrides.
-`endpoints` accepts only the protocol keys `chat-completions`, `responses`, and
+`endpoints` is a provider setting for custom integrations, not a metadata override.
+It accepts only the protocol keys `chat-completions`, `responses`, and
 `messages`; each present value is one complete base URL. A base must be absolute
 and contain no embedded credentials, query, or fragment. Authenticated traffic
 requires HTTPS except for explicitly local endpoints permitted by the
@@ -253,15 +289,13 @@ requires HTTPS except for explicitly local endpoints permitted by the
 Preserve an explicitly supplied base; do not add or remove `/v1`, infer another
 protocol's path, or interpret a base as permission for arbitrary API operations.
 
-For a known integration, these fields select its declared region-by-protocol map,
-not arbitrary endpoint overrides. The
+For a known integration, the integration ID selects its complete fixed protocol
+map; nonempty `endpoints` is invalid. There is no `region` field. The
 [endpoint resolution rules](../integrations/spec.md#endpoint-resolution) own
-selector requirements, exact-match validation, singleton defaults, and
-multi-region resolution. The configured `endpoints` table need not repeat the
-resolved map; omitting an entry does not itself disable a mapped protocol.
+product-qualified IDs and their fixed destinations.
 
-For a custom integration, reject `region` and require at least one explicit
-supported protocol entry in `endpoints`. All entries belong to this one provider
+For a custom integration, require at least one explicit supported protocol entry
+in `endpoints`. All entries belong to this one provider
 instance. An omitted protocol is unavailable, not inherited from catalog `api`,
 another entry, or another provider. Removing the last endpoint without changing
 to a valid known-integration selection is invalid.
@@ -525,10 +559,10 @@ Each `[[providers.<id>.models."<upstream-id>".schedule]]` requires an integer
 - `weekdays`: nonempty unique array from `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`.
 - `dates`: nonempty unique array of TOML local dates.
 
-It also requires either `all_day = true`, or both `start` and `end` strings in
-24-hour `HH:MM` format, with unequal values. `all_day = false` is not a shorthand
-for a timed rule. Optional `effective_from` and `effective_until` are local dates;
-the latter is exclusive and must be later than the former when both are present.
+Omit both `start` and `end` for the whole selected local day, or supply both in
+24-hour `HH:MM` format with unequal values. A half-specified pair is invalid.
+Optional `effective_from` and `effective_until` are local dates; the latter is
+exclusive and must be later than the former when both are present.
 All rules use the model's saved `timezone`. Multiple rules express multiple
 windows. Precedence, overnight spillover, clipping, overlap rejection, and DST
 behavior are defined once in [Time rules](../model-routing/spec.md#time-rules).
@@ -559,7 +593,7 @@ and explicit move changes order. Remove and add expresses new intent, not a rena
 
 `time_window`, when present, contains exactly the selector, window, and optional
 bounds of [Time-rule fields](#time-rule-fields): `weekdays` or `dates`,
-`all_day = true` or `start`/`end`, and optional `effective_from`/`effective_until`.
+optional paired `start`/`end`, and optional `effective_from`/`effective_until`.
 It contains no `priority`; the surrounding signal rule supplies the replacement.
 The model's `timezone` is required. An omitted table is ungated, not an
 inferred daily window. Window interpretation uses the existing
@@ -765,13 +799,11 @@ interface has no authentication; the shared key remains required for inference.
 ## Outbound network settings
 
 The optional `[network]` table is the sole persisted outbound policy.
-Omitting it is the canonical direct representation; an explicit valid
-`mode = "direct"` table is also accepted in a manually edited file.
+Omit the table for direct connections. When present, it selects a proxy:
 
 | Field | Type and constraint |
 | --- | --- |
-| `mode` | Optional string `direct` or `proxy`, default `direct` |
-| `proxy_url` | Absolute HTTP, HTTPS, or SOCKS5 proxy URL; required for `proxy` and invalid for `direct` |
+| `proxy_url` | Required absolute HTTP, HTTPS, or SOCKS5 proxy URL |
 
 `proxy_url` accepts the schemes `http`, `https`, and `socks5`. It must contain a
 host and a valid port when supplied. An omitted port means 80 for HTTP, 443 for
@@ -782,7 +814,7 @@ lists, environment selectors, or TLS-verification bypass settings.
 The [product outbound network policy](../product/spec.md#outbound-network-policy)
 owns traffic coverage, explicit routing, and failure behavior.
 
-`network proxy URL` saves `mode = "proxy"` with `proxy_url`; `network direct`
+`network proxy URL` saves only `proxy_url`; `network direct`
 removes the optional table. The [CLI network contract](../cli/service/spec.md#outbound-network-configuration)
 owns operands and read syntax. These operations use ordinary revision guards,
 validation, whole-snapshot activation, and dry-run rules. They do not start
@@ -939,13 +971,13 @@ concurrency rules, not a separate approval or persisted-plan system.
 ## Example scope
 
 [example.toml](example.toml) illustrates persistence for two OpenCode Go instances
-and official DeepSeek with explicit known-region and known-base selections,
+and official DeepSeek with fixed known-integration maps,
 one custom provider with two explicit protocol bases, a global outbound proxy
 policy, metadata overrides, optional subscription labels, six concrete models,
 arbitrarily named `L0`–`L3` aliases with explicit candidates, a three-source scenario alias with shared continuity,
 scheduled priority, provider-local manual quota/reset declarations and ordered
 signal rules, and one omp target containing both upstream and gateway native
-provider entries. It also shows a provider using its published singleton default
+provider entries. It also shows a provider using its fixed map
 without authentication/models. The gateway/provider/alias settings are valid
 without the Agent target; target incompleteness is defined above rather than
 required by gateway setup. Manual observed values stay outside TOML and use

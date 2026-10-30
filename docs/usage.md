@@ -38,6 +38,45 @@ exits. If a save completed first, their incomplete result still identifies that
 saved revision and the actual failed/partial boundary. Validation, persistence,
 and revision conflicts are never converted into successful saves.
 
+## Simplified configuration syntax
+
+Use `--set metadata VALUE` and `--set integration VALUE` for provider scalar
+selections; the corresponding standalone flags and the `region` field are removed.
+`provider auth set ID --via TARGET` implies login authentication and takes no
+`--method`. Interactive login operations keep their own browser/device choice.
+
+In manually maintained configuration, remove `network.mode`: a network table
+contains only its required `proxy_url`, and direct connections omit the table.
+Remove `all_day = true` from schedule entries and signal-rule time gates;
+omitting both times means the whole selected local day. Timed windows require
+both `start` and `end`; equal or half-specified times remain invalid.
+
+Known integrations select fixed destinations, never explicit `endpoints` or a
+`region`. Kimi uses `kimi-code-plan-cn` or `kimi-code-plan-global`; MiniMax uses
+`minimax-cn-coding-plan` or `minimax-coding-plan`. These IDs match models.dev, while
+the qualified protocol and quota paths remain owned by tmax's integration
+contracts. In particular, this naming change does not replace MiniMax's existing
+`api.minimaxi.com` China destination with a catalog URL.
+
+Before upgrading a manually maintained file, replace an old integration/region
+pair using the [cutover table](../specs/configuration/spec.md#historical-regional-integration-cutover),
+remove `region`, and clear any known-integration endpoint selectors. Other known
+integrations no longer need `region = "default"`. Custom integrations still need
+explicit protocol bases. Validate the resulting file before reload. Removed
+desired syntax is rejected, not silently interpreted. Local instance IDs are
+unchanged and do not select a region.
+
+```sh
+tmax provider add work --set integration kimi-code-plan-cn
+tmax provider add travel --set integration kimi-code-plan-global
+```
+
+`work` and `travel` are arbitrary local names; the integration selects the product
+and destinations, without repeating a region field.
+
+Historical routing snapshots are normalized separately without erasing stored
+model identities, authorization generations, or observations.
+
 ## Add one provider and model
 
 Choose a supported integration with `tmax integration list` and
@@ -50,7 +89,7 @@ PROVIDER_ID=my-gateway
 MODEL_ID=exact-upstream-model-id
 BASE_URL=https://gateway.example/v1
 
-tmax provider add "$PROVIDER_ID" --integration custom \
+tmax provider add "$PROVIDER_ID" --set integration custom \
   --endpoint chat-completions "$BASE_URL"
 tmax provider key set "$PROVIDER_ID"
 tmax model add "$PROVIDER_ID/$MODEL_ID"
@@ -175,7 +214,7 @@ its key through explicit protected input (such as `--key-stdin`), and refresh
 the desired scope:
 
 ```sh
-tmax provider add go-a --integration opencode-go
+tmax provider add go-a --set integration opencode-go
 tmax provider key set go-a
 tmax provider refresh go-a --scope quota
 tmax provider inspect go-a
@@ -201,13 +240,13 @@ not prove that path.
 
 ## Plan quota observations
 
-The plan integrations `kimi-coding-plan`, `glm-coding-plan`,
-`stepfun-token-plan`, and `minimax-m-plan` each own one bounded read-only
-quota GET beside their inference endpoints. Select the integration (and, for
-Kimi and MiniMax, the region) explicitly, then refresh the quota scope:
+The plan integrations `kimi-code-plan-cn`, `kimi-code-plan-global`,
+`glm-coding-plan`, `stepfun-token-plan`, `minimax-cn-coding-plan`, and
+`minimax-coding-plan` each own one bounded read-only quota GET beside their
+inference endpoints. Select the exact integration, then refresh the quota scope:
 
 ```sh
-tmax provider add glm-a --integration glm-coding-plan
+tmax provider add glm-a --set integration glm-coding-plan
 tmax provider refresh glm-a --scope quota
 tmax provider inspect glm-a
 ```

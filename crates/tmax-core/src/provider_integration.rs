@@ -17,10 +17,12 @@ pub fn integration_id(provider: &Provider) -> Result<&str> {
                 | "deepseek"
                 | "opencode-go"
                 | "codex-subscription"
-                | "kimi-coding-plan"
+                | "kimi-code-plan-cn"
+                | "kimi-code-plan-global"
                 | "glm-coding-plan"
                 | "stepfun-token-plan"
-                | "minimax-m-plan"
+                | "minimax-cn-coding-plan"
+                | "minimax-coding-plan"
         ) {
             return Ok(id);
         }
@@ -32,7 +34,10 @@ pub fn integration_id(provider: &Provider) -> Result<&str> {
         Some("deepseek") => Ok("deepseek"),
         Some("opencode-go") => Ok("opencode-go"),
         Some("openai-codex") => Ok("codex-subscription"),
-        Some("kimi-for-coding") | Some("kimi-code") => Ok("kimi-coding-plan"),
+        Some("kimi-code-plan-cn") => Ok("kimi-code-plan-cn"),
+        Some("kimi-code-plan-global") => Ok("kimi-code-plan-global"),
+        Some("minimax-cn-coding-plan") => Ok("minimax-cn-coding-plan"),
+        Some("minimax-coding-plan") => Ok("minimax-coding-plan"),
         Some("stepfun-step-plan") => Ok("stepfun-token-plan"),
         _ => Err(Error::new(
             "invalid_configuration",
@@ -47,81 +52,49 @@ fn map(values: &[(&str, &str)]) -> BTreeMap<String, String> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
 }
-pub fn regions(id: &str) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
-    let entries = match id {
-        "deepseek" => vec![(
-            "default",
-            map(&[
-                ("chat-completions", "https://api.deepseek.com"),
-                ("responses", "https://api.deepseek.com"),
-                ("messages", "https://api.deepseek.com/anthropic"),
-            ]),
-        )],
-        "opencode-go" => vec![(
-            "default",
-            map(&[
-                (
-                    "chat-completions",
-                    "https://opencode.ai/inference/go/openai/v1",
-                ),
-                ("responses", "https://opencode.ai/inference/go/openai/v1"),
-                ("messages", "https://opencode.ai/inference/go/anthropic"),
-            ]),
-        )],
-        "codex-subscription" => vec![(
-            "default",
-            map(&[("responses", "https://chatgpt.com/backend-api/codex")]),
-        )],
-        "kimi-coding-plan" => vec![
+pub fn fixed_endpoints(id: &str) -> Result<BTreeMap<String, String>> {
+    Ok(match id {
+        "deepseek" => map(&[
+            ("chat-completions", "https://api.deepseek.com"),
+            ("responses", "https://api.deepseek.com"),
+            ("messages", "https://api.deepseek.com/anthropic"),
+        ]),
+        "opencode-go" => map(&[
             (
-                "china",
-                map(&[
-                    ("chat-completions", "https://api.kimi.com/coding/v1"),
-                    ("responses", "https://api.kimi.com/coding/v1"),
-                    ("messages", "https://api.kimi.com/coding/"),
-                ]),
+                "chat-completions",
+                "https://opencode.ai/inference/go/openai/v1",
             ),
+            ("responses", "https://opencode.ai/inference/go/openai/v1"),
+            ("messages", "https://opencode.ai/inference/go/anthropic"),
+        ]),
+        "codex-subscription" => map(&[("responses", "https://chatgpt.com/backend-api/codex")]),
+        "kimi-code-plan-cn" => map(&[
+            ("chat-completions", "https://api.kimi.com/coding/v1"),
+            ("responses", "https://api.kimi.com/coding/v1"),
+            ("messages", "https://api.kimi.com/coding/"),
+        ]),
+        "kimi-code-plan-global" => map(&[
+            ("chat-completions", "https://api.kimi.ai/coding/v1"),
+            ("responses", "https://api.kimi.ai/coding/v1"),
+            ("messages", "https://api.kimi.ai/coding/"),
+        ]),
+        "glm-coding-plan" => map(&[
             (
-                "overseas",
-                map(&[
-                    ("chat-completions", "https://api.kimi.ai/coding/v1"),
-                    ("responses", "https://api.kimi.ai/coding/v1"),
-                    ("messages", "https://api.kimi.ai/coding/"),
-                ]),
+                "chat-completions",
+                "https://open.bigmodel.cn/api/coding/paas/v4",
             ),
-        ],
-        "glm-coding-plan" => vec![(
-            "default",
-            map(&[
-                (
-                    "chat-completions",
-                    "https://open.bigmodel.cn/api/coding/paas/v4",
-                ),
-                ("responses", "https://open.bigmodel.cn/api/v1"),
-                ("messages", "https://open.bigmodel.cn/api/anthropic"),
-            ]),
-        )],
-        "stepfun-token-plan" => vec![(
-            "default",
-            map(&[
-                ("chat-completions", "https://api.stepfun.com/step_plan/v1"),
-                ("messages", "https://api.stepfun.com/step_plan"),
-            ]),
-        )],
-        "minimax-m-plan" => vec![
-            (
-                "global",
-                map(&[("messages", "https://api.minimax.io/anthropic")]),
-            ),
-            (
-                "china",
-                map(&[("messages", "https://api.minimaxi.com/anthropic")]),
-            ),
-        ],
-        "custom" => vec![],
+            ("responses", "https://open.bigmodel.cn/api/v1"),
+            ("messages", "https://open.bigmodel.cn/api/anthropic"),
+        ]),
+        "stepfun-token-plan" => map(&[
+            ("chat-completions", "https://api.stepfun.com/step_plan/v1"),
+            ("messages", "https://api.stepfun.com/step_plan"),
+        ]),
+        "minimax-cn-coding-plan" => map(&[("messages", "https://api.minimaxi.com/anthropic")]),
+        "minimax-coding-plan" => map(&[("messages", "https://api.minimax.io/anthropic")]),
+        "custom" => BTreeMap::new(),
         _ => return Err(Error::new("invalid_arguments", "Unknown integration ID")),
-    };
-    Ok(entries.into_iter().map(|(k, v)| (k.into(), v)).collect())
+    })
 }
 pub fn valid_base(base: &str) -> Result<()> {
     let u = url::Url::parse(base).map_err(|_| {
@@ -149,67 +122,43 @@ pub fn valid_base(base: &str) -> Result<()> {
 }
 pub fn resolve(provider: &Provider) -> Result<BTreeMap<String, String>> {
     let id = integration_id(provider)?;
-    for (p, b) in &provider.endpoints {
-        if !PROTOCOLS.contains(&p.as_str()) {
-            return Err(Error::new(
-                "invalid_configuration",
-                "Unknown endpoint protocol",
-            ));
-        }
-        valid_base(b)?;
+    if id != "custom" && !provider.endpoints.is_empty() {
+        return Err(Error::new(
+            "invalid_configuration",
+            "Known integrations do not accept endpoints; clear endpoints",
+        )
+        .field("endpoints"));
     }
     if id == "custom" {
-        if provider.region.is_some() || provider.endpoints.is_empty() {
+        for (p, b) in &provider.endpoints {
+            if !PROTOCOLS.contains(&p.as_str()) {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    "Unknown endpoint protocol",
+                ));
+            }
+            valid_base(b)?;
+        }
+        if provider.endpoints.is_empty() {
             return Err(Error::new(
                 "invalid_configuration",
-                "Custom integration requires explicit protocol bases and forbids a region",
+                "Custom integration requires explicit protocol bases",
             ));
         }
         return Ok(provider.endpoints.clone());
     }
-    let regions = regions(id)?;
-    let mut candidates: Vec<_> = regions
-        .iter()
-        .filter(|(region, bases)| {
-            provider.region.as_ref().is_none_or(|r| r == *region)
-                && provider
-                    .endpoints
-                    .iter()
-                    .all(|(p, b)| bases.get(p) == Some(b))
-        })
-        .collect();
-    if candidates.len() != 1 {
-        return Err(Error::new(
-            "invalid_configuration",
-            "Select one unambiguous known region or exact published protocol base",
-        ));
-    }
-    Ok(candidates.remove(0).1.clone())
+    fixed_endpoints(id)
 }
 pub fn endpoint_view(provider: &Provider) -> Result<Value> {
     let id = integration_id(provider)?;
     let endpoints = resolve(provider)?;
-    let region = if id == "custom" {
-        None
-    } else {
-        regions(id)?
-            .into_iter()
-            .find(|(_, v)| v == &endpoints)
-            .map(|(k, _)| k)
-    };
     let source = if id == "custom" {
         "explicit_bases"
-    } else if provider.region.is_some() && !provider.endpoints.is_empty() {
-        "region_and_known_base"
-    } else if provider.region.is_some() {
-        "region"
-    } else if !provider.endpoints.is_empty() {
-        "known_base"
     } else {
-        "singleton_default"
+        "integration"
     };
     Ok(
-        json!({"kind":if id=="custom"{"custom"}else{"known"},"region":region,"source":source,"unavailable_protocols":PROTOCOLS.into_iter().filter(|p|!endpoints.contains_key(*p)).collect::<Vec<_>>(),"endpoints":endpoints}),
+        json!({"kind":if id=="custom"{"custom"}else{"known"},"source":source,"unavailable_protocols":PROTOCOLS.into_iter().filter(|p|!endpoints.contains_key(*p)).collect::<Vec<_>>(),"endpoints":endpoints}),
     )
 }
 pub fn operation_path(protocol: &str) -> Result<&'static str> {
@@ -265,14 +214,8 @@ pub fn client(config: &Config) -> Result<reqwest::Client> {
         .connect_timeout(CONNECT_DEADLINE)
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("tmax/", env!("CARGO_PKG_VERSION")));
-    if let Some(n) = &config.network
-        && n.mode == "proxy"
-    {
-        let raw = n
-            .proxy_url
-            .as_deref()
-            .ok_or_else(|| Error::new("invalid_configuration", "Outbound proxy URL required"))?;
-        let mut url = url::Url::parse(raw)
+    if let Some(n) = &config.network {
+        let mut url = url::Url::parse(&n.proxy_url)
             .map_err(|_| Error::new("invalid_configuration", "Invalid outbound proxy URL"))?;
         if url.scheme() == "socks5" {
             url.set_scheme("socks5h")
@@ -297,10 +240,12 @@ pub fn registry() -> Value {
             "deepseek",
             "opencode-go",
             "codex-subscription",
-            "kimi-coding-plan",
+            "kimi-code-plan-cn",
+            "kimi-code-plan-global",
             "glm-coding-plan",
             "stepfun-token-plan",
-            "minimax-m-plan"
+            "minimax-cn-coding-plan",
+            "minimax-coding-plan"
         ]
         .into_iter()
         .map(|id| inspect(id).expect("built-in integration"))
@@ -308,22 +253,16 @@ pub fn registry() -> Value {
     )
 }
 pub fn inspect(id: &str) -> Result<Value> {
-    let r = regions(id)?;
+    let endpoints = fixed_endpoints(id)?;
     let setup = if id == "custom" {
         "explicit_bases"
-    } else if r.len() == 1 {
-        "singleton_default"
     } else {
-        "region_or_known_base"
+        "fixed"
     };
     let protocols: Vec<_> = if id == "custom" {
         PROTOCOLS.iter().map(|p| p.to_string()).collect()
     } else {
-        r.values()
-            .flat_map(|r| r.keys().cloned())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect()
+        endpoints.keys().cloned().collect()
     };
     let mut operations:Vec<_>=protocols.iter().map(|p|json!({"protocol":p,"method":"POST","path_template":operation_path(p).expect("registry protocol"),"query_variants":operation_queries(p),"transport":"http","streaming":"sse","requires_original_binding":false})).collect();
     if id == "codex-subscription" {
@@ -335,37 +274,39 @@ pub fn inspect(id: &str) -> Result<Value> {
     if id == "opencode-go" {
         operations.push(json!({"protocol":null,"method":"GET","path_template":"/zen/go/v1/usage","url":GO_USAGE_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":GO_USAGE_DESTINATION.source,"source_contract":GO_USAGE_DESTINATION.contract}));
     }
-    if id == "kimi-coding-plan" {
-        for (region, url) in [
-            ("china", KIMI_USAGE_DESTINATION.url),
-            ("overseas", "https://api.kimi.ai/coding/v1/usages"),
-        ] {
-            operations.push(json!({"region":region,"protocol":null,"method":"GET","path_template":"/usages","url":url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":KIMI_USAGE_DESTINATION.source,"source_contract":KIMI_USAGE_DESTINATION.contract,"authorization":"bearer"}));
-        }
-    }
-    if id == "glm-coding-plan" {
-        operations.push(json!({"region":"default","protocol":null,"method":"GET","path_template":"/api/monitor/usage/quota/limit","url":GLM_MONITOR_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":GLM_MONITOR_DESTINATION.source,"source_contract":GLM_MONITOR_DESTINATION.contract,"authorization":"raw_key"}));
-    }
-    if id == "stepfun-token-plan" {
-        operations.push(json!({"region":"default","protocol":null,"method":"GET","path_template":"/step_plan/v1/usage","url":STEPFUN_USAGE_DESTINATION.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":STEPFUN_USAGE_DESTINATION.source,"source_contract":STEPFUN_USAGE_DESTINATION.contract,"authorization":"bearer"}));
-    }
-    if id == "minimax-m-plan" {
-        for (region, url) in [
-            ("global", MINIMAX_REMAINS_DESTINATION.url),
-            ("china", "https://api.minimaxi.com/v1/token_plan/remains"),
-        ] {
-            operations.push(json!({"region":region,"protocol":null,"method":"GET","path_template":"/v1/token_plan/remains","url":url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":MINIMAX_REMAINS_DESTINATION.source,"source_contract":MINIMAX_REMAINS_DESTINATION.contract,"authorization":"bearer"}));
-        }
+    let quota = match id {
+        "kimi-code-plan-cn" => Some((KIMI_USAGE_DESTINATION, "/usages", "bearer")),
+        "kimi-code-plan-global" => Some((KIMI_GLOBAL_USAGE_DESTINATION, "/usages", "bearer")),
+        "glm-coding-plan" => Some((
+            GLM_MONITOR_DESTINATION,
+            "/api/monitor/usage/quota/limit",
+            "raw_key",
+        )),
+        "stepfun-token-plan" => Some((STEPFUN_USAGE_DESTINATION, "/step_plan/v1/usage", "bearer")),
+        "minimax-cn-coding-plan" => Some((
+            MINIMAX_CN_REMAINS_DESTINATION,
+            "/v1/token_plan/remains",
+            "bearer",
+        )),
+        "minimax-coding-plan" => Some((
+            MINIMAX_REMAINS_DESTINATION,
+            "/v1/token_plan/remains",
+            "bearer",
+        )),
+        _ => None,
+    };
+    if let Some((destination, path, authorization)) = quota {
+        operations.push(json!({"protocol":null,"method":"GET","path_template":path,"url":destination.url,"transport":"http","requires_original_binding":false,"purpose":"quota","source":destination.source,"source_contract":destination.contract,"authorization":authorization}));
     }
     let auth = if id == "codex-subscription" {
         vec!["login"]
-    } else if id == "kimi-coding-plan" {
+    } else if matches!(id, "kimi-code-plan-cn" | "kimi-code-plan-global") {
         vec!["api-key", "login"]
     } else {
         vec!["api-key"]
     };
     Ok(
-        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"regions":r.into_iter().map(|(id,endpoints)|json!({"id":id,"endpoints":endpoints})).collect::<Vec<_>>(),"operations":operations},"login_sources":crate::agent_integration::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","Quota GET provides consumed-only percentages and reset announcements, with unqualified freshness and no priority-rule inputs; renewal remains unknown (Console or explicit manual information)"]),"kimi-coding-plan"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),"glm-coding-plan"=>json!(["Domestic plan scope only; international z.ai bases are not interchangeable","Monitor quota rows keep raw labels with unqualified unit and reset encodings","No monitor field becomes a rule input, renewal fact, or per-model allowance copy"]),"stepfun-token-plan"=>json!(["Plan-route billing only; standard /v1 API fallback is prohibited","Usage read is runtime-qualified and undocumented; parsing fails closed on schema drift","step-5-preview is the only qualified model scope"]),"minimax-m-plan"=>json!(["Quota display is percent-only; counter units are unpublished","Status enums and zero totals never mean unlimited or no active plan","Regional hosts require explicit selection and are not interchangeable"]),_=>json!([])}}),
+        json!({"id":id,"integration":id,"protocols":protocols,"endpoint_setup":setup,"authentication_methods":auth,"endpoint_support":{"kind":if id=="custom"{"custom"}else{"known"},"setup":setup,"endpoints":endpoints,"operations":operations},"login_sources":crate::agent_integration::login_source_agents(id),"provider_input_capabilities":[],"public_reset_input":if id=="codex-subscription"{json!({"source":"codex-resets","kind":"reset","scope":"codex","endpoint":"https://codex-resets.com/index.md"})}else{Value::Null},"support":{"documentation":"documented","runtime_verification":"unknown","version_range":null},"restrictions":match id{"codex-subscription"=>json!(["Native owner retains tokens and refresh","Gateway requires authorized managed policy and established native identity"]),"opencode-go"=>json!(["Truthful coding-client and stable native conversation identity on every inference request","Quota GET provides consumed-only percentages and reset announcements, with unqualified freshness and no priority-rule inputs; renewal remains unknown (Console or explicit manual information)"]),"kimi-code-plan-cn" | "kimi-code-plan-global"=>json!(["Personal interactive coding only; no identity spoofing","Regional alternatives require explicit selection","Native omp OAuth cannot be copied to other consumers"]),"glm-coding-plan"=>json!(["Domestic plan scope only; international z.ai bases are not interchangeable","Monitor quota rows keep raw labels with unqualified unit and reset encodings","No monitor field becomes a rule input, renewal fact, or per-model allowance copy"]),"stepfun-token-plan"=>json!(["Plan-route billing only; standard /v1 API fallback is prohibited","Usage read is runtime-qualified and undocumented; parsing fails closed on schema drift","step-5-preview is the only qualified model scope"]),"minimax-cn-coding-plan" | "minimax-coding-plan"=>json!(["Quota display is percent-only; counter units are unpublished","Status enums and zero totals never mean unlimited or no active plan","Regional hosts require explicit selection and are not interchangeable"]),_=>json!([])}}),
     )
 }
 pub async fn refresh(
@@ -411,6 +352,10 @@ const KIMI_USAGE_DESTINATION: ObservationDestination<'static> = ObservationDesti
     contract: "kimi_coding_usage_2026_10_28",
     auth: AuthStyle::Bearer,
 };
+const KIMI_GLOBAL_USAGE_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    url: "https://api.kimi.ai/coding/v1/usages",
+    ..KIMI_USAGE_DESTINATION
+};
 const GLM_MONITOR_DESTINATION: ObservationDestination<'static> = ObservationDestination {
     source: "glm_monitor_api",
     url: "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
@@ -429,12 +374,16 @@ const MINIMAX_REMAINS_DESTINATION: ObservationDestination<'static> = Observation
     contract: "minimax_token_plan_remains_2026_10_28",
     auth: AuthStyle::Bearer,
 };
+const MINIMAX_CN_REMAINS_DESTINATION: ObservationDestination<'static> = ObservationDestination {
+    url: "https://api.minimaxi.com/v1/token_plan/remains",
+    ..MINIMAX_REMAINS_DESTINATION
+};
 
 pub fn observation_destination(
     provider: &Provider,
     scope: &str,
 ) -> Result<Option<ObservationDestination<'static>>> {
-    let bases = resolve(provider)?;
+    resolve(provider)?;
     Ok(match (integration_id(provider)?, scope) {
         ("deepseek", "auth" | "quota") => Some(ObservationDestination {
             source: "official_balance_api",
@@ -450,34 +399,12 @@ pub fn observation_destination(
             auth: AuthStyle::Bearer,
         }),
         ("opencode-go", "quota") => Some(GO_USAGE_DESTINATION),
-        ("kimi-coding-plan", "quota") => {
-            let overseas = bases
-                .get("chat-completions")
-                .is_some_and(|base| base == "https://api.kimi.ai/coding/v1");
-            Some(if overseas {
-                ObservationDestination {
-                    url: "https://api.kimi.ai/coding/v1/usages",
-                    ..KIMI_USAGE_DESTINATION
-                }
-            } else {
-                KIMI_USAGE_DESTINATION
-            })
-        }
+        ("kimi-code-plan-cn", "quota") => Some(KIMI_USAGE_DESTINATION),
+        ("kimi-code-plan-global", "quota") => Some(KIMI_GLOBAL_USAGE_DESTINATION),
         ("glm-coding-plan", "quota") => Some(GLM_MONITOR_DESTINATION),
         ("stepfun-token-plan", "quota") => Some(STEPFUN_USAGE_DESTINATION),
-        ("minimax-m-plan", "quota") => {
-            let china = bases
-                .get("messages")
-                .is_some_and(|base| base == "https://api.minimaxi.com/anthropic");
-            Some(if china {
-                ObservationDestination {
-                    url: "https://api.minimaxi.com/v1/token_plan/remains",
-                    ..MINIMAX_REMAINS_DESTINATION
-                }
-            } else {
-                MINIMAX_REMAINS_DESTINATION
-            })
-        }
+        ("minimax-cn-coding-plan", "quota") => Some(MINIMAX_CN_REMAINS_DESTINATION),
+        ("minimax-coding-plan", "quota") => Some(MINIMAX_REMAINS_DESTINATION),
         _ => None,
     })
 }
@@ -1025,10 +952,12 @@ pub fn dashboard(id: &str) -> &'static str {
         "deepseek" => "https://platform.deepseek.com/",
         "opencode-go" => "https://opencode.ai/console",
         "codex-subscription" => "https://chatgpt.com/codex/settings/usage",
-        "kimi-coding-plan" => "https://www.kimi.com/code/console",
+        "kimi-code-plan-cn" | "kimi-code-plan-global" => "https://www.kimi.com/code/console",
         "glm-coding-plan" => "https://www.bigmodel.cn/coding-plan/personal/usage",
         "stepfun-token-plan" => "https://platform.stepfun.com",
-        "minimax-m-plan" => "https://platform.minimax.io/console/usage",
+        "minimax-cn-coding-plan" | "minimax-coding-plan" => {
+            "https://platform.minimax.io/console/usage"
+        }
         _ => "",
     }
 }
@@ -1096,6 +1025,9 @@ mod tests {
             resolve(&p).unwrap()["messages"],
             "https://api.deepseek.com/anthropic"
         );
+        let view = endpoint_view(&p).unwrap();
+        assert!(view.get("region").is_none());
+        assert_eq!(view["source"], "integration");
         let mut p = Provider {
             integration: Some("custom".into()),
             ..Provider::default()
@@ -1103,22 +1035,242 @@ mod tests {
         p.endpoints
             .insert("chat-completions".into(), "http://127.0.0.1:9000/v1".into());
         assert!(!resolve(&p).unwrap().contains_key("responses"));
+        assert_eq!(endpoint_view(&p).unwrap()["source"], "explicit_bases");
+        p.endpoints.clear();
+        assert!(resolve(&p).is_err());
+        p.endpoints
+            .insert("unknown".into(), "https://example.com".into());
+        assert!(resolve(&p).is_err());
+        p.endpoints.clear();
+        p.endpoints
+            .insert("responses".into(), "http://example.com".into());
+        assert!(resolve(&p).is_err());
     }
     #[test]
-    fn regional_ambiguity_and_no_product_fallback() {
-        let mut p = Provider {
-            integration: Some("kimi-coding-plan".into()),
+    fn regional_products_have_fixed_destinations_and_reject_endpoint_overrides() {
+        for (id, messages, messages_url, quota, chat) in [
+            (
+                "kimi-code-plan-cn",
+                "https://api.kimi.com/coding/",
+                "https://api.kimi.com/coding/v1/messages",
+                "https://api.kimi.com/coding/v1/usages",
+                Some("https://api.kimi.com/coding/v1"),
+            ),
+            (
+                "kimi-code-plan-global",
+                "https://api.kimi.ai/coding/",
+                "https://api.kimi.ai/coding/v1/messages",
+                "https://api.kimi.ai/coding/v1/usages",
+                Some("https://api.kimi.ai/coding/v1"),
+            ),
+            (
+                "minimax-cn-coding-plan",
+                "https://api.minimaxi.com/anthropic",
+                "https://api.minimaxi.com/anthropic/v1/messages",
+                "https://api.minimaxi.com/v1/token_plan/remains",
+                None,
+            ),
+            (
+                "minimax-coding-plan",
+                "https://api.minimax.io/anthropic",
+                "https://api.minimax.io/anthropic/v1/messages",
+                "https://api.minimax.io/v1/token_plan/remains",
+                None,
+            ),
+        ] {
+            let mut p = Provider {
+                integration: Some(id.into()),
+                ..Provider::default()
+            };
+            let endpoints = resolve(&p).unwrap();
+            assert_eq!(endpoints["messages"], messages);
+            assert_eq!(endpoints.get("chat-completions").map(String::as_str), chat);
+            assert_eq!(endpoints.get("responses").map(String::as_str), chat);
+            assert_eq!(
+                format!(
+                    "{}{}",
+                    endpoints["messages"].trim_end_matches('/'),
+                    operation_path("messages").unwrap()
+                ),
+                messages_url
+            );
+            if let Some(base) = chat {
+                assert_eq!(
+                    format!("{}{}", base, operation_path("responses").unwrap()),
+                    format!("{base}/responses")
+                );
+                assert_eq!(
+                    format!("{}{}", base, operation_path("chat-completions").unwrap()),
+                    format!("{base}/chat/completions")
+                );
+            }
+            let destination = observation_destination(&p, "quota").unwrap().unwrap();
+            assert_eq!(destination.url, quota);
+            assert_eq!(destination.auth, AuthStyle::Bearer);
+            let view = endpoint_view(&p).unwrap();
+            assert!(view.get("region").is_none());
+            assert_eq!(view["source"], "integration");
+            let declaration = inspect(id).unwrap();
+            assert_eq!(declaration["endpoint_setup"], "fixed");
+            assert_eq!(
+                declaration["endpoint_support"]["endpoints"],
+                json!(endpoints)
+            );
+            let operations = declaration["endpoint_support"]["operations"]
+                .as_array()
+                .unwrap();
+            assert_eq!(operations.len(), endpoints.len() + 1);
+            assert!(operations.iter().all(|op| op.get("region").is_none()));
+            let quotas: Vec<_> = operations
+                .iter()
+                .filter(|op| op["purpose"] == "quota")
+                .collect();
+            assert_eq!(quotas.len(), 1);
+            assert_eq!(quotas[0]["url"], quota);
+            assert_eq!(
+                quotas[0]["path_template"],
+                if chat.is_some() {
+                    "/usages"
+                } else {
+                    "/v1/token_plan/remains"
+                }
+            );
+            if chat.is_some() {
+                assert_eq!(
+                    declaration["authentication_methods"],
+                    json!(["api-key", "login"])
+                );
+                assert_eq!(declaration["login_sources"], json!(["omp"]));
+            }
+            for base in [messages, "https://example.com", "not a URL"] {
+                p.endpoints.insert("messages".into(), base.into());
+                assert_eq!(resolve(&p).unwrap_err().field.as_deref(), Some("endpoints"));
+                assert!(endpoint_view(&p).is_err());
+                assert!(observation_destination(&p, "quota").is_err());
+                p.endpoints.clear();
+            }
+        }
+        let singleton = Provider {
+            metadata: Some("deepseek".into()),
+            endpoints: map(&[("messages", "https://api.deepseek.com/anthropic")]),
             ..Provider::default()
         };
-        assert!(resolve(&p).is_err());
-        p.region = Some("china".into());
-        assert_eq!(
-            resolve(&p).unwrap()["messages"],
-            "https://api.kimi.com/coding/"
+        assert!(resolve(&singleton).is_err());
+    }
+
+    #[test]
+    fn regional_metadata_is_exact_and_legacy_integration_ids_are_rejected() {
+        for id in [
+            "kimi-code-plan-cn",
+            "kimi-code-plan-global",
+            "minimax-cn-coding-plan",
+            "minimax-coding-plan",
+        ] {
+            let p = Provider {
+                metadata: Some(id.into()),
+                ..Provider::default()
+            };
+            assert_eq!(integration_id(&p).unwrap(), id);
+            assert_eq!(resolve(&p).unwrap(), fixed_endpoints(id).unwrap());
+        }
+        for id in ["kimi-for-coding", "kimi-code"] {
+            let mut p = Provider {
+                metadata: Some(id.into()),
+                ..Provider::default()
+            };
+            assert!(integration_id(&p).is_err());
+            p.integration = Some("kimi-code-plan-global".into());
+            assert_eq!(integration_id(&p).unwrap(), "kimi-code-plan-global");
+            assert_eq!(p.metadata.as_deref(), Some(id));
+        }
+        for id in ["kimi-coding-plan", "minimax-m-plan"] {
+            assert!(fixed_endpoints(id).is_err());
+            assert!(inspect(id).is_err());
+            let p = Provider {
+                integration: Some(id.into()),
+                ..Provider::default()
+            };
+            assert!(integration_id(&p).is_err());
+        }
+    }
+    #[tokio::test]
+    async fn socks_proxy_resolves_host_remotely_and_does_not_fall_back_directly() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_address = proxy.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = proxy.accept().await.unwrap();
+            let mut greeting = [0; 2];
+            socket.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting[0], 5);
+            let mut methods = vec![0; greeting[1] as usize];
+            socket.read_exact(&mut methods).await.unwrap();
+            assert!(methods.contains(&0));
+            socket.write_all(&[5, 0]).await.unwrap();
+            let mut request = [0; 4];
+            socket.read_exact(&mut request).await.unwrap();
+            assert_eq!(request, [5, 1, 0, 3]);
+            let length = socket.read_u8().await.unwrap();
+            let mut host = vec![0; length as usize];
+            socket.read_exact(&mut host).await.unwrap();
+            let port = socket.read_u16().await.unwrap();
+            socket
+                .write_all(&[5, 1, 0, 1, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            (host, port)
+        });
+        let config = Config {
+            network: Some(crate::config::Network {
+                proxy_url: format!("socks5://{proxy_address}"),
+            }),
+            ..Config::empty()
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            client(&config)
+                .unwrap()
+                .get("http://proxy-test.invalid:4321/")
+                .send(),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        let (host, port) = server.await.unwrap();
+        assert_eq!(host.as_slice(), b"proxy-test.invalid");
+        assert_eq!(port, 4321);
+
+        let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination_address = destination.local_addr().unwrap();
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_address = proxy.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = proxy.accept().await.unwrap();
+            drop(socket);
+        });
+        let config = Config {
+            network: Some(crate::config::Network {
+                proxy_url: format!("socks5://{proxy_address}"),
+            }),
+            ..Config::empty()
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            client(&config)
+                .unwrap()
+                .get(format!("http://{destination_address}/"))
+                .send(),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        server.await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), destination.accept())
+                .await
+                .is_err()
         );
-        p.endpoints
-            .insert("messages".into(), "https://api.kimi.ai/coding/".into());
-        assert!(resolve(&p).is_err());
     }
     fn go_usage_body() -> Value {
         json!({"usage":{
@@ -1448,7 +1600,7 @@ mod tests {
     }
 
     #[test]
-    fn new_integrations_resolve_declared_maps_and_scope_regions() {
+    fn new_integrations_resolve_declared_maps() {
         let glm = Provider {
             integration: Some("glm-coding-plan".into()),
             ..Default::default()
@@ -1476,45 +1628,10 @@ mod tests {
             .unwrap(),
             "stepfun-token-plan"
         );
-        let mut minimax = Provider {
-            integration: Some("minimax-m-plan".into()),
-            ..Default::default()
-        };
-        assert!(resolve(&minimax).is_err());
-        minimax.region = Some("global".into());
-        assert_eq!(
-            resolve(&minimax).unwrap()["messages"],
-            "https://api.minimax.io/anthropic"
-        );
-        minimax.region = Some("china".into());
-        assert_eq!(
-            resolve(&minimax).unwrap()["messages"],
-            "https://api.minimaxi.com/anthropic"
-        );
     }
 
     #[test]
-    fn quota_destinations_follow_selected_region_and_declare_auth_style() {
-        let mut kimi = Provider {
-            integration: Some("kimi-coding-plan".into()),
-            ..Default::default()
-        };
-        kimi.region = Some("china".into());
-        assert_eq!(
-            observation_destination(&kimi, "quota")
-                .unwrap()
-                .unwrap()
-                .url,
-            "https://api.kimi.com/coding/v1/usages"
-        );
-        kimi.region = Some("overseas".into());
-        assert_eq!(
-            observation_destination(&kimi, "quota")
-                .unwrap()
-                .unwrap()
-                .url,
-            "https://api.kimi.ai/coding/v1/usages"
-        );
+    fn quota_destinations_declare_auth_style() {
         let glm = Provider {
             integration: Some("glm-coding-plan".into()),
             ..Default::default()
@@ -1526,26 +1643,6 @@ mod tests {
         );
         assert_eq!(glm_quota.auth, AuthStyle::RawKey);
         assert!(observation_destination(&glm, "auth").unwrap().is_none());
-        let mut minimax = Provider {
-            integration: Some("minimax-m-plan".into()),
-            ..Default::default()
-        };
-        minimax.region = Some("china".into());
-        assert_eq!(
-            observation_destination(&minimax, "quota")
-                .unwrap()
-                .unwrap()
-                .url,
-            "https://api.minimaxi.com/v1/token_plan/remains"
-        );
-        minimax.region = Some("global".into());
-        assert_eq!(
-            observation_destination(&minimax, "quota")
-                .unwrap()
-                .unwrap()
-                .url,
-            "https://api.minimax.io/v1/token_plan/remains"
-        );
         let stepfun = Provider {
             integration: Some("stepfun-token-plan".into()),
             ..Default::default()
@@ -1557,10 +1654,12 @@ mod tests {
         );
         assert_eq!(stepfun_quota.auth, AuthStyle::Bearer);
         for id in [
-            "kimi-coding-plan",
+            "kimi-code-plan-cn",
+            "kimi-code-plan-global",
             "glm-coding-plan",
             "stepfun-token-plan",
-            "minimax-m-plan",
+            "minimax-cn-coding-plan",
+            "minimax-coding-plan",
         ] {
             let declaration = inspect(id).unwrap();
             assert_eq!(declaration["provider_input_capabilities"], json!([]));

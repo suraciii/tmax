@@ -134,6 +134,7 @@ fn read(store: &Store) -> Result<Heads> {
     let Some(bytes) = crate::storage::read_optional(&store.path(STATE)?)? else {
         return Ok(Heads::default());
     };
+    inputs::check_historical_field_uniqueness(&bytes).map_err(|_| invalid_record())?;
     let heads: Heads = serde_json::from_slice(&bytes).map_err(|_| invalid_record())?;
     for (key, head) in &heads.heads {
         let b = &head.binding;
@@ -159,7 +160,44 @@ fn read(store: &Store) -> Result<Heads> {
             return Err(invalid_record());
         }
     }
-    Ok(heads)
+    let mut canonical = Heads::default();
+    for (_, mut head) in heads.heads {
+        if let Some(candidates) =
+            crate::retained_integration::regional_candidates(&head.binding.integration)
+        {
+            let mut matching = candidates.iter().filter(|(_, id)| {
+                provider_integration::fixed_endpoints(id)
+                    .is_ok_and(|endpoints| signature(&endpoints) == head.binding.endpoint_contract)
+            });
+            let id = matching.next().ok_or_else(invalid_record)?.1;
+            if matching.next().is_some() {
+                return Err(invalid_record());
+            }
+            let provider = config::Provider {
+                integration: Some(id.into()),
+                ..Default::default()
+            };
+            let destination =
+                provider_integration::observation_destination(&provider, &head.binding.scope)
+                    .map_err(|_| invalid_record())?;
+            if head.binding.source.as_deref() != destination.map(|d| d.source)
+                || head.binding.source_contract.as_deref() != destination.map(|d| d.contract)
+            {
+                return Err(invalid_record());
+            }
+            head.binding.integration = id.into();
+        } else if provider_integration::fixed_endpoints(&head.binding.integration).is_err() {
+            return Err(invalid_record());
+        }
+        if canonical
+            .heads
+            .insert(signature(&head.binding), head)
+            .is_some()
+        {
+            return Err(invalid_record());
+        }
+    }
+    Ok(canonical)
 }
 fn retained_bindings(runtime: &Runtime) -> Result<BTreeSet<String>> {
     let mut keys = BTreeSet::new();
@@ -537,7 +575,7 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
     let integration = provider_integration::integration_id(p)?;
     Ok(
         json!({"provider":provider,"account_identity":null,"observations":scopes,
-        "billing":{"kind":match integration{"deepseek"=>"api_balance","opencode-go"=>"go_allowance","kimi-coding-plan"|"glm-coding-plan"|"stepfun-token-plan"|"minimax-m-plan"=>"plan_allowance",_=>"unknown"},
+        "billing":{"kind":match integration{"deepseek"=>"api_balance","opencode-go"=>"go_allowance","kimi-code-plan-cn"|"kimi-code-plan-global"|"glm-coding-plan"|"stepfun-token-plan"|"minimax-cn-coding-plan"|"minimax-coding-plan"=>"plan_allowance",_=>"unknown"},
             "state":if billing_fact.is_some(){"observed"}else{"unknown"},"observation":billing_fact,
             "freshness":temporal_applicability(billing_fact,Some(billing_source),&at),
             "subscription":p.subscription,"account_identity":null,
@@ -1354,6 +1392,156 @@ mod tests {
         assert!(!store.path(STATE).unwrap().exists());
     }
     #[test]
+    fn historical_regional_quota_rebinds_exact_fingerprints_and_rejects_corruption() {
+        for (old_id, canonical, source, body) in [
+            (
+                "kimi-coding-plan",
+                "kimi-code-plan-cn",
+                "kimi_usage_api",
+                json!({"usage":{"limit":"100","used":"20","remaining":"80"}}),
+            ),
+            (
+                "kimi-coding-plan",
+                "kimi-code-plan-global",
+                "kimi_usage_api",
+                json!({"usage":{"limit":"100","used":"20","remaining":"80"}}),
+            ),
+            (
+                "minimax-m-plan",
+                "minimax-cn-coding-plan",
+                "minimax_plan_remains_api",
+                json!({"base_resp":{"status_code":0},"model_remains":[{"model_name":"general","current_interval_remaining_percent":80}]}),
+            ),
+            (
+                "minimax-m-plan",
+                "minimax-coding-plan",
+                "minimax_plan_remains_api",
+                json!({"base_resp":{"status_code":0},"model_remains":[{"model_name":"general","current_interval_remaining_percent":80}]}),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::at(dir.path().to_path_buf());
+            let mut config = Config::empty();
+            config.providers.insert(
+                "plan".into(),
+                config::Provider {
+                    integration: Some(canonical.into()),
+                    auth: Some(config::Auth::ApiKey {
+                        key_ref: "fixture-key".into(),
+                    }),
+                    ..Default::default()
+                },
+            );
+            store
+                .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+                .unwrap();
+            inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+            inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+            let captured = capture(&store, &config, "plan", "quota").unwrap();
+            let data = provider_integration::normalize_observation(source, &body).unwrap();
+            commit(
+                &store,
+                &captured,
+                Ok(AcquiredObservation { status: 200, data }),
+            )
+            .unwrap();
+            let expected = read(&store).unwrap();
+            let before = inspect(&store, &config, "plan").unwrap();
+            let canonical_head = expected.heads.values().next().unwrap().clone();
+            let mut legacy_head = canonical_head.clone();
+            legacy_head.binding.integration = old_id.into();
+            let mut historical = Heads::default();
+            historical
+                .heads
+                .insert(signature(&legacy_head.binding), legacy_head.clone());
+            store.write_json(STATE, &historical).unwrap();
+            let bytes = std::fs::read(store.path(STATE).unwrap()).unwrap();
+            let after = inspect(&store, &config, "plan").unwrap();
+            assert_eq!(
+                after["billing"]["observation"],
+                before["billing"]["observation"]
+            );
+            assert_eq!(
+                after["observations"][2]["latest_attempt"],
+                before["observations"][2]["latest_attempt"]
+            );
+            assert_eq!(
+                serde_json::to_value(read(&store).unwrap()).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            assert_eq!(std::fs::read(store.path(STATE).unwrap()).unwrap(), bytes);
+
+            let mut bad_key = Heads::default();
+            bad_key
+                .heads
+                .insert("wrong-key".into(), legacy_head.clone());
+            store.write_json(STATE, &bad_key).unwrap();
+            assert_eq!(
+                inspect(&store, &config, "plan").unwrap_err().code,
+                "invalid_record"
+            );
+            let mut bad_fingerprint = legacy_head.clone();
+            bad_fingerprint.binding.endpoint_contract =
+                signature(&std::collections::BTreeMap::<String, String>::new());
+            let mut invalid = Heads::default();
+            invalid
+                .heads
+                .insert(signature(&bad_fingerprint.binding), bad_fingerprint);
+            store.write_json(STATE, &invalid).unwrap();
+            assert_eq!(
+                inspect(&store, &config, "plan").unwrap_err().code,
+                "invalid_record"
+            );
+            let mut bad_source = legacy_head.clone();
+            bad_source.binding.source_contract = Some("different-contract".into());
+            let mut invalid = Heads::default();
+            invalid
+                .heads
+                .insert(signature(&bad_source.binding), bad_source);
+            store.write_json(STATE, &invalid).unwrap();
+            assert_eq!(
+                inspect(&store, &config, "plan").unwrap_err().code,
+                "invalid_record"
+            );
+            let mut collision = historical;
+            collision
+                .heads
+                .insert(signature(&canonical_head.binding), canonical_head);
+            store.write_json(STATE, &collision).unwrap();
+            let collision_bytes = std::fs::read(store.path(STATE).unwrap()).unwrap();
+            assert_eq!(
+                inspect(&store, &config, "plan").unwrap_err().code,
+                "invalid_record"
+            );
+            assert_eq!(
+                std::fs::read(store.path(STATE).unwrap()).unwrap(),
+                collision_bytes
+            );
+            let mut historical = Heads::default();
+            historical
+                .heads
+                .insert(signature(&legacy_head.binding), legacy_head);
+            store.write_json(STATE, &historical).unwrap();
+            let captured = capture(&store, &config, "plan", "quota").unwrap();
+            commit(
+                &store,
+                &captured,
+                Err(Error::new("transport_error", "fixture")),
+            )
+            .unwrap();
+            let persisted: Heads = store.read_json(STATE).unwrap();
+            assert_eq!(
+                persisted.heads.values().next().unwrap().binding.integration,
+                canonical
+            );
+            assert_eq!(
+                inspect(&store, &config, "plan").unwrap()["billing"]["observation"],
+                before["billing"]["observation"]
+            );
+        }
+    }
+
+    #[test]
     fn plan_quota_projection_reports_plan_kind_without_invented_freshness() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::at(dir.path().to_path_buf());
@@ -1361,8 +1549,7 @@ mod tests {
         config.providers.insert(
             "kimi-a".into(),
             config::Provider {
-                integration: Some("kimi-coding-plan".into()),
-                region: Some("china".into()),
+                integration: Some("kimi-code-plan-cn".into()),
                 auth: Some(config::Auth::ApiKey {
                     key_ref: "key-kimi-a".into(),
                 }),

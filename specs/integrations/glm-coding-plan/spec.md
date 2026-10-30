@@ -11,9 +11,9 @@ operations. [Product authentication](../../product/spec.md#providers-and-authent
 and [selection and continuity](../../model-routing/spec.md#selection-and-continuity)
 remain authoritative.
 
-The known integration `glm-coding-plan` is registered. It declares one domestic
-region `default` with the three protocol bases in the table below,
-authentication method `api-key`, and explicit-integration selection. Catalog or
+The known integration `glm-coding-plan` is registered. It declares one fixed
+domestic map with the three protocol bases below, authentication method
+`api-key`, and explicit-integration selection. Catalog or
 models.dev metadata must not auto-map a provider to it. A provider configured
 with international Z.ai bases stays on explicit
 [`custom`](../spec.md#custom-integration) transport. Registration adds no
@@ -49,8 +49,7 @@ Multiple keys or providers must not be treated as independent plan allowances.
 The [supported-tools endpoint table](https://docs.bigmodel.cn/cn/coding-plan/tool/others)
 publishes one domestic endpoint set. These are source-qualified product
 requirements that the known `glm-coding-plan` integration resolves through its
-single domestic region map. An explicit integration selection, or an exact known
-base, must resolve this map. Direct and gateway routes must select the same
+fixed protocol map. Direct and gateway routes must select the same
 product/protocol destination.
 
 | Protocol | Published domestic base | Finite operation and authentication evidence |
