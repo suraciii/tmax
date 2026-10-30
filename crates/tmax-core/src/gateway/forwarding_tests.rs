@@ -5,6 +5,14 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
+fn error_log(store: &crate::storage::Store) -> Vec<Value> {
+    std::fs::read_to_string(store.root.join("error.log"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
 #[test]
 fn key_comparison_requires_exact_bytes() {
     assert!(matches_key(b"abc", b"abc"));
@@ -322,6 +330,7 @@ async fn fallback_keeps_admitted_lineage_endpoint_and_body_across_reload() {
                 release.notified().await;
                 (
                     StatusCode::TOO_MANY_REQUESTS,
+                    [("x-request-id", "first-provider-request")],
                     axum::Json(json!({"error":"FIRST_LIMIT"})),
                 )
             }
@@ -338,6 +347,7 @@ async fn fallback_keeps_admitted_lineage_endpoint_and_body_across_reload() {
                 .send(to_bytes(request.into_body(), 4096).await.unwrap())
                 .await
                 .unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
             axum::Json(
                 json!({"choices":[{"finish_reason":"stop","message":{"content":"SECOND_OK"}}]}),
             )
@@ -437,6 +447,516 @@ async fn fallback_keeps_admitted_lineage_endpoint_and_body_across_reload() {
         inspected["record"]["decision"]["attempts"][1]["outcome"],
         "completed"
     );
+    let log = error_log(&runtime.store);
+    let entry = log
+        .iter()
+        .find(|entry| entry["request_id"] == inspected["record"]["request"])
+        .unwrap();
+    assert_eq!(entry["event"], "gateway.request_recovered");
+    assert_eq!(entry["level"], "warn");
+    assert_eq!(entry["outcome"], "completed");
+    assert_eq!(entry["provider"], "q");
+    assert_eq!(entry["model"], "q/m");
+    assert!(entry["upstream_request_id"].is_null());
+    assert_eq!(entry["errors"][0]["provider"], "p");
+    assert_eq!(
+        entry["errors"][0]["upstream_request_id"],
+        "first-provider-request"
+    );
+    assert_eq!(entry["errors"][0]["attempt"], 1);
+    assert_eq!(entry["errors"][0]["outcome"], "failed");
+    assert_eq!(entry["errors"][0]["stage"], "upstream_response");
+    assert_eq!(entry["errors"][0]["http_status"], 429);
+    let failure_time =
+        chrono::DateTime::parse_from_rfc3339(entry["errors"][0]["time"].as_str().unwrap()).unwrap();
+    let completion_time =
+        chrono::DateTime::parse_from_rfc3339(entry["time"].as_str().unwrap()).unwrap();
+    assert!(failure_time <= completion_time);
+    assert!(!entry.to_string().contains("original"));
     first_server.abort();
     second_server.abort();
+}
+
+#[tokio::test]
+async fn error_logs_preserve_upstream_failures_across_runtime_restarts_without_conversations() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = Router::new().fallback(|request: axum::extract::Request| async move {
+        let bytes = to_bytes(request.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let (status, content_type, response) = match body["mode"].as_str().unwrap() {
+            "http" => (StatusCode::BAD_REQUEST, "application/json", r#"{"error":{"message":"Invalid tool arguments","type":"invalid_request_error"}}"#),
+            "plain" => (StatusCode::BAD_GATEWAY, "text/plain", "Upstream connection refused"),
+            "event" => (StatusCode::OK, "text/event-stream", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"private-successful-chunk\"}\n\nevent: error\ndata: {\"message\":\"Upstream function arguments must be a JSON object\",\"code\":\"bad_arguments\"}\n\n"),
+            "nested" => (StatusCode::OK, "text/event-stream", "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"Malformed function arguments\"},\"output\":[\"private-output\"]}}"),
+            _ => (StatusCode::OK, "application/json", r#"{"status":"completed","output":["private-successful-chunk"]}"#),
+        };
+        (status, [("content-type", content_type), ("x-request-id", "upstream-diagnostic-id")], response)
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let (_temporary, runtime, initial) = fixture();
+    let mut config = initial.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .endpoints
+        .insert("responses".into(), format!("http://{address}/v1"));
+    publish(&runtime, &initial, &config, "error-evidence");
+    runtime.open();
+    let store = runtime.store.clone();
+    let mut handles = Vec::new();
+    for mode in ["http", "plain", "event", "nested", "success"] {
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("authorization", "Bearer test-local-key")
+            .header("user-agent", "pi (linux test; x64)")
+            .body(Body::from(
+                json!({"model":"p/m","store":false,"input":"private-request-prompt","mode":mode})
+                    .to_string(),
+            ))
+            .unwrap();
+        let response = forward(State(runtime.clone()), request).await;
+        let status = response.status().as_u16();
+        let id = response.headers()["x-tmax-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let delivered = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(
+            std::str::from_utf8(&delivered)
+                .unwrap()
+                .contains(match mode {
+                    "http" => "Invalid tool arguments",
+                    "plain" => "Upstream connection refused",
+                    "event" => "bad_arguments",
+                    "nested" => "Malformed function arguments",
+                    _ => "private-successful-chunk",
+                })
+        );
+        handles.push((mode, id, status));
+    }
+    drop(runtime);
+    let restarted = Runtime::new(store, "restarted".into()).unwrap();
+    let entries = error_log(&restarted.store);
+    assert_eq!(entries.len(), 4);
+    for (mode, id, status) in handles {
+        let entry = entries.iter().find(|entry| entry["request_id"] == id);
+        if mode == "success" {
+            assert!(entry.is_none());
+            continue;
+        }
+        let entry = entry.unwrap();
+        assert_eq!(entry["event"], "gateway.request_failed");
+        assert_eq!(entry["level"], "error");
+        assert_eq!(entry["outcome"], "failed");
+        assert_eq!(entry["http_status"], status);
+        assert_eq!(entry["provider"], "p");
+        assert_eq!(entry["model"], "p/m");
+        assert_eq!(entry["upstream_request_id"], "upstream-diagnostic-id");
+        assert_eq!(
+            entry["errors"][0]["upstream_request_id"],
+            "upstream-diagnostic-id"
+        );
+        assert_eq!(entry["errors"][0]["attempt"], 1);
+        assert_eq!(entry["errors"][0]["outcome"], "failed");
+        let (message, stage) = match mode {
+            "http" => ("Invalid tool arguments", "upstream_response"),
+            "plain" => ("Upstream connection refused", "upstream_response"),
+            "event" => (
+                "Upstream function arguments must be a JSON object",
+                "upstream_stream",
+            ),
+            _ => ("Malformed function arguments", "upstream_stream"),
+        };
+        assert_eq!(entry["stage"], stage);
+        assert_eq!(entry["errors"][0]["stage"], stage);
+        assert_eq!(entry["error_message"], message);
+        assert_eq!(entry["errors"][0]["error_message"], message);
+        match mode {
+            "http" => assert_eq!(
+                entry["errors"][0]["error_details"]["error"]["type"],
+                "invalid_request_error"
+            ),
+            "plain" => assert_eq!(entry["errors"][0]["error_details"], message),
+            "event" => assert_eq!(entry["errors"][0]["error_details"]["code"], "bad_arguments"),
+            _ => assert_eq!(entry["errors"][0]["error_details"]["message"], message),
+        }
+        assert!(entry.get("record").is_none());
+        assert!(entry.get("decision").is_none());
+        let encoded = entry.to_string();
+        for excluded in [
+            "private-request-prompt",
+            "private-successful-chunk",
+            "private-output",
+            "test-provider-key",
+            "test-local-key",
+        ] {
+            assert!(
+                !encoded.contains(excluded),
+                "unexpected conversation or credential content: {excluded}"
+            );
+        }
+        let query = Request {
+            command: vec!["history".into(), "inspect".into()],
+            operands: vec![id],
+            arguments: Default::default(),
+            dry_run: false,
+            if_revision: None,
+        };
+        assert_eq!(
+            restarted.history.view(&query).unwrap()["snapshot_state"],
+            "unavailable"
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn response_stream_read_failure_uses_stream_stage() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = Router::new().fallback(|| async {
+        let stream = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"data: {\"type\":\"response.output_text.delta\"}\n\n",
+            ))
+        })
+        .chain(futures_util::stream::once(async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Err(std::io::Error::other("upstream interrupted"))
+        }));
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/event-stream")
+            .header("x-request-id", "stream-request-id")
+            .body(Body::from_stream(stream))
+            .unwrap()
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let (_temporary, runtime, initial) = fixture();
+    let mut config = initial.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .endpoints
+        .insert("responses".into(), format!("http://{address}/v1"));
+    publish(&runtime, &initial, &config, "stream-error");
+    runtime.open();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("authorization", "Bearer test-local-key")
+        .header("user-agent", "pi (linux test; x64)")
+        .body(Body::from(r#"{"model":"p/m","input":"x"}"#))
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let id = response.headers()["x-tmax-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(to_bytes(response.into_body(), 4096).await.is_err());
+    let entries = error_log(&runtime.store);
+    let entry = entries
+        .iter()
+        .find(|entry| entry["request_id"] == id)
+        .unwrap();
+    assert_eq!(entry["event"], "gateway.request_failed");
+    assert_eq!(entry["outcome"], "failed");
+    assert_eq!(entry["http_status"], 200);
+    assert_eq!(entry["stage"], "upstream_stream");
+    assert_eq!(entry["errors"][0]["stage"], "upstream_stream");
+    assert_eq!(entry["errors"][0]["attempt"], 1);
+    let query = Request {
+        command: vec!["history".into(), "inspect".into()],
+        operands: vec![id],
+        arguments: Default::default(),
+        dry_run: false,
+        if_revision: None,
+    };
+    assert_eq!(
+        runtime.history.view(&query).unwrap()["record"]["stage"],
+        "upstream_stream"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn local_rejection_logs_only_known_upstream_information() {
+    let (_temporary, runtime, config) = fixture();
+    publish(&runtime, &config, &config, "local-rejection");
+    runtime.open();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("authorization", "Bearer wrong-key")
+        .body(Body::empty())
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let entries = error_log(&runtime.store);
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry["event"], "gateway.request_rejected");
+    assert_eq!(entry["level"], "warn");
+    assert_eq!(entry["outcome"], "rejected");
+    assert_eq!(entry["stage"], "shared_key_authentication");
+    assert_eq!(entry["reason_code"], "authentication_failed");
+    assert!(entry["provider"].is_null());
+    assert!(entry["model"].is_null());
+    assert!(entry["protocol"].is_null());
+    assert!(entry["http_status"].is_null());
+    assert!(entry["upstream_request_id"].is_null());
+    assert_eq!(entry["errors"], json!([]));
+}
+
+#[tokio::test]
+async fn error_log_storage_failure_does_not_change_error_delivery() {
+    let (_temporary, runtime, config) = fixture();
+    publish(&runtime, &config, &config, "unavailable-error-log");
+    runtime.open();
+    std::fs::create_dir(runtime.store.root.join("error.log")).unwrap();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("authorization", "Bearer wrong-key")
+        .body(Body::empty())
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(body["error"]["type"], "authentication_failed");
+    assert_eq!(
+        body["error"]["message"],
+        "Current shared gateway key required"
+    );
+    let query = Request {
+        command: vec!["history".into(), "inspect".into()],
+        operands: vec![body["error"]["request_id"].as_str().unwrap().into()],
+        arguments: Default::default(),
+        dry_run: false,
+        if_revision: None,
+    };
+    assert_eq!(
+        runtime.history.view(&query).unwrap()["record"]["evidence_gap"],
+        true
+    );
+    assert!(runtime.store.root.join("error.log").is_dir());
+    assert_eq!(runtime.active(), 0);
+}
+
+#[tokio::test]
+async fn error_detail_bounds_do_not_truncate_forwarded_responses() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let size = crate::diagnostics::error_log::DETAIL_BYTES + 1024;
+    let upstream =
+        Router::new().fallback(move || async move { (StatusCode::BAD_REQUEST, "界".repeat(size)) });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let (_temporary, runtime, initial) = fixture();
+    let mut config = initial.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .endpoints
+        .insert("chat-completions".into(), format!("http://{address}/v1"));
+    publish(&runtime, &initial, &config, "error-truncation");
+    runtime.open();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("authorization", "Bearer test-local-key")
+        .header("user-agent", "pi (linux test; x64)")
+        .body(Body::from(
+            r#"{"model":"p/m","messages":[{"role":"user","content":"x"}]}"#,
+        ))
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let id = response.headers()["x-tmax-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let delivered = to_bytes(response.into_body(), size * 3).await.unwrap();
+    assert_eq!(delivered.as_ref(), "界".repeat(size).as_bytes());
+    let log = error_log(&runtime.store);
+    let entry = log.iter().find(|entry| entry["request_id"] == id).unwrap();
+    assert_eq!(entry["errors"][0]["truncated"], true);
+    let text = entry["errors"][0]["error_details"].as_str().unwrap();
+    assert!(text.len() <= crate::diagnostics::error_log::DETAIL_BYTES);
+    assert!(text.chars().all(|character| character == '界'));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_regression_oversized_request_id_is_visible_as_truncated() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = Router::new().fallback(|| async {
+        (
+            StatusCode::BAD_REQUEST,
+            [("x-request-id", "r".repeat(700))],
+            axum::Json(json!({"error":{"message":"Rejected"}})),
+        )
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let (_temporary, runtime, initial) = fixture();
+    let mut config = initial.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .endpoints
+        .insert("chat-completions".into(), format!("http://{address}/v1"));
+    publish(&runtime, &initial, &config, "long-request-id");
+    runtime.open();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("authorization", "Bearer test-local-key")
+        .header("user-agent", "pi (linux test; x64)")
+        .body(Body::from(
+            r#"{"model":"p/m","messages":[{"role":"user","content":"x"}]}"#,
+        ))
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    to_bytes(response.into_body(), 4096).await.unwrap();
+    let entry = error_log(&runtime.store).pop().unwrap();
+    assert_eq!(entry["upstream_request_id"], "r".repeat(512));
+    assert_eq!(entry["errors"][0]["truncated"], true);
+    assert_eq!(entry["truncated"], true);
+    assert_eq!(
+        entry["errors"][0]["error_details"]["error"]["message"],
+        "Rejected"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_regression_failed_fallback_selection_retains_the_first_error() {
+    let (_temporary, runtime, initial) = fixture();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let store = runtime.store.clone();
+    let upstream = Router::new().fallback(move || {
+        let store = store.clone();
+        async move {
+            store
+                .write_raw("provider-failures/state.json", b"broken failure state")
+                .unwrap();
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                axum::Json(json!({"error":{"message":"First attempt throttled"}})),
+            )
+        }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let mut config = initial.clone();
+    let provider = config.providers.get_mut("p").unwrap();
+    provider
+        .endpoints
+        .insert("chat-completions".into(), format!("http://{address}/v1"));
+    provider.failure_policy = Some(crate::config::FailurePolicy {
+        enabled: true,
+        errors: crate::config::FailureConditions {
+            http_statuses: vec![429],
+            ..Default::default()
+        },
+        consecutive_failures: 2,
+        priority: -1,
+        duration_seconds: 60,
+    });
+    config.model_aliases[0].continuity = Some("stateless".into());
+    config.model_aliases[0].fallback = Some(crate::config::FailureConditions {
+        http_statuses: vec![429],
+        ..Default::default()
+    });
+    publish(&runtime, &initial, &config, "selection-error-after-refusal");
+    runtime.open();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("authorization", "Bearer test-local-key")
+        .header(
+            "user-agent",
+            "deepseek-harness/0.2.1-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)",
+        )
+        .body(Body::from(
+            r#"{"model":"dynamic","messages":[{"role":"user","content":"x"}]}"#,
+        ))
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    to_bytes(response.into_body(), 4096).await.unwrap();
+    let entry = error_log(&runtime.store).pop().unwrap();
+    assert_eq!(entry["outcome"], "rejected");
+    assert_eq!(entry["stage"], "selection");
+    assert_eq!(entry["errors"][0]["provider"], "p");
+    assert_eq!(entry["errors"][0]["http_status"], 429);
+    server.abort();
+}
+
+#[tokio::test]
+async fn dropping_a_partial_error_response_preserves_text_and_marks_it_incomplete() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = Router::new().fallback(|| async {
+        let prefix = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"{\"error\":{\"message\":\"Rejected before EOF\"}}",
+            ))
+        });
+        (
+            StatusCode::BAD_REQUEST,
+            Body::from_stream(prefix.chain(futures_util::stream::pending())),
+        )
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let (_temporary, runtime, initial) = fixture();
+    let mut config = initial.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .endpoints
+        .insert("chat-completions".into(), format!("http://{address}/v1"));
+    publish(&runtime, &initial, &config, "incomplete-http-error");
+    runtime.open();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("authorization", "Bearer test-local-key")
+        .header("user-agent", "pi (linux test; x64)")
+        .body(Body::from(
+            r#"{"model":"p/m","messages":[{"role":"user","content":"x"}]}"#,
+        ))
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let id = response.headers()["x-tmax-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let mut stream = response.into_body().into_data_stream();
+    assert_eq!(
+        stream.next().await.unwrap().unwrap().as_ref(),
+        b"{\"error\":{\"message\":\"Rejected before EOF\"}}"
+    );
+    drop(stream);
+    let entry = error_log(&runtime.store).pop().unwrap();
+    assert_eq!(entry["request_id"], id);
+    assert_eq!(entry["outcome"], "cancelled");
+    assert_eq!(
+        entry["errors"][0]["error_details"],
+        r#"{"error":{"message":"Rejected before EOF"}}"#
+    );
+    assert_eq!(entry["errors"][0]["truncated"], true);
+    assert_eq!(entry["evidence_gap"], true);
+    server.abort();
 }

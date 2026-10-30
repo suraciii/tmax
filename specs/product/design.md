@@ -406,15 +406,17 @@ within its original validity; input publication never rewrites desired prioritie
 The [diagnostics contract](../diagnostics/spec.md) owns request-record fields,
 evidence scope, retention, and cleanup. Selection captures evidence from the
 same decision used for forwarding. The display must not reconstruct a historical
-decision by running today's rules. State readers return allowlisted summaries,
-not serialized provider adapters, credential objects, raw errors, or payloads.
+decision by running today's rules. Ordinary state readers return allowlisted summaries,
+not serialized provider adapters, credential objects, raw errors, or payloads. The
+separate [error log](../diagnostics/spec.md#persistent-gateway-error-log) retains
+bounded raw failure details.
 
 Bounded in-memory request history is distinct from durable session bindings,
 applied-state recovery information, and provider quota observations. Clearing
 that history or restarting the gateway cannot release a destination or revoke
 credentials. Retained-record aggregates describe only retained coverage, not
-an account-wide or lifetime bill. No disk request archive or body-capture mode
-is part of this design.
+an account-wide or lifetime bill. There is no general disk request archive or
+request-body capture mode.
 
 Provider-reported usage and observed usage are never summed. Selection follows
 configured priorities and the scoped evidence in the

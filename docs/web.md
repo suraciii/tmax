@@ -81,6 +81,8 @@ page makes no external font, image, or script requests.
   page and verifies a new ready process before displaying completion; it never
   automatically resubmits a mutation after connection loss. Revealed keys disappear
   on hide, navigation, page exit, or switching away from the tab.
+  Persistent gateway errors are kept in the local [log file](usage.md#gateway-error-log),
+  not in the history panel. Clearing current-process history does not delete that file.
 
 The redesigned workspace uses Simplified Chinese labels and retains stable IDs,
 protocol names, and command names. It uses the same backend operations and local

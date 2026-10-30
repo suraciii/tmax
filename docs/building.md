@@ -68,8 +68,9 @@ See [service usage](usage.md#gateway-only-access) for lifecycle and qualificatio
 The tmax store keeps API keys and credential-bearing recovery data as plaintext
 under `~/.tmax`. Unix uses mode-0600 files and mode-0700 directories; Windows
 uses an owner-only ACL. These permissions are not encryption. Ordinary
-configuration stores references, not key bytes. Credential contents never
-appear in stdout, logs, or ordinary inspection.
+configuration stores references, not key bytes. tmax does not intentionally put
+credential contents in stdout, logs, or ordinary inspection. Raw upstream errors
+in the separate [error log](usage.md#gateway-error-log) can echo sensitive content.
 
 Unsupported storage-format records return `storage_version_unsupported` or
 `storage_record_invalid` and remain unchanged. Re-enter provider keys through

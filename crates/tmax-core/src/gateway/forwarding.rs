@@ -19,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use futures_util::{Stream, StreamExt};
+use futures_util::{FutureExt, Stream, StreamExt};
 use serde_json::{Value, json};
 use std::{pin::Pin, sync::Arc, time::Duration};
 
@@ -58,6 +58,7 @@ pub(super) async fn forward(
             record.outcome = "rejected".into();
             record.stage = "local_admission".into();
             record.reason_code = Some(e.code.clone());
+            runtime.log_error(&mut record, &[]);
             runtime.history.update(record);
             return error_response(StatusCode::SERVICE_UNAVAILABLE, &e.code, &id);
         }
@@ -347,6 +348,7 @@ pub(super) async fn forward(
             flight.finish("interrupted", "upstream_dispatch", Some("force_stop"));
             return error_response(StatusCode::SERVICE_UNAVAILABLE, "force_stop", &id);
         }
+        flight.dispatch_attempts += 1;
         let attempt = AttemptContext {
             snapshot: snapshot.clone(),
             provider: selection.provider.clone(),
@@ -377,6 +379,7 @@ pub(super) async fn forward(
             dispatch.resolved = true;
             result
         };
+        let result = result.map_err(reqwest::Error::without_url);
         let (status, reason) = match &result {
             Ok(response) => (Some(response.status().as_u16()), None),
             Err(error) => (
@@ -405,15 +408,34 @@ pub(super) async fn forward(
                 &attempted,
                 &lineage,
             ) {
-                Ok(next) => {
-                    choice = next;
-                    continue;
+                Err(error) if error.code == "fallback_exhausted" => {}
+                next => {
+                    match result {
+                        Ok(response) => record_fallback_error(response, &mut flight),
+                        Err(error) => flight.record_error(
+                            Utc::now(),
+                            if error.is_connect() {
+                                "upstream_connection"
+                            } else {
+                                "upstream_dispatch"
+                            },
+                            None,
+                            None,
+                            error.to_string(),
+                            false,
+                        ),
+                    }
+                    match next {
+                        Ok(next) => {
+                            choice = next;
+                            continue;
+                        }
+                        Err(error) => {
+                            flight.record.decision["fallback"] = safe_evidence(&evidence);
+                            return flight.reject(StatusCode::CONFLICT, &error.code, "selection");
+                        }
+                    }
                 }
-                Err(error) if error.code != "fallback_exhausted" => {
-                    flight.record.decision["fallback"] = safe_evidence(&evidence);
-                    return flight.reject(StatusCode::CONFLICT, &error.code, "selection");
-                }
-                Err(_) => {}
             }
         }
         match result {
@@ -427,7 +449,19 @@ pub(super) async fn forward(
                     },
                 );
             }
-            Err(_) => {
+            Err(error) => {
+                flight.record_error(
+                    Utc::now(),
+                    if error.is_connect() {
+                        "upstream_connection"
+                    } else {
+                        "upstream_dispatch"
+                    },
+                    None,
+                    None,
+                    error.without_url().to_string(),
+                    false,
+                );
                 let reason = reason.expect("transport reason");
                 flight.finish(
                     "failed",
@@ -446,6 +480,7 @@ pub(super) async fn forward(
     drop(original);
     let status = response.status();
     let headers = response.headers().clone();
+    let request_id = upstream_request_id(&headers);
     flight.record.upstream_status = Some(status.as_u16());
     flight.record.stage = "upstream_response".into();
     runtime.history.update(flight.record.clone());
@@ -458,9 +493,15 @@ pub(super) async fn forward(
         pending: Bytes::new(),
         flight,
         observer: Observer::new(protocol, sse, status.is_success()),
+        error_stage: if sse && status.is_success() {
+            "upstream_stream"
+        } else {
+            "upstream_response"
+        },
         done: false,
         attempt,
         runtime: runtime.clone(),
+        request_id,
     };
     let stream = futures_util::stream::unfold(state, |mut state| async move {
         if state.done {
@@ -468,7 +509,7 @@ pub(super) async fn forward(
         }
         let interrupted = *state.flight.cancel.borrow();
         if interrupted {
-            state.observer.finish(&mut state.flight.record);
+            state.finish_observation(false);
             finish_pending_attempt(&mut state.flight.record, "interrupted", Some("force_stop"));
             state
                 .flight
@@ -483,21 +524,24 @@ pub(super) async fn forward(
         }
         tokio::select! {
             biased;
-            _ = state.flight.cancel.changed()=>{state.observer.finish(&mut state.flight.record);finish_pending_attempt(&mut state.flight.record,"interrupted",Some("force_stop"));state.flight.finish("interrupted","upstream_stream",Some("force_stop"));state.done=true;Some((Err(std::io::Error::other("request interrupted")),state))},
+            _ = state.flight.cancel.changed()=>{state.finish_observation(false);finish_pending_attempt(&mut state.flight.record,"interrupted",Some("force_stop"));state.flight.finish("interrupted","upstream_stream",Some("force_stop"));state.done=true;Some((Err(std::io::Error::other("request interrupted")),state))},
             result=state.upstream.next()=>match result {
                 Some(Ok(bytes))=>{state.observer.observe(&bytes);state.pending=bytes;let n=state.pending.len().min(FORWARD_CHUNK_BYTES);let chunk=state.pending.split_to(n);Some((Ok(chunk),state))},
-                Some(Err(_))=>{
-                    state.observer.finish(&mut state.flight.record);
+                Some(Err(error))=>{
+                    state.finish_observation(false);
+                    state.flight.record_error(Utc::now(),"upstream_stream",state.flight.record.upstream_status,state.request_id.clone(),error.without_url().to_string(),false);
                     state.complete_attempt(false,Some("upstream_transport_failed"));
                     state.flight.finish("failed","upstream_stream",Some("upstream_stream_failed"));state.done=true;
                     Some((Err(std::io::Error::other("upstream stream failed")),state))
                 },
                 None=>{
-                    state.observer.finish(&mut state.flight.record);state.flight.record.downstream_complete=true;
+                    state.finish_observation(true);state.flight.record.downstream_complete=true;
                     let success=state.observer.success && state.observer.complete;
                     state.complete_attempt(success,None);
                     let outcome=if !state.observer.success{"failed"}else if state.observer.complete{"completed"}else{"unknown"};
-                    state.flight.finish(outcome,"downstream_delivery",if state.observer.complete{None}else{Some("completion_not_evidenced")});None
+                    let reason=if !state.observer.success{Some("upstream_error")}else if state.observer.complete{None}else{Some("completion_not_evidenced")};
+                    let stage=if !state.observer.success{state.error_stage}else{"downstream_delivery"};
+                    state.flight.finish(outcome,stage,reason);None
                 }
             }
         }
@@ -513,6 +557,58 @@ pub(super) async fn forward(
         downstream.headers_mut().insert("x-tmax-request-id", v);
     }
     downstream
+}
+fn upstream_request_id(headers: &HeaderMap) -> Option<(String, bool)> {
+    ["request-id", "x-request-id"].iter().find_map(|name| {
+        headers
+            .get(*name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| {
+                let end = value
+                    .len()
+                    .min(crate::diagnostics::error_log::DETAIL_IDENTIFIER_BYTES);
+                (value[..end].to_owned(), end < value.len())
+            })
+    })
+}
+fn record_fallback_error(response: reqwest::Response, flight: &mut Flight) {
+    let captured_at = Utc::now();
+    let status = Some(response.status().as_u16());
+    let request_id = upstream_request_id(response.headers());
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    let mut truncated = true;
+    loop {
+        match stream.next().now_or_never() {
+            Some(None) => {
+                truncated = false;
+                break;
+            }
+            Some(Some(Ok(bytes))) if !bytes.is_empty() => {
+                let keep = bytes
+                    .len()
+                    .min(crate::diagnostics::error_log::DETAIL_BYTES - body.len());
+                body.extend_from_slice(&bytes[..keep]);
+                if keep < bytes.len() || body.len() == crate::diagnostics::error_log::DETAIL_BYTES {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    let error = if body.is_empty() {
+        "Upstream HTTP failure; response body unavailable before fallback".into()
+    } else {
+        String::from_utf8_lossy(&body).into_owned()
+    };
+    flight.record_error(
+        captured_at,
+        "upstream_response",
+        status,
+        request_id,
+        error,
+        truncated,
+    );
 }
 #[derive(Default)]
 struct AttemptEvidence {
@@ -646,11 +742,29 @@ struct ForwardStream {
     pending: Bytes,
     flight: Flight,
     observer: Observer,
+    error_stage: &'static str,
     done: bool,
     attempt: Option<AttemptContext>,
     runtime: Arc<Runtime>,
+    request_id: Option<(String, bool)>,
 }
 impl ForwardStream {
+    fn finish_observation(&mut self, reached_eof: bool) {
+        if !reached_eof {
+            self.observer.mark_incomplete();
+        }
+        self.observer.finish(&mut self.flight.record);
+        if let Some((captured_at, error, truncated)) = self.observer.take_error() {
+            self.flight.record_error(
+                captured_at,
+                self.error_stage,
+                self.flight.record.upstream_status,
+                self.request_id.clone(),
+                error,
+                truncated,
+            );
+        }
+    }
     fn complete_attempt(&mut self, success: bool, reason: Option<&str>) {
         if let Some(attempt) = self.attempt.take() {
             let status = if reason.is_none() {
@@ -678,14 +792,20 @@ impl ForwardStream {
         finish_pending_attempt(
             &mut self.flight.record,
             outcome,
-            reason.or((outcome == "unknown").then_some("completion_not_evidenced")),
+            reason.or(if !self.observer.success {
+                Some("upstream_error")
+            } else if outcome == "unknown" {
+                Some("completion_not_evidenced")
+            } else {
+                None
+            }),
         );
     }
 }
 impl Drop for ForwardStream {
     fn drop(&mut self) {
         if !self.flight.finished {
-            self.observer.finish(&mut self.flight.record);
+            self.finish_observation(false);
             let interrupted = *self.flight.cancel.borrow();
             finish_pending_attempt(
                 &mut self.flight.record,

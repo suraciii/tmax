@@ -1,4 +1,5 @@
-//! Bounded, content-free diagnostics. These are process-local observations, never billing facts.
+//! Bounded diagnostics. Process-local request history is separate from persistent error observations.
+pub mod error_log;
 use crate::{Error, Request, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,67 @@ use uuid::Uuid;
 pub const RECORD_LIMIT: usize = 256;
 pub const RECORD_BYTES: usize = 32 * 1024;
 pub const HISTORY_BYTES: usize = RECORD_LIMIT * RECORD_BYTES;
+
+fn bounded_record(mut record: Record) -> Record {
+    record.decision = safe_evidence(&record.decision);
+    record.evidence_gap |=
+        record.decision.get("evidence_gap").and_then(Value::as_bool) == Some(true);
+    for field in [
+        &mut record.target,
+        &mut record.agent_provider,
+        &mut record.model,
+        &mut record.protocol,
+        &mut record.provider,
+        &mut record.qualified_model,
+        &mut record.authorization_generation,
+        &mut record.configuration_revision,
+        &mut record.reason_code,
+    ] {
+        if field.as_ref().is_some_and(|s| s.len() > 512) {
+            *field = None;
+            record.evidence_gap = true;
+        } else if let Some(value) = field
+            && value.capacity() > 512
+        {
+            value.shrink_to_fit();
+        }
+    }
+    for field in [
+        &mut record.request,
+        &mut record.process_instance,
+        &mut record.origin,
+        &mut record.model_kind,
+        &mut record.outcome,
+        &mut record.stage,
+        &mut record.usage_state,
+        &mut record.execution,
+    ] {
+        if field.len() > 512 {
+            *field = "unavailable".into();
+            record.evidence_gap = true;
+        } else if field.capacity() > 512 {
+            field.shrink_to_fit();
+        }
+    }
+    let usage_count = record.usage.len();
+    record
+        .usage
+        .retain(|key, _| key.len() <= 64 && key.capacity() <= 64);
+    if record.usage.len() != usage_count {
+        record.evidence_gap = true;
+        record.usage_state = "partial".into();
+    }
+    if encoded_size(&record) > RECORD_BYTES || record_memory(&record) > RECORD_BYTES {
+        record.decision = decision_summary(&record.decision);
+        record.evidence_gap = true;
+    }
+    if encoded_size(&record) > RECORD_BYTES || record_memory(&record) > RECORD_BYTES {
+        record.decision = json!({"evidence_gap":true,"reason_code":"record_capacity"});
+        record.usage.clear();
+        record.usage_state = "unknown".into();
+    }
+    record
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Record {
@@ -113,64 +175,8 @@ impl History {
         state.records.push_back(record.clone());
         record
     }
-    pub fn update(&self, mut record: Record) {
-        record.decision = safe_evidence(&record.decision);
-        record.evidence_gap |=
-            record.decision.get("evidence_gap").and_then(Value::as_bool) == Some(true);
-        for field in [
-            &mut record.target,
-            &mut record.agent_provider,
-            &mut record.model,
-            &mut record.protocol,
-            &mut record.provider,
-            &mut record.qualified_model,
-            &mut record.authorization_generation,
-            &mut record.configuration_revision,
-            &mut record.reason_code,
-        ] {
-            if field.as_ref().is_some_and(|s| s.len() > 512) {
-                *field = None;
-                record.evidence_gap = true;
-            } else if let Some(value) = field
-                && value.capacity() > 512
-            {
-                value.shrink_to_fit();
-            }
-        }
-        for field in [
-            &mut record.request,
-            &mut record.process_instance,
-            &mut record.origin,
-            &mut record.model_kind,
-            &mut record.outcome,
-            &mut record.stage,
-            &mut record.usage_state,
-            &mut record.execution,
-        ] {
-            if field.len() > 512 {
-                *field = "unavailable".into();
-                record.evidence_gap = true;
-            } else if field.capacity() > 512 {
-                field.shrink_to_fit();
-            }
-        }
-        let usage_count = record.usage.len();
-        record
-            .usage
-            .retain(|key, _| key.len() <= 64 && key.capacity() <= 64);
-        if record.usage.len() != usage_count {
-            record.evidence_gap = true;
-            record.usage_state = "partial".into();
-        }
-        if encoded_size(&record) > RECORD_BYTES || record_memory(&record) > RECORD_BYTES {
-            record.decision = decision_summary(&record.decision);
-            record.evidence_gap = true;
-        }
-        if encoded_size(&record) > RECORD_BYTES || record_memory(&record) > RECORD_BYTES {
-            record.decision = json!({"evidence_gap":true,"reason_code":"record_capacity"});
-            record.usage.clear();
-            record.usage_state = "unknown".into();
-        }
+    pub fn update(&self, record: Record) {
+        let record = bounded_record(record);
         let mut state = self.state.lock().expect("history mutex");
         if let Some(current) = state
             .records

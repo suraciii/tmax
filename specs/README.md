@@ -36,7 +36,7 @@ and the invariants it protects.
   - [Service](cli/service/spec.md) — outbound network, gateway, Web, and nested request diagnostics.
   - [Results](cli/results/spec.md) — compact JSON and exit codes shared by all commands.
 - [Diagnostics](diagnostics/spec.md) — scoped status evidence, historical selection
-  reasons, bounded in-memory request history, and cleanup.
+  reasons, bounded in-memory request history, and persistent gateway error logs.
 
 Shared vocabulary lives in [CONTEXT.md](../CONTEXT.md). The executable and shared
 runtime implement management, configuration, native adapters, Web, and gateway
