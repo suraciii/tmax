@@ -16,7 +16,7 @@ source, retrieval time, staleness, and material accepted/downloaded differences.
 | --- | --- |
 | `catalog providers [--snapshot SNAPSHOT]` | Compact selectable catalog-provider metadata and qualified integration/authentication/endpoint-setup choices. |
 | `catalog models CATALOG-ID [--snapshot SNAPSHOT]` | Compact model IDs/metadata under that entry; register nothing. |
-| `catalog inspect CATALOG-ID [--model MODEL-ID] [--snapshot SNAPSHOT]` | Detailed metadata/provenance, qualified region/explicit-base setup choices, and the first-unused local provider-ID suggestion. |
+| `catalog inspect CATALOG-ID [--model MODEL-ID] [--snapshot SNAPSHOT]` | Detailed metadata/provenance, qualified fixed-integration/explicit-base setup choices, and the first-unused local provider-ID suggestion. |
 | `catalog refresh` | Download and validate metadata without upstream credentials. Preserve accepted defaults; do not apply or activate the download. |
 | `catalog apply --revision REVISION` | Apply exactly that validated downloaded snapshot and activate resulting valid settings when the service runs. Report affected providers/models/targets and actual saved/loaded outcome. |
 

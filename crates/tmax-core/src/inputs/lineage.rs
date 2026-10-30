@@ -23,11 +23,22 @@ pub(crate) fn signature<T: Serialize>(value: &T) -> String {
 }
 
 fn source_definition(provider: &Provider, declaration: &InputDeclaration) -> String {
+    source_definition_with_integration(
+        provider,
+        declaration,
+        crate::provider_integration::integration_id(provider).ok(),
+    )
+}
+pub(super) fn source_definition_with_integration(
+    provider: &Provider,
+    declaration: &InputDeclaration,
+    integration: Option<&str>,
+) -> String {
     let mut models = declaration.models.clone();
     models.sort();
     signature(
         &json!({"kind":declaration.kind,"source":declaration.source,"scope":declaration.scope,"models":models,
-        "max_age_seconds":declaration.max_age_seconds,"integration":crate::provider_integration::integration_id(provider).ok(),
+        "max_age_seconds":declaration.max_age_seconds,"integration":integration,
         "endpoints":crate::provider_integration::resolve(provider).ok()}),
     )
 }

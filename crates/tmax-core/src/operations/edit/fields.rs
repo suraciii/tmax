@@ -85,7 +85,6 @@ pub(in crate::operations) fn fields(owner: &str) -> &'static [(&'static str, &'s
             ("metadata", "string"),
             ("integration", "string"),
             ("enabled", "boolean"),
-            ("region", "string"),
             ("overrides.name", "string"),
             ("overrides.doc", "string"),
             ("subscription.plan", "string"),

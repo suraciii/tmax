@@ -391,7 +391,7 @@ fn integration_commands() -> Command {
     Command::new("integration")
         .about("Discover supported provider integrations and their qualified capabilities.")
         .subcommand(leaf("list", "List locally supported provider integration IDs and setup summaries.", "Reads the built-in qualified registry only. Does not require a catalog, network, credentials, providers, targets, or valid configuration. The result includes protocol, endpoint setup, and authentication summaries.\n\nExit: 0 when registry discovery completes.\nExample: tmax integration list"))
-        .subcommand(leaf("inspect", "Inspect one supported provider integration and its exact capabilities.", "Reports regions/protocol bases, finite operations, protocols/transports, auth methods/login sources, input source/kind/scope/model coverage, noninteractive acquisition, restrictions, and known/unknown qualification. It does not probe an endpoint.\n\nExit: 0 when the registry entry is found; 2 for an unknown integration ID.\nExample: tmax integration inspect deepseek")
+        .subcommand(leaf("inspect", "Inspect one supported provider integration and its exact capabilities.", "Reports fixed protocol bases, finite operations, protocols/transports, auth methods/login sources, input source/kind/scope/model coverage, noninteractive acquisition, restrictions, and known/unknown qualification. It does not probe an endpoint.\n\nExit: 0 when the registry entry is found; 2 for an unknown integration ID.\nExample: tmax integration inspect deepseek")
             .arg(required_pos(1, "ID", "Stable integration ID from integration list.")))
         .subcommand_required(true)
 }
@@ -417,7 +417,7 @@ fn skill_commands() -> Command {
 fn provider_commands() -> Command {
     let add_fields = concat!(
         "Supported --set/--clear scalar FIELD paths:\n",
-        "`metadata`, `integration`, `region`: strings; clearing removes the selection, subject to valid integration/endpoint mapping. Metadata changes are not renames.\n",
+        "`metadata`, `integration`: strings; clearing removes the selection, subject to valid integration/endpoint mapping. Integration IDs include regional product choices. Metadata changes are not renames.\n",
         "`enabled`: boolean; clear restores true. `overrides.name`, `overrides.doc`: strings; clear restores inheritance.\n",
         "`subscription.plan`, `subscription.billing_period`: strings; `subscription.renewal_date`, `subscription.expiry_date`: YYYY-MM-DD dates; clear makes each manual fact unknown.\n",
         "`subscription.auto_renew`: boolean; clear means unknown, not false.\n",
@@ -434,14 +434,11 @@ fn provider_commands() -> Command {
             leaf_with_fields(
                 "add",
                 "Create one independently managed provider access instance.",
-                "Select catalog metadata or an explicit supported integration. A provider is an independent upstream access instance; it may remain incomplete and unauthenticated. --metadata, --integration, --region and repeated --endpoint are explicit selectors; do not set the same field through --set.\n\nExit: 0 when saved; 2 for invalid schema/duplicate ID; 3 for action-required qualification; 4 for persistence or required safety/startup failure.\nExample: tmax provider add custom-gateway --integration custom --endpoint chat-completions https://gateway.example/openai/v1",
+                "Select catalog metadata or an explicit supported integration with --set. A provider is an independent upstream access instance; it may remain incomplete and unauthenticated. Known integrations select fixed destinations with no region field; only custom integrations accept --endpoint.\n\nExit: 0 when saved; 2 for invalid schema/duplicate ID; 3 for action-required qualification; 4 for persistence or required safety/startup failure.\nExample: tmax provider add custom-gateway --set integration custom --endpoint chat-completions https://gateway.example/openai/v1",
                 add_fields,
             ),
             add_fields,
         )
-        .arg(value("metadata", "CATALOG-ID", "Select catalog provider metadata."))
-        .arg(value("integration", "INTEGRATION", "Select an exact supported integration ID."))
-        .arg(value("region", "REGION", "Select a region advertised by the integration."))
         .arg(pair("endpoint", "P", "URL", "Set one protocol endpoint; repeat for distinct protocols."))
         .arg(repeated("clear-endpoint", "P", "Remove one protocol endpoint; repeat for distinct protocols.").value_parser(["chat-completions", "responses", "messages"]))
         .arg(required_pos(1, "ID", "Unique local provider ID.")),
@@ -453,12 +450,11 @@ fn provider_commands() -> Command {
             leaf_with_fields(
                 "update",
                 "Edit selected provider settings without replacing unrelated fields.",
-                "At least one change is required. --endpoint P URL replaces exactly one protocol base; --clear-endpoint P removes only that base. Region, endpoint, integration, and scalar edits are validated together.\n\nExit: 0 when saved; 2 for invalid schema; 4 for persistence or required safety/startup failure.",
+                "At least one change is required. --endpoint P URL replaces exactly one custom protocol base; --clear-endpoint P removes only that base. Endpoint, integration, and scalar edits are validated together.\n\nExit: 0 when saved; 2 for invalid schema; 4 for persistence or required safety/startup failure.",
                 add_fields,
             ),
             add_fields,
         )
-        .arg(value("region", "REGION", "Set an exact supported region."))
         .arg(pair("endpoint", "P", "URL", "Set one protocol endpoint; repeat for distinct protocols."))
         .arg(repeated("clear-endpoint", "P", "Remove one protocol endpoint.").value_parser(["chat-completions", "responses", "messages"]))
         .arg(required_pos(1, "ID", "Local provider ID.")),
@@ -467,8 +463,7 @@ fn provider_commands() -> Command {
     );
     let auth = Command::new("auth")
         .about("Set or clear provider login authentication declaratively.")
-        .subcommand(mutation(leaf("set", "Replace provider authentication with explicit login-source configuration.", "Requires --method login and explicit --via SOURCE. This is declarative configuration only: it does not sign in or import native credentials. Omitted --session-ref removes the previous reference.\n\nExit: 0 when saved; 2 for invalid source/method; 3 for qualified action-required blockers; 4 for persistence or required safety/startup failure.\nExample: tmax provider auth set deepseek --method login --via pi-main")
-            .arg(value("method", "METHOD", "Currently login; must be explicit.").value_parser(["login"]).required(true))
+        .subcommand(mutation(leaf("set", "Replace provider authentication with explicit login-source configuration.", "Requires explicit --via SOURCE. This operation selects login authentication declaratively; it does not sign in or import native credentials. Omitted --session-ref removes the previous reference.\n\nExit: 0 when saved; 2 for invalid source; 3 for qualified action-required blockers; 4 for persistence or required safety/startup failure.\nExample: tmax provider auth set deepseek --via pi-main")
             .arg(value("via", "SOURCE", "Qualified login source: tmax or a declared target.").required(true))
             .arg(value("session-ref", "REF", "Optional opaque source-scoped session reference."))
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true))
@@ -601,7 +596,7 @@ fn catalog_commands() -> Command {
         .subcommand(snapshot(leaf("providers", "List selectable providers from a retained catalog snapshot.", "Identifies snapshot/source/retrieval time/staleness and compact qualified integration/authentication/endpoint setup choices. Latest is a retained validated download, not a live fetch.\n\nExit: 0 for available/absent snapshot results.\nExample: tmax catalog providers")))
         .subcommand(snapshot(leaf("models", "List model metadata for one catalog provider without registering it.", "Catalog model IDs are not local provider or qualified model IDs. This operation does not modify configuration.\n\nExit: 0 when read completes; 2 for unknown catalog ID.\nExample: tmax catalog models deepseek")
             .arg(required_pos(1, "CATALOG-ID", "Exact catalog-provider ID."))))
-        .subcommand(snapshot(leaf("inspect", "Inspect catalog metadata and qualified setup choices for one provider/model.", "Shows provenance, qualified endpoint/region setup choices, and the first-unused local ID suggestion. Suggestions are not reserved; provider creation must name its local ID. Catalog API fields do not qualify endpoint behavior.\n\nExit: 0 when details are available; 2 for unknown catalog ID/model.\nExample: tmax catalog inspect deepseek --model deepseek-flash")
+        .subcommand(snapshot(leaf("inspect", "Inspect catalog metadata and qualified setup choices for one provider/model.", "Shows provenance, qualified fixed-integration or explicit-base setup choices, and the first-unused local ID suggestion. Suggestions are not reserved; provider creation must name its local ID. Catalog API fields do not qualify endpoint behavior.\n\nExit: 0 when details are available; 2 for unknown catalog ID/model.\nExample: tmax catalog inspect deepseek --model deepseek-flash")
             .arg(value("model", "MODEL-ID", "Optional exact catalog model ID."))
             .arg(required_pos(1, "CATALOG-ID", "Exact catalog-provider ID."))))
         .subcommand(mutation(leaf("refresh", "Download and validate catalog metadata without credentials.", "Preserves accepted metadata; does not apply or activate a downloaded snapshot. Dry-run describes the operation without fetching or writing.\n\nExit: 0 for a successful validated download; 3 for action-required network policy; 4 for download/validation failure.\nExample: tmax catalog refresh --dry-run"), true, false))
@@ -737,19 +732,55 @@ fn schedule_rule(name: &'static str, indexed: bool) -> Command {
     } else {
         "Append one complete calendar schedule entry."
     };
-    let detail = "Requires --priority INTEGER, one unique selector form (--weekday DAY repeated or --date DATE repeated), and one complete window (--all-day or both --start HH:MM --end HH:MM). DAYS: mon,tue,wed,thu,fri,sat,sun. Weekdays and dates cannot mix. Optional --effective-from DATE and --effective-until DATE use local dates with an exclusive upper bound. Set the model timezone first. Times and DST follow the model time-rule contract.\n\nExit: 0 when saved; 2 for invalid rule; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule add deepseek/deepseek-flash --priority 100 --weekday mon --start 00:00 --end 08:00";
-    let mut command = mutation(leaf(name, about, detail)
-        .arg(signed_value("priority", "INTEGER", "Signed replacement priority.").required(true))
-        .arg(weekdays("weekday", "Weekday selector; repeat unique values.").conflicts_with("date"))
-        .arg(repeated("date", "DATE", "YYYY-MM-DD local date selector; repeat unique values.").conflicts_with("weekday"))
-        .arg(flag("all-day", "Use the whole selected local day; alternatively provide both --start and --end.").conflicts_with_all(["start", "end"]))
-        .arg(value("start", "HH:MM", "Local window start.").requires("end").conflicts_with("all-day"))
-        .arg(value("end", "HH:MM", "Local window end.").requires("start").conflicts_with("all-day"))
-        .arg(value("effective-from", "DATE", "Inclusive local-date lower bound."))
-        .arg(value("effective-until", "DATE", "Exclusive local-date upper bound."))
-        .arg(required_pos(1, "QUALIFIED", "Qualified concrete model name."))
-        .group(ArgGroup::new("selector").args(["weekday", "date"]).required(true).multiple(true))
-        .group(ArgGroup::new("window").args(["all-day", "start", "end"]).required(true).multiple(true)), true, false);
+    let detail = "Requires --priority INTEGER and one unique selector form (--weekday DAY repeated or --date DATE repeated). Omit both times for the whole selected day, or supply both --start HH:MM --end HH:MM. DAYS: mon,tue,wed,thu,fri,sat,sun. Weekdays and dates cannot mix. Optional --effective-from DATE and --effective-until DATE use local dates with an exclusive upper bound. Set the model timezone first. Times and DST follow the model time-rule contract.\n\nExit: 0 when saved; 2 for invalid rule; 3 for revision conflict; 4 for persistence or required safety/startup failure.\nExample: tmax model schedule add deepseek/deepseek-flash --priority 100 --weekday mon --start 00:00 --end 08:00";
+    let mut command = mutation(
+        leaf(name, about, detail)
+            .arg(signed_value("priority", "INTEGER", "Signed replacement priority.").required(true))
+            .arg(
+                weekdays("weekday", "Weekday selector; repeat unique values.")
+                    .conflicts_with("date"),
+            )
+            .arg(
+                repeated(
+                    "date",
+                    "DATE",
+                    "YYYY-MM-DD local date selector; repeat unique values.",
+                )
+                .conflicts_with("weekday"),
+            )
+            .arg(
+                value(
+                    "start",
+                    "HH:MM",
+                    "Local window start; omit both times for a whole day.",
+                )
+                .requires("end"),
+            )
+            .arg(value("end", "HH:MM", "Local window end.").requires("start"))
+            .arg(value(
+                "effective-from",
+                "DATE",
+                "Inclusive local-date lower bound.",
+            ))
+            .arg(value(
+                "effective-until",
+                "DATE",
+                "Exclusive local-date upper bound.",
+            ))
+            .arg(required_pos(
+                1,
+                "QUALIFIED",
+                "Qualified concrete model name.",
+            ))
+            .group(
+                ArgGroup::new("selector")
+                    .args(["weekday", "date"])
+                    .required(true)
+                    .multiple(true),
+            ),
+        true,
+        false,
+    );
     if indexed {
         command = command
             .arg(
@@ -778,7 +809,7 @@ fn model_rule_commands() -> Command {
         } else {
             "Append a new immutable model-local signal-rule ID."
         };
-        let detail = "Requires --input INPUT --priority INTEGER --reset-within DURATION. Quota inputs also require --remaining-at-least-percent DECIMAL; reset inputs forbid it. Optional --enabled BOOLEAN defaults true. The input must belong to this provider and cover the upstream model; kind is derived from the same declaration snapshot. Optional time gates require a complete date/weekday selector and complete --all-day or --start/--end window, and use the model timezone. DURATION is a positive integer and one lowercase s/m/h/d unit.\n\nReplace requires the complete required definition; omitted optional gate clears it and omitted enabled restores true. Missing/stale input keeps a valid rule unknown, never zero quota.\n\nExit: 0 when saved; 2 for invalid reference/definition; 3 for required current action; 4 for persistence or required safety/startup failure.\nExample: tmax model rule add opencode-go/deepseek-v4.1-flash use-weekly --input weekly-allowance --priority 120 --reset-within 6h --remaining-at-least-percent 75.0";
+        let detail = "Requires --input INPUT --priority INTEGER --reset-within DURATION. Quota inputs also require --remaining-at-least-percent DECIMAL; reset inputs forbid it. Optional --enabled BOOLEAN defaults true. The input must belong to this provider and cover the upstream model; kind is derived from the same declaration snapshot. An optional time gate requires a date/weekday selector and uses the model timezone. Omit both times for whole selected days, or supply both --start and --end. DURATION is a positive integer and one lowercase s/m/h/d unit.\n\nReplace requires the complete required definition; omitted optional gate clears it and omitted enabled restores true. Missing/stale input keeps a valid rule unknown, never zero quota.\n\nExit: 0 when saved; 2 for invalid reference/definition; 3 for required current action; 4 for persistence or required safety/startup failure.\nExample: tmax model rule add opencode-go/deepseek-v4.1-flash use-weekly --input weekly-allowance --priority 120 --reset-within 6h --remaining-at-least-percent 75.0";
         mutation(
             leaf(name, about, detail)
                 .arg(
@@ -809,41 +840,38 @@ fn model_rule_commands() -> Command {
                 .arg(value("enabled", "BOOLEAN", "true or false; defaults true."))
                 .arg(
                     weekdays("weekday", "Optional time-gate weekday selector.")
-                        .conflicts_with("date")
-                        .requires("window"),
+                        .conflicts_with("date"),
                 )
                 .arg(
                     repeated("date", "DATE", "Optional time-gate date selector.")
-                        .conflicts_with("weekday")
-                        .requires("window"),
-                )
-                .arg(
-                    flag("all-day", "Use the whole selected local day.")
-                        .conflicts_with_all(["start", "end"])
-                        .requires("selector"),
+                        .conflicts_with("weekday"),
                 )
                 .arg(
                     value("start", "HH:MM", "Optional time-gate window start.")
                         .requires("end")
-                        .requires("selector")
-                        .conflicts_with("all-day"),
+                        .requires("selector"),
                 )
                 .arg(
                     value("end", "HH:MM", "Optional time-gate window end.")
                         .requires("start")
-                        .requires("selector")
-                        .conflicts_with("all-day"),
+                        .requires("selector"),
                 )
-                .arg(value(
-                    "effective-from",
-                    "DATE",
-                    "Optional inclusive local-date bound.",
-                ))
-                .arg(value(
-                    "effective-until",
-                    "DATE",
-                    "Optional exclusive local-date bound.",
-                ))
+                .arg(
+                    value(
+                        "effective-from",
+                        "DATE",
+                        "Optional inclusive local-date bound.",
+                    )
+                    .requires("selector"),
+                )
+                .arg(
+                    value(
+                        "effective-until",
+                        "DATE",
+                        "Optional exclusive local-date bound.",
+                    )
+                    .requires("selector"),
+                )
                 .arg(required_pos(
                     1,
                     "QUALIFIED",
@@ -853,11 +881,6 @@ fn model_rule_commands() -> Command {
                 .group(
                     ArgGroup::new("selector")
                         .args(["weekday", "date"])
-                        .multiple(true),
-                )
-                .group(
-                    ArgGroup::new("window")
-                        .args(["all-day", "start", "end"])
                         .multiple(true),
                 ),
             true,
@@ -1478,7 +1501,6 @@ mod tests {
                 "-10",
                 "--weekday",
                 "mon",
-                "--all-day",
             ],
             vec![
                 "tmax",
@@ -1527,7 +1549,6 @@ mod tests {
                 "--priority",
                 "--weekday",
                 "mon",
-                "--all-day",
             ],
         ] {
             assert!(command().try_get_matches_from(args).is_err());

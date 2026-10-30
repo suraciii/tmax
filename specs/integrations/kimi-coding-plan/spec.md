@@ -69,20 +69,20 @@ free validation step. A network failure leaves remote validity unknown rather
 than proving a revoked key or expired membership.
 
 An explicit inference probe must disclose that it can consume quota or incur
-charges. Its result must identify the tested provider, region, protocol, model,
-and time. A successful reply proves that request worked, not account identity,
+charges. Its result must identify the tested provider, integration, protocol,
+model, and time. A successful reply proves that request worked, not account identity,
 plan, quota, or renewal.
 
-## Region, endpoints, and native protocols
+## Endpoints and native protocols
 
 The [official endpoint table](https://www.kimi.com/code/docs/en/index.html#service-endpoint)
 defines the following known map under the
 [shared endpoint resolver](../spec.md#endpoint-resolution):
 
-| Region ID (source label) | `chat-completions` base | `responses` base | `messages` base |
+| Integration ID | `chat-completions` base | `responses` base | `messages` base |
 | --- | --- | --- | --- |
-| `china` (China) | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding/` |
-| `overseas` (Overseas) | `https://api.kimi.ai/coding/v1` | `https://api.kimi.ai/coding/v1` | `https://api.kimi.ai/coding/` |
+| `kimi-code-plan-cn` | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding/` |
+| `kimi-code-plan-global` | `https://api.kimi.ai/coding/v1` | `https://api.kimi.ai/coding/v1` | `https://api.kimi.ai/coding/` |
 
 The declared HTTP creation operations append these suffixes at the documented
 base/path boundary:
@@ -98,11 +98,11 @@ For example, the China Messages endpoint is
 not receive a full request URL that causes it to append the path twice. Direct
 configuration and gateway forwarding must resolve the same map entry.
 
-Kimi's regional alternatives require an explicit region or an unambiguous known
-base under the shared resolver. The adapter must show the actual Coding host
-and native protocol. A regional endpoint change requires explicit
-configuration and qualification for that access. Documentation of both hosts
-does not prove cross-region key portability. Neither `api.moonshot.ai/v1` nor
+Kimi's regional products use distinct integration IDs under the shared resolver;
+there is no separate region setting. The adapter shows the actual Coding host
+and native protocol. Changing integration requires explicit configuration and
+qualification for that access. Documentation of both hosts does not prove
+cross-region key portability. Neither `api.moonshot.ai/v1` nor
 `api.moonshot.cn/v1` is a Coding Plan fallback.
 
 These creation paths do not establish a model-discovery API, ID-only response
@@ -205,8 +205,8 @@ subscription-management or renewal API for tmax. Inspection keeps the dashboard
 links and optional user-maintained subscription information.
 
 The integration's quota operation is
-`GET {selected regional coding base}/usages`: `https://api.kimi.com/coding/v1/usages`
-for `china` and `https://api.kimi.ai/coding/v1/usages` for `overseas`. It sends
+`GET https://api.kimi.com/coding/v1/usages` for `kimi-code-plan-cn`, or
+`GET https://api.kimi.ai/coding/v1/usages` for `kimi-code-plan-global`. It sends
 the selected membership key in `Authorization: Bearer`. One bounded read on
 2026-10-27 returned HTTP 200 with a weekly usage object and separate window
 limits (five-hour and weekly) carrying provider-reported limit/remaining
@@ -271,11 +271,11 @@ inventing an error code or converting it into zero quota.
   omp login. A native command named `login` does not alter the selected method.
   An unsupported tmax-owned or cross-agent login path has a named unavailable
   result rather than a successful placeholder.
-- Provider inspection shows the selected region, resolved per-protocol Coding
-  bases, declared operations, login source or key reference, and qualification status.
-  Direct and gateway use share the map. A missing or conflicting regional selector,
-  undeclared method/path, or unsupported original-resource binding cannot trigger
-  speculative key migration, path guessing, regional failover, or platform billing.
+- Provider inspection shows the selected product-qualified integration, resolved
+  per-protocol Coding bases, declared operations, login source or key reference,
+  and qualification status. Direct and gateway use share the map. An invalid
+  integration, undeclared method/path, or unsupported original-resource binding
+  cannot trigger key migration, path guessing, regional failover, or platform billing.
 - Without a supported non-inference identity check, a provider can retain an
   unknown identity without a paid probe. Local readiness, network failure, and a
   successful explicit inference probe remain distinct observable results.

@@ -100,6 +100,10 @@ Responses, Chat Completions, or Anthropic Messages into one another.
 Model protocol availability follows configured provider endpoints under
 [endpoint resolution](../integrations/spec.md#endpoint-resolution), not a
 per-model qualification whitelist.
+Known provider integrations identify one service product and fixed destination
+set, including regional alternatives as distinct integration IDs. Local provider
+names remain arbitrary; neither their spelling nor a catalog default may choose
+a different region or billing product.
 
 Team administration, remote gateway sharing, subscription purchase/cancellation,
 and payment execution are outside this product scope. Selection must stay within
@@ -191,7 +195,7 @@ replay requests, or overwrite current native settings as a side effect of startu
 
 A user must be able to add, name, inspect, disable, reauthenticate, and remove a
 provider. Each provider represents one independently managed upstream access
-instance, with one authorization configuration, an integration type, region/endpoints,
+instance, with one authorization configuration, an integration type, endpoints,
 native protocols, and provider-owned models. Separate access instances may use
 the same service or account; distinct local IDs or credentials do not establish
 separate accounts, subscriptions, or allowances. A different account requires
@@ -219,10 +223,10 @@ do not verify an endpoint or grant a subscription entitlement.
 
 Endpoint selection follows the shared
 [endpoint-resolution contract](../integrations/spec.md#endpoint-resolution).
-Known services use one integration-owned region/protocol mapping for direct
+Known services use one integration-owned fixed protocol map for direct
 configuration and gateway forwarding. Custom services use explicit per-protocol
 bases within the same provider. A catalog URL is not universal protocol support;
-missing or ambiguous endpoint selection must remain unavailable.
+missing endpoint configuration remains unavailable.
 
 Setup must accept a custom ID or suggest the catalog-provider ID when available.
 If that suggestion is already used, it must suggest the first unused numeric
@@ -1089,7 +1093,7 @@ credentials; do not claim readiness or add a fallback.
 30. Reject local overload before upstream dispatch, bound buffering for slow
     clients, and distinguish local capacity from upstream throttling. Connection
     and credential deadlines must not terminate valid long-running inference.
-31. Use one region/protocol endpoint resolution in both modes; require explicit
+31. Use one integration/protocol endpoint resolution in both modes; require explicit
     custom protocol bases and reject unsupported operations or unbound resource
     IDs without probing providers or creating a resource directory.
 32. Apply explicit global outbound policy consistently in CLI and service work;

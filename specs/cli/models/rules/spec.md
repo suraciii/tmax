@@ -16,23 +16,23 @@ predicates, fallback, and continuity. Use [common CLI rules](../../spec.md),
 | `model schedule remove QUALIFIED INDEX --if-revision REVISION` | Remove exactly that local rule at that revision. |
 | `model schedule clear QUALIFIED` | Remove the schedule, not base priority. |
 
-`RULE` requires `--priority INTEGER`, one nonempty unique selector form
-(`--weekday DAY` repeated or `--date DATE` repeated), and one window form
-(`--all-day` or both `--start HH:MM --end HH:MM`). Days are `mon`, `tue`, `wed`,
-`thu`, `fri`, `sat`, `sun`. Mixing weekday/date selectors is invalid.
-All-day writes true; false is not shorthand. Optional `--effective-from DATE` and
-`--effective-until DATE` bound local dates with an exclusive upper bound.
+`RULE` requires `--priority INTEGER` and one nonempty unique selector form
+(`--weekday DAY` repeated or `--date DATE` repeated). Days are `mon`, `tue`,
+`wed`, `thu`, `fri`, `sat`, `sun`. Mixing weekday/date selectors is invalid.
+Omit both time operands for the whole selected day, or provide both
+`--start HH:MM` and `--end HH:MM` for a timed window. Optional
+`--effective-from DATE` and `--effective-until DATE` bound local dates with an
+exclusive upper bound.
 
 Set the model's `timezone` before adding a schedule; an empty schedule permits
 that setup. All rules use that zone. Times, unequal timed endpoints, overnight
 spillover, clipping, overlap rejection, precedence, and DST follow
-[Time rules](../../../model-routing/spec.md#time-rules), without extra fields or
-inferred windows.
+[Time rules](../../../model-routing/spec.md#time-rules).
 
 ```sh
 tmax model update deepseek/deepseek-flash --set timezone Asia/Shanghai
 tmax model schedule add deepseek/deepseek-flash --priority 100 --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --weekday sat --weekday sun --start 00:00 --end 08:00 --effective-from 2026-10-01 --effective-until 2026-11-01
-tmax model schedule replace deepseek/deepseek-flash 0 --if-revision CURRENT-REVISION --priority 90 --date 2026-10-23 --all-day
+tmax model schedule replace deepseek/deepseek-flash 0 --if-revision CURRENT-REVISION --priority 90 --date 2026-10-23
 tmax model schedule remove deepseek/deepseek-flash 0 --if-revision CURRENT-REVISION
 tmax model schedule clear deepseek/deepseek-flash
 tmax model update deepseek/deepseek-flash --clear timezone
@@ -72,9 +72,10 @@ Replace requires the full required set, restores enabled true when omitted, and
 removes an omitted gate; it is not partial update.
 
 An optional finite time gate reuses schedule selectors/windows/bounds. No gate
-operands means no `time_window`; any gate operand requires a complete selector
-and window, with optional bounds. They set only `time_window`; priority remains
-the outer rule's score. Set the model's timezone first. Cross-midnight windows,
+operands means no `time_window`; any selector, time, or bound operand requires a
+complete selector. Omitting both time operands selects the whole day; providing
+either requires both. The gate sets only `time_window`; priority remains the
+outer rule's score. Set the model's timezone first. Cross-midnight windows,
 local dates, and DST use the same Time rules, not a new expression language.
 
 Reads do not refresh or resolve secrets. List uses the common current instant;

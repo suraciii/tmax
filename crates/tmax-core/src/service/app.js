@@ -30,7 +30,7 @@ const areas = {
   gateway:['网关','LOCAL MODEL GATEWAY','配置网关地址、管理运行状态和查看请求记录。'],
 };
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber'],['dsh','DeepSeek Harness','D','blue']];
-const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-coding-plan':'Kimi Coding Plan','glm-coding-plan':'GLM Coding Plan','stepfun-token-plan':'StepFun Step Plan','minimax-m-plan':'MiniMax M Plan','custom':'自定义集成'};
+const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-code-plan-cn':'Kimi Code Plan · 中国','kimi-code-plan-global':'Kimi Code Plan · 全球','glm-coding-plan':'GLM Coding Plan','stepfun-token-plan':'StepFun Step Plan','minimax-cn-coding-plan':'MiniMax Coding Plan · 中国','minimax-coding-plan':'MiniMax Coding Plan · 全球','custom':'自定义集成'};
 const protocolNames = {'responses':'Responses','chat-completions':'Chat Completions','messages':'Messages'};
 const stateLabel = value => ({saved:'已保存',native_reload_and_inference_not_verified:'尚未验证工具加载与实际使用',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',restored_reload_pending:'已恢复，重新打开工具后生效',pending_native_changes:'有修改待应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
 const state = {area:'overview', catalog:[], config:null, providers:[], models:[], agents:[], runtime:null, integrations:[], errors:[], revision:null, loaded:false, generation:0, modelKind:'concrete', query:'', busy:false, dialogGeneration:0};
@@ -290,10 +290,9 @@ async function addProvider() {
     '<div id="catalog-fields" hidden><div id="catalog-selector"></div></div>'+
     field('integration','集成类型',state.integrations.find(i=>i.id==='deepseek')?'deepseek':'custom',{options:state.integrations.map(i=>[i.id,integrationNames[i.id] || i.id]),required:true})+
     '<div id="endpoint-fields"></div><div class="form-grid">'+field('id','本地 ID',suggestedId('deepseek'),{required:true,help:'用于模型引用，可使用自己的名称。'})+field('name','显示名称','',{placeholder:'例如：我的 DeepSeek'})+'</div>',()=>{
-      const args={integration:[value('integration')]};
-      if(value('setup')==='catalog'){if(!value('metadata'))throw Error('请先选择目录提供商。');args.metadata=[value('metadata')];}
-      if(value('name'))args.set=['overrides.name',value('name')];
-      if($('f-region'))args.region=[value('region')];
+      const args={set:['integration',value('integration')]};
+      if(value('setup')==='catalog'){if(!value('metadata'))throw Error('请先选择目录提供商。');args.set.push('metadata',value('metadata'));}
+      if(value('name'))args.set.push('overrides.name',value('name'));
       const endpoints=[];document.querySelectorAll('[data-endpoint]').forEach(input=>{if(input.value.trim())endpoints.push(input.dataset.endpoint,input.value.trim());});
       if(endpoints.length)args.endpoint=endpoints;
       return {operation:'provider add',operands:[value('id').trim()],args};
@@ -304,7 +303,7 @@ async function addProvider() {
     if(!idEdited)$('f-id').value=suggestedId(value('setup')==='catalog'&&value('metadata')?value('metadata'):value('integration'));
     const support=integration?.endpoint_support;
     if(support?.kind==='custom')$('endpoint-fields').innerHTML=notice('为需要使用的协议填写对应基础地址，至少填写一个。')+(integration.protocols || []).map(p=>field('endpoint-'+p,protocolNames[p]+' 基础地址','',{type:'url',placeholder:'https://api.example.com/v1'})).join('');
-    else $('endpoint-fields').innerHTML=(support?.regions?.length>1?field('region','服务区域','',{required:true,options:[['','请选择区域'],...support.regions.map(r=>[r.id,r.id])]}):'')+notice('基础地址与原生协议使用所选集成类型的内置配置。'+(support?.regions?.[0]?.endpoints?'<br>'+Object.entries(support.regions[0].endpoints).map(([p,url])=>`${escapeHtml(protocolNames[p])} · <span class="mono">${escapeHtml(url)}</span>`).join('<br>'):''));
+    else $('endpoint-fields').innerHTML=notice('基础地址与原生协议使用所选集成类型的内置配置。'+(support?.endpoints?'<br>'+Object.entries(support.endpoints).map(([p,url])=>`${escapeHtml(protocolNames[p])} · <span class="mono">${escapeHtml(url)}</span>`).join('<br>'):''));
     document.querySelectorAll('[id^="f-endpoint-"]').forEach(input=>input.dataset.endpoint=input.id.slice('f-endpoint-'.length));
   };
   $('f-integration').addEventListener('change',updateIntegration);updateIntegration();

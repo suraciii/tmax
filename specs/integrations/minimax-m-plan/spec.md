@@ -2,10 +2,10 @@
 
 ## Authority and scope
 
-This contract owns the MiniMax M Plan integration, registered as integration ID
-`minimax-m-plan` in this directory `specs/integrations/minimax-m-plan/`. M Plan is
-also marketed as Token Plan. It is a subscription sold at platform.minimax.io
-whose Subscription Key authorizes inference and one display-only quota read.
+This contract owns the regional MiniMax M Plan integrations
+`minimax-cn-coding-plan` and `minimax-coding-plan`. M Plan is also marketed as
+Token Plan. Its Subscription Key authorizes inference and one display-only
+quota read at the corresponding platform destination.
 It extends the [shared integration contract](../spec.md) and its
 [provider-specific index](../spec.md#provider-specific-contracts).
 [Product](../../product/spec.md) owns provider identity and authentication
@@ -37,15 +37,15 @@ Subscription Key.
 | Region binding | A key issued by one platform is not valid on the other region's host. Official error `2049` `invalid API Key` is the cross-host evidence. |
 | Membership sharing | All tools and keys of one membership share one usage pool. Several keys or several local provider instances must not be treated as independent allowances. |
 
-## Region, endpoints, and native protocols
+## Endpoints and native protocols
 
-The region map below is source-qualified under the
+Each integration selects one source-qualified endpoint map under the
 [shared endpoint resolver](../spec.md#endpoint-resolution):
 
-| Region ID | `messages` base |
+| Integration ID | `messages` base |
 | --- | --- |
-| `global` | `https://api.minimax.io/anthropic` |
-| `china` | `https://api.minimaxi.com/anthropic` |
+| `minimax-coding-plan` | `https://api.minimax.io/anthropic` |
+| `minimax-cn-coding-plan` | `https://api.minimaxi.com/anthropic` |
 
 The declared HTTP creation operation appends its suffix at the documented
 base/path boundary:
@@ -56,16 +56,16 @@ base/path boundary:
 
 The base already ends in `/anthropic`, and the Anthropic SDK appends
 `/v1/messages`. The resulting request URLs are
-`https://api.minimax.io/anthropic/v1/messages` for `global` and
-`https://api.minimaxi.com/anthropic/v1/messages` for `china`. A target that
+`https://api.minimax.io/anthropic/v1/messages` for `minimax-coding-plan` and
+`https://api.minimaxi.com/anthropic/v1/messages` for `minimax-cn-coding-plan`. A target that
 expects a base URL must not receive a full request URL that causes the path to
 be appended twice.
 
-Region selection must be explicit. The two region hosts are not interchangeable.
-A missing, ambiguous, or conflicting region selector must be rejected before
-upstream access. The resolver must not infer a region from credentials, catalog
-names, locale, or network location. An upstream failure must not cause regional
-failover.
+Integration selection is explicit; there is no separate region selector. The two
+hosts are not interchangeable. The local provider name, credentials, locale, and
+network location never choose another integration. Upstream failures never
+cause regional failover. These integration IDs match models.dev, but the
+directory's API guidance does not replace these qualified bases or append paths.
 
 This contract declares `messages` as its only inference protocol. The provider
 also publishes OpenAI-compatible and other surfaces; a documented provider path
@@ -105,9 +105,9 @@ source contract `minimax_token_plan_remains_2026_10_28`.
 
 | Item | Contract |
 | --- | --- |
-| Operation | `GET {selected region host}/v1/token_plan/remains` |
-| `global` URL | `https://api.minimax.io/v1/token_plan/remains` |
-| `china` URL | `https://api.minimaxi.com/v1/token_plan/remains` |
+| Operation | `GET {selected integration host}/v1/token_plan/remains` |
+| `minimax-coding-plan` URL | `https://api.minimax.io/v1/token_plan/remains` |
+| `minimax-cn-coding-plan` URL | `https://api.minimaxi.com/v1/token_plan/remains` |
 | Authorization | `Authorization: Bearer <Subscription Key>` |
 | Success gate | `base_resp.status_code === 0` only |
 
@@ -175,7 +175,7 @@ into a numeric allowance.
 | Condition | Observable result and recovery |
 | --- | --- |
 | Wrong key class (`2057` `not token plan token`) | Report the wrong-key-class signal and the affected provider. Direct the user to replace the pay-as-you-go key with the Subscription Key from Plan Details. Do not call a balance endpoint, do not treat the plan as revoked, and do not substitute another product. |
-| Invalid or cross-region key (`2049` `invalid API Key`, `1004` `not authorized`) | Report the affected key and selected region. Require explicit correction of the region selector or the key. Do not attempt regional failover, key rotation, or path probing. |
+| Invalid or cross-region key (`2049` `invalid API Key`, `1004` `not authorized`) | Report the affected authorization and selected integration. Require explicit correction of the integration or key. Do not attempt regional failover, key rotation, or path probing. |
 | HTTP 200 with a business error (`base_resp.status_code` non-zero) | Report `status_code` and `status_msg` verbatim. The only success gate is `status_code === 0`; a 200 response must not be parsed as quota. Do not invent an error code. |
 | Quota acquisition unavailable or failed | Keep quota dated or unknown. Never render zero quota and never treat the failure as authentication revocation. Otherwise qualified inference remains unaffected. |
 | Schema drift, missing fields, or an unrecognized status value | Fail closed. Retain the last good observation as dated. Do not guess a field meaning or normalize a new enum value. |
@@ -183,12 +183,12 @@ into a numeric allowance.
 
 ## Observable acceptance
 
-- Setup exposes the M Plan product, the two region IDs, the exact `messages`
-  base, and the Subscription Key source. A missing or conflicting region
-  selector is rejected before upstream access.
+- Setup exposes the two product-qualified integration IDs, their exact `messages`
+  bases, and the Subscription Key source. Former region fields and the unqualified
+  integration ID are rejected before upstream access.
 - Setup distinguishes a Subscription Key from a pay-as-you-go key without
   treating a key prefix as proof of validity, identity, or entitlement.
-- The quota read targets the selected region host path with Bearer
+- The quota read targets the selected integration host path with Bearer
   authorization, and reports `base_resp.status_code` as the only success gate.
 - Quota display shows the bucket label, the per-window remaining percents, the
   verbatim status values, and the observation date. Unknown fields stay visibly

@@ -79,7 +79,7 @@ pub(super) fn native_login_provider(integration: &str, agent: &str) -> Option<&'
     match (integration, agent) {
         ("codex-subscription", "codex" | "opencode") => Some("openai"),
         ("codex-subscription", "pi" | "omp" | "hermes") => Some("openai-codex"),
-        ("kimi-coding-plan", "omp") => Some("kimi-code"),
+        ("kimi-code-plan-cn" | "kimi-code-plan-global", "omp") => Some("kimi-code"),
         _ => None,
     }
 }
@@ -131,7 +131,7 @@ pub(super) fn auth_namespace_present(path: &Path, selected: &str) -> Result<bool
 pub fn login_source_agents(integration: &str) -> &'static [&'static str] {
     match integration {
         "codex-subscription" => &["codex", "pi", "omp", "opencode", "hermes"],
-        "kimi-coding-plan" => &["omp"],
+        "kimi-code-plan-cn" | "kimi-code-plan-global" => &["omp"],
         _ => &[],
     }
 }
@@ -796,6 +796,44 @@ mod tests {
     use super::*;
     use crate::Request;
     use std::collections::BTreeMap;
+    #[test]
+    fn both_kimi_products_keep_native_login_and_hermes_restrictions() {
+        for integration in ["kimi-code-plan-cn", "kimi-code-plan-global"] {
+            let mut config = Config::empty();
+            config.providers.insert(
+                "p".into(),
+                config::Provider {
+                    integration: Some(integration.into()),
+                    auth: Some(Auth::ApiKey {
+                        key_ref: "test-key".into(),
+                    }),
+                    ..Default::default()
+                },
+            );
+            let hermes = compatibility::Context {
+                agent: "hermes",
+                target: None,
+                provider: None,
+                gateway: false,
+            };
+            assert_eq!(
+                hermes
+                    .assess(&config, "p", "messages", "p/m")
+                    .unwrap_err()
+                    .code,
+                "incompatible"
+            );
+            assert!(
+                hermes
+                    .assess(&config, "p", "chat-completions", "p/m")
+                    .is_ok()
+            );
+            assert_eq!(login_source_agents(integration), &["omp"]);
+            assert_eq!(native_login_provider(integration, "omp"), Some("kimi-code"));
+            assert_eq!(native_login_provider(integration, "hermes"), None);
+        }
+    }
+
     async fn auth_fixture() -> (tempfile::TempDir, Store, Config, Logins) {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());

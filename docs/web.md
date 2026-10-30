@@ -12,7 +12,7 @@ page makes no external font, image, or script requests.
   renewal date does not establish a billing outcome.
 - **Providers** groups independent instances by service. Search by name or ID.
   Add an instance from the local catalog or choose explicit manual setup. The
-  integration registry supplies protocols, regional choices, and endpoint defaults.
+  integration registry supplies product-qualified choices and fixed protocol bases.
   Configure authentication separately. Provider details expose subscriptions,
   observations, inherited metadata, overrides, and explicit upstream refresh.
   **Configure error policy** sets matched HTTP/connection/transport failures, the

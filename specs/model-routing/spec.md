@@ -42,7 +42,7 @@ The selected entry supplies defaults using the following source fields where pre
 | Source metadata | Use in tmax |
 | --- | --- |
 | Provider `name`, `doc` | Display name and documentation link, with explicit local overrides |
-| Provider `api` | Source-labeled endpoint guidance only; never an inferred protocol base, region selector, or inherited endpoint setting |
+| Provider `api` | Source-labeled endpoint guidance only; never an inferred protocol base or inherited endpoint setting |
 | Provider `env` | Suggested credential-reference names; never credentials or automatic environment access |
 | Provider `npm` | Integration-selection evidence, not an instruction to install or execute a package |
 | Model `name`, `description`, `family`, release fields | Model description and grouping metadata |
@@ -69,7 +69,7 @@ changing a source entry, local provider ID, or upstream model ID must use the
 corresponding explicit configuration operation and show affected references.
 The catalog reference and canonical model identity must never replace local IDs.
 
-Provider integration, region/endpoints, authentication, optional subscription
+Provider integration, custom endpoints, authentication, optional subscription
 data, enabled-model selection, priorities, schedules, input declarations,
 priority rules, and model effort maps are local settings, not inherited from models.dev.
 Endpoint consumers use the
@@ -109,7 +109,7 @@ intersections. Revalidate every model-map target and fixed candidate effort
 against the proposed effective declarations after overrides; reject incompatible
 adoption without dropping mappings or fixed values. Optional `--dry-run` exposes
 those effects without applying them. A changed catalog `api` value remains endpoint guidance.
-Accepting that guidance requires an explicit provider endpoint/region change
+Accepting that guidance requires an explicit provider integration/endpoint change
 under the integration resolver, with impact reporting for credential
 destinations, routes, retained sessions, and native agent settings. It is not an
 inherited catalog-default update.
@@ -119,7 +119,7 @@ established session's destination. Changing the selected metadata source uses an
 explicit operation with the same impact reporting and current validation of
 existing overrides and model references.
 
-Refresh must preserve local IDs, integration, region/endpoints, authentication,
+Refresh must preserve local IDs, integration, custom endpoints, authentication,
 subscription information, overrides, enabled models, priorities, effort maps,
 schedules, input declarations, and priority rules. New directory entries are
 suggestions, not automatically enabled route candidates. The `api`, `env`, and
@@ -408,10 +408,11 @@ record an explicit IANA time zone. Setup may suggest the local zone, but a later
 host time-zone change must not change a saved zone. Evaluate the common
 request-admission instant in that zone.
 
-A weekly rule must specify weekdays, a local start and end time, and a replacement
-priority. Intervals include the start and exclude the end. A cross-midnight
-interval belongs to its starting weekday. Equal start and end times are invalid;
-a full-day rule must be explicit. Multiple windows per day must be supported.
+A weekly schedule rule must specify weekdays and a replacement priority. Omitting
+both local times selects the entire day; a timed window requires both start and
+end. Intervals include the start and exclude the end. A cross-midnight interval
+belongs to its starting weekday. Equal start and end times are invalid. Multiple
+windows per day must be supported.
 
 Date-specific rules must support explicit dates and full-day or timed priority
 overrides for holidays and exceptional pricing. A timed cross-midnight date rule
@@ -725,7 +726,7 @@ conversations. An Agent target/native provider may contribute scope only when
 independently established, not inferred from that key. This is request-correctness
 and continuation safety, not a permissions boundary between the user's tools.
 The binding retains the same provider instance, upstream model, resolved
-region/protocol endpoint, and authorization identity for later turns.
+protocol endpoint, and authorization identity for later turns.
 Concurrent first requests for the same session must converge on one selection.
 Calendar and input-validity boundaries, candidate additions, new instances,
 priority/schedule/rule edits, rule reordering or disabling, and input replacement,
@@ -744,7 +745,7 @@ Activation must block affected bound sessions, without reassignment, when their
 retained candidate leaves the alias's explicit list, the alias is disabled, or
 that definition's effective continuity changes. A disabled destination, removed
 upstream authorization, incompatible
-region/protocol/base change, or another incompatible provider/alias edit
+integration/protocol/base change, or another incompatible provider/alias edit
 likewise blocks continuation rather than silently moving the session. Changes to
 another candidate do not block an otherwise compatible retained destination.
 The operation and its optional dry run distinguish these blockers from
@@ -1230,7 +1231,7 @@ response delivery; retained-session errors do not replay on a sibling.
     qualified exhaustion evidence. Neither manual input nor reset announcements
     may expand membership, bypass authorization/capability filters, or cause
     request replay.
-35. Use one known integration region/protocol map for native upstream entries and
+35. Use one known integration fixed protocol map for native upstream entries and
     gateway dispatch. Resolve custom protocols only from explicit bases in the same
     provider; an omitted custom protocol is unavailable. Neither catalog `api`
     nor a request can guess a base or repair `/v1`. Reject undeclared operations

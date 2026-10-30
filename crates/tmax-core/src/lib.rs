@@ -12,6 +12,7 @@ pub mod observations;
 pub mod operations;
 pub mod provider_integration;
 mod reasoning;
+mod retained_integration;
 pub mod routing;
 pub mod secrets;
 pub mod service;

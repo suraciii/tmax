@@ -52,7 +52,9 @@ pub fn native_mismatch(
 ) -> Option<&'static str> {
     match crate::provider_integration::integration_id(provider) {
         Ok("codex-subscription") => Some("gateway_identity_prerequisite"),
-        Ok("kimi-coding-plan") if matches!(provider.auth, Some(Auth::Login { .. })) => {
+        Ok("kimi-code-plan-cn" | "kimi-code-plan-global")
+            if matches!(provider.auth, Some(Auth::Login { .. })) =>
+        {
             Some("native_authorization_unqualified")
         }
         // Go answers a request naming no session with HTTP 400. A client that
@@ -63,7 +65,9 @@ pub fn native_mismatch(
         Ok("opencode-go") if !native.go_session && !native.gateway_attribution(provider) => {
             Some("native_session_required")
         }
-        Ok("kimi-coding-plan") if native.client == NativeClient::Unknown => {
+        Ok("kimi-code-plan-cn" | "kimi-code-plan-global")
+            if native.client == NativeClient::Unknown =>
+        {
             Some("native_client_required")
         }
         Ok(_) => None,
@@ -196,6 +200,43 @@ fn conversation_seed(headers: &HeaderMap) -> String {
     "anonymous".to_owned()
 }
 
+#[cfg(test)]
+mod regional_tests {
+    use super::*;
+    use crate::config::Provider;
+
+    #[test]
+    fn both_kimi_products_require_qualified_identity_and_reject_login_handoff() {
+        for integration in ["kimi-code-plan-cn", "kimi-code-plan-global"] {
+            let mut provider = Provider {
+                integration: Some(integration.into()),
+                auth: Some(Auth::ApiKey {
+                    key_ref: "test".into(),
+                }),
+                ..Default::default()
+            };
+            let mut native = NativeRequirements {
+                client: NativeClient::Unknown,
+                go_session: false,
+                unattributed: true,
+            };
+            assert_eq!(
+                native_mismatch(&provider, &native),
+                Some("native_client_required")
+            );
+            native.client = NativeClient::Pi;
+            assert_eq!(native_mismatch(&provider, &native), None);
+            provider.auth = Some(Auth::Login {
+                via: "owner".into(),
+                session_ref: Some("test".into()),
+            });
+            assert_eq!(
+                native_mismatch(&provider, &native),
+                Some("native_authorization_unqualified")
+            );
+        }
+    }
+}
 #[cfg(test)]
 #[path = "client_identity_tests.rs"]
 mod tests;

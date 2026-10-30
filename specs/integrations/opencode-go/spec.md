@@ -80,11 +80,11 @@ agent version, and transport together. This evidence is informational; model
 protocol availability follows [endpoint resolution](../spec.md#endpoint-resolution).
 The known map under that resolver is:
 
-| Region ID | Native protocol | Exact protocol base | Declared inference operation beneath that base |
-| --- | --- | --- | --- |
-| `default` | `chat-completions` | `https://opencode.ai/inference/go/openai/v1` | `POST /chat/completions` |
-| `default` | `responses` | `https://opencode.ai/inference/go/openai/v1` | `POST /responses` |
-| `default` | `messages` | `https://opencode.ai/inference/go/anthropic` | `POST /v1/messages` |
+| Native protocol | Exact protocol base | Declared inference operation beneath that base |
+| --- | --- | --- |
+| `chat-completions` | `https://opencode.ai/inference/go/openai/v1` | `POST /chat/completions` |
+| `responses` | `https://opencode.ai/inference/go/openai/v1` | `POST /responses` |
+| `messages` | `https://opencode.ai/inference/go/anthropic` | `POST /v1/messages` |
 
 The [Inference API](https://opencode.ai/v2/docs/console/api/inference/) documents
 the HTTP creation methods. The
@@ -339,7 +339,7 @@ Go-specific error codes or undocumented management APIs.
    allowance. A same-workspace key replacement preserves the provider and user
    subscription data while invalidating credential-derived observations.
 3. Each advertised direct or gateway scenario resolves the same selected provider
-   key, native scope, region/protocol map, exact model, and declared operation.
+   key, native scope, fixed protocol map, exact model, and declared operation.
    Discovery uses its separate declared URL; it cannot be guessed beneath the
    inference base. Undeclared methods, paths, and transports remain unavailable.
    A second OpenCode saved key cannot silently switch existing consumers.

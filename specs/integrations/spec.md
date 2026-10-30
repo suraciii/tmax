@@ -265,7 +265,7 @@ Each provider contract must define:
 
 - Its service/access product, exclusions, credential source, owner, refresh or
   replacement behavior, and how upstream identity can remain unknown.
-- Concrete direct and gateway scenarios, the finite region/protocol endpoint map,
+- Concrete direct and gateway scenarios, the finite integration/protocol endpoint map,
   native scope, and conditional or unavailable combinations.
 - Supported HTTP method/path operations and transports, model-selection inputs,
   required client/session identity, and original-resource binding requirements
@@ -315,26 +315,28 @@ identity, or permission to select another authorization.
 
 ## Endpoint resolution
 
-A known integration owns one finite map from its exact region IDs and native
-protocols to upstream base URLs. Its provider contract owns the source evidence
-and known limitations for that map. Direct agent configuration and gateway
-forwarding must use the same resolved map entry. A region ID of `default` names
-one published endpoint set; it is not a claim about service geography.
+A known integration identifies one access product and one fixed protocol-to-base
+map. Regional products are distinct integration IDs, not another provider field.
+Local provider names remain arbitrary labels and never select a destination.
+Direct agent configuration and gateway forwarding use the same map.
 
-A known provider with regional alternatives must select a region explicitly or
-supply an exact known per-protocol base that identifies one region
-unambiguously. A singleton published `default` endpoint set may be selected
-without a region or base selector. Multiple supplied bases and an explicit
-region must select the same map entry. A missing selector for regional
-alternatives, or an ambiguous, unknown, or conflicting selector, must be rejected
-before upstream access. The resolver must not infer region from credentials,
-catalog names, locale, network location, or a trial request.
+| Integration ID | Product destination | Owning contract |
+| --- | --- | --- |
+| `kimi-code-plan-cn` | Kimi Coding Plan, China | [Kimi](kimi-coding-plan/spec.md#endpoints-and-native-protocols) |
+| `kimi-code-plan-global` | Kimi Coding Plan, overseas | [Kimi](kimi-coding-plan/spec.md#endpoints-and-native-protocols) |
+| `minimax-cn-coding-plan` | MiniMax M/Token Plan, China | [MiniMax](minimax-m-plan/spec.md#endpoints-and-native-protocols) |
+| `minimax-coding-plan` | MiniMax M/Token Plan, global | [MiniMax](minimax-m-plan/spec.md#endpoints-and-native-protocols) |
 
-For a known integration, supplied bases are selectors into the map, not arbitrary
-overrides. Selecting a region resolves its declared protocol bases; it does not
-qualify every model, operation, transport, or credential for those protocols.
-Missing map entries remain unavailable. An upstream failure must not cause
-regional failover, a different service product, or a protocol change.
+These IDs match the corresponding [models.dev directory](https://models.dev/api.json)
+entries, but catalog `api` and `npm` values do not override qualified operation
+or authentication contracts. Other supported integration IDs remain unchanged.
+Known integrations reject supplied `endpoints`; desired configuration rejects
+`region` and the former unqualified Kimi/MiniMax integration IDs. No alias or
+implicit default chooses between regional products.
+
+Changing integration is an explicit destination change, not proof of key
+portability or safe conversation continuation. Missing protocol entries remain
+unavailable. An upstream failure never selects another region or product.
 
 A custom provider must instead declare an explicit base for each protocol it
 uses within that one provider instance. Its omitted protocols remain unavailable.
@@ -344,7 +346,7 @@ append or remove `/v1`, or probe alternative bases. The integration's declared
 operation path is appended only at its documented base/path boundary; this is
 not permission to repair the supplied base. The
 [configuration endpoint schema](../configuration/spec.md#provider-endpoints)
-owns persisted `region` and `endpoints` fields.
+owns the `endpoints` field for custom integrations only.
 
 Model protocol availability follows the provider's resolved endpoints, not a
 per-model approval list. An unverified model/protocol combination must not block
@@ -364,8 +366,8 @@ This preference must not change existing selections, native defaults, or request
 Every endpoint consumer must use this resolution: direct configuration, gateway
 dispatch, model compatibility checks, and provider discovery. Qualified
 provider-specific discovery, identity, quota, and balance operations must use
-their integration-declared destinations for the selected access product and
-region. They must not derive an undeclared metadata URL from an inference base.
+their integration-declared destinations for the selected access product. They
+must not derive an undeclared metadata URL from an inference base.
 Catalog `api` metadata is endpoint guidance under the
 [catalog contract](../model-routing/spec.md#model-catalog), not a universal base
 or another endpoint-precedence layer.
@@ -404,7 +406,7 @@ preserving them does not widen the operation set.
 
 An ID-only operation, such as retrieval, deletion, or cancellation of an upstream
 response or file, requires a reliable binding to the original provider instance,
-region, protocol endpoint, and authorization. Its integration must qualify how
+integration, protocol endpoint, and authorization. Its integration must qualify how
 the native/session scope or another supported original binding establishes that
 identity and any authorization-generation continuity. The resource ID, its
 spelling, a caller-supplied account hint, current configuration defaults, or the
@@ -570,7 +572,7 @@ An upstream native provider entry must issue a real provider request without
 the tmax server on the inference path.
 
 Each advertised gateway route must be exercised for its declared method/path and
-transport set, resolved region/protocol bases, streaming, a tool-call/result
+transport set, resolved integration/protocol bases, streaming, a tool-call/result
 round trip, cancellation, auth expiry or revocation, upstream errors, correct
 account selection, configured-model boundaries, and supported continuation.
 Qualification must cover rejection of undeclared operations and missing or conflicting endpoint

@@ -231,7 +231,7 @@ fn request(command: &[&str], operands: &[&str], sets: &[&str]) -> Request {
 #[tokio::test]
 async fn protected_web_key_descriptor_saves_existing_provider_with_signed_rules() {
     use std::os::fd::AsRawFd;
-    let base = "# signed fixture\nversion=1\n[providers.synthetic]\nintegration='custom'\n[providers.synthetic.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.synthetic.models.signed-priority]\npriority=-10\ntimezone='UTC'\nschedule=[{all_day=true,priority=-10,weekdays=['mon']}]\npriority_rules=[{id='synthetic-negative',input='weekly',priority=-10,remaining_at_least_percent='1',reset_within_seconds=86400}]\n[providers.synthetic.inputs.weekly]\nkind='quota'\nmax_age_seconds=3600\nmodels=['signed-priority']\nscope='synthetic-scope'\nsource='manual'\n";
+    let base = "# signed fixture\nversion=1\n[providers.synthetic]\nintegration='custom'\n[providers.synthetic.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.synthetic.models.signed-priority]\npriority=-10\ntimezone='UTC'\nschedule=[{priority=-10,weekdays=['mon']}]\npriority_rules=[{id='synthetic-negative',input='weekly',priority=-10,remaining_at_least_percent='1',reset_within_seconds=86400}]\n[providers.synthetic.inputs.weekly]\nkind='quota'\nmax_age_seconds=3600\nmodels=['signed-priority']\nscope='synthetic-scope'\nsource='manual'\n";
     for existing_auth in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
@@ -604,7 +604,7 @@ async fn stale_guard_and_dry_run_never_initialize_missing_home() {
     let mut r = Request {
         command: vec!["provider".into(), "add".into()],
         operands: vec!["p".into()],
-        arguments: BTreeMap::from([("integration".into(), vec!["deepseek".into()])]),
+        arguments: BTreeMap::from([("set".into(), vec!["integration".into(), "deepseek".into()])]),
         dry_run: true,
         if_revision: Some("absent".into()),
     };

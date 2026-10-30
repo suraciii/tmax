@@ -19,8 +19,8 @@ _Avoid_: Local provider ID, credential, model developer
 
 **Provider integration**:
 A supported definition of upstream protocols, authentication methods, endpoint
-rules, and operations. It describes how tmax accesses an upstream, not a user
-account or a universal service identity.
+rules, and operations. A known-service definition identifies one access product
+and fixed destinations, including its regional choice, not a user account.
 _Avoid_: Integration as a standalone name, provider instance, subscription, catalog provider, Agent integration
 
 **Account identity**:

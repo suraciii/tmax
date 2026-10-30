@@ -6,10 +6,9 @@
 version = 1
 
 # Explicit illustrative outbound proxy choice, not a claim that it is running.
-# Direct policy canonically omits [network]; manual mode = "direct" remains valid.
+# Direct policy omits [network]; a present table selects its required proxy URL.
 # This policy governs tmax-owned outbound work, not native-agent networking.
 [network]
-mode = "proxy"
 proxy_url = "http://127.0.0.1:8080"
 
 # One independent gateway and shared key; no Agent registration is needed to serve it.
@@ -21,7 +20,6 @@ autostart = false
 
 [providers.opencode-go]
 metadata = "opencode-go"
-region = "default"
 
 [providers.opencode-go.auth]
 method = "api-key"
@@ -31,7 +29,7 @@ key_ref = "go-primary"
 plan = "OpenCode Go"
 
 # Incremental provider setup does not require authentication or registered models.
-# Its published singleton default needs no explicit region/base selector.
+# Its fixed map needs no explicit base selector.
 [providers.opencode-go-setup]
 metadata = "opencode-go"
 
@@ -106,9 +104,7 @@ output = 8192
 [providers.deepseek]
 metadata = "deepseek"
 
-# A known exact base selects the endpoint set; other protocols use its known map.
-[providers.deepseek.endpoints]
-messages = "https://api.deepseek.com/anthropic"
+# This integration selects one fixed protocol map without regional settings.
 
 [providers.deepseek.auth]
 method = "api-key"

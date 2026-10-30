@@ -78,7 +78,7 @@ keeps its actual original path; login-source generation changes follow
 [authorization replacement](../providers/authentication/spec.md#authorization-replacement).
 
 ```sh
-tmax provider add deepseek --metadata deepseek
+tmax provider add deepseek --set metadata deepseek
 tmax provider key set deepseek --key-stdin
 tmax model add deepseek/deepseek-flash
 tmax model alias add L0 --protocol chat-completions --candidate deepseek/deepseek-flash

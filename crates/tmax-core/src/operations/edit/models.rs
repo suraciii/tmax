@@ -300,9 +300,6 @@ fn window(r: &Request) -> Result<Value> {
             put(&mut v, &[key], string(s))?;
         }
     }
-    if arg(r, "all-day").is_some() {
-        put(&mut v, &["all_day"], Value::Boolean(true))?;
-    }
     for (flag, key) in [
         ("effective-from", "effective_from"),
         ("effective-until", "effective_until"),
