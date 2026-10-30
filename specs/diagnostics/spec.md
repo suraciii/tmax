@@ -138,8 +138,9 @@ Explicit `gateway key show` and its protected Web reveal equivalent are sensitiv
 retrieval operations, not diagnostic inspection. Their normal results report
 only protected-delivery outcomes under the
 [key-disclosure contract](../cli/providers/authentication/spec.md#shared-gateway-key).
-Status, source inspection, history, and ordinary management results never expose
-the key. Key replacement reports known managed dependencies separately from the
+Status, source inspection, ordinary history, and ordinary management results never
+expose the key. The separate error log follows its own content boundary. Key
+replacement reports known managed dependencies separately from the
 unknown, nonenumerable unmanaged-client scope; it cannot claim all clients updated.
 
 An explicitly configured service acquisition interval is a separate opt-in under
@@ -203,8 +204,9 @@ by the continuity contract.
 
 A request record is a minimal diagnostic event, not an OpenTelemetry trace,
 conversation transcript, or replay record. Only the following semantic data may
-be retained or returned by request-diagnostic views; serialized field names
-belong to the CLI contract.
+be retained or returned by ordinary request-history views; serialized field names
+belong to the CLI contract. The separate
+[error log](#persistent-gateway-error-log) has its own content boundary.
 History lists may show compact summaries. Explicit detail reads expose retained
 decision evidence and its gaps without rerunning selection or adding unretained data.
 
@@ -255,10 +257,11 @@ reconstruct or relabel the original attribution.
 
 ### Data minimization and safe errors
 
-Request diagnostics must not retain or render request/response bodies, prompts,
-completions, reasoning content, tool arguments or results, credentials,
+Ordinary request history must not retain or render request/response bodies,
+prompts, completions, reasoning content, tool arguments or results, credentials,
 authentication/session tokens, headers, raw upstream errors, raw URLs, or arbitrary
 request fields. There is no request-body capture mode or opt-in archive feature.
+The separate [error log](#persistent-gateway-error-log) may retain failure details.
 The rule/input scalar allowlist permits neither raw source bodies, source
 reference URLs, HTML/Markdown, arbitrary source fields, executable expressions,
 nor upstream account/native session identifiers. A current input-inspection view
@@ -267,10 +270,11 @@ provenance document or URL into a request record. Only allowlisted typed usage
 counters may be extracted from usage responses; unknown usage fields must not be
 copied as an opaque object.
 
-The allowlist applies to error paths as well as successful requests. Error text
-from providers, native tools, secret resolvers, parsers, and transports must not be
-copied into diagnostic records or management output. Safe explanations must use
-controlled reason codes/templates and validated, nonsecret local references.
+The ordinary-history allowlist applies to error paths as well as successful
+requests. Error text from providers, native tools, secret resolvers, parsers, and
+transports must not be copied into ordinary diagnostic records or management output.
+Safe explanations must use controlled reason codes/templates and validated,
+nonsecret local references. The separate error log is governed by its own boundary.
 An upstream code is safe only if the integration explicitly recognizes its
 bounded format and meaning; arbitrary error strings are not safe codes.
 
@@ -306,14 +310,106 @@ A local deadline is not evidence of upstream credential revocation or exhausted
 quota. No text during valid reasoning is not itself a timeout or failed request
 under the [transport-deadline contract](../product/spec.md#transport-deadlines).
 
+## Persistent gateway error log
+
+tmax retains bounded gateway failure evidence under `~/.tmax/error.log`,
+separate from ordinary request history. It records local rejections, non-success
+terminal outcomes including cancellation, interruption and unknown completion,
+upstream non-2xx responses, transport failures, and HTTP 200 stream errors. A failed
+upstream attempt remains evidence even if a later fallback succeeds. For an earlier
+failure, capture only body chunks already ready without delaying fallback; mark an
+incomplete body as truncated or retain a placeholder when unavailable. Direct
+upstream traffic outside the gateway is not covered.
+
+Capture raw upstream error JSON, events, and non-2xx response bodies when available,
+and transport error descriptions with URLs removed. Do not archive request bodies,
+successful response content, or conversation traffic. Do not intentionally import
+secret values or authentication headers into the log. Raw upstream errors may echo
+request snippets or other sensitive material; truncation is not a privacy scrub.
+Keep both log files restricted to the current OS user and do not upload them automatically.
+
+Each line is one compact JSON object for a terminal request with error evidence.
+A completed request without failed attempts is not logged. The root contains no
+record, decision, usage, or configuration snapshot.
+
+| Root field | Meaning |
+| --- | --- |
+| `time` | Terminal logging time in UTC RFC 3339 format with milliseconds. |
+| `level`, `event` | Level and event for the final outcome, as listed below. |
+| `request_id` | Local request correlation ID. |
+| `provider`, `model` | Final selected provider and qualified model, or null when unavailable. |
+| `protocol`, `stage` | Request protocol and final stage. |
+| `http_status` | Final HTTP status, or null when unavailable. |
+| `outcome` | Final request outcome, independent of failed attempts. |
+| `reason_code` | Final reason code, or null when unavailable. |
+| `duration_ms` | Request duration in milliseconds, or null when unavailable. |
+| `upstream_request_id` | Upstream request ID from the final matching failed provider and model detail, or null. Never borrow an earlier fallback identity. |
+| `error_message` | Readable final-outcome summary, at most 512 UTF-8 bytes. |
+| `errors` | Array of failed attempt details described below. |
+| `truncated` | Whether a summary or raw capture was truncated, or detail evidence was omitted. |
+| `evidence_gap` | Whether request diagnostics report a gap or retained log evidence was truncated. |
+
+| Final `outcome` | `event` | `level` |
+| --- | --- | --- |
+| `failed` | `gateway.request_failed` | `error` |
+| `completed` with failed attempts | `gateway.request_recovered` | `warn` |
+| `rejected` | `gateway.request_rejected` | `warn` |
+| `cancelled` | `gateway.request_cancelled` | `info` |
+| `interrupted` | `gateway.request_interrupted` | `warn` |
+| `unknown` | `gateway.request_unknown` | `warn` |
+
+Each `errors` item represents a failed attempt or failure before dispatch:
+
+| Detail field | Meaning |
+| --- | --- |
+| `time` | Capture time in UTC RFC 3339 format with milliseconds, distinct from terminal logging time. |
+| `attempt` | One-based dispatch count, or null before dispatch. |
+| `provider`, `model` | Provider and qualified model for this failure, when available. |
+| `stage`, `http_status` | Failure stage and HTTP status when available. |
+| `upstream_request_id` | Upstream request ID for this failure, when available. |
+| `outcome` | Always `failed`. |
+| `error_message` | Readable failure summary, at most 512 UTF-8 bytes. |
+| `error_details` | Parsed JSON value for complete valid JSON; otherwise the original captured text, including plain text, malformed JSON, and truncated bodies. |
+| `truncated` | Whether this detail or its summary was truncated. |
+
+For a JSON error summary, use a message at `/message`, `/error/message`, or
+`/response/error/message`, a string at `/error`, or the JSON string itself when
+available. Use a neutral summary for other JSON and retain its `error_details`.
+Do not invent an error code or cause. For a failed final outcome, use the last
+detail matching the final provider and model for the root summary. Other final
+outcomes use a neutral finite summary and the separate `reason_code`; a recovered
+request must not present an earlier failure as its final failure.
+
+Retain at most 64 KiB of aggregate raw UTF-8 error content across at most 16
+details per row. Limit identifiers, stage, and reason code to 512 UTF-8 bytes.
+Truncated summaries, raw captures, identifiers, or omitted details mark truncation
+and an evidence gap. Ordinary history remains independent. Rotation, capture gaps,
+and traffic outside the gateway limit coverage. Failure to write error evidence,
+including a busy log lock, must be reported as an evidence gap and must not change
+forwarding. Log lock acquisition must not wait.
+
+Append only the new row without reading, parsing, or rewriting existing log
+content. Before an append would exceed 4 MiB, rename the active file to
+`error.log.1`, replacing the previous backup, and open a fresh active file. The two
+files retain at most 8 MiB in total. Older generations age out. After an append
+failure, attempt to truncate only the newly written suffix before releasing the
+lock. A failed rollback or crash may leave a partial final line; atomic row writes
+are not guaranteed.
+
+The active file is created when the first error is recorded. Users inspect the log
+files directly with ordinary file tools, including while the service is stopped or
+configuration is invalid. There is no dedicated CLI or Web query, error-log cleanup
+command, or new configuration option. Missing entries do not establish that no
+errors occurred.
+
 ## Session-only bounded history
 
-Request history and its derived usage aggregates must exist only in bounded
-memory for the lifetime of the gateway process. tmax must not persist them to disk
-or reconstruct them from durable logs after restart. A new process must report
-that earlier request coverage is unavailable, not infer earlier successes,
-failures, or usage. Returning the retained safe metadata through CLI/Web reads
-does not create a persistent history or archive capability.
+Ordinary request history and its derived usage aggregates must exist only in
+bounded memory for the lifetime of the gateway process. tmax must not persist them
+to disk or reconstruct them from the separate [error log](#persistent-gateway-error-log)
+after restart. A new process must report that earlier request coverage is unavailable,
+not infer earlier successes, failures, or usage. Returning retained safe metadata
+through CLI/Web reads does not create a persistent history or archive capability.
 
 Persisted current input heads and the last acquisition attempts have the
 independent [retention lifecycle](../model-routing/inputs/spec.md#retention-and-removal).
@@ -380,6 +476,8 @@ identity/time. Its aggregates no longer include cleared records. No operation
 snapshot is persisted or reused by another call. A dry run promises neither
 future retention nor future-request suppression.
 
+`history clear` does not delete the separate persistent error log.
+
 Clearing or evicting history, stopping the gateway, and restarting it must not delete
 session bindings or their original decision basis, protected native-restore/recovery
 information, authentication, current input heads/last acquisition attempts,
@@ -403,9 +501,10 @@ bill. Clearing history does not reset an upstream allowance.
 Diagnostics record failures; they do not own routing policy. Explicit
 [request fallback and failure priority policies](../model-routing/spec.md#request-fallback-and-failure-priority-override)
 own attempt permission, counters, and fixed-expiry overrides independently of
-retained diagnostic history. Record each attempted provider/model, HTTP status
-or transport reason, and final outcome without raw upstream error bodies,
-request content, or secrets. Bounded omissions remain explicit evidence gaps.
+retained diagnostic history. Ordinary history records each attempted provider/model,
+HTTP status or transport reason, and final outcome without raw upstream error bodies,
+request content, or secrets. The separate error log follows its own content boundary.
+Bounded omissions remain explicit evidence gaps.
 Capture an attempt when dispatch begins, before its response headers arrive.
 Cancellation and stop finalize the pending attempt with an honest terminal
 outcome, not a lingering in-progress entry or a fabricated provider failure.
@@ -433,19 +532,19 @@ are explained separately; no diagnostic summary implicitly creates a policy.
    input-head, rule-order, or identity changes cannot rewrite a recorded selection
    reason or reconstruct absent old facts.
 4. Malformed model values and credential-bearing dynamic errors appear only as
-   safe classifications. Diagnostics expose no bodies, tokens, headers, or raw
-   errors. A failed stream stays failed or incomplete with honest usage and
-   execution uncertainty while preserving native error forwarding.
+   safe classifications in ordinary history. The separate error log follows its
+   own content boundary. A failed stream stays failed or incomplete with honest
+   usage and execution uncertainty while preserving native error forwarding.
 5. Limits and retained coverage are discoverable. Eviction, empty history, native
    upstream traffic, and restart do not imply success, bypass, or complete coverage.
 6. An optional history-clear dry run reports current terminal coverage without
    freezing membership or creating a prerequisite. Actual execution snapshots
    current terminal records and preserves concurrent and in-progress requests.
    An intervening clear/restart during that operation rejects its stale mutation.
-   Cleared-record contributions disappear; restart drops all request history.
-   Both preserve session bindings and original decision evidence, recovery
-   information, authentication, current input heads/attempts, provider quota
-   observations, and settings.
+   Cleared-record contributions disappear; restart drops ordinary request history.
+   Both preserve the separate error log, session bindings and original decision
+   evidence, recovery information, authentication, current input heads/attempts,
+   provider quota observations, and settings.
 7. Retained summaries expose unknown/partial usage instead of zero and never
    create official bills, all-time totals, or generic failure-based exclusions.
 8. For the Codex reset, weekly GLM quota, and expensive-period

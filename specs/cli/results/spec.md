@@ -86,10 +86,12 @@ still applies when another operand is invalid; invalid/conflicting format option
 use default JSON. Omit irrelevant context; use null when a needed fact is unknown.
 Name rejected command/option/field but redact arbitrary positional values and
 secret-looking input rather than echo argv. Config errors name paths, not rejected
-values. No result, stderr, example,
-log, or raw upstream error exposes secrets, protected/rejected content, or
-unredacted credentials. Shared gateway-key show is the sole explicit protected
-delivery exception, never a generic export of upstream secrets. Its ordinary
+values. Ordinary results, stderr, examples, and logs must not expose secrets,
+protected/rejected content, or unredacted credentials. The separate
+[gateway error log](../../diagnostics/spec.md#persistent-gateway-error-log)
+may contain raw upstream error content, which can echo sensitive material.
+Shared gateway-key show is the sole explicit protected key-delivery operation,
+never a generic export of upstream secrets. Its ordinary
 result contains only reference/readiness and delivery outcome. Partial/uncertain
 delivery reports exit 4 with the actual `secret_delivery` boundary, not a false
 effect-free cancellation or a replay of secret bytes.

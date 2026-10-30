@@ -40,8 +40,9 @@ payload records use storage version 2 and are plaintext files restricted to the
 current OS account; file permissions are not encryption. This storage change does
 not change the desired configuration schema version. The [product secret-protection
 contract](../product/spec.md#local-access-and-secret-protection) owns that access
-boundary and credential handoff. Request history remains in memory, not in the
-configuration or any persistent history store.
+boundary and credential handoff. Ordinary request history remains in memory, not
+in the configuration or a persistent history store. The separate
+[error log](../diagnostics/spec.md#persistent-gateway-error-log) retains failures.
 
 The root requires `version = 1`; this revision does not introduce a new schema
 version. Other root fields are `providers`, `model_aliases`, `agents`, `gateway`,

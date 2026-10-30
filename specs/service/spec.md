@@ -135,7 +135,9 @@ A Web port initially allocated by the OS becomes the acknowledged address for
 recovery within that activation.
 Automatic recovery must not launch a browser.
 Loss of in-memory request history on process exit must remain an evidence gap;
-retained conversation bindings follow their independent persistence contract.
+the separate [error log](../diagnostics/spec.md#persistent-gateway-error-log) does
+not reconstruct that history. Retained conversation bindings follow their independent
+persistence contract.
 
 ## Native-manager and permission boundary
 

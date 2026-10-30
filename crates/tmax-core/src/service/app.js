@@ -765,7 +765,7 @@ async function history() {
   const generation=state.generation;const container=$('history-panel');if(!container)return;
   container.innerHTML='<div class="loading">正在读取本地请求记录…</div>';
   try {const data=await read('history list');if(state.area!=='gateway'||generation!==state.generation||container!==$('history-panel'))return;
-    container.innerHTML=data.records?.length?`<div class="panel-body"><h3 class="subheading">${data.records.length} 条保留记录</h3>${notice('仅包含当前进程保留的网关请求，不代表上游账单或全部账户用量。')}${data.records.map(record=>detail(record,'查看请求 '+(record.handle || record.id || record.started_at || '详情'))).join('')}${detail(data.coverage,'查看记录覆盖范围与保留限制')}</div>`:empty('还没有网关请求','当前进程没有保留的请求记录。直接连接流量不会出现在这里。','','history',true);
+    container.innerHTML=data.records?.length?`<div class="panel-body"><h3 class="subheading">${data.records.length} 条保留记录</h3>${notice('仅包含当前进程保留的网关请求，不代表上游账单或全部账户用量。')}${data.records.map(record=>detail(record,'查看请求 '+(record.request || '详情'))).join('')}${detail(data.coverage,'查看记录覆盖范围与保留限制')}</div>`:empty('还没有网关请求','当前进程没有保留的请求记录。直接连接流量不会出现在这里。','','history',true);
   }catch(error){if(container===$('history-panel'))container.innerHTML=notice(escapeHtml(error.message),'error');}
 }
 async function revealKey() {

@@ -120,7 +120,9 @@ program. Users may use their own calling agent to uninstall it.
 tmax owns one personal configuration at `~/.tmax/tmax.toml`, independent of the
 calling agent and working directory. All tmax-owned persisted data, caches,
 logs, protected secrets, session bindings, and recovery records belong under
-`~/.tmax`; request history remains in memory under its retention contract.
+`~/.tmax`; ordinary request history remains in memory. The separate
+[error log](../diagnostics/spec.md#persistent-gateway-error-log) retains bounded
+failure details locally.
 Native-agent configuration and native-owned credentials remain in their native
 locations. Platform startup registration is an external integration, not a
 second tmax data directory.
@@ -950,9 +952,10 @@ credential stores follow the explicit credential-handoff rule and are not
 imported into tmax.
 
 The [diagnostics contract](../diagnostics/spec.md) owns operational evidence,
-request-history coverage, and cleanup. Diagnostics must not expose provider
-secrets through status reads or error details. Provider URLs must not be taken
-from inference request input, and credential-bearing redirects to another
+request-history coverage, and cleanup. Status reads and ordinary error details must
+not expose provider secrets. The separate persistent error log may contain raw
+upstream errors under its stated access and content boundaries. Provider URLs must
+not be taken from inference request input, and credential-bearing redirects to another
 origin must not be followed.
 
 ## Acceptance boundary

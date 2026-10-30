@@ -26,7 +26,9 @@ Timing follows [transport deadlines](../../../product/spec.md#transport-deadline
 not an invented generation/first-token deadline. Dry-run neither reads credentials
 nor contacts upstream.
 
-History is memory-only, without content archives/logs or body capture. Time filters
+Ordinary history is memory-only, without content archives or body capture; the
+separate [error log](../../../diagnostics/spec.md#persistent-gateway-error-log)
+retains bounded failure details. Time filters
 use admission time, or receipt time for pre-admission rejection, in `[since, until)`;
 records identify which. Filters combine with AND. Model is exact public ID and
 requires protocol; protocol alone is invalid. Outcome is `in-progress`, `rejected`,
@@ -55,9 +57,9 @@ in-progress work that remains, without retaining a record set. Actual clear
 recomputes process/history identity and freezes membership only at its serialized
 boundary. Later completions/arrivals remain. In-operation reset/process replacement
 rejects before clearing the wrong history. Clear changes only history/derived
-aggregates, not settings, bindings, recovery, or quota data. It never starts a
-service to invent history. Results report cleared count, retained in-progress
-count, process/history scope, and actual coverage changes.
+aggregates, not the persistent error log, settings, bindings, recovery, or quota
+data. It never starts a service to invent history. Results report cleared count,
+retained in-progress count, process/history scope, and actual coverage changes.
 
 Examples: `tmax model probe deepseek/deepseek-flash --protocol chat-completions
 --transport TRANSPORT --dry-run`, the same without dry-run,

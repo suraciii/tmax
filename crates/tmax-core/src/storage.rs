@@ -189,6 +189,21 @@ pub(crate) fn storage_error() -> Error {
     )
 }
 
+/// Open a restricted regular file for append without reading or replacing its contents.
+pub(crate) fn open_append(path: &Path) -> Result<File> {
+    ensure_directory(path.parent().ok_or_else(storage_error)?)?;
+    check_ancestors(path)?;
+    let mut options = OpenOptions::new();
+    options.append(true).create(true);
+    secure_options(&mut options);
+    let file = options.open(path).map_err(|_| storage_error())?;
+    if !file.metadata().map_err(|_| storage_error())?.is_file() {
+        return Err(storage_error());
+    }
+    restrict_file(&file, path)?;
+    Ok(file)
+}
+
 pub(crate) fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
     read_optional_bounded(path, usize::MAX)
 }
@@ -297,12 +312,12 @@ pub(crate) fn atomic_create(path: &Path, bytes: &[u8]) -> Result<bool> {
 }
 
 #[cfg(not(windows))]
-fn replace_file(source: &Path, destination: &Path) -> Result<()> {
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> Result<()> {
     fs::rename(source, destination).map_err(|_| storage_error())
 }
 
 #[cfg(windows)]
-fn replace_file(source: &Path, destination: &Path) -> Result<()> {
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {

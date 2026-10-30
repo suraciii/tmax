@@ -363,8 +363,57 @@ acceptable. Unknown clients, retained sessions, upstream-owned resource state,
 local rejection, and requests whose response delivery has begun cannot use
 fallback. Each provider is attempted at most once per request; exhaustion returns
 the last upstream rejection or transport failure, with a bounded attempt chain
-in gateway request details. Diagnostics retain status/reason, not raw error bodies.
+in gateway request details. Failed attempts also appear in the separate local
+[error log](#gateway-error-log), even if a later fallback succeeds.
 
+
+## Gateway error log
+
+Read the local error log directly with ordinary file tools:
+
+```sh
+jq -r '.error_message' ~/.tmax/error.log
+jq '.errors[].error_details' ~/.tmax/error.log
+jq 'select(.http_status == 200 and .outcome == "failed")' ~/.tmax/error.log
+tail -F ~/.tmax/error.log
+```
+
+The file is created when the gateway first records an error. It remains readable
+after the service stops or the saved configuration becomes invalid. There is no
+dedicated CLI or Web query for error logs. The log is separate from current-process
+`history list`, `history inspect`, `history clear`, and usage aggregates. Clearing
+history does not delete the log.
+
+tmax stores the active log at `~/.tmax/error.log`, restricted to the current OS user.
+It does not automatically upload the file or intentionally store authentication
+headers or secret values. Raw upstream error bodies and events may echo request
+snippets or other sensitive content, so review the file before sharing it. The log
+does not archive request bodies or successful response content. Local rejection,
+transport failure, HTTP 200 stream failure, cancellation, interruption, and unknown
+completion can also be recorded. An earlier fallback failure can lack its response
+body; the detail identifies that gap.
+
+Each line is a compact terminal request event, with a final `outcome` and an
+`errors` array of failed attempt details. A completed request with earlier failures
+is a recovered event at warning level, not a final failure. The root `time` is the
+terminal logging time; detail times are capture times. Error details contain parsed
+JSON when complete and valid, or captured text for plain, malformed, or truncated
+content. Root and detail `error_message` fields are readable summaries. The root
+contains no record or decision snapshot.
+
+Before an append would exceed 4 MiB, tmax renames the active log to `error.log.1`,
+replacing the previous backup, and creates a fresh active log. The two files retain
+at most 8 MiB in total; older generations age out. Raw error capture is limited to
+64 KiB across at most 16 details per row. Summaries, identifiers, stages, and reason
+codes are limited to 512 UTF-8 bytes each. `truncated` marks truncated or omitted
+content; `evidence_gap` includes request diagnostic gaps and log truncation.
+Rotation, capture or write gaps, and traffic outside the gateway limit coverage.
+Logging does not wait for a busy log lock: it reports a gap instead of blocking
+the response. A failed append attempts to remove only its newly written suffix.
+A failed rollback or crash can leave a partial final line; there is no atomic-row
+guarantee. See the
+[diagnostics contract](../specs/diagnostics/spec.md#persistent-gateway-error-log)
+for the event schema and storage boundary.
 
 ## Native login and logout boundaries
 
