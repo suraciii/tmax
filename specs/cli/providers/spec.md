@@ -158,3 +158,45 @@ inspect for both complete views. Dry-run and endpoint failures return
 `data.endpoint_resolution` for the evaluated candidate when available, with
 [config impact](../configuration/spec.md#configuration-impact-data). Candidate
 bases are not claimed saved, loaded, reachable, or reserved.
+
+## Quota display data
+
+Quota facts remain display-only observations. `provider inspect` returns the
+observation projection at `data.observations`; its `billing.display` is the
+source-neutral report and `billing.dashboard` the provider console link.
+`provider list` repeats the same report as `display` on each quota entry under
+`observations.observations`, together with `billing_kind` so a caller can
+distinguish a supported source from one that never has a quota operation. A null
+`display` means the integration has no subscription quota source; it never means
+zero allowance.
+
+`display` contains:
+
+- `plan`: null, or provider-reported `{name?, level?, expires_at_ms?}`. Raw
+  `expires_at_ms` stays unqualified and is not a renewal date.
+- `rows`: one entry per provider-reported window or bucket.
+- `notes`: stable qualification codes. Surfaces localize them; they are not
+  user-supplied text.
+
+A row contains `label`, `basis`, optional `percent`, optional exact `counters`,
+optional verbatim `status`, optional `expiry`, and `reset`.
+
+`label` keys are `rolling`, `weekly`, `monthly`, `weekly_allowance`, `duration`
+(`duration`, `unit`), `bucket` (`name`, `window`), `limit` (raw `type`, `unit`,
+`number`), or `credit` (`kind`). `basis` is `consumed_percent`,
+`remaining_percent`, `counters`, or `credit`. Counter values are the provider's
+exact decimal strings; the projection never derives a missing counter, unit, or
+window name.
+
+`reset.kind` is `announced`, `provider_timestamp`, `window_end`,
+`unqualified_epoch_millis`, or `absent`. `announced` and `provider_timestamp`
+carry an ISO `at` and are qualified instants. `window_end` and
+`unqualified_epoch_millis` carry provider `raw` epoch milliseconds plus
+`encoding`; a surface may show a conditional local conversion only when it is
+labeled unconfirmed. Reset, subscription expiry, and renewal remain separate
+facts.
+
+Rows never invent a window the source does not report: MiniMax video is
+weekly-only, and Kimi's `usage` and `limits` stay separate rows because they may
+describe the same allowance. A percent basis keeps its source precision and
+supports no arithmetic reconstruction of exact remaining allowance.

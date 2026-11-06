@@ -409,6 +409,257 @@ pub fn observation_destination(
     })
 }
 
+/// Surface-neutral display projection of one normalized quota fact. It owns
+/// which retained provider fields mean a window, a percentage basis, counters,
+/// or reset evidence; surfaces own wording, layout, and localization.
+pub(crate) fn quota_display(source: &str, data: &Value) -> Option<Value> {
+    let (plan, rows, notes) = match source {
+        "go_usage_api" => (
+            Value::Null,
+            go_display_rows(data),
+            vec!["percent_consumed_floored"],
+        ),
+        "kimi_usage_api" => (
+            Value::Null,
+            kimi_display_rows(data),
+            vec!["counters_unit_unqualified", "usage_and_limits_may_overlap"],
+        ),
+        "glm_monitor_api" => (
+            json!({"level": data["data"]["level"]}),
+            glm_display_rows(data),
+            vec!["fields_unqualified"],
+        ),
+        "minimax_plan_remains_api" => (
+            Value::Null,
+            minimax_display_rows(data),
+            vec!["status_enums_unqualified"],
+        ),
+        "stepfun_usage_api" => (
+            stepfun_display_plan(data),
+            stepfun_display_rows(data),
+            vec!["credit_not_tokens"],
+        ),
+        _ => return None,
+    };
+    Some(json!({"plan": plan, "rows": rows, "notes": notes}))
+}
+fn go_display_rows(data: &Value) -> Vec<Value> {
+    ["rolling", "weekly", "monthly"]
+        .into_iter()
+        .filter_map(|name| {
+            let window = data.get("usage")?.get(name)?;
+            Some(json!({
+                "label": {"key": name},
+                "basis": "consumed_percent",
+                "percent": window.get("percent")?,
+                "reset": {"kind": "announced", "at": window.get("resetsAt")?},
+            }))
+        })
+        .collect()
+}
+fn kimi_counters(detail: &Value) -> Option<Value> {
+    let mut counters = serde_json::Map::new();
+    for field in ["limit", "used", "remaining"] {
+        if let Some(value) = detail.get(field).and_then(Value::as_str) {
+            counters.insert(field.into(), json!(value));
+        }
+    }
+    (!counters.is_empty()).then_some(Value::Object(counters))
+}
+fn kimi_reset(detail: &Value) -> Value {
+    detail
+        .get("resetTime")
+        .and_then(Value::as_str)
+        .map(|at| json!({"kind": "provider_timestamp", "at": at}))
+        .unwrap_or_else(|| json!({"kind": "absent"}))
+}
+fn kimi_display_rows(data: &Value) -> Vec<Value> {
+    let mut rows = Vec::new();
+    if let Some(usage) = data.get("usage")
+        && let Some(counters) = kimi_counters(usage)
+    {
+        rows.push(json!({
+            "label": {"key": "weekly_allowance"},
+            "basis": "counters",
+            "counters": counters,
+            "reset": kimi_reset(usage),
+        }));
+    }
+    if let Some(limits) = data.get("limits").and_then(Value::as_array) {
+        for row in limits {
+            let detail = row.get("detail").unwrap_or(&Value::Null);
+            let Some(counters) = kimi_counters(detail) else {
+                continue;
+            };
+            let window = row.get("window");
+            let mut label = serde_json::Map::new();
+            label.insert("key".into(), json!("duration"));
+            for field in ["duration", "timeUnit"] {
+                if let Some(value) = window.and_then(|window| window.get(field)) {
+                    label.insert(
+                        if field == "timeUnit" { "unit" } else { field }.into(),
+                        value.clone(),
+                    );
+                }
+            }
+            rows.push(json!({
+                "label": label,
+                "basis": "counters",
+                "counters": counters,
+                "reset": kimi_reset(detail),
+            }));
+        }
+    }
+    rows
+}
+fn glm_display_rows(data: &Value) -> Vec<Value> {
+    data.get("data")
+        .and_then(|data| data.get("limits"))
+        .and_then(Value::as_array)
+        .map(|limits| {
+            limits
+                .iter()
+                .filter_map(|row| {
+                    let kind = row.get("type").and_then(Value::as_str)?;
+                    let mut display = serde_json::Map::new();
+                    display.insert(
+                        "label".into(),
+                        json!({"key": "limit", "type": kind, "unit": row.get("unit").cloned(), "number": row.get("number").cloned()}),
+                    );
+                    if let Some(percent) = row.get("percentage") {
+                        display.insert("basis".into(), json!("consumed_percent"));
+                        display.insert("percent".into(), percent.clone());
+                    } else {
+                        display.insert("basis".into(), json!("counters"));
+                    }
+                    let mut counters = serde_json::Map::new();
+                    for field in ["usage", "currentValue", "remaining"] {
+                        if let Some(value) = row.get(field) {
+                            counters.insert(field.into(), value.clone());
+                        }
+                    }
+                    if !counters.is_empty() {
+                        display.insert("counters".into(), Value::Object(counters));
+                    }
+                    display.insert(
+                        "reset".into(),
+                        row.get("nextResetTime")
+                            .map(|raw| json!({"kind": "unqualified_epoch_millis", "raw": raw, "encoding": "epoch_milliseconds_unqualified"}))
+                            .unwrap_or_else(|| json!({"kind": "absent"})),
+                    );
+                    Some(Value::Object(display))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+fn minimax_display_rows(data: &Value) -> Vec<Value> {
+    let mut rows = Vec::new();
+    let Some(items) = data.get("model_remains").and_then(Value::as_array) else {
+        return rows;
+    };
+    for item in items {
+        let Some(name) = item.get("model_name").and_then(Value::as_str) else {
+            continue;
+        };
+        // Video is subject only to the weekly window; no interval row is invented.
+        let windows: &[(&str, &str, &str, &str)] = if name == "video" {
+            &[(
+                "weekly",
+                "current_weekly_remaining_percent",
+                "current_weekly_status",
+                "weekly_end_time",
+            )]
+        } else {
+            &[
+                (
+                    "interval",
+                    "current_interval_remaining_percent",
+                    "current_interval_status",
+                    "end_time",
+                ),
+                (
+                    "weekly",
+                    "current_weekly_remaining_percent",
+                    "current_weekly_status",
+                    "weekly_end_time",
+                ),
+            ]
+        };
+        for (window, percent_field, status_field, end_field) in windows {
+            let Some(percent) = item.get(*percent_field) else {
+                continue;
+            };
+            rows.push(json!({
+                "label": {"key": "bucket", "name": name, "window": window},
+                "basis": "remaining_percent",
+                "percent": percent,
+                "status": item.get(*status_field),
+                "reset": {"kind": "window_end", "raw": item.get(*end_field), "encoding": "epoch_milliseconds"},
+            }));
+        }
+    }
+    rows
+}
+fn stepfun_display_plan(data: &Value) -> Value {
+    let plan = &data["plan"];
+    let mut out = serde_json::Map::new();
+    for field in ["state", "family", "name"] {
+        if let Some(value) = plan.get(field).and_then(Value::as_str) {
+            out.insert(field.into(), json!(value));
+        }
+    }
+    if let Some(expires) = plan
+        .get("subscription")
+        .and_then(|value| value.get("expires_at_ms"))
+    {
+        out.insert("expires_at_ms".into(), expires.clone());
+    }
+    Value::Object(out)
+}
+fn stepfun_display_rows(data: &Value) -> Vec<Value> {
+    data["quota"]["credit_buckets"]
+        .as_array()
+        .map(|buckets| {
+            buckets
+                .iter()
+                .filter_map(|bucket| {
+                    let mut counters = serde_json::Map::new();
+                    for field in ["remaining", "total"] {
+                        if let Some(value) = bucket.get(field).and_then(Value::as_str) {
+                            counters.insert(field.into(), json!(value));
+                        }
+                    }
+                    if counters.is_empty() {
+                        return None;
+                    }
+                    let mut row = serde_json::Map::new();
+                    row.insert(
+                        "label".into(),
+                        json!({"key": "credit", "kind": bucket.get("type").cloned()}),
+                    );
+                    row.insert("basis".into(), json!("credit"));
+                    row.insert("counters".into(), Value::Object(counters));
+                    row.insert(
+                        "reset".into(),
+                        bucket
+                            .get("resets_at_ms")
+                            .map(|raw| json!({"kind": "window_end", "raw": raw, "encoding": "epoch_milliseconds"}))
+                            .unwrap_or_else(|| json!({"kind": "absent"})),
+                    );
+                    if let Some(expires) = bucket.get("expires_at_ms") {
+                        row.insert(
+                            "expiry".into(),
+                            json!({"raw": expires, "encoding": "epoch_milliseconds"}),
+                        );
+                    }
+                    Some(Value::Object(row))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) struct AcquiredObservation {
     pub data: Value,
     pub status: u16,
@@ -1630,6 +1881,116 @@ mod tests {
         );
     }
 
+    #[test]
+    fn quota_display_projects_windows_bases_and_reset_evidence_per_source() {
+        let go = normalize_observation("go_usage_api", &go_usage_body()).unwrap();
+        let display = quota_display("go_usage_api", &go).unwrap();
+        let rows = display["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["label"]["key"], "rolling");
+        assert_eq!(rows[0]["basis"], "consumed_percent");
+        assert_eq!(rows[0]["reset"]["kind"], "announced");
+        assert_eq!(rows[2]["label"]["key"], "monthly");
+        assert_eq!(rows[2]["percent"], 62);
+        assert_eq!(display["notes"], json!(["percent_consumed_floored"]));
+
+        let kimi = normalize_observation(
+            "kimi_usage_api",
+            &json!({
+                "usage":{"limit":"100","used":"9","remaining":"91","resetTime":"2026-11-06T15:42:16.495050Z"},
+                "limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
+                    "detail":{"limit":"100","remaining":"100","resetTime":"2026-11-06T08:42:16.495050Z"}}]
+            }),
+        )
+        .unwrap();
+        let display = quota_display("kimi_usage_api", &kimi).unwrap();
+        let rows = display["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        // Exact decimal strings are preserved; no counter is calculated.
+        assert_eq!(
+            rows[0]["counters"],
+            json!({"limit":"100","used":"9","remaining":"91"})
+        );
+        assert_eq!(rows[0]["reset"]["kind"], "provider_timestamp");
+        assert_eq!(rows[1]["label"]["duration"], 300);
+        assert_eq!(
+            display["notes"],
+            json!(["counters_unit_unqualified", "usage_and_limits_may_overlap"])
+        );
+
+        let glm = normalize_observation(
+            "glm_monitor_api",
+            &json!({"success":true,"code":200,"data":{"level":"max","limits":[
+                {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":0},
+                {"type":"TOKENS_LIMIT","unit":6,"number":1,"percentage":0,"nextResetTime":1794371479999_u64},
+                {"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":0,"remaining":4000,"nextResetTime":1795231968999_u64}
+            ]}}),
+        )
+        .unwrap();
+        let display = quota_display("glm_monitor_api", &glm).unwrap();
+        let rows = display["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["label"]["unit"], 3);
+        assert_eq!(rows[0]["reset"]["kind"], "absent");
+        assert_eq!(rows[1]["reset"]["kind"], "unqualified_epoch_millis");
+        assert_eq!(rows[1]["reset"]["raw"], json!(1794371479999_u64));
+        // An unqualified encoding is never converted here.
+        assert!(rows[1]["reset"].get("at").is_none());
+        assert_eq!(rows[2]["basis"], "counters");
+        assert_eq!(rows[2]["counters"]["remaining"], 4000);
+        assert_eq!(display["plan"], json!({"level":"max"}));
+
+        let minimax = normalize_observation(
+            "minimax_plan_remains_api",
+            &json!({"base_resp":{"status_code":0},"model_remains":[
+                {"model_name":"general","current_interval_remaining_percent":100,"current_interval_status":1,
+                 "end_time":1793959200000_u64,"current_weekly_remaining_percent":100,"current_weekly_status":3,
+                 "weekly_end_time":1794182400000_u64},
+                {"model_name":"video","current_interval_remaining_percent":100,"current_interval_status":3,
+                 "current_weekly_remaining_percent":100,"current_weekly_status":3,"weekly_end_time":1794182400000_u64}
+            ]}),
+        )
+        .unwrap();
+        let rows = quota_display("minimax_plan_remains_api", &minimax).unwrap()["rows"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["label"]["window"], "interval");
+        assert_eq!(rows[1]["label"]["window"], "weekly");
+        assert_eq!(rows[1]["basis"], "remaining_percent");
+        // Video is weekly-only: its interval percent is not shown as a window.
+        assert_eq!(rows[2]["label"]["name"], "video");
+        assert_eq!(rows[2]["label"]["window"], "weekly");
+        assert_eq!(rows[2]["status"], 3);
+        assert_eq!(rows[2]["reset"]["raw"], json!(1794182400000_u64));
+
+        let stepfun = normalize_observation(
+            "stepfun_usage_api",
+            &json!({"schema_version":1,"scope":"personal_account","observed_at_ms":1793945261957_u64,
+                "plan":{"state":"known","family":"token","name":"Token-Pro",
+                    "subscription":{"expires_at_ms":1804143379000_u64}},
+                "quota":{"state":"known","allowed":true,"windows":[],
+                    "credit_buckets":[{"type":"subscription","total":"8000000000","remaining":"7564747788",
+                        "resets_at_ms":1795073471000_u64,"expires_at_ms":1804143379000_u64}]}}),
+        )
+        .unwrap();
+        let display = quota_display("stepfun_usage_api", &stepfun).unwrap();
+        let rows = display["rows"].as_array().unwrap();
+        assert_eq!(rows[0]["basis"], "credit");
+        assert_eq!(
+            rows[0]["counters"],
+            json!({"remaining":"7564747788","total":"8000000000"})
+        );
+        assert_eq!(rows[0]["reset"]["kind"], "window_end");
+        assert_eq!(rows[0]["expiry"]["raw"], json!(1804143379000_u64));
+        assert_eq!(display["plan"]["name"], "Token-Pro");
+        assert_eq!(display["plan"]["expires_at_ms"], json!(1804143379000_u64));
+
+        // Balance and discovery sources are not subscription quota reports.
+        assert!(quota_display("official_balance_api", &json!({})).is_none());
+        assert!(quota_display("official_models_api", &json!({})).is_none());
+    }
     #[test]
     fn quota_destinations_declare_auth_style() {
         let glm = Provider {

@@ -808,8 +808,38 @@ mod tests {
             }
         }
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn accept_rebaselines_native_rewrites_and_retains_credential_ownership() {
+        const CHILD: &str = "TMAX_OMP_ACCEPT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("omp");
+            fs::write(
+                &executable,
+                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '1.0.0\\n'\n",
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agent_integration::application::tests::accept_rebaselines_native_rewrites_and_retains_credential_ownership",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("PATH", directory.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated OMP accept lifecycle failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
         let path = directory.path().join("native");

@@ -15,6 +15,14 @@ page makes no external font, image, or script requests.
   integration registry supplies product-qualified choices and fixed protocol bases.
   Configure authentication separately. Provider details expose subscriptions,
   observations, inherited metadata, overrides, and explicit upstream refresh.
+  The allowance section leads with the reported plan, each window or bucket with
+  its consumed or remaining basis, exact counters, reset evidence, and retrieval
+  time; the raw record stays behind a disclosure. It distinguishes a retained
+  observation from a missing one and from a freshness guarantee the provider did
+  not supply. **查询额度** opens a dedicated panel that fixes the scope to quota;
+  **刷新可查询额度** refreshes each supported provider and reports failures per
+  provider. A failed query retains the previous dated record, and an integration
+  without a quota operation does not offer a query.
   **Configure error policy** sets matched HTTP/connection/transport failures, the
   consecutive-failure threshold, a signed fixed replacement priority, and duration
   in hours. New policies require explicit enablement. Details distinguish loaded

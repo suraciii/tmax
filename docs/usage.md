@@ -272,6 +272,16 @@ observation or calculated as zero. A response with no readable allowance counter
 still reports a failed refresh and retains the previous dated observation. See
 the [Kimi tolerant-read contract](../specs/integrations/kimi-coding-plan/spec.md#tolerant-quota-reads).
 
+CLI readers get the same report. `provider inspect ID` exposes
+`data.observations.billing.display` with `rows` and qualification `notes`, and
+`provider list` repeats it per quota entry. Each row names its window or bucket,
+whether the percentage is consumed or remaining, exact counters when the source
+reports them, and reset evidence. An unqualified epoch-millisecond reset stays a
+raw value with an optional labeled local conversion; it is not a confirmed reset
+or renewal. A failed refresh keeps the previous dated fact beside the failure,
+and an integration without a quota operation says so instead of offering an
+impossible query.
+
 ## Local Overview and evidence
 
 The Web Overview groups the provider and agent evidence already available through

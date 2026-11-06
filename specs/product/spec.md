@@ -820,7 +820,7 @@ The supplementary Web interface must have these task-oriented areas:
 | Area | Primary information and actions |
 | --- | --- |
 | Overview | Provider-instance problems grouped by service, agent configuration state, gateway health, stale quota information, upcoming known renewal dates |
-| Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota and freshness |
+| Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota windows with their basis, units and reset evidence, and freshness |
 | Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases with public names, explicit candidate lists, and selection previews |
 | Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
 | Gateway | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
