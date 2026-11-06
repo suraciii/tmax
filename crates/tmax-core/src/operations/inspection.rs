@@ -298,7 +298,7 @@ pub(super) fn model_rules(
 
 pub(super) fn agent_list(config: &Config) -> Result<Value> {
     Ok(
-        json!({"agents":config.agents.iter().map(|(id,t)|json!({"target":id,"agent":t.agent,"path":t.scope,"provider_count":t.providers.len(),"model_count":t.providers.values().map(|e|e.models.len()).sum::<usize>(),"default_configured":t.default.is_some(),"native_application":"not_verified"})).collect::<Vec<_>>()}),
+        json!({"agents":config.agents.iter().map(|(id,t)|json!({"target":id,"agent":t.agent,"path":t.scope,"provider_count":t.providers.len(),"model_count":t.providers.values().map(|e|e.models.len()).sum::<usize>(),"default_configured":t.default.is_some()})).collect::<Vec<_>>()}),
     )
 }
 

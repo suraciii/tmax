@@ -3,7 +3,7 @@
 Source-qualified version: **0.2.1-rc.2**. Consulted 2026-10-27 from the installed
 checkout `/home/szf/repos/deepseek-harness`, source commit
 [`687f282e8625c6b8d11ff58211a90524be2e4317`](https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317).
-No supported version range is inferred (`version_range: null`). See the
+No supported version range is inferred. See the
 [reference index](README.md) and the owning
 [DSH home boundary](../../specs/integrations/spec.md#dsh-home-boundary).
 
