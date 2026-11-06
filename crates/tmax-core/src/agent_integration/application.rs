@@ -254,7 +254,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     }
     if desired_unchanged {
         return Ok(
-            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"warnings":version_warnings(&installed),"fact_gaps":fact_gaps,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
+            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
         );
     }
     adapters::resolve_handoff(&target.agent, &mut files, |reference| {
@@ -543,7 +543,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         let _ = secrets::remove(store, &old.payload_ref);
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&installed),"fact_gaps":fact_gaps,"precedence":adapters::precedence(&target.agent)}),
+        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps,"precedence":adapters::precedence(&target.agent)}),
     )
 }
 
@@ -810,36 +810,146 @@ mod tests {
     }
     #[cfg(unix)]
     #[tokio::test]
-    async fn accept_rebaselines_native_rewrites_and_retains_credential_ownership() {
-        const CHILD: &str = "TMAX_OMP_ACCEPT_CHILD";
+    async fn apply_writes_when_native_executable_is_absent_and_reports_it() {
+        const CHILD: &str = "TMAX_MISSING_EXECUTABLE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let empty = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agent_integration::application::tests::apply_writes_when_native_executable_is_absent_and_reports_it",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("PATH", empty.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated missing-executable apply failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let path = directory.path().join("native");
+        fs::create_dir(&path).unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "pi".into();
+        target.default = None;
+        fs::write(
+            path.join("models.json"),
+            "{\"providers\":{\"unrelated\":{\"models\":{\"keep\":{}}}}}\n",
+        )
+        .unwrap();
+        let reference = secrets::put(&store, "provider:p", b"synthetic-missing-tool-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let applied = apply(&store, &config, "managed", false).await.unwrap();
+        assert_eq!(applied["_code"], "awaiting_native_reload");
+        assert_eq!(applied["written"], true);
+        assert_eq!(applied["installation"]["state"], "not_installed");
+        assert!(
+            applied["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning["code"] == "native_executable_not_found" })
+        );
+        let written = fs::read_to_string(path.join("models.json")).unwrap();
+        assert!(written.contains("local"));
+        assert!(path.read_dir().unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("tmax-")
+        }));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn known_incompatible_schema_blocks_before_writes() {
+        const CHILD: &str = "TMAX_INCOMPATIBLE_SCHEMA_CHILD";
         if std::env::var_os(CHILD).is_none() {
             use std::os::unix::fs::PermissionsExt;
-            let directory = tempfile::tempdir().unwrap();
-            let executable = directory.path().join("omp");
+            let bin = tempfile::tempdir().unwrap();
+            let executable = bin.path().join("opencode");
             fs::write(
                 &executable,
-                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '1.0.0\\n'\n",
+                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '1.9.0\\n'\n",
             )
             .unwrap();
             fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "agent_integration::application::tests::accept_rebaselines_native_rewrites_and_retains_credential_ownership",
+                    "agent_integration::application::tests::known_incompatible_schema_blocks_before_writes",
                     "--nocapture",
                 ])
                 .env(CHILD, "1")
-                .env("PATH", directory.path())
+                .env("PATH", bin.path())
                 .output()
                 .unwrap();
             assert!(
                 output.status.success(),
-                "isolated OMP accept lifecycle failed: {}{}",
+                "isolated schema block failed: {}{}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
             return;
         }
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let path = directory.path().join("native");
+        fs::create_dir(&path).unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "opencode".into();
+        target.default = None;
+        let reference = secrets::put(&store, "provider:p", b"synthetic-schema-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let result = apply(&store, &config, "managed", false).await.unwrap();
+        assert_eq!(result["_code"], "native_schema_incompatible");
+        assert_eq!(result["_status"], "blocked");
+        assert_eq!(result["effects"]["native_writes"], false);
+        assert!(path.read_dir().unwrap().next().is_none());
+    }
+    #[tokio::test]
+    async fn accept_rebaselines_native_rewrites_and_retains_credential_ownership() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
         let path = directory.path().join("native");
