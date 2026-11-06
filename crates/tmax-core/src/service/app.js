@@ -32,12 +32,116 @@ const areas = {
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber'],['dsh','DeepSeek Harness','D','blue']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-code-plan-cn':'Kimi Code Plan · 中国','kimi-code-plan-global':'Kimi Code Plan · 全球','glm-coding-plan':'GLM Coding Plan','stepfun-token-plan':'StepFun Step Plan','minimax-cn-coding-plan':'MiniMax Coding Plan · 中国','minimax-coding-plan':'MiniMax Coding Plan · 全球','custom':'自定义集成'};
 const protocolNames = {'responses':'Responses','chat-completions':'Chat Completions','messages':'Messages'};
-const stateLabel = value => ({saved:'已保存',native_reload_and_inference_not_verified:'尚未验证工具加载与实际使用',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',restored_reload_pending:'已恢复，重新打开工具后生效',pending_native_changes:'有修改待应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
+const stateLabel = value => ({saved:'已保存',native_reload_and_inference_not_verified:'尚未验证工具加载与实际使用',observed:'已获取观测',unqualified:'有效期未获保证',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',restored_reload_pending:'已恢复，重新打开工具后生效',pending_native_changes:'有修改待应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
+const quotaSourceNames={go_usage_api:'OpenCode Go 用量接口',kimi_usage_api:'Kimi 用量接口',glm_monitor_api:'GLM 监控接口',stepfun_usage_api:'StepFun 用量接口',minimax_plan_remains_api:'MiniMax 用量接口',official_balance_api:'账户余额接口',official_models_api:'模型目录接口'};
+const quotaNotes={percent_consumed_floored:'百分比为已用值并向下取整，不能据此反推精确剩余额度。',counters_unit_unqualified:'计数单位未公布，不能当作请求数或 token 数。',usage_and_limits_may_overlap:'接口同时返回 usage 与 limits，二者可能描述同一额度，这里不作相加。',fields_unqualified:'字段含义、单位枚举与时间编码尚未确认，按供应商原值展示。',status_enums_unqualified:'状态码含义尚未确认，不能据此推断额度可用或已耗尽。',credit_not_tokens:'Credit 不是原始 token 数或请求次数；重置与到期含义待确认。'};
+const quotaWindows={interval:'当前窗口',weekly:'周窗口'};
+const pad2 = value => String(value).padStart(2,'0');
+const quotaTime = value => { const date = value==null?null:new Date(value); if(!date || Number.isNaN(date.getTime())) return '时间无法解析'; const year=date.getFullYear()===new Date().getFullYear()?'':`${date.getFullYear()}-`; return `${year}${pad2(date.getMonth()+1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`; };
+const quotaGroup = value => { const number=Number(value); return Number.isSafeInteger(number)?number.toLocaleString('zh-CN'):String(value); };
+const quotaLabel = label => {
+  if (!label) return '额度';
+  if (label.key==='rolling') return '滚动窗口';
+  if (label.key==='weekly') return '本周';
+  if (label.key==='monthly') return '本月';
+  if (label.key==='weekly_allowance') return '周额度';
+  if (label.key==='duration') {
+    const unit=label.unit==='TIME_UNIT_MINUTE'?'分钟':label.unit==='TIME_UNIT_HOUR'?'小时':label.unit==='TIME_UNIT_DAY'?'天':label.unit || '时间单位未公布';
+    return label.duration==null?`窗口（${unit}）`:`每 ${label.duration} ${unit}`;
+  }
+  if (label.key==='bucket') {
+    const name=label.name==='general'?'通用':label.name==='video'?'视频':label.name || '额度';
+    return `${name} · ${quotaWindows[label.window] || '窗口'}`;
+  }
+  if (label.key==='limit') return `${label.type || '限制'} · unit ${label.unit ?? '?'} · number ${label.number ?? '?'}`;
+  if (label.key==='credit') return label.kind ? `Credit · ${label.kind==='subscription'?'订阅额度':label.kind}` : 'Credit';
+  return '额度';
+};
+const quotaValue = row => {
+  const counters=row.counters || {};
+  if (row.basis==='consumed_percent') {
+    const base=row.percent==null?'已用百分比未知':`已用 ${row.percent}%`;
+    return counters.remaining!=null ? `${base} · 剩余 ${counters.remaining}` : base;
+  }
+  if (row.basis==='remaining_percent') return row.percent==null?'剩余百分比未知':`剩余 ${row.percent}%`;
+  if (row.basis==='credit') {
+    if (counters.remaining!=null && counters.total!=null) {
+      const remaining=Number(counters.remaining), total=Number(counters.total);
+      const ratio=Number.isFinite(remaining) && Number.isFinite(total) && total>0 ? `（约 ${(remaining/total*100).toFixed(2)}%）` : '';
+      return `剩余 ${quotaGroup(counters.remaining)} / ${quotaGroup(counters.total)}${ratio}`;
+    }
+    return `剩余 ${counters.remaining ?? '未知'}`;
+  }
+  if (counters.limit!=null && counters.remaining!=null) return `剩余 ${counters.remaining} / ${counters.limit}`;
+  if (counters.remaining!=null) return `剩余 ${counters.remaining}`;
+  if (counters.used!=null) return `已用 ${counters.used}`;
+  const parts=Object.entries(counters).map(([key,value])=>`${key} ${value}`);
+  return parts.length ? parts.join(' · ') : '读数未知';
+};
+const quotaReset = reset => {
+  if (!reset || reset.kind==='absent') return '未返回重置时间';
+  if (reset.kind==='announced') return `供应商公告重置 ${quotaTime(reset.at)}`;
+  if (reset.kind==='provider_timestamp') return `供应商报告重置 ${quotaTime(reset.at)}`;
+  if (reset.kind==='window_end') return `窗口结束 ${quotaTime(reset.raw)}（毫秒换算）`;
+  if (reset.kind==='unqualified_epoch_millis') return `若按 Unix 毫秒解释 ${quotaTime(reset.raw)}（含义待确认）`;
+  return '重置含义待确认';
+};
+const quotaStatus = observation => {
+  if (!observation) return '尚无额度观测';
+  const attempt=observation.latest_attempt;
+  const suffix=observation.freshness?.state==='unqualified'?'；供应商未提供有效期保证':'';
+  if (observation.fact) {
+    const when=quotaTime(observation.fact.observed_at);
+    const failed=attempt?.outcome==='failed' || attempt?.outcome==='unavailable';
+    return (failed ? `最近查询未成功，以下保留 ${when} 的记录` : `已获取 · ${when} 读取`) + suffix;
+  }
+  if (attempt?.outcome==='unavailable') return attempt.reason_code==='unsupported_source'?'此接入没有支持的额度查询源':'本次查询不可用，暂无保留记录';
+  if (attempt?.outcome==='failed') return '最近查询失败，暂无保留记录';
+  return '尚无额度观测';
+};
+const quotaSummaryStatus = observation => {
+  if (!observation) return '尚无额度观测';
+  if (observation.observed_at) return observation.last_attempt_outcome==='failed' ? `最近查询失败 · 保留 ${quotaTime(observation.observed_at)} 记录` : `已获取 · ${quotaTime(observation.observed_at)}`;
+  if (observation.last_attempt_outcome==='unavailable') return observation.last_attempt_reason_code==='unsupported_source'?'没有支持的查询源':'查询不可用';
+  if (observation.last_attempt_outcome==='failed') return '最近查询失败';
+  return '尚无额度观测';
+};
+const quotaRow = row => `<div class="quota-row"><div class="quota-row-main"><span class="quota-row-label">${escapeHtml(quotaLabel(row.label))}</span><strong class="quota-row-value">${escapeHtml(quotaValue(row))}</strong></div><div class="quota-row-meta">${row.reset?`<span>${escapeHtml(quotaReset(row.reset))}</span>`:''}${row.expiry?`<span>Credit 到期 ${escapeHtml(quotaTime(row.expiry.raw))}（毫秒换算）</span>`:''}${row.status!=null?`<span>状态码 ${escapeHtml(String(row.status))}（未解释）</span>`:''}</div></div>`;
+const quotaCard = observation => {
+  const rows=observation?.display?.rows || [];
+  if (rows.length) {
+    const shown=rows.slice(0,3).map(row=>`<div class="quota-mini-row"><span>${escapeHtml(quotaLabel(row.label))}</span><strong>${escapeHtml(quotaValue(row))}</strong></div>`).join('');
+    return `<div class="quota-mini">${shown}${rows.length>3?`<p>另有 ${rows.length-3} 项，见接入详情</p>`:''}</div>`;
+  }
+  return `<div class="quota-mini"><div class="quota-mini-row"><span>额度</span><strong>${escapeHtml(quotaSummaryStatus(observation))}</strong></div></div>`;
+};
+const quotaSupported = billing => Boolean(billing?.kind) && billing.kind!=='unknown';
+function quotaSection(data,id,mode='detail') {
+  const observation=(data.observations?.observations || []).find(o=>o.scope==='quota');
+  const billing=data.observations?.billing;
+  const display=billing?.display;
+  const rows=display?.rows || [];
+  const sourceName=observation?.source ? (quotaSourceNames[observation.source] || observation.source) : null;
+  const plan=display?.plan;
+  const planLine=plan && (plan.name || plan.level || plan.expires_at_ms!=null)
+    ? `<p class="quota-plan">${plan.name?`接口报告的计划：<strong>${escapeHtml(plan.name)}</strong>`:''}${plan.level?`${plan.name?' · ':''}接口报告等级：<strong>${escapeHtml(plan.level)}</strong>`:''}${plan.expires_at_ms!=null?`${plan.name||plan.level?' · ':''}计划到期（若按毫秒）：${escapeHtml(quotaTime(plan.expires_at_ms))}`:''}</p>`
+    : '';
+  const table=rows.length
+    ? `<div class="quota-table">${rows.map(quotaRow).join('')}</div>`
+    : `<p class="muted">${quotaSupported(billing)?(observation?.state==='observed'?'接口已返回额度记录，但当前来源没有可展示的订阅窗口。':'尚无额度观测。查询后显示接口返回的窗口、数值与重置信息。'):'没有可展示的额度窗口。'}</p>`;
+  const notes=(display?.notes || []).map(code=>quotaNotes[code]).filter(Boolean);
+  const supported=quotaSupported(billing);
+  const actions=mode==='query'
+    ? (supported?`<div class="actions"><button type="button" class="btn primary" id="quota-run">${icon('refresh')}查询上游额度</button></div>`:'')
+    : `<div class="actions">${supported?button('查询额度','provider-quota',id,'small','refresh'):''}${button('登记额度输入','provider-input',id,'small')}</div>`;
+  return `<h3 class="subheading">额度</h3>${notice('额度未知不代表额度为零；只显示已获取的信息，不自动请求上游。')}<p class="quota-status">${escapeHtml(quotaStatus(observation))}${sourceName?` · 来源 ${escapeHtml(sourceName)}`:''}</p>${planLine}${table}${notes.length?`<ul class="quota-notes">${notes.map(note=>`<li>${escapeHtml(note)}</li>`).join('')}</ul>`:''}<p class="quota-hint">${rows.length?'时间均为本机时区；重置为供应商报告值，不代表已经完成。':''}</p>${billing?.dashboard?`<p class="quota-dashboard"><a href="${escapeHtml(billing.dashboard)}" target="_blank" rel="noreferrer">在供应商控制台核对</a></p>`:''}${actions}`;
+}
+
 const state = {area:'overview', catalog:[], config:null, providers:[], models:[], agents:[], runtime:null, integrations:[], errors:[], revision:null, loaded:false, generation:0, modelKind:'concrete', query:'', busy:false, dialogGeneration:0};
 let toastTimer;
 let revealGeneration=0;
 const badge = (text, tone='') => `<span class="badge ${tone}">${escapeHtml(text)}</span>`;
-const button = (label, action, id='', variant='', glyph='') => `<button type="button" class="btn ${variant}" data-action="${escapeHtml(action)}" data-id="${escapeHtml(id)}">${glyph ? icon(glyph) : ''}${escapeHtml(label)}</button>`;
+const button = (label, action, id='', variant='', glyph='', aria='') => `<button type="button" class="btn ${variant}" data-action="${escapeHtml(action)}" data-id="${escapeHtml(id)}"${aria?` aria-label="${escapeHtml(aria)}"`:''}>${glyph ? icon(glyph) : ''}${escapeHtml(label)}</button>`;
 const fact = (label, value) => `<div class="fact"><span>${escapeHtml(label)}</span><span>${escapeHtml(value ?? '未知')}</span></div>`;
 const notice = (message, tone='') => `<div class="notice ${tone}">${icon('info')}<div>${message}</div></div>`;
 const detail = (value, label='查看技术详情') => `<details><summary>${escapeHtml(label)}</summary><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre></details>`;
@@ -154,7 +258,7 @@ function renderOverview() {
 }
 function searchBox(placeholder) { return `<div class="search">${icon('search')}<input id="search" type="search" aria-label="${placeholder}" placeholder="${placeholder}" value="${escapeHtml(state.query)}"></div>`; }
 function renderProviders() {
-  $('content').innerHTML=`<div class="toolbar">${searchBox('搜索接入名称或 ID')}<span class="muted">${state.providers?.length ?? '—'} 个接入</span></div><div id="provider-list"></div>`;
+  $('content').innerHTML=`<div class="toolbar">${searchBox('搜索接入名称或 ID')}<div class="toolbar-actions"><span class="muted">${state.providers?.length ?? '—'} 个接入</span>${button('刷新可查询额度','provider-quota-all','','small','refresh')}</div></div><div id="provider-list"></div>`;
   renderProviderList();
   $('search').addEventListener('input',e=>{state.query=e.target.value;renderProviderList();});
 }
@@ -163,7 +267,7 @@ function renderProviderList() {
   const filtered=state.providers.filter(p=>`${p.id} ${providerName(p.id)} ${serviceName(state.config.providers[p.id])}`.toLowerCase().includes(state.query.toLowerCase()));
   if (!filtered.length) { $('provider-list').innerHTML=`<div class="panel">${empty(state.query?'没有匹配的接入':'还没有添加接入',state.query?'试试其他名称或 ID。':'选择集成类型或自定义端点，保存后配置授权和模型。',state.query?'':button('添加接入','provider-add','','primary','plus'),'providers')}</div>`; return; }
   const groups=Map.groupBy?Map.groupBy(filtered,p=>serviceName(state.config.providers[p.id])):filtered.reduce((m,p)=>{const k=serviceName(state.config.providers[p.id]);m.set(k,[...(m.get(k)||[]),p]);return m;},new Map());
-  $('provider-list').innerHTML=[...groups].map(([name,providers])=>`<div class="section-label"><h2>${escapeHtml(name)}</h2><p>${providers.length} 个独立实例</p></div><div class="cards">${providers.map(p=>{const config=state.config.providers[p.id];const observation=p.observations?.observations?.find(o=>o.scope==='quota');return `<article class="provider-card"><div class="card-top"><div class="avatar blue">${escapeHtml(name.slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p class="mono">${escapeHtml(p.id)}</p></div>${authBadge(p)}</div><div class="card-facts">${fact('模型',Object.keys(config.models || {}).length+' 个')}${fact('订阅计划',config.subscription?.plan || '未记录')}${fact('额度信息',observation?.last_attempt_outcome==='failed'?'最近读取失败':stateLabel(observation?.freshness?.state))}${fact('使用此接入的工具',p.affected_targets+' 个配置')}</div><div class="card-actions">${button('管理接入','provider-detail',p.id,'small')}${button(p.authentication==='not_configured'?'配置授权':'更新授权','provider-auth',p.id,'soft small','key')}</div></article>`;}).join('')}</div>`).join('');
+  $('provider-list').innerHTML=[...groups].map(([name,providers])=>`<div class="section-label"><h2>${escapeHtml(name)}</h2><p>${providers.length} 个独立实例</p></div><div class="cards">${providers.map(p=>{const config=state.config.providers[p.id];const observation=p.observations?.observations?.find(o=>o.scope==='quota');return `<article class="provider-card"><div class="card-top"><div class="avatar blue">${escapeHtml(name.slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p class="mono">${escapeHtml(p.id)}</p></div>${authBadge(p)}</div><div class="card-facts">${fact('模型',Object.keys(config.models || {}).length+' 个')}${fact('订阅计划',config.subscription?.plan || '未记录')}${quotaCard(observation)}${fact('使用此接入的工具',p.affected_targets+' 个配置')}</div><div class="card-actions">${button('管理接入','provider-detail',p.id,'small','',`管理接入 ${providerName(p.id)}`)}${button(p.authentication==='not_configured'?'配置授权':'更新授权','provider-auth',p.id,'soft small','key',`${p.authentication==='not_configured'?'配置授权':'更新授权'} ${providerName(p.id)}`)}</div></article>`;}).join('')}</div>`).join('');
 }
 function renderModels() {
   $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">模型别名</button></div>${searchBox('搜索模型或接入')}</div>${state.modelKind==='alias'?notice('模型别名是引用已有模型的命名配置。每个候选是模型引用及别名内的局部设置，不是独立模型。可为每个候选设置推理强度覆盖；未设置时不改写客户端请求。别名仅用于网关，不自动改变工具的直接连接。'):''}<div id="model-list"></div>`;
@@ -383,9 +487,55 @@ async function providerDetail(id) {
     const [data,inputs]=await Promise.all([read('provider inspect',[id]),read('provider input list',[id]).catch(()=>null)]);
     if(generation!==state.dialogGeneration)return;
     const p=data.provider;
-    $('dialog-content').innerHTML=`<div class="actions">${button('编辑信息','provider-edit',id,'primary','settings')}${button('配置授权','provider-auth',id,'','key')}${button('添加模型','model-add',id,'','plus')}</div><div class="detail-facts">${fact('本地 ID',id)}${fact('集成类型',serviceName(p))}${fact('授权',p.auth?'已配置 · 上游未验证':'尚未配置')}${fact('账户身份',data.identity || '未知')}${fact('订阅计划',p.subscription?.plan || '未记录')}${fact('续费日期',dateValue(data.renewal) || '未知')}</div><h3 class="subheading">额度与信息来源</h3>${notice('额度未知不代表额度为零。仅显示已获取的信息，不自动查询上游提供商。')}${(data.observations?.observations || []).filter(o=>o.scope==='quota').map(o=>`<div class="detail-facts">${fact('来源',o.source)}${fact('新鲜度',stateLabel(o.freshness?.state))}${fact('观测状态',stateLabel(o.state))}</div>`).join('') || '<p class="muted">暂无已知额度观测。</p>'}${inputs?.inputs?.length?detail(inputs,'查看额度输入及新鲜度'):''}<div class="actions">${button('查询上游额度','provider-quota',id,'small')}${button('登记额度输入','provider-input',id,'small')}</div>${detail(data,'查看继承、覆盖值、端点与完整详情')}<h3 class="subheading">更多操作</h3><div class="actions">${button('高级编辑','provider-advanced',id,'small')}${button('移除接入','provider-remove',id,'small danger')}</div>`;
+    $('dialog-content').innerHTML=`<div class="actions">${button('编辑信息','provider-edit',id,'primary','settings')}${button('配置授权','provider-auth',id,'','key')}${button('添加模型','model-add',id,'','plus')}</div><div class="detail-facts">${fact('本地 ID',id)}${fact('集成类型',serviceName(p))}${fact('授权',p.auth?'已配置 · 上游未验证':'尚未配置')}${fact('账户身份',data.identity || '未知')}${fact('订阅计划',p.subscription?.plan || '未记录')}${fact('续费日期',dateValue(data.renewal) || '未知')}</div>${quotaSection(data,id)}${inputs?.inputs?.length?detail(inputs,'查看额度输入及新鲜度'):''}${detail(data,'查看继承、覆盖值、端点与完整详情')}<h3 class="subheading">更多操作</h3><div class="actions">${button('高级编辑','provider-advanced',id,'small')}${button('移除接入','provider-remove',id,'small danger')}</div>`;
     $('dialog-content').insertAdjacentHTML('beforeend',providerFailureState(data,id));
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error')+notice('接入检查失败，错误计数与固定优先级状态未知。','warning')+`<div class="actions">${button('配置错误策略','provider-failure-policy',id)}${button('重置错误状态','provider-failure-reset',id,'danger')}</div>`;}
+}
+async function providerQuota(id) {
+  const generation=openDialog(`查询 ${providerName(id)} 额度`,'<div class="loading">正在读取保留的额度记录…</div>','QUOTA');
+  const draw=async message=>{
+    let data;
+    try { data=await read('provider inspect',[id]); }
+    catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');return;}
+    if(generation!==state.dialogGeneration)return;
+    $('dialog-content').innerHTML=`${message?`<div role="status">${message}</div>`:''}${quotaSection(data,id,'query')}`;
+    const run=$('quota-run');
+    run?.addEventListener('click',async()=>{
+      if(state.busy)return;
+      state.busy=true; run.disabled=true; run.textContent='正在查询…';
+      let message='';
+      try {
+        const response=await execute('provider refresh',[id],{scope:['quota']},{});
+        const check=response.body.data?.checks?.[0];
+        const ok=isSuccess(response) && check?.outcome==='completed';
+        message=notice(escapeHtml(ok?'查询完成，以下为最新读数。':check?.reason_code==='unsupported_source'?'此接入没有支持的额度查询源。':`查询未成功：${resultMessage(response)}。以下保留上次记录。`),ok?'':'warning');
+        await refresh();
+      } catch(error) { message=notice(escapeHtml(error.message),'error'); }
+      finally { state.busy=false; }
+      await draw(message);
+    });
+  };
+  await draw();
+}
+async function refreshAllQuotas() {
+  const targets=(state.providers || []).filter(provider=>{const kind=provider.observations?.billing_kind;return Boolean(kind) && kind!=='unknown';});
+  if (!targets.length) { toast('没有可查询额度的接入。'); return; }
+  if (state.busy) { toast('正在处理当前操作，请稍候。'); return; }
+  state.busy=true;
+  const control=document.querySelector('[data-action="provider-quota-all"]');
+  if (control) { control.disabled=true; control.textContent='正在查询…'; }
+  const results=[];
+  for (const provider of targets) {
+    try {
+      const response=await execute('provider refresh',[provider.id],{scope:['quota']},{});
+      const check=response.body.data?.checks?.[0];
+      results.push([provider.id,isSuccess(response) && check?.outcome==='completed']);
+    } catch(_) { results.push([provider.id,false]); }
+  }
+  await refresh();
+  state.busy=false;
+  const failed=results.filter(([,ok])=>!ok).map(([provider])=>provider);
+  toast(failed.length ? `已查询 ${results.length} 个接入；${failed.length} 个未成功：${failed.join('、')}` : `已查询 ${results.length} 个接入，全部成功。`);
 }
 let loginPoll;
 function stopLoginPolling() { clearTimeout(loginPoll); loginPoll=null; }
@@ -789,7 +939,8 @@ async function dispatch(action,id) {
     case 'provider-auth': providerAuth(id);break;
     case 'provider-remove': openOperation('provider remove',[id]);break;
     case 'provider-advanced': openOperation('provider update',[id]);break;
-    case 'provider-quota': openOperation('provider refresh',[id],{scope:['quota']});break;
+    case 'provider-quota': await providerQuota(id);break;
+    case 'provider-quota-all': await refreshAllQuotas();break;
     case 'provider-input': openOperation('provider input add',[id]);break;
     case 'model-add': modelForm('',id);break;
     case 'model-edit': modelForm(id);break;

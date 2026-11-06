@@ -563,6 +563,10 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
     } else {
         plan_usage.map_or("", |(source, _)| source)
     };
+    // Surfaces render this projection instead of interpreting source payloads.
+    let display = billing_fact
+        .zip((!billing_source.is_empty()).then_some(billing_source))
+        .and_then(|(fact, source)| provider_integration::quota_display(source, &fact.data));
     let plan_has_reset = plan_usage.is_some_and(|(source, fact)| {
         source != "kimi_usage_api"
             || fact.data["usage"].get("resetTime").is_some()
@@ -577,6 +581,7 @@ pub fn inspect(store: &Store, config: &Config, provider: &str) -> Result<Value> 
         json!({"provider":provider,"account_identity":null,"observations":scopes,
         "billing":{"kind":match integration{"deepseek"=>"api_balance","opencode-go"=>"go_allowance","kimi-code-plan-cn"|"kimi-code-plan-global"|"glm-coding-plan"|"stepfun-token-plan"|"minimax-cn-coding-plan"|"minimax-coding-plan"=>"plan_allowance",_=>"unknown"},
             "state":if billing_fact.is_some(){"observed"}else{"unknown"},"observation":billing_fact,
+            "display":display,
             "freshness":temporal_applicability(billing_fact,Some(billing_source),&at),
             "subscription":p.subscription,"account_identity":null,
             "shared_upstream_limits":"unknown; providers may share upstream account limits",
@@ -595,11 +600,12 @@ pub fn summary(store: &Store, config: &Config, provider: &str) -> Result<Value> 
             json!({"scope":s["scope"],"state":s["state"],"applicability":s["applicability"],
             "source":s["source"],"observed_at":s["fact"]["observed_at"],"freshness":s["freshness"],
             "last_attempt_outcome":s["latest_attempt"]["outcome"],
-            "last_attempt_reason_code":s["latest_attempt"]["reason_code"]})
+            "last_attempt_reason_code":s["latest_attempt"]["reason_code"],
+            "display":if s["scope"]=="quota"{detail["billing"]["display"].clone()}else{Value::Null}})
         })
         .collect::<Vec<_>>();
     Ok(
-        json!({"provider":provider,"observations":scopes,"billing_state":detail["billing"]["state"],"account_identity":null}),
+        json!({"provider":provider,"observations":scopes,"billing_state":detail["billing"]["state"],"billing_kind":detail["billing"]["kind"],"account_identity":null}),
     )
 }
 
@@ -1291,6 +1297,16 @@ mod tests {
         );
         assert_eq!(before["billing"]["reset"], "announced");
         assert_eq!(before["billing"]["renewal"], "unknown");
+        // The surface-neutral display projection is part of inspection, so no
+        // reader has to decode the normalized payload itself.
+        assert_eq!(
+            before["billing"]["display"]["rows"][2]["label"]["key"],
+            "monthly"
+        );
+        assert_eq!(
+            before["billing"]["display"]["rows"][2]["percent"],
+            fact["data"]["usage"]["monthly"]["percent"]
+        );
         assert_eq!(before["billing"]["freshness"]["state"], "unqualified");
         assert!(before["billing"]["freshness"]["as_of"].is_null());
         assert!(before["billing"]["freshness"]["valid_until"].is_null());
