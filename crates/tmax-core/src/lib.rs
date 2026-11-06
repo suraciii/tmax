@@ -77,3 +77,23 @@ pub async fn execute(request: Request) -> Response {
 pub fn render_text(response: &Response) -> String {
     serde_json::to_string_pretty(&response.body).unwrap_or_else(|_| "Result unavailable".into())
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn text_format_is_indented_json_of_the_same_envelope() {
+        let response = Response {
+            exit_code: 0,
+            body: serde_json::json!({"code":"ok","data":{"value":1}}),
+        };
+        let text = render_text(&response);
+        assert_eq!(
+            text,
+            "{\n  \"code\": \"ok\",\n  \"data\": {\n    \"value\": 1\n  }\n}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+            response.body
+        );
+    }
+}

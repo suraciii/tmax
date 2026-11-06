@@ -130,7 +130,7 @@ pub(crate) async fn impact(
     } else {
         vec![]
     };
-    let mut out = json!({"config_impact":{"file_revision_before":file_revision,"file_revision_after":file_revision,"candidate_revision":null,"loaded_revision_before":loaded.as_ref().map(|f|&f.revision),"activation_diff_state":if loaded_error.is_some(){"unavailable"}else if loaded.is_some(){"complete"}else{"no_loaded_snapshot"},"includes_pending_file_changes":loaded.as_ref().map(|f|f.revision!=file_revision)},"changes":changes,"warnings":[{"code":"external_availability_unverified","message":"Dry-run does not read secrets or verify upstream authorization","affected":[]}],"save":"not_executed","runtime":"not_executed","native_application":"not_requested"});
+    let mut out = json!({"config_impact":{"file_revision_before":file_revision,"file_revision_after":file_revision,"candidate_revision":null,"loaded_revision_before":loaded.as_ref().map(|f|&f.revision),"activation_diff_state":if loaded_error.is_some(){"unavailable"}else if loaded.is_some(){"complete"}else{"no_loaded_snapshot"},"includes_pending_file_changes":loaded.as_ref().map(|f|f.revision!=file_revision)},"changes":changes,"save":"not_executed","runtime":"not_executed","native_application":"not_requested"});
     out["session_impact"] = match crate::service::preview_activation(store, candidate).await {
         Ok(impact) => impact,
         Err(error) => {
@@ -138,7 +138,7 @@ pub(crate) async fn impact(
         }
     };
     if let Some(error) = loaded_error {
-        out["warnings"].as_array_mut().unwrap().push(json!({"code":error.code,"message":"Loaded configuration and complete activation impact are unavailable; local desired changes remain inspectable","affected":[]}));
+        out["warnings"] = json!([{"code":error.code,"message":"Loaded configuration and complete activation impact are unavailable; local desired changes remain inspectable","affected":[]}]);
     }
     if let Some(before) = before {
         let before = serde_json::to_value(before)
@@ -252,7 +252,7 @@ pub(super) async fn reset(store: &Store, r: &Request) -> Result<Value> {
 pub(super) fn validate(store: &Store, file: &config::LoadedFile) -> Result<Value> {
     crate::reasoning::validate_saved(store, &file.config)?;
     Ok(
-        json!({"snapshot_state":if file.exists{"available"}else{"absent"},"valid":true,"revision":file.revision,"external_availability":"not_verified"}),
+        json!({"snapshot_state":if file.exists{"available"}else{"absent"},"valid":true,"revision":file.revision}),
     )
 }
 

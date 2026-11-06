@@ -1,5 +1,6 @@
 //! Native authorization lineage, durable login metadata, and owner commands.
 use super::{
+    adapters,
     compatibility::Context,
     document::{self, Format},
     installation::{self, native_command, version},
@@ -454,7 +455,7 @@ async fn native_auth(
         );
     }
     let installed = version(&target.agent, &path).await;
-    if installed["compatibility"] != "documented" {
+    if installed["version"].as_str() != Some(adapters::qualified_version(&target.agent)) {
         return Err(Error::new(
             "native_version_unknown",
             "Native login commit and recovery are qualified only for the exact researched owner version",

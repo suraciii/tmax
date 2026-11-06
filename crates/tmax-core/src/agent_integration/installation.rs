@@ -1,4 +1,4 @@
-//! Native executable resolution, scoped commands, and installation qualification.
+//! Native executable resolution, scoped commands, and installation evidence.
 use super::{adapters, scope::read_native};
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -228,7 +228,7 @@ async fn hermes_version(path: &Path) -> Option<Vec<u8>> {
 }
 pub(super) async fn version(agent: &str, path: &Path) -> Value {
     let Some(exe) = executable(agent) else {
-        return json!({"state":"not_installed","version":null,"compatibility":"unknown","qualified_version":adapters::qualified_version(agent)});
+        return json!({"state":"not_installed","version":null});
     };
     let output = if agent == "hermes" {
         hermes_version(path).await
@@ -253,10 +253,9 @@ pub(super) async fn version(agent: &str, path: &Path) -> Value {
         .as_deref()
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|text| detected_version(agent, text));
-    let exact = found.as_deref() == Some(adapters::qualified_version(agent));
-    json!({"executable":exe.script.as_ref().unwrap_or(&exe.program),"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"source":adapters::source(agent)})
+    json!({"executable":exe.script.as_ref().unwrap_or(&exe.program),"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"source":adapters::source(agent)})
 }
-pub(super) fn version_blocker(agent: &str, installation: &Value) -> Option<Value> {
+pub(super) fn schema_blocker(agent: &str, installation: &Value) -> Option<Value> {
     if agent == "opencode"
         && installation["version"]
             .as_str()
@@ -267,19 +266,6 @@ pub(super) fn version_blocker(agent: &str, installation: &Value) -> Option<Value
         );
     }
     None
-}
-pub(super) fn version_warnings(agent: &str, installation: &Value) -> Vec<Value> {
-    if installation["state"] == "not_installed" {
-        return vec![
-            json!({"code":"native_executable_not_found","message":format!("The {agent} executable was not found on PATH. Configuration can still be applied; install the tool or correct PATH, then reload it.")}),
-        ];
-    }
-    if installation["compatibility"] == "documented" {
-        return Vec::new();
-    }
-    vec![
-        json!({"code":"native_version_unverified","message":"This tool version has not been verified. Configuration can still be applied; reload the tool to check it"}),
-    ]
 }
 
 #[cfg(test)]
@@ -330,21 +316,20 @@ mod tests {
         }
     }
     #[test]
-    fn application_versions_are_advisory_except_known_incompatible_schemas() {
-        for state in ["probe_failed", "version_unknown", "detected"] {
-            let evidence = json!({"state":state,"version":"2.0.19","compatibility":"unknown"});
-            assert!(version_blocker("opencode", &evidence).is_none());
-            assert_eq!(version_warnings("opencode", &evidence).len(), 1);
+    fn only_opencode_one_schema_blocks_application() {
+        for evidence in [
+            json!({"state":"not_installed","version":null}),
+            json!({"state":"probe_failed","version":null}),
+            json!({"state":"version_unknown","version":null}),
+            json!({"state":"detected","version":"2.0.19"}),
+        ] {
+            assert!(schema_blocker("opencode", &evidence).is_none());
         }
         assert_eq!(
-            version_blocker("opencode", &json!({"version":"1.9.0"})).unwrap()["code"],
+            schema_blocker("opencode", &json!({"version":"1.9.0"})).unwrap()["code"],
             "native_schema_incompatible"
         );
-        assert!(version_blocker("pi", &json!({"state":"not_installed"})).is_none());
-        let missing = version_warnings("pi", &json!({"state":"not_installed"}));
-        assert_eq!(missing.len(), 1);
-        assert_eq!(missing[0]["code"], "native_executable_not_found");
-        assert!(version_warnings("pi", &json!({"compatibility":"documented"})).is_empty());
+        assert!(schema_blocker("pi", &json!({"version":"1.9.0"})).is_none());
     }
     #[test]
     fn hermes_provenance_resolution_never_executes_repair_capable_launcher() {

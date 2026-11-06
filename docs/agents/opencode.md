@@ -205,9 +205,9 @@ part of tmax's model apply/restore.
 ## Applying models and session routing
 
 A default model is optional. Without one, tmax adds the selected provider models
-and leaves OpenCode's current default alone. An unverified version produces a
-warning, not an application gate; OpenCode 1 remains incompatible with this V2
-configuration format.
+and leaves OpenCode's current default alone. Version uncertainty does not gate
+application; a detected OpenCode 1 schema remains incompatible with this V2
+configuration format and blocks before writes.
 
 OpenCode V2 supplies `x-opencode-session` and matching `X-Session-Id` on model
 requests, with `opencode/<channel>/<version>/<name>` as its User-Agent. Children
