@@ -1,8 +1,8 @@
-//! Native application transaction: preview, qualification, protected capture, guarded writes.
+//! Native application transaction: preview, schema detection, protected capture, guarded writes.
 use super::{
     adapters::{self, File, desired_fields_with_ownership, inline_credential},
     document::{self, Format},
-    installation::{version, version_blocker, version_warnings},
+    installation::{schema_blocker, version},
     planning::{entries, fact_gap_warnings, projection_view},
     recovery::{
         Capture, Field, FileRecord, INDEX, Index, Payload, Record, baseline, conflicts,
@@ -188,7 +188,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             dsh_credential_permissions(&file.path)?;
         }
         if dry_run && file.format == Format::Credential {
-            previews.push(json!({"path":file.path,"present":file.path.exists(),"credential_handoff":"private native-owned credential file, referenced by the documented native key command/file mechanism","plaintext_native_store":true,"content_revision":"checked_only_on_execution","secret_reads":false}));
+            previews.push(json!({"path":file.path,"present":file.path.exists(),"credential_handoff":"private native-owned credential file, referenced by the documented native key command/file mechanism","content_revision":"checked_only_on_execution","secret_reads":false}));
             continue;
         }
         let before = read_native(&file.path)?;
@@ -243,18 +243,20 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     }
     if dry_run {
         return Ok(
-            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false}}),
+            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"credentials":{"resolved":false},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false}}),
         );
     }
-    let installed = version(&target.agent, &path).await;
-    if let Some(blocker) = version_blocker(&target.agent, &installed) {
-        return Ok(
-            json!({"_code":blocker["code"],"_status":"blocked","target":id,"agent":target.agent,"path":path,"installation":installed,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false}}),
-        );
+    if target.agent == "opencode" {
+        let installed = version(&target.agent, &path).await;
+        if let Some(blocker) = schema_blocker(&target.agent, &installed) {
+            return Ok(
+                json!({"_code":blocker["code"],"target":id,"agent":target.agent,"path":path,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false}}),
+            );
+        }
     }
     if desired_unchanged {
         return Ok(
-            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps}),
+            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"fact_gaps":fact_gaps}),
         );
     }
     adapters::resolve_handoff(&target.agent, &mut files, |reference| {
@@ -518,7 +520,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         }
         if store.write_json(INDEX, &index).is_err() {
             return Ok(
-                json!({"_code":"partial_native_apply","target":id,"changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"state":"recovery_required","reason_code":"recovery_metadata_write_failed","native_reload":"not_attempted"}),
+                json!({"_code":"partial_native_apply","target":id,"changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"state":"recovery_required","reason_code":"recovery_metadata_write_failed"}),
             );
         }
     }
@@ -543,7 +545,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         let _ = secrets::remove(store, &old.payload_ref);
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps,"precedence":adapters::precedence(&target.agent)}),
+        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"fact_gaps":fact_gaps}),
     )
 }
 
@@ -866,14 +868,8 @@ mod tests {
         let applied = apply(&store, &config, "managed", false).await.unwrap();
         assert_eq!(applied["_code"], "awaiting_native_reload");
         assert_eq!(applied["written"], true);
-        assert_eq!(applied["installation"]["state"], "not_installed");
-        assert!(
-            applied["warnings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|warning| { warning["code"] == "native_executable_not_found" })
-        );
+        assert!(applied.get("installation").is_none());
+        assert!(applied.get("warnings").is_none());
         let written = fs::read_to_string(path.join("models.json")).unwrap();
         assert!(written.contains("local"));
         assert!(path.read_dir().unwrap().any(|entry| {
@@ -883,6 +879,81 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("tmax-")
         }));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn apply_does_not_probe_non_opencode_executables() {
+        const CHILD: &str = "TMAX_NO_PROBE_CHILD";
+        const MARKER: &str = "TMAX_NO_PROBE_MARKER";
+        if std::env::var_os(CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let bin = tempfile::tempdir().unwrap();
+            let marker = bin.path().join("probed");
+            let executable = bin.path().join("pi");
+            fs::write(
+                &executable,
+                "#!/bin/sh\n: > \"$TMAX_NO_PROBE_MARKER\"\nexit 1\n",
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agent_integration::application::tests::apply_does_not_probe_non_opencode_executables",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env(MARKER, &marker)
+                .env("PATH", bin.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated no-probe apply failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                !marker.exists(),
+                "apply executed a non-OpenCode native executable"
+            );
+            return;
+        }
+        let marker = std::env::var_os(MARKER).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let path = directory.path().join("native");
+        fs::create_dir(&path).unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "pi".into();
+        target.default = None;
+        fs::write(
+            path.join("models.json"),
+            "{\"providers\":{\"unrelated\":{\"models\":{\"keep\":{}}}}}\n",
+        )
+        .unwrap();
+        let reference = secrets::put(&store, "provider:p", b"synthetic-no-probe-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let applied = apply(&store, &config, "managed", false).await.unwrap();
+        assert_eq!(applied["written"], true);
+        assert!(!std::path::Path::new(&marker).exists());
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -944,7 +1015,6 @@ mod tests {
             .unwrap();
         let result = apply(&store, &config, "managed", false).await.unwrap();
         assert_eq!(result["_code"], "native_schema_incompatible");
-        assert_eq!(result["_status"], "blocked");
         assert_eq!(result["effects"]["native_writes"], false);
         assert!(path.read_dir().unwrap().next().is_none());
     }

@@ -43,6 +43,13 @@ pub(super) fn success_response(operation: &str, dry_run: bool, mut data: Value) 
         .filter(|s| matches!(*s, "blocked" | "incomplete" | "cancelled"))
     {
         status
+    } else if exit == 3
+        && data
+            .get("blockers")
+            .and_then(Value::as_array)
+            .is_some_and(|blockers| !blockers.is_empty())
+    {
+        "blocked"
     } else if exit != 0 {
         "incomplete"
     } else if dry_run {
@@ -192,5 +199,16 @@ mod tests {
             json!({"_code":"awaiting_native_reload"}),
         );
         assert_eq!(login.exit_code, 3);
+    }
+    #[test]
+    fn blocker_evidence_sets_blocked_status_without_a_private_marker() {
+        let response = success_response(
+            "agent apply",
+            false,
+            json!({"_code":"native_schema_incompatible","blockers":[{"code":"native_schema_incompatible"}]}),
+        );
+        assert_eq!(response.exit_code, 3);
+        assert_eq!(response.body["status"], "blocked");
+        assert!(response.body["data"].get("_status").is_none());
     }
 }

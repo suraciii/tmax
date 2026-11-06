@@ -553,7 +553,7 @@ fn retained_explanation(
         "selection_reason":"retained_destination",
         "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
         "continuation":{"state":if blocker.is_some(){"blocked"}else{"retained"},"reason_code":blocker,"stored_blocker":binding.blocked},
-        "original_decision":safe_evidence(&binding.decision),"fresh_ranking":"not_evaluated","authorization":"not_verified"
+        "original_decision":safe_evidence(&binding.decision),"fresh_ranking":"not_evaluated"
     }))
 }
 

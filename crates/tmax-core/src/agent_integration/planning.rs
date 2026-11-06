@@ -7,7 +7,7 @@ use super::{
     compatibility,
     discovery::safe_files,
     document::{self, Format},
-    installation::{version, version_blocker, version_warnings},
+    installation::{schema_blocker, version},
     recovery::{INDEX, Index, Record, field_drift, field_hash, owner, record_for, record_view},
     scope::{dsh_preflight, read_native, scope_evidence, target, unavailable},
 };
@@ -97,9 +97,9 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     let installed = if available {
         version(&target.agent, &path).await
     } else {
-        json!({"state":"not_checked","version":null,"compatibility":"unknown","reason_code":"native_scope_unavailable"})
+        json!({"state":"not_checked","version":null,"reason_code":"native_scope_unavailable"})
     };
-    if available && let Some(blocker) = version_blocker(&target.agent, &installed) {
+    if available && let Some(blocker) = schema_blocker(&target.agent, &installed) {
         blockers.push(blocker);
     }
     let applied_state = match &pending {
@@ -109,7 +109,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"desired_state":"saved","applied_state":applied_state,"last_application_state":record.map(|r|r.state.as_str()),"pending_native_changes":pending,"blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"pending_native_changes":pending,"blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -574,6 +574,19 @@ mod tests {
         assert_eq!(inspected["providers"][0]["models"][0]["id"], "first");
         assert_eq!(inspected["applied_state"], "unknown");
         assert!(inspected["pending_native_changes"].is_null());
+        assert_eq!(inspected["installation"]["state"], "not_checked");
+        assert_eq!(
+            inspected["installation"]["reason_code"],
+            "native_scope_unavailable"
+        );
+        for removed in [
+            "warnings",
+            "desired_state",
+            "last_application_state",
+            "effective_state",
+        ] {
+            assert!(inspected.get(removed).is_none(), "{removed} is present");
+        }
         let error = apply(&store, &config, "managed", false).await.unwrap_err();
         assert_eq!(error.code, "native_scope_unavailable");
         assert!(error.message.contains(path.to_str().unwrap()));

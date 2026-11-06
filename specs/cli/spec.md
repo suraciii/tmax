@@ -37,7 +37,7 @@ appear at most once across the full command path, including parent and leaf leve
 
 | Global option | Contract |
 | --- | --- |
-| `--format json` or `--format text` | Compact JSON is the management default. Text reports the same facts and effects. One valid occurrence is supported before or after subcommands. An invalid or repeated value is rejected in default JSON without echoing argv. |
+| `--format json` or `--format text` | `--format json` prints one compact JSON line and is the management default. `--format text` prints the same envelope as indented JSON. One valid occurrence is supported before or after subcommands; an invalid or repeated value is rejected in default JSON without echoing argv. |
 | `--non-interactive` | Never prompt or launch interactive sign-in. Explicit key input and qualified native authorization/key input remain permitted; missing required interaction is a blocker. |
 
 New API keys use explicit hidden terminal input or `--key-stdin`. See

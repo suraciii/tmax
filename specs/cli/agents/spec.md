@@ -106,10 +106,10 @@ Help uses supported native roles, not invented ones.
 | Command | Result or requested boundary |
 | --- | --- |
 | `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, and `default_configured`. |
-| `agent discover [--agent AGENT]` | Supported installations/paths, versions, profiles, and compatibility without registration/import. |
+| `agent discover [--agent AGENT]` | Supported installations/paths, versions, and profiles without registration/import. |
 | `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, native capability projection, desired/applied differences, blockers, and recovery. |
 | `agent inspect --agent AGENT --path PATH` | Inspect an explicit undeclared native path without registration/import. |
-| `agent apply TARGET` | Apply current complete desired configuration; identify owned files, credential handoff, native reload, affected paths, and recovery. |
+| `agent apply TARGET` | Apply current complete desired configuration; report affected files, applied state, and recovery. |
 | `agent restore TARGET` | Restore owned changes using the declared target's retained recovery. |
 | `agent restore --recovery RECORD` | Restore exactly that record, including after removal, without recreating a target. |
 | `agent recovery list [--target TARGET]` | Recovery handles/paths under current-user-restricted `~/.tmax`, including removed targets, with restoration/conflict state and no credentials. |
@@ -245,35 +245,40 @@ Native inspection reports `scope_state` separately from the saved target. When a
 declared path is absent or unusable, it retains the target and resolved `path`,
 sets `scope_state: unavailable`, and provides `scope_reason_code` (`absent`,
 `not_directory`, `unreadable`, or `unavailable`); actual apply remains blocked.
-`applied_state` describes current desired-versus-written state, while
-`last_application_state` reports the historical last application. When comparison
+`applied_state` describes current desired-versus-written state. When comparison
 is available, `pending_native_changes` identifies native field `set`/`release`
 changes or a credential-reference replacement; otherwise it is null. These are
 unwritten desired deltas. `awaiting_native_reload` is separate: it means written
 native changes await a tool reload/restart, not that those deltas remain pending.
-Installation version evidence distinguishes `not_installed`, `probe_failed`, `version_unknown`,
-and `detected`. Applying configuration is a declared-target file edit: it does
-not require the tool executable. Writes depend on saved configuration and native
-file contents; installation evidence is reported alongside them and never blocks.
-When the executable is absent, apply writes the target and reports
-`native_executable_not_found` in `data.warnings`; inspection and application
-keep the same evidence. A positively detected incompatible schema
-(`native_schema_incompatible`) refuses application with exit 3 and no native
-writes. Other version uncertainty produces `native_version_unverified` in
-`data.warnings` without blocking application. Operations that execute the
-tool's own commands, such as browser login, require the executable and report
-`native_not_installed`.
+
+Installation evidence consists of `state`, `version`, `executable`, and `source`,
+with states `not_installed`, `probe_failed`, `version_unknown`, and `detected`.
+When the executable is absent, evidence consists only of `state: not_installed`
+and `version: null`. If a declared target's inspection scope is unavailable,
+installation is not checked and reports `state: not_checked`, `version: null`,
+and reason code `native_scope_unavailable`.
+
+Applying configuration is a declared-target file edit and does not require or
+probe the tool executable, except for OpenCode schema detection. A positively
+detected OpenCode 1.x schema reports `native_schema_incompatible`, exit 3, and no
+native writes. Missing or unknown versions do not block application. Apply
+results contain no installation evidence or version warnings; neither
+`native_version_unverified` nor `native_executable_not_found` is emitted.
+Operations that execute the tool's own commands, such as browser login, require
+the executable and report `native_not_installed` when it is absent.
 
 Successful apply/restore returns exit 0 and status `success`, including when its
 code is `awaiting_native_reload`. The reload reminder remains explicit; a
 completed file write is not a failed application.
 
-Routine mutation results identify `data.target`, `data.provider` when entry-scoped,
-requested changes, and actual saved/loaded or applied/reload outcome. Native
-partial writes enumerate changed/unchanged files and safe recovery; a completed
-write with a reload reminder is a write outcome, not a claim about the running
-tool. Detail keeps desired and written state distinct. Incomplete effects stay
-visible.
+Successful apply results identify the target and agent, applied state, changed
+and unchanged files, recovery, and fact gaps; a write also reports its path and
+`written`. Apply dry-run reports unresolved credentials without reading secrets
+or starting processes. A schema-blocked result identifies the target, agent,
+path, blockers, and effects. Native partial writes enumerate changed/unchanged
+files and safe recovery; a completed write with a reload reminder is a write
+outcome, not a claim about the running tool. Detail keeps desired and written
+state distinct. Incomplete effects stay visible.
 
 Examples: `tmax agent discover --agent pi`, `tmax agent inspect pi-main`,
 `tmax agent inspect --agent pi --path /home/user/.pi/agent`,

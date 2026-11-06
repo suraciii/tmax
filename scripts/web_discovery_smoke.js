@@ -18,7 +18,7 @@ async page => {
     if(request?.command.join(' ')!=='agent discover')return route.continue();
     const kind=request.arguments.agent[0], selected=mode;
     if(selected==='slow')await new Promise(resolve=>{releaseSlow=resolve;});
-    const installation={agent:kind,path:kind==='codex'?path:path+'-'+kind,scope_state:selected==='empty'?'unavailable':'available',profiles:[],installation:{state:'detected',version:'test-version',compatibility:'unknown',qualified_version:'qualified-version'}};
+    const installation={agent:kind,path:kind==='codex'?path:path+'-'+kind,scope_state:selected==='empty'?'unavailable':'available',profiles:[],installation:{state:'detected',version:'test-version'}};
     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({exit_code:selected==='error'?4:0,body:{schema_version:1,operation:'agent discover',status:selected==='error'?'error':'success',code:selected==='error'?'probe_failed':'ok',data:{installations:[installation]}}})});
     if(selected==='slow')slowDone=true;
   };
@@ -31,7 +31,7 @@ async page => {
     await page.route('**/api/execute',handler);
     await open();
     assert('Discovery is integrated in add form',await page.locator('[data-discovered-path]').count()===1);
-    assert('Version compatibility is explicit',(await page.locator('#agent-discovery').innerText()).includes('配置适配尚未验证'));
+    assert('Version is reported without a compatibility claim',(await page.locator('#agent-discovery').innerText()).includes('检测到版本 test-version'));
     await page.locator('[data-discovered-path]').click();
     assert('Selected path fills form',await page.locator('#f-path').inputValue()===path);
     await page.locator('#f-target').fill(id);

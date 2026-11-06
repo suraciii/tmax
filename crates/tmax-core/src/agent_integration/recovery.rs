@@ -232,7 +232,7 @@ pub(super) fn partial(
     }
     let persisted = store.write_json(INDEX, index).is_ok();
     Ok(
-        json!({"_code":"partial_native_apply","target":record.target,"state":"recovery_required","changed_files":changed,"unchanged_files":unchanged,"remaining_files":record.files.iter().filter(|f|!f.written).map(|f|&f.path).collect::<Vec<_>>(),"reason_code":code,"message":message,"recovery":record.id,"recovery_metadata_updated":persisted,"native_reload":"not_attempted"}),
+        json!({"_code":"partial_native_apply","target":record.target,"state":"recovery_required","changed_files":changed,"unchanged_files":unchanged,"remaining_files":record.files.iter().filter(|f|!f.written).map(|f|&f.path).collect::<Vec<_>>(),"reason_code":code,"message":message,"recovery":record.id,"recovery_metadata_updated":persisted}),
     )
 }
 pub(super) fn prune_empty_parents(
@@ -417,7 +417,7 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
     }
     if dry_run {
         return Ok(
-            json!({"target":record.target,"recovery":selected,"dry_run":true,"files":record.files.iter().map(|f|&f.path).collect::<Vec<_>>(),"restoration":"three_way_owned_fields_only","secret_reads":false,"native_writes":false,"native_reload":"required_after_execution"}),
+            json!({"target":record.target,"recovery":selected,"dry_run":true,"files":record.files.iter().map(|f|&f.path).collect::<Vec<_>>(),"restoration":"three_way_owned_fields_only","secret_reads":false,"native_writes":false}),
         );
     }
     let payload = payload.expect("executing restoration resolves its payload");
@@ -491,7 +491,7 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
         );
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":record.target,"agent":record.agent,"recovery":selected,"state":"restored_reload_pending","changed_files":changed,"unchanged_files":unchanged,"preserved":"unrelated settings and later unowned edits","credential_logout":false,"gateway_key_revoked":false,"native_reload":"required","recovery_retained":true}),
+        json!({"_code":"awaiting_native_reload","target":record.target,"agent":record.agent,"recovery":selected,"state":"restored_reload_pending","changed_files":changed,"unchanged_files":unchanged,"preserved":"unrelated settings and later unowned edits","credential_logout":false,"gateway_key_revoked":false,"recovery_retained":true}),
     )
 }
 

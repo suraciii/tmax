@@ -31,8 +31,7 @@ async page => {
     await route.fulfill({json:{exit_code:0, body:{schema_version:1, operation:'agent apply',
       code:request.dry_run?'dry_run_ready':'awaiting_native_reload',
       status:request.dry_run?'dry_run':'success', data:{target,
-        state:'applied_reload_pending', effective:'not_verified',
-        warnings:request.dry_run?[]:[{code:'native_version_unverified'}]},
+        state:'applied_reload_pending'},
     }}});
   };
   let created = false;
@@ -56,8 +55,7 @@ async page => {
     await page.locator('button[name="intent"][value="save"]').click();
     await page.locator('#form-result').getByText('配置已写入，请重启或重新加载对应编程工具。').waitFor();
     assert('Application submitted once', applied === 1);
-    assert('Reload and version reminders are not errors', await page.locator('#form-result .error').count() === 0);
-    assert('Version reminder is localized', (await page.locator('#form-result').innerText()).includes('此工具版本尚未验证'));
+    assert('Reload reminder is not an error', await page.locator('#form-result .error').count() === 0);
     assert('No page errors', errors.length === 0);
     return {checks, errors};
   } finally {

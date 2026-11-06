@@ -37,8 +37,9 @@ runtime evidence must remain distinct. None establishes an untested version rang
 Configuration application treats an unverified version or unavailable version
 probe as advisory. It may proceed using the supported schema without claiming
 runtime verification. A known incompatible schema (for example OpenCode 1 versus
-2), missing executable, invalid selection, or unavailable credential still blocks
-application with an actionable reason. Authentication qualification is separate.
+2), invalid selection, or unavailable credential still blocks application with an
+actionable reason. A missing executable is advisory for configuration
+application; operations that execute the tool report it.
 
 ## Agent boundaries
 

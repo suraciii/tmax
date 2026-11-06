@@ -109,7 +109,8 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         let mut data = crate::service::control(store, config, r).await?;
         data["context"] = context;
         data["requested"] = json!({"id":r.operands.first(),"protocol":protocol});
-        data["native_assessment"] = json!({"state":"not_reassessed","reason":"retained_destination_inspection","authorization":"not_verified"});
+        data["native_assessment"] =
+            json!({"state":"not_reassessed","reason":"retained_destination_inspection"});
         return Ok(data);
     }
     let requirements =
@@ -138,7 +139,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         crate::routing::explain_native(store, config, &id, protocol, arg(r, "at"), Some(&advice))?
     };
     if requirements.is_some() {
-        data["native_assessment"] = json!({"state":"assessed","scope":"protocol_provider_client_and_credential_handoff","native_login_readiness":"safe_operation_metadata_checked_for_direct_login","installation_and_authorization":"not_verified","ranking_is_live_authorization_proof":false,"secret_reads":false,"native_apply":"not_requested"});
+        data["native_assessment"] = json!({"state":"assessed","scope":"protocol_provider_client_and_credential_handoff","native_login_readiness":"safe_operation_metadata_checked_for_direct_login","secret_reads":false,"native_apply":"not_requested"});
     }
     data["context"] = context;
     data["requested"] = json!({"id":r.operands.first(),"protocol":protocol});

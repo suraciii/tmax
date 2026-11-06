@@ -57,9 +57,9 @@ page makes no external font, image, or script requests.
   Select a found directory or enter a path manually; registered directories link
   to their existing configuration. Discovery failure does not block manual entry.
   Discovery does not import settings or credentials, and installation detection
-  does not establish compatibility. Applying writes the declared target even when
-  the executable is not on `PATH`; that absence is reported as a warning, not a
-  refusal. Saving opens the configuration details.
+  does not establish that the tool will use the configuration. Applying writes
+  the declared target even when the executable is not on `PATH`; discovery
+  reports that absence and never blocks the write. Saving opens the configuration details.
   Add an upstream or gateway provider entry, select its models and native
   protocols, then optionally choose its default (required for Codex). The model
   choices list only published protocols, grouped Responses first for both concrete
@@ -126,7 +126,7 @@ before retrying. An existing unrelated login is never imported automatically.
 The official Codex executable is required. Browser authentication checks the
 installed authentication interface, without requiring an exact CLI version.
 If the required methods are unavailable, update Codex and retry. Native model
-configuration has separate compatibility checks. The optional device-code method depends on OpenAI account
+configuration applies its own schema checks. The optional device-code method depends on OpenAI account
 settings and availability. Codex stores and refreshes credentials; tmax stores
 only a reference and account metadata. The independent scope uses Codex's file
 credential store with private local permissions, not encryption.
@@ -169,6 +169,6 @@ it never applies native files. Run it in the same dedicated browser session.
 
 The optional [`scripts/web_agent_apply_smoke.js`](../scripts/web_agent_apply_smoke.js)
 checks OpenCode's optional default, the application form without command/target
-fields, preview isolation, and successful application with non-error reload and
-version reminders. It creates a temporary target declaration and mocks the
+fields, preview isolation, and successful application with a non-error reload
+reminder. It creates a temporary target declaration and mocks the
 application result; it does not write native files or prove runtime inference.

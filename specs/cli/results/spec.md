@@ -7,7 +7,7 @@ for behavior and evidence.
 
 ## Result envelope and output
 
-Management emits exactly one compact UTF-8 JSON object plus newline on stdout,
+By default, management emits exactly one compact UTF-8 JSON object plus newline on stdout,
 including parse errors, blockers, dry-runs, partial effects, and failures. Never
 mix progress, child output, usage, prompts, or a second result into stdout.
 Optional redacted stderr is not needed to interpret JSON. Protected input/sign-in
@@ -15,8 +15,9 @@ use terminal or explicit inherited descriptors without corrupting stdout.
 Explicit [gateway key show](../providers/authentication/spec.md#shared-gateway-key)
 delivers only through its qualified separate terminal/pipe channel; stdout still
 contains exactly the redacted management result, never the secret line.
-`--format text` presents the same outcome/effects/blockers/actions; success goes
-to stdout and errors to stderr. Offline help/version remain text, not envelopes.
+`--format text` prints the same envelope as indented JSON; success goes to stdout
+and errors to stderr. Neither format adds progress, prose, or a second result.
+Offline help/version remain text, not envelopes.
 
 | Required field | Type and meaning |
 | --- | --- |

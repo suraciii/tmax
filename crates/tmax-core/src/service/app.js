@@ -347,7 +347,7 @@ function resultMessage(response) {
   const known={unsupported_protected_input:'当前 Windows 版本无法接收受保护输入。配置尚未完成，需要修复运行时后再试。',inputs_changed:'配置已被其他操作更新。请关闭此表单，刷新页面后重新编辑。',target_incomplete:'请先添加模型来源和模型；Codex 还需选择默认模型。',native_schema_incompatible:'当前安装的是 OpenCode 1，请升级到 OpenCode 2 后应用配置。',credential_unavailable:'授权凭据不可用，请检查接入授权配置。',saved_not_active:'配置已保存，但未生效。请检查原因后重新加载配置。',awaiting_native_reload:'配置已写入，请重启或重新加载对应编程工具。',unresolved_reference:'还有其他配置引用此项。请先调整相关模型、别名或工具配置。',active_requests:'仍有请求进行中。请等待请求结束后再停止。',restart_required:'配置需要重启网关才能生效。',login_source_required:'请选择负责登录的工具配置。',interactive_required:'此操作需要交互登录，请通过本地命令行完成登录后刷新状态。'};
   return known[body.code] || body.blockers?.[0]?.message || (isSuccess(response)?(body.status==='dry_run'?'预览完成，没有执行修改。':'操作已完成。'):'操作未完成，请查看原因。');
 }
-const warningText=w=>({native_version_unverified:'此工具版本尚未验证，配置已应用；请重新打开工具检查。',native_executable_not_found:'未在 PATH 中找到该工具的可执行文件；配置仍已写入，安装工具或修正 PATH 后重新加载即可。',external_availability_unverified:'预览不会读取密钥或验证上游授权。',listener_restart_required:'配置已保存，需要主动重启网关后生效。',saved_not_active:'配置已保存，运行时尚未生效；请检查并重新加载，不要重复创建。'}[w.code] || (typeof w==='string'?w:w.message || w.code));
+const warningText=w=>({listener_restart_required:'配置已保存，需要主动重启网关后生效。',saved_not_active:'配置已保存，运行时尚未生效；请检查并重新加载，不要重复创建。'}[w.code] || (typeof w==='string'?w:w.message || w.code));
 function presentResult(response, container) {
   const body=response.body; const success=isSuccess(response); const warnings=[...(body.warnings || []),...(body.data?.warnings || [])];
   const next=body.next_actions || body.data?.next_actions || [];
@@ -709,7 +709,7 @@ function agentForm(agent='') {
       const installation=found.installation || {};
       const candidates=[...(found.scope_state==='available'?[{path:found.path,label:kind==='dsh'?'DSH 主目录':'当前配置目录'}]:[]),...(kind==='dsh'?[]:found.profiles || []).map(path=>({path,label:'其他配置目录'}))].filter((item,index,all)=>all.findIndex(other=>nativePathKey(other.path)===nativePathKey(item.path))===index);
       const version=installation.version?'检测到版本 '+installation.version:'未获取到工具版本';
-      const advice=installation.state==='not_installed'?'未在本机命令路径中找到可执行文件。仍可登记目录并写入配置；安装工具或修正 PATH 后重新加载即可。':installation.compatibility==='documented'?'此版本的配置格式已适配；实际使用需在应用后验证。':`当前版本的配置适配尚未验证${installation.qualified_version?'，参考适配版本为 '+installation.qualified_version:''}。仍可保存并应用配置，使用后可反馈兼容性问题。`;
+      const advice=installation.state==='not_installed'?'未在本机命令路径中找到可执行文件。仍可登记目录并写入配置；安装后重新加载即可。':installation.version?`检测到版本 ${installation.version}；配置可写入，实际使用需重新加载工具。`:'未获取到工具版本；配置仍可写入。';
       $('agent-discovery').innerHTML=`<p class="muted">${escapeHtml(version)}</p><p class="muted">${escapeHtml(advice)}</p>`+
         (candidates.length?candidates.map((item,index)=>{
           const saved=registered(kind,item.path);
@@ -762,10 +762,6 @@ function nativeProjectionSection(data) {
   }).join('');
   return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${entries||'<p class="muted">尚未生成映射。</p>'}`;
 }
-function warningsSection(warnings) {
-  const list=Array.isArray(warnings)?warnings:[];
-  return list.length?`<h3 class="subheading">提示</h3>${list.map(warning=>notice(escapeHtml(warningText(warning)),'warning')).join('')}`:'';
-}
 function blockersSection(blockers) {
   const list=Array.isArray(blockers)?blockers:[];
   return list.length?`<h3 class="subheading">阻塞原因</h3>${list.map(b=>notice(escapeHtml(b.message||'存在未说明的阻塞原因。')+(b.code?` <span class="mono">${escapeHtml(b.code)}</span>`:''),'warning')).join('')}`:'';
@@ -812,7 +808,7 @@ async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
   try {const data=await read('agent inspect',[target]);if(generation!==state.dialogGeneration)return;
     const config=state.config.agents[target];
-    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',config.default?.id || (config.agent==='codex'?'未选择':'沿用工具当前选择'))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${warningsSection(data.warnings)}${blockersSection(data.blockers)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
+    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',config.default?.id || (config.agent==='codex'?'未选择':'沿用工具当前选择'))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
 function agentSource(target) {

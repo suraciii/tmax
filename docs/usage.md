@@ -2,8 +2,9 @@
 
 This guide uses supported command grammar, but credentials and upstream calls are
 user-specific. CLI help is offline (`tmax help provider input`, for example); it
-never creates a starter configuration. Management output is JSON by default;
-`--format text` can follow a command when a human-readable view is preferred.
+never creates a starter configuration. The default `--format json` prints one
+compact JSON line intended for scripts; `--format text` prints the same result
+envelope as indented JSON.
 
 Ordinary provider/model/agent/network edits save desired settings without requiring
 a running service. `provider inspect`, file-state reads, and configuration
