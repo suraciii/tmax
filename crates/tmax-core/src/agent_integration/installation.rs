@@ -254,7 +254,7 @@ pub(super) async fn version(agent: &str, path: &Path) -> Value {
         .and_then(|b| std::str::from_utf8(b).ok())
         .and_then(|text| detected_version(agent, text));
     let exact = found.as_deref() == Some(adapters::qualified_version(agent));
-    json!({"executable":exe.script.as_ref().unwrap_or(&exe.program),"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
+    json!({"executable":exe.script.as_ref().unwrap_or(&exe.program),"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"source":adapters::source(agent)})
 }
 pub(super) fn version_blocker(agent: &str, installation: &Value) -> Option<Value> {
     if agent == "opencode"

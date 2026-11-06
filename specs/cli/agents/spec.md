@@ -105,9 +105,9 @@ Help uses supported native roles, not invented ones.
 
 | Command | Result or requested boundary |
 | --- | --- |
-| `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, `default_configured`, and desired/applied/effective condition. |
+| `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, and `default_configured`. |
 | `agent discover [--agent AGENT]` | Supported installations/paths, versions, profiles, and compatibility without registration/import. |
-| `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, native capability projection, desired/applied/effective differences, blockers, and recovery. |
+| `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, native capability projection, desired/applied differences, blockers, and recovery. |
 | `agent inspect --agent AGENT --path PATH` | Inspect an explicit undeclared native path without registration/import. |
 | `agent apply TARGET` | Apply current complete desired configuration; identify owned files, credential handoff, native reload, affected paths, and recovery. |
 | `agent restore TARGET` | Restore owned changes using the declared target's retained recovery. |
@@ -190,7 +190,7 @@ restoring native settings never revokes the shared key. Stop management with
 | Target/tool identity | `target` is the declared target ID; `agent` is its tool identity, never a target ID. An undeclared native scope has null `target`; resolved `path` identifies the inspected scope. |
 | `NativeModelRef` | `{provider, id, protocol}` with a target-local provider name. |
 | `AgentProviderView` | `name`, `source` (`{provider: string}` or `{gateway: true}`), and exact `{id, protocol}` selections. |
-| Provider detail | Qualified requirements, readiness, native precedence/evidence, and desired/applied/effective differences; no mode, target credential, permission list, or target continuity field. |
+| Provider detail | Qualified requirements, readiness, native precedence/evidence, and desired/applied differences; no mode, target credential, permission list, or target continuity field. |
 | `agent inspect` | `data.providers` contains entries; `data.default` and `data.roles` use `NativeModelRef`, with null default when absent. |
 | `native_projection` | `agent inspect` and `agent apply --dry-run` return one entry per native provider entry: `name`, `source` (`{provider: string}` or `{gateway: true}`), and `models` of `{id, protocol, projection}`. A `projection` has `state`, `reason_code`, `fields`, and `omitted`; a blocked projection adds `message`. `fields` carries only safe capability metadata and never secrets. |
 | Lists | Target/tool identities, counts, and readiness summaries instead of complete entries/evaluations; `default_configured` reports whether the target has a configured default. |
@@ -265,14 +265,15 @@ tool's own commands, such as browser login, require the executable and report
 `native_not_installed`.
 
 Successful apply/restore returns exit 0 and status `success`, including when its
-code is `awaiting_native_reload`. The reload reminder and unverified runtime
-state remain explicit; a completed file write is not a failed application.
+code is `awaiting_native_reload`. The reload reminder remains explicit; a
+completed file write is not a failed application.
 
 Routine mutation results identify `data.target`, `data.provider` when entry-scoped,
 requested changes, and actual saved/loaded or applied/reload outcome. Native
-partial writes enumerate changed/unchanged files and safe recovery; write-complete
-but reload-pending is not fully effective application. Detail keeps desired,
-written, and effective state distinct. Incomplete/unknown effects stay visible.
+partial writes enumerate changed/unchanged files and safe recovery; a completed
+write with a reload reminder is a write outcome, not a claim about the running
+tool. Detail keeps desired and written state distinct. Incomplete effects stay
+visible.
 
 Examples: `tmax agent discover --agent pi`, `tmax agent inspect pi-main`,
 `tmax agent inspect --agent pi --path /home/user/.pi/agent`,

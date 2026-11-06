@@ -181,14 +181,10 @@ mod tests {
     #[test]
     fn completed_native_writes_are_success_with_a_reload_reminder() {
         for operation in ["agent apply", "agent restore"] {
-            let response = success_response(
-                operation,
-                false,
-                json!({"_code":"awaiting_native_reload","effective":"not_verified"}),
-            );
+            let response =
+                success_response(operation, false, json!({"_code":"awaiting_native_reload"}));
             assert_eq!(response.exit_code, 0);
             assert_eq!(response.body["status"], "success");
-            assert_eq!(response.body["data"]["effective"], "not_verified");
         }
         let login = success_response(
             "provider login",

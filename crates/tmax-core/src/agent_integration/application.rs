@@ -243,18 +243,18 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     }
     if dry_run {
         return Ok(
-            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"qualification":{"state":"requires_execution_version_check","exact_version":adapters::qualified_version(&target.agent),"source":adapters::source(&target.agent),"inference":"not_verified"},"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false},"native_reload":"required; see precedence.native_reload"}),
+            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"precedence":adapters::precedence(&target.agent),"credentials":{"resolved":false,"plaintext_native_handoff":true},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false}}),
         );
     }
     let installed = version(&target.agent, &path).await;
     if let Some(blocker) = version_blocker(&target.agent, &installed) {
         return Ok(
-            json!({"_code":blocker["code"],"_status":"blocked","target":id,"agent":target.agent,"path":path,"installation":installed,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false},"qualification":"not_established"}),
+            json!({"_code":blocker["code"],"_status":"blocked","target":id,"agent":target.agent,"path":path,"installation":installed,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false}}),
         );
     }
     if desired_unchanged {
         return Ok(
-            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps,"native_reload":"still_required_or_unknown","effective":"not_verified"}),
+            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"secret_reads":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps}),
         );
     }
     adapters::resolve_handoff(&target.agent, &mut files, |reference| {
@@ -543,7 +543,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         let _ = secrets::remove(store, &old.payload_ref);
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"effective":"not_verified","changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps,"precedence":adapters::precedence(&target.agent)}),
+        json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"plaintext_native_handoff":true,"native_auth_import":false,"installation":installed,"warnings":version_warnings(&target.agent,&installed),"fact_gaps":fact_gaps,"precedence":adapters::precedence(&target.agent)}),
     )
 }
 
