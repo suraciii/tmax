@@ -57,7 +57,9 @@ page makes no external font, image, or script requests.
   Select a found directory or enter a path manually; registered directories link
   to their existing configuration. Discovery failure does not block manual entry.
   Discovery does not import settings or credentials, and installation detection
-  does not establish compatibility. Saving opens the configuration details.
+  does not establish compatibility. Applying writes the declared target even when
+  the executable is not on `PATH`; that absence is reported as a warning, not a
+  refusal. Saving opens the configuration details.
   Add an upstream or gateway provider entry, select its models and native
   protocols, then optionally choose its default (required for Codex). The model
   choices list only published protocols, grouped Responses first for both concrete

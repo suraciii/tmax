@@ -257,11 +257,6 @@ pub(super) async fn version(agent: &str, path: &Path) -> Value {
     json!({"executable":exe.script.as_ref().unwrap_or(&exe.program),"version":found,"state":if found.is_some(){"detected"}else if output.is_none(){"probe_failed"}else{"version_unknown"},"compatibility":if exact{"documented"}else{"unknown"},"qualified_version":adapters::qualified_version(agent),"version_range":null,"source":adapters::source(agent),"runtime_inference":"not_verified"})
 }
 pub(super) fn version_blocker(agent: &str, installation: &Value) -> Option<Value> {
-    if installation["state"] == "not_installed" {
-        return Some(
-            json!({"code":"native_not_installed","message":"Install the tool or correct PATH before applying"}),
-        );
-    }
     if agent == "opencode"
         && installation["version"]
             .as_str()
@@ -273,8 +268,13 @@ pub(super) fn version_blocker(agent: &str, installation: &Value) -> Option<Value
     }
     None
 }
-pub(super) fn version_warnings(installation: &Value) -> Vec<Value> {
-    if installation["compatibility"] == "documented" || installation["state"] == "not_installed" {
+pub(super) fn version_warnings(agent: &str, installation: &Value) -> Vec<Value> {
+    if installation["state"] == "not_installed" {
+        return vec![
+            json!({"code":"native_executable_not_found","message":format!("The {agent} executable was not found on PATH. Configuration can still be applied; install the tool or correct PATH, then reload it.")}),
+        ];
+    }
+    if installation["compatibility"] == "documented" {
         return Vec::new();
     }
     vec![
@@ -334,17 +334,17 @@ mod tests {
         for state in ["probe_failed", "version_unknown", "detected"] {
             let evidence = json!({"state":state,"version":"2.0.19","compatibility":"unknown"});
             assert!(version_blocker("opencode", &evidence).is_none());
-            assert_eq!(version_warnings(&evidence).len(), 1);
+            assert_eq!(version_warnings("opencode", &evidence).len(), 1);
         }
         assert_eq!(
             version_blocker("opencode", &json!({"version":"1.9.0"})).unwrap()["code"],
             "native_schema_incompatible"
         );
-        assert_eq!(
-            version_blocker("pi", &json!({"state":"not_installed"})).unwrap()["code"],
-            "native_not_installed"
-        );
-        assert!(version_warnings(&json!({"compatibility":"documented"})).is_empty());
+        assert!(version_blocker("pi", &json!({"state":"not_installed"})).is_none());
+        let missing = version_warnings("pi", &json!({"state":"not_installed"}));
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0]["code"], "native_executable_not_found");
+        assert!(version_warnings("pi", &json!({"compatibility":"documented"})).is_empty());
     }
     #[test]
     fn hermes_provenance_resolution_never_executes_repair_capable_launcher() {
@@ -374,6 +374,34 @@ mod tests {
         let launcher = directory.path().join("hermes");
         fs::write(&launcher, "#!/bin/sh\nexec \"$HERMES_PYTHON\" \"$@\"\n").unwrap();
         assert!(hermes_provenance_runtime(&launcher).is_none());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn tool_invoking_commands_still_require_the_executable() {
+        const CHILD: &str = "TMAX_MISSING_COMMAND_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let empty = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "agent_integration::installation::tests::tool_invoking_commands_still_require_the_executable",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("PATH", empty.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated native command check failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let error = native_command("pi", directory.path()).unwrap_err();
+        assert_eq!(error.code, "native_not_installed");
     }
     #[test]
     fn installed_version_prefixes_remain_exact() {

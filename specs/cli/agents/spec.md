@@ -252,10 +252,17 @@ changes or a credential-reference replacement; otherwise it is null. These are
 unwritten desired deltas. `awaiting_native_reload` is separate: it means written
 native changes await a tool reload/restart, not that those deltas remain pending.
 Installation version evidence distinguishes `not_installed`, `probe_failed`, `version_unknown`,
-and `detected`. Missing tools (`native_not_installed`) and known incompatible
-schemas (`native_schema_incompatible`) block application with exit 3 and no
-native writes. Other version uncertainty produces `native_version_unverified`
-in `data.warnings` without blocking application.
+and `detected`. Applying configuration is a declared-target file edit: it does
+not require the tool executable. Writes depend on saved configuration and native
+file contents; installation evidence is reported alongside them and never blocks.
+When the executable is absent, apply writes the target and reports
+`native_executable_not_found` in `data.warnings`; inspection and application
+keep the same evidence. A positively detected incompatible schema
+(`native_schema_incompatible`) refuses application with exit 3 and no native
+writes. Other version uncertainty produces `native_version_unverified` in
+`data.warnings` without blocking application. Operations that execute the
+tool's own commands, such as browser login, require the executable and report
+`native_not_installed`.
 
 Successful apply/restore returns exit 0 and status `success`, including when its
 code is `awaiting_native_reload`. The reload reminder and unverified runtime
