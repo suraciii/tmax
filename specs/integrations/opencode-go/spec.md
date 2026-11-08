@@ -283,7 +283,7 @@ versioned provider schema:
 | Field | Qualified meaning and boundary |
 | --- | --- |
 | `usage.rolling`, `usage.weekly`, `usage.monthly` | All three named allowance windows must be present; no per-model allocation or coverage is inferred. |
-| Each window's `status` | The qualified current value is `ok`. An unknown or historical status is unsupported representation, not an inferred quota denial. |
+| Each window's `status` | The qualified current values are `ok` and `rate-limited`. Retain the verbatim status; `rate-limited` is a current provider window state, not an inferred quota denial for other windows or providers. An unknown or historical status is unsupported representation. |
 | Each window's `percent` | Nonnegative integer, floored percentage consumed. Preserve it without clamping or deriving remaining allowance; zero does not establish exactly zero consumption. |
 | Each window's `resetsAt` | Valid ISO-8601 UTC `Z` instant, retained exactly as a reset announcement, not proof of a completed reset or subscription renewal. |
 

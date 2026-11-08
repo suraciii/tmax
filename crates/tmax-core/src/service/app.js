@@ -106,11 +106,12 @@ const quotaSummaryStatus = observation => {
   if (observation.last_attempt_outcome==='failed') return '最近查询失败';
   return '尚无额度观测';
 };
-const quotaRow = row => `<div class="quota-row"><div class="quota-row-main"><span class="quota-row-label">${escapeHtml(quotaLabel(row.label))}</span><strong class="quota-row-value">${escapeHtml(quotaValue(row))}</strong></div><div class="quota-row-meta">${row.reset?`<span>${escapeHtml(quotaReset(row.reset))}</span>`:''}${row.expiry?`<span>Credit 到期 ${escapeHtml(quotaTime(row.expiry.raw))}（毫秒换算）</span>`:''}${row.status!=null?`<span>状态码 ${escapeHtml(String(row.status))}（未解释）</span>`:''}</div></div>`;
+const quotaStatusText = row => row.status==null || row.status==='ok' ? '' : row.status==='rate-limited' ? '已限流' : `状态码 ${String(row.status)}（未解释）`;
+const quotaRow = row => `<div class="quota-row"><div class="quota-row-main"><span class="quota-row-label">${escapeHtml(quotaLabel(row.label))}</span><strong class="quota-row-value">${escapeHtml(quotaValue(row))}</strong></div><div class="quota-row-meta">${row.reset?`<span>${escapeHtml(quotaReset(row.reset))}</span>`:''}${row.expiry?`<span>Credit 到期 ${escapeHtml(quotaTime(row.expiry.raw))}（毫秒换算）</span>`:''}${quotaStatusText(row)?`<span>${escapeHtml(quotaStatusText(row))}</span>`:''}</div></div>`;
 const quotaCard = observation => {
   const rows=observation?.display?.rows || [];
   if (rows.length) {
-    const shown=rows.slice(0,3).map(row=>`<div class="quota-mini-row"><span>${escapeHtml(quotaLabel(row.label))}</span><strong>${escapeHtml(quotaValue(row))}</strong></div>`).join('');
+    const shown=rows.slice(0,3).map(row=>`<div class="quota-mini-row"><span>${escapeHtml(quotaLabel(row.label))}</span><strong>${escapeHtml(quotaValue(row))}${quotaStatusText(row)?` · ${escapeHtml(quotaStatusText(row))}`:''}</strong></div>`).join('');
     return `<div class="quota-mini">${shown}${rows.length>3?`<p>另有 ${rows.length-3} 项，见接入详情</p>`:''}</div>`;
   }
   return `<div class="quota-mini"><div class="quota-mini-row"><span>额度</span><strong>${escapeHtml(quotaSummaryStatus(observation))}</strong></div></div>`;

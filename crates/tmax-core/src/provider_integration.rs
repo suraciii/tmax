@@ -452,6 +452,7 @@ fn go_display_rows(data: &Value) -> Vec<Value> {
                 "label": {"key": name},
                 "basis": "consumed_percent",
                 "percent": window.get("percent")?,
+                "status": window.get("status")?,
                 "reset": {"kind": "announced", "at": window.get("resetsAt")?},
             }))
         })
@@ -830,13 +831,14 @@ fn normalize_go_usage(body: &Value) -> Result<Value> {
             .get(name)
             .and_then(Value::as_object)
             .ok_or_else(invalid)?;
-        // Only this current status is qualified; historical enums are not the
-        // current wire contract. Percentages are consumed, floored integers,
-        // not exact remaining allowance, and no published maximum is assumed.
+        // `ok` and `rate-limited` are current provider statuses. Retain the
+        // verbatim status; historical or unknown enums are not the current wire
+        // contract. Percentages are consumed, floored integers, not exact
+        // remaining allowance, and no published maximum is assumed.
         let status = window
             .get("status")
             .and_then(Value::as_str)
-            .filter(|s| *s == "ok")
+            .filter(|s| matches!(*s, "ok" | "rate-limited"))
             .ok_or_else(invalid)?;
         let percent = window
             .get("percent")
@@ -1583,6 +1585,18 @@ mod tests {
         );
     }
     #[test]
+    fn go_usage_accepts_rate_limited_as_a_current_consumed_window() {
+        let mut body = go_usage_body();
+        body["usage"]["monthly"]["status"] = json!("rate-limited");
+        body["usage"]["monthly"]["percent"] = json!(100);
+        let normalized = normalize_observation("go_usage_api", &body).unwrap();
+        assert_eq!(normalized["usage"]["monthly"]["status"], "rate-limited");
+        assert_eq!(normalized["usage"]["monthly"]["percent"], 100);
+        let display = quota_display("go_usage_api", &normalized).unwrap();
+        assert_eq!(display["rows"][2]["status"], "rate-limited");
+        assert_eq!(display["rows"][2]["percent"], 100);
+    }
+    #[test]
     fn malformed_or_unqualified_go_window_never_becomes_zero_or_partial_success() {
         let valid = go_usage_body();
         let mut cases = vec![
@@ -1602,7 +1616,7 @@ mod tests {
                 body["usage"][name]["percent"] = percent;
                 cases.push(body);
             }
-            for status in ["rate-limited", "unknown", "", "ok\n"] {
+            for status in ["unknown", "", "ok\n", "rate_limited"] {
                 let mut body = valid.clone();
                 body["usage"][name]["status"] = json!(status);
                 cases.push(body);
@@ -1892,6 +1906,7 @@ mod tests {
         assert_eq!(rows[0]["reset"]["kind"], "announced");
         assert_eq!(rows[2]["label"]["key"], "monthly");
         assert_eq!(rows[2]["percent"], 62);
+        assert_eq!(rows[2]["status"], "ok");
         assert_eq!(display["notes"], json!(["percent_consumed_floored"]));
 
         let kimi = normalize_observation(
