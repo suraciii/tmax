@@ -43,7 +43,7 @@ obsolete managed declarations, with the existing conflict and restoration rules.
 | Fixed candidate effort | Alias candidate configuration; unconditional upstream effort selected by the user | Conditional mapping or global model default |
 | Native capability projection | Agent integration; represents gateway-facing input names in its native selector | Model-specific upstream mapping performed before the gateway selects a destination |
 | Actual request and native preference | Caller and native Agent | A value selected by capability metadata |
-| Eligibility, ranking, and session binding | Gateway admission and continuity | Authority to discard an explicit effort or move an existing conversation |
+| Candidate eligibility, ranking, and session binding | Gateway admission and continuity | Authority to discard an explicit effort or move an existing conversation |
 
 Provider and AgentTarget remain the principal independently managed objects.
 Model remains provider-owned. ModelAlias references existing Models and does not
@@ -86,7 +86,7 @@ resolve(candidate, input effort)
 | Fixed candidate input set | Advertise only its fixed upstream name, not every possible input. Fixed override behavior on other incoming values remains explicit intent, not evidence those inputs are supported. |
 | Alias advertised set | Intersection of all configured candidate input sets; every advertised input can be resolved on any candidate without using effort to choose one |
 | Partial-coverage set | Union of candidate input sets; useful for explanation, not published as universally selectable alias effort |
-| Routing-eligible subset | Candidates satisfying protocol, authorization, availability, other request constraints, and continuity; effort does not remove or rerank candidates |
+| Eligible candidate subset | Candidates satisfying protocol, authorization, availability, other request constraints, and continuity; effort does not remove or rerank candidates |
 
 Configured membership includes temporarily unavailable and disabled candidates;
 those facts do not rewrite persistent selectors. Advertised support is a

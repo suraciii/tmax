@@ -257,7 +257,13 @@ Supported provider fields:
 | `subscription` | Optional user-maintained subscription information |
 | `models` | Table of explicitly registered concrete models keyed by exact upstream model ID |
 | `inputs` | Optional table of named provider-local input declarations; omission means empty |
+| `quota_guard` | Optional provider-scoped policy table; omission disables it. See [Quota guard fields](#quota-guard-fields). |
 | `failure_policy` | Optional provider-wide consecutive-error fixed-priority policy; omission disables it. See [Failure policy fields](#failure-policy-fields). |
+
+`quota_guard` is provider-scoped and off when omitted. It adds no global setting.
+The [routing contract](../model-routing/spec.md#selection-and-continuity) owns its
+candidate eligibility effect and recovery; the provider integration owns a quota
+observation's access state and applicability.
 
 Provider integration selection uses tmax's qualified registry, not execution of the
 catalog's `npm` value or inference from a provider ID. The local integration
@@ -459,6 +465,20 @@ reads a secret, or creates another daemon. Without a running service,
 automatic acquisition is explicitly paused; explicit refresh and manual record
 operations remain available without one. Scheduling, safe credentials, publication,
 and late-result rejection belong to the input lifecycle, not configuration loading.
+
+### Quota guard fields
+
+`[providers.<id>.quota_guard]` is an optional policy table. Its presence enables
+the guard; omission disables it. It does not change effective priority or
+enablement. [Routing](../model-routing/spec.md#selection-and-continuity) owns the
+candidate eligibility and recovery rules; this table owns only the policy bound.
+
+| Field | Type and constraint |
+| --- | --- |
+| `max_observation_age_seconds` | Optional positive integer, default `3600`; the maximum age of a quota observation used by the guard at selection. |
+
+The age is a user-policy bound, not a provider-supplied validity interval or a
+claim that the observation remains true until then.
 
 ### Failure policy fields
 
@@ -762,11 +782,11 @@ but is also valid with no Agent targets:
 Non-loopback addresses are invalid. The public model list is derived directly
 from enabled provider-owned models and enabled alias definitions, within their
 declared supported protocols. Missing availability or compatibility evidence
-remains visible under the model-support and eligibility rules. There is no
-`gateway.models` table, separate publication resource, client registry, or private
-allowlist. Every holder of the current shared key uses the same published models;
-Agent native selections do not restrict this access. Catalog discovery never
-enrolls models automatically.
+remains visible under the model-support and candidate eligibility rules. There
+is no `gateway.models` table, separate publication resource, client registry, or
+private allowlist. Every holder of the current shared key uses the same published
+models; Agent native selections do not restrict this access. Catalog discovery
+never enrolls models automatically.
 
 Initial explicit `gateway configure --listen ADDRESS` generates the shared key
 once in a current-user-restricted plaintext storage-version-2 file under `~/.tmax`

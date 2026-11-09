@@ -28,6 +28,12 @@ key_ref = "go-primary"
 [providers.opencode-go.subscription]
 plan = "OpenCode Go"
 
+# Stop new selection when the included allowance is rate-limited, until the
+# announced reset; the age bound keeps a stale observation from holding
+# indefinitely.
+[providers.opencode-go.quota_guard]
+max_observation_age_seconds = 3600
+
 # Incremental provider setup does not require authentication or registered models.
 # Its fixed map needs no explicit base selector.
 [providers.opencode-go-setup]

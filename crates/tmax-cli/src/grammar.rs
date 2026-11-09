@@ -422,12 +422,13 @@ fn provider_commands() -> Command {
         "`subscription.plan`, `subscription.billing_period`: strings; `subscription.renewal_date`, `subscription.expiry_date`: YYYY-MM-DD dates; clear makes each manual fact unknown.\n",
         "`subscription.auto_renew`: boolean; clear means unknown, not false.\n",
         "`subscription.charge.amount`: nonnegative decimal string; `subscription.charge.currency`: uppercase three-letter currency string. Set or clear the pair together.\n",
+        "`quota_guard.max_observation_age_seconds`: positive integer seconds; when the quota guard is configured, defaults to 3600. Clear the field to restore the default.\n",
         "`failure_policy.enabled`: boolean, defaults true. `failure_policy.errors.http_statuses`: comma-separated unique HTTP statuses 400..599, e.g. 429,503; `failure_policy.errors.connection_errors` and `.transport_errors`: booleans. At least one error condition is required.\n",
         "`failure_policy.consecutive_failures`: positive integer count; `failure_policy.priority`: signed integer fixed replacement score (may be negative), not a cap; `failure_policy.duration_seconds`: positive integer seconds. Configure count, priority, duration, and errors together; incomplete policies are rejected atomically, even when disabled.\n",
         "Clear `failure_policy` to remove the complete policy, or clear optional error fields to restore their empty/false defaults while keeping at least one condition. Policy state is separate from configuration; provider failure-reset clears it explicitly. Active penalties expire at a fixed time, not extended by more failures or ended by success.\n",
         "Selecting transport errors or HTTP 5xx explicitly accepts that upstream execution or billing may already have occurred; these observations do not prove that an upstream rejected the request before execution.\n",
         "Example: tmax provider update custom-gateway --set failure_policy.errors.http_statuses 429,503 --set failure_policy.consecutive_failures 3 --set failure_policy.priority -100 --set failure_policy.duration_seconds 3600\n",
-        "Clear also accepts `endpoints`, `overrides`, `subscription`, and `subscription.charge`; endpoint tables use dedicated `--endpoint P URL`/`--clear-endpoint P` options, never scalar blobs.",
+        "Clear also accepts `quota_guard`, `endpoints`, `overrides`, `subscription`, and `subscription.charge`; endpoint tables use dedicated `--endpoint P URL`/`--clear-endpoint P` options, never scalar blobs.",
     );
     let add = mutation(
         edit_args(
@@ -1379,6 +1380,32 @@ mod tests {
                 ])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn provider_quota_guard_set_and_clear_are_parsed() {
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "provider",
+                "update",
+                "p",
+                "--set",
+                "quota_guard.max_observation_age_seconds",
+                "3600",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(
+            request.arguments["set"],
+            ["quota_guard.max_observation_age_seconds", "3600"]
+        );
+
+        let matches = command()
+            .try_get_matches_from(["tmax", "provider", "update", "p", "--clear", "quota_guard"])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.arguments["clear"], ["quota_guard"]);
     }
 
     #[test]

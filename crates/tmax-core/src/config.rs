@@ -63,6 +63,8 @@ pub struct Provider {
     pub inputs: BTreeMap<String, InputDeclaration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_policy: Option<FailurePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_guard: Option<QuotaGuard>,
 }
 impl Default for Provider {
     fn default() -> Self {
@@ -77,6 +79,7 @@ impl Default for Provider {
             models: BTreeMap::new(),
             inputs: BTreeMap::new(),
             failure_policy: None,
+            quota_guard: None,
         }
     }
 }
@@ -99,6 +102,15 @@ pub struct FailurePolicy {
     pub consecutive_failures: u32,
     pub priority: i64,
     pub duration_seconds: i64,
+}
+fn default_quota_guard_age() -> i64 {
+    3600
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaGuard {
+    #[serde(default = "default_quota_guard_age")]
+    pub max_observation_age_seconds: i64,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -565,6 +577,16 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
                 return Err(invalid(&format!("{path}.duration_seconds")));
             }
         }
+        if let Some(guard) = &p.quota_guard
+            && (guard.max_observation_age_seconds <= 0
+                || chrono::Duration::try_seconds(guard.max_observation_age_seconds)
+                    .and_then(|duration| chrono::Utc::now().checked_add_signed(duration))
+                    .is_none())
+        {
+            return Err(invalid(&format!(
+                "{base}.quota_guard.max_observation_age_seconds"
+            )));
+        }
         let endpoints = crate::provider_integration::resolve(p).map_err(|error| {
             let field = format!("{base}.{}", error.field.as_deref().unwrap_or("endpoints"));
             Error::new("invalid_configuration", &error.message).field(field)
@@ -838,6 +860,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quota_guard_defaults_validates_and_rejects_unknown_fields() {
+        let base = "version=1\n[providers.p]\nintegration='deepseek'\n";
+        let absent = parse(base).unwrap();
+        assert!(absent.providers["p"].quota_guard.is_none());
+        assert!(Provider::default().quota_guard.is_none());
+        assert!(
+            serde_json::to_value(&absent).unwrap()["providers"]["p"]
+                .get("quota_guard")
+                .is_none()
+        );
+
+        let default = parse(&format!("{base}[providers.p.quota_guard]\n")).unwrap();
+        assert_eq!(
+            default.providers["p"]
+                .quota_guard
+                .as_ref()
+                .unwrap()
+                .max_observation_age_seconds,
+            3600
+        );
+        let explicit = parse(&format!(
+            "{base}[providers.p.quota_guard]\nmax_observation_age_seconds=120\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            explicit.providers["p"]
+                .quota_guard
+                .as_ref()
+                .unwrap()
+                .max_observation_age_seconds,
+            120
+        );
+        for age in ["0", "-1", "9223372036854775807", "10000000000000"] {
+            let error = parse(&format!(
+                "{base}[providers.p.quota_guard]\nmax_observation_age_seconds={age}\n"
+            ))
+            .unwrap_err();
+            assert_eq!(error.code, "invalid_configuration");
+            assert_eq!(
+                error.field.as_deref(),
+                Some("providers.p.quota_guard.max_observation_age_seconds")
+            );
+        }
+        assert!(parse(&format!("{base}[providers.p.quota_guard]\nunknown=1\n")).is_err());
+    }
+
+    #[test]
     fn failure_policies_validate_and_reject_invalid_saves_atomically() {
         let base = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n";
         let alias =
@@ -1102,6 +1171,14 @@ mod tests {
 
     #[test]
     fn documented_configuration_example_has_resolvable_explicit_alias_members() {
-        parse(include_str!("../../../specs/configuration/example.toml")).unwrap();
+        let example = parse(include_str!("../../../specs/configuration/example.toml")).unwrap();
+        assert_eq!(
+            example.providers["opencode-go"]
+                .quota_guard
+                .as_ref()
+                .unwrap()
+                .max_observation_age_seconds,
+            3600
+        );
     }
 }

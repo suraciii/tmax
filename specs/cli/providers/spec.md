@@ -15,7 +15,7 @@ own command contracts.
 | `integration list` | Compact stable integration IDs, protocols, endpoint-setup requirements, and authentication summaries. |
 | `integration inspect ID` | Fixed protocol bases/custom-base requirements, finite method/path operations and original-binding requirements, protocols/transports, authentication methods/login sources, supported input source/kind/scope/model coverage and normalized fields, noninteractive acquisition, restrictions, and known/unknown compatibility evidence. |
 | `provider list` | Compact IDs/names, enabled/authentication state, billing/quota freshness, and affected-target counts. |
-| `provider inspect ID` | File/loaded endpoints, configured/inherited/overridden/effective metadata and provenance, authentication `via`/known-or-unknown identity, model access, subscription/balance facts, input readiness, retained secret references, and file/loaded differences. |
+| `provider inspect ID` | File/loaded endpoints, configured/inherited/overridden/effective metadata and provenance, authentication `via`/known-or-unknown identity, model access, subscription/balance facts, revision-qualified file/loaded quota guard policy, input readiness, retained secret references, and file/loaded differences. |
 | `provider refresh ID --scope SCOPE` | Explicit qualified non-inference checks. `SCOPE` is `auth`, `models`, `quota`, or `all`; return each check/channel separately. Model discovery registers nothing. |
 
 Provider integration discovery reads the built-in qualified registry without catalog,
@@ -89,9 +89,11 @@ validation and the meaning of an omitted custom base.
 | `failure_policy.priority` | Signed fixed replacement score, not a delta or cap. |
 | `failure_policy.duration_seconds` | Positive integer duration in seconds. |
 | `failure_policy` | Clear-only container; remove the policy. |
+| `quota_guard.max_observation_age_seconds` | Positive integer seconds; default `3600` when the policy table is enabled. |
+| `quota_guard` | Clear-only container; remove the policy. |
 
-Clear also accepts `endpoints`, `overrides`, `subscription`, and
-`subscription.charge`. Clearing endpoints may combine with protocol operands to
+Clear also accepts `endpoints`, `overrides`, `subscription`, `subscription.charge`,
+and `quota_guard`. Clearing endpoints may combine with protocol operands to
 rebuild the table atomically. Subscription clear does not cancel upstream;
 charge clear makes price unknown. Refresh never rewrites these facts.
 Authentication uses dedicated commands, not scalar auth edits.
@@ -99,6 +101,8 @@ Authentication uses dedicated commands, not scalar auth edits.
 ```sh
 tmax provider update opencode-go --set subscription.charge.amount 20.00 --set subscription.charge.currency USD
 tmax provider update opencode-go --clear subscription.charge
+tmax provider update opencode-go --set quota_guard.max_observation_age_seconds 3600
+tmax provider update opencode-go --clear quota_guard
 tmax provider add custom-gateway --set integration custom --endpoint chat-completions https://gateway.example/openai/v1 --endpoint messages https://gateway.example/anthropic
 tmax provider update custom-gateway --endpoint responses https://gateway.example/responses/v1
 tmax provider update custom-gateway --clear-endpoint responses

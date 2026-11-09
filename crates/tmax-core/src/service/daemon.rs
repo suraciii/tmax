@@ -755,9 +755,14 @@ async fn daemon_control_inner(
                 saved = crate::config::load(&daemon.store)?;
                 &saved.config
             };
+            let at = request
+                .arguments
+                .get("at")
+                .and_then(|v| v.first())
+                .map(String::as_str);
             daemon
                 .runtime
-                .inspect_session(config, id, protocol, session, loaded)
+                .inspect_session(config, id, protocol, session, loaded, at)
         }
         ("history", "clear") => Ok(daemon.runtime.history.clear(request.dry_run)),
         ("history", _) => daemon.runtime.history.view(&request),

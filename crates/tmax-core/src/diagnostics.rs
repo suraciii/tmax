@@ -450,6 +450,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "reset_within_seconds"
                 | "remaining_at_least_percent"
                 | "time_window"
+                | "window"
                 | "weekdays"
                 | "dates"
                 | "start"
@@ -466,6 +467,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "received_at"
                 | "valid_until"
                 | "reset_at"
+                | "max_observation_age_seconds"
                 | "remaining_percent"
                 | "remaining"
                 | "total"
@@ -476,6 +478,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "excluded"
                 | "evaluations"
                 | "continuity"
+                | "continuation"
                 | "decision"
                 | "evidence_gap"
                 | "public_id"
@@ -488,6 +491,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "upstream_effort"
                 | "priority_evaluations"
                 | "excluded_candidates"
+                | "availability_hold"
                 | "priority_used_for_ranking"
                 | "priority_evaluation"
                 | "selected_evaluation"
@@ -565,6 +569,9 @@ pub fn safe_evidence(value: &Value) -> Value {
                     "fallback",
                     "calendar",
                     "matched",
+                    "continuation",
+                    "availability_hold",
+                    "excluded_candidates",
                     "original_decision",
                     "decision",
                     "rules",
@@ -617,6 +624,8 @@ fn decision_summary(value: &Value) -> Value {
         "metadata_revision",
         "at",
         "reason_code",
+        "continuation",
+        "availability_hold",
         "effective_priority",
         "priority",
         "selection",
@@ -635,6 +644,32 @@ fn decision_summary(value: &Value) -> Value {
             && encoded_size(value) <= 2048
         {
             result.insert(key.into(), value.clone());
+        }
+    }
+    if let Some(excluded) = value.get("excluded_candidates").and_then(Value::as_array) {
+        let mut retained = Vec::new();
+        let mut bytes = 0;
+        for candidate in excluded.iter().take(64) {
+            let Some(hold) = candidate.get("availability_hold") else {
+                continue;
+            };
+            let mut row = serde_json::Map::new();
+            for key in ["qualified_model", "reason_code"] {
+                if let Some(value) = candidate.get(key) {
+                    row.insert(key.into(), value.clone());
+                }
+            }
+            row.insert("availability_hold".into(), hold.clone());
+            let row = Value::Object(row);
+            let size = encoded_size(&row).max(value_memory(&row));
+            if bytes + size > RECORD_BYTES / 4 {
+                break;
+            }
+            bytes += size;
+            retained.push(row);
+        }
+        if !retained.is_empty() {
+            result.insert("excluded_candidates".into(), Value::Array(retained));
         }
     }
     if let Some(attempts) = value.get("attempts").and_then(Value::as_array) {
@@ -723,6 +758,138 @@ mod tests {
         assert!(result.get("body").is_none());
         assert_eq!(result["evidence_gap"], true);
     }
+    #[test]
+    fn availability_hold_survives_evidence_and_history_projection() {
+        let decision = json!({
+            "excluded_candidates": [{
+                "provider": "upstream",
+                "availability_hold": {
+                    "reason_code": "quota_guard",
+                    "state": "rate-limited",
+                    "window": "monthly",
+                    "coverage": "provider",
+                    "observed_at": "2026-11-09T00:00:00Z",
+                    "valid_until": "2026-11-09T01:00:00Z",
+                    "reset_at": "2026-12-01T00:00:00Z",
+                    "max_observation_age_seconds": 3600
+                }
+            }]
+        });
+        let evidence = safe_evidence(&decision);
+        assert_eq!(evidence, decision);
+        assert!(evidence.get("evidence_gap").is_none());
+
+        let history = History::new("holds".into());
+        let mut record = history.begin();
+        record.decision = decision.clone();
+        record.outcome = "rejected".into();
+        let request = Request {
+            command: vec!["history".into(), "inspect".into()],
+            operands: vec![record.request.clone()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        history.update(record);
+        let projected = history.view(&request).unwrap();
+        assert_eq!(projected["record"]["decision"], decision);
+        assert_eq!(projected["record"]["evidence_gap"], false);
+
+        let mut with_unknown = decision.clone();
+        with_unknown["excluded_candidates"][0]["source_payload"] = json!("secret");
+        let filtered = safe_evidence(&with_unknown);
+        assert_eq!(
+            filtered["excluded_candidates"],
+            decision["excluded_candidates"]
+        );
+        assert!(
+            filtered["excluded_candidates"][0]
+                .get("source_payload")
+                .is_none()
+        );
+        assert_eq!(filtered["evidence_gap"], true);
+
+        let retained = json!({
+            "selection_reason": "retained_destination",
+            "continuation": {
+                "state": "blocked",
+                "reason_code": "quota_guard",
+                "availability_hold": {
+                    "reason_code": "quota_guard",
+                    "state": "rate-limited",
+                    "window": "weekly",
+                    "coverage": "provider",
+                    "observed_at": "2026-11-09T00:00:00Z",
+                    "valid_until": "2026-11-09T01:00:00Z",
+                    "reset_at": "2026-12-01T00:00:00Z",
+                    "max_observation_age_seconds": 3600
+                }
+            }
+        });
+        assert_eq!(safe_evidence(&retained), retained);
+
+        let large_original = json!({
+            "continuation": retained["continuation"].clone(),
+            "original_decision": {
+                "selection": {"model": "x".repeat(30_000)}
+            }
+        });
+        let filtered = safe_evidence(&large_original);
+        assert_eq!(
+            filtered["continuation"]["availability_hold"]["window"],
+            "weekly"
+        );
+        assert_eq!(filtered["evidence_gap"], true);
+    }
+
+    #[test]
+    fn availability_holds_survive_compacted_history() {
+        let history = History::new("compact-holds".into());
+        let mut record = history.begin();
+        record.decision = json!({
+            "selection_reason": "retained_destination",
+            "continuation": {
+                "state": "blocked",
+                "reason_code": "quota_guard",
+                "availability_hold": {
+                    "reason_code": "quota_guard",
+                    "state": "rate-limited",
+                    "window": "weekly",
+                    "coverage": "provider",
+                    "observed_at": "2026-11-09T00:00:00Z",
+                    "valid_until": "2026-11-09T01:00:00Z",
+                    "reset_at": "2026-12-01T00:00:00Z",
+                    "max_observation_age_seconds": 3600
+                }
+            },
+            "priority_evaluations": [{
+                "candidate_reasoning_effort": "x".repeat(20_000)
+            }]
+        });
+        record.outcome = "rejected".into();
+        record.usage = (0..100)
+            .map(|index| (format!("token_{index}"), index))
+            .collect();
+        let request = Request {
+            command: vec!["history".into(), "inspect".into()],
+            operands: vec![record.request.clone()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        history.update(record);
+        let projected = history.view(&request).unwrap();
+        assert_eq!(projected["record"]["evidence_gap"], true);
+        assert_eq!(
+            projected["record"]["decision"]["continuation"]["availability_hold"]["window"],
+            "weekly"
+        );
+        assert_eq!(
+            projected["record"]["decision"]["continuation"]["availability_hold"]["valid_until"],
+            "2026-11-09T01:00:00Z"
+        );
+    }
+
     #[test]
     fn retention_never_evicts_active() {
         let h = History::new("p".into());

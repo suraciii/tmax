@@ -193,6 +193,25 @@ pub(super) async fn provider_inspect(
             json!({"snapshot_state":"unavailable","configuration_revision":null,"configured":null,"resolution":null,"reason_code":error.code})
         }
     };
+    let quota_guard = |c: &Config, revision: &str| -> Value {
+        match c.providers.get(id) {
+            Some(p) => {
+                json!({"snapshot_state":"available","configuration_revision":revision,"policy":p.quota_guard,"reason_code":null})
+            }
+            None => {
+                json!({"snapshot_state":"available","configuration_revision":revision,"policy":null,"reason_code":"provider_missing"})
+            }
+        }
+    };
+    let loaded_quota_guard = match &loaded {
+        Ok(Some(loaded)) => quota_guard(&loaded.config, &loaded.revision),
+        Ok(None) => {
+            json!({"snapshot_state":"absent","configuration_revision":null,"policy":null,"reason_code":"no_loaded_snapshot"})
+        }
+        Err(error) => {
+            json!({"snapshot_state":"unavailable","configuration_revision":null,"policy":null,"reason_code":error.code})
+        }
+    };
     let observations = crate::observations::inspect(store, config, id)
         .unwrap_or_else(|error| json!({"state":"unavailable","reason_code":error.code}));
     let now = chrono::Utc::now();
@@ -213,7 +232,7 @@ pub(super) async fn provider_inspect(
     };
     failure_state["views"] = json!({"file":file_failure,"loaded":loaded_failure});
     Ok(
-        json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"identity":null,"upstream_authentication":"unverified","observations":observations,"failure_state":failure_state,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
+        json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"quota_guard":{"file":quota_guard(config,&file.revision),"loaded":loaded_quota_guard},"identity":null,"upstream_authentication":"unverified","observations":observations,"failure_state":failure_state,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
     )
 }
 
@@ -306,6 +325,32 @@ pub(super) fn agent_list(config: &Config) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn provider_inspection_exposes_quota_guard_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=1\n[providers.p]\nintegration='deepseek'\n[providers.p.quota_guard]\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let file = config::load(&store).unwrap();
+        let request = Request {
+            command: vec!["provider".into(), "inspect".into()],
+            operands: vec!["p".into()],
+            arguments: Default::default(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let inspect = provider_inspect(&store, &file, &request).await.unwrap();
+        assert_eq!(
+            inspect["provider"]["quota_guard"]["max_observation_age_seconds"],
+            3600
+        );
+        assert_eq!(
+            inspect["quota_guard"]["file"]["policy"]["max_observation_age_seconds"],
+            3600
+        );
+        assert_eq!(inspect["quota_guard"]["loaded"]["snapshot_state"], "absent");
+    }
+
     #[tokio::test]
     async fn provider_inspection_reports_fixed_regional_destination_without_region_field() {
         let directory = tempfile::tempdir().unwrap();

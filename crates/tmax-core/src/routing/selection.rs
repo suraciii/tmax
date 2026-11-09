@@ -213,25 +213,44 @@ fn decision(
         let observed_unavailability = if reason.is_none()
             && let Some((incarnation, authorization, _)) = &identity
         {
-            crate::observations::routing_availability_for_binding(
-                store,
+            crate::observations::routing_availability_for_admission(
+                snapshot.as_ref(),
                 config,
                 &provider,
                 exact_at,
                 (incarnation, authorization),
             )
-            .ok()
-            .flatten()
         } else {
             None
         };
-        let reason = reason.or(observed_unavailability.as_deref());
+        let quota_hold = if reason.is_none()
+            && observed_unavailability.is_none()
+            && let Some((incarnation, authorization, _)) = &identity
+        {
+            crate::observations::quota_guard_hold_for_binding(
+                snapshot.as_ref(),
+                config,
+                &provider,
+                &name,
+                exact_at,
+                (incarnation, authorization),
+            )
+        } else {
+            None
+        };
+        let reason = reason
+            .or(observed_unavailability.as_deref())
+            .or(quota_hold.as_ref().map(|hold| hold.reason_code));
         let priority = evaluation["effective_priority"]
             .as_i64()
             .unwrap_or(m.priority);
         let qualified = format!("{provider}/{name}");
         if let Some(reason) = reason {
-            excluded.push(json!({"qualified_model":qualified,"reason_code":reason,"native_requirement":native_assessment.as_ref().and_then(|result| result.as_ref().err()).map(|error| json!({"code":error.code,"message":error.message}))}));
+            let mut candidate = json!({"qualified_model":qualified,"reason_code":reason,"native_requirement":native_assessment.as_ref().and_then(|result| result.as_ref().err()).map(|error| json!({"code":error.code,"message":error.message}))});
+            if let Some(hold) = &quota_hold {
+                candidate["availability_hold"] = json!(hold);
+            }
+            excluded.push(candidate);
         } else if let Some((provider_identity, authorization_generation, identity)) = identity {
             ranked.push((
                 priority,
@@ -334,6 +353,26 @@ fn request_unavailable(evidence: &Value) -> Error {
     // A fixed model, or candidates with the same blocker, has a precise
     // rejection reason. Do not erase it before the gateway records history.
     // Different blockers cannot truthfully be reduced to one candidate's cause.
+    if let Some(excluded) = evidence["excluded_candidates"].as_array()
+        && !excluded.is_empty()
+        && excluded
+            .iter()
+            .all(|candidate| candidate["reason_code"].as_str() == Some("quota_guard"))
+    {
+        let earliest = excluded
+            .iter()
+            .filter_map(|candidate| candidate["availability_hold"]["valid_until"].as_str())
+            .filter_map(|valid_until| inputs::ExactInstant::parse(valid_until).ok())
+            .min()
+            .map(|valid_until| valid_until.canonical());
+        let message = match earliest {
+            Some(valid_until) => format!(
+                "All configured candidates are held by quota_guard; earliest recovery at {valid_until}"
+            ),
+            None => "All configured candidates are held by quota_guard".into(),
+        };
+        return Error::new("quota_guard", &message);
+    }
     let common_reason = evidence["excluded_candidates"]
         .as_array()
         .and_then(|excluded| {
@@ -407,6 +446,7 @@ pub(crate) fn select_request_admitted(
     request: RequestRequirements<'_>,
     snapshot: &inputs::Snapshot<'_>,
     excluded_providers: &BTreeSet<String>,
+    evidence_out: &mut Value,
 ) -> Result<Selection> {
     let (evidence, selection) = decision(
         store,
@@ -421,6 +461,7 @@ pub(crate) fn select_request_admitted(
             excluded_providers,
         },
     )?;
+    *evidence_out = evidence.clone();
     selection.ok_or_else(|| {
         if excluded_providers.is_empty() {
             request_unavailable(&evidence)
@@ -628,5 +669,11 @@ mod tests {
             request_unavailable(&json!({"excluded_candidates":[]})).code,
             "model_unavailable"
         );
+        let held = request_unavailable(&json!({"excluded_candidates":[
+            {"qualified_model":"p/m","reason_code":"quota_guard","availability_hold":{"valid_until":"2026-11-09T01:00:00Z"}},
+            {"qualified_model":"q/m","reason_code":"quota_guard","availability_hold":{"valid_until":"2026-11-09T02:00:00Z"}}
+        ]}));
+        assert_eq!(held.code, "quota_guard");
+        assert!(held.message.contains("2026-11-09T01:00:00Z"));
     }
 }

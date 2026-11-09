@@ -53,10 +53,21 @@ struct Head {
     fact: Option<Fact>,
     last_attempt: Attempt,
 }
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Heads {
     heads: BTreeMap<String, Head>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ObservationSnapshot {
+    heads: Heads,
+}
+
+pub(crate) fn snapshot(store: &Store) -> Result<ObservationSnapshot> {
+    Ok(ObservationSnapshot {
+        heads: read(store)?,
+    })
 }
 
 fn signature(value: &impl Serialize) -> String {
@@ -627,6 +638,7 @@ pub fn routing_availability(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn routing_availability_for_binding(
     store: &Store,
     config: &Config,
@@ -635,6 +647,168 @@ pub(crate) fn routing_availability_for_binding(
     scope: (&str, &str),
 ) -> Result<Option<String>> {
     routing_availability_impl(store, config, provider, at, Some(scope))
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AvailabilityHold {
+    pub reason_code: &'static str,
+    pub state: &'static str,
+    pub window: String,
+    pub coverage: &'static str,
+    pub observed_at: String,
+    pub valid_until: String,
+    pub reset_at: String,
+    pub max_observation_age_seconds: i64,
+}
+
+/// A quota guard hold is derived from the exact retained quota fact captured
+/// with the admission snapshot. It never reads a priority input and never
+/// mutates the fact.
+pub(crate) fn quota_guard_hold_for_binding(
+    snapshot: &inputs::Snapshot<'_>,
+    config: &Config,
+    provider: &str,
+    model: &str,
+    at: &inputs::ExactInstant,
+    captured_scope: (&str, &str),
+) -> Option<AvailabilityHold> {
+    let provider_config = config.providers.get(provider)?;
+    let guard = provider_config.quota_guard.as_ref()?;
+    let selected = snapshot.provider_scope_binding(provider)?;
+    if selected.0 != captured_scope.0 || selected.1 != captured_scope.1 {
+        return None;
+    }
+    let observations = snapshot.observations()?;
+    let current = binding_with_scope(config, provider, "quota", selected).ok()?;
+    let head = observations.heads.heads.get(&signature(&current))?;
+    let fact = head.fact.as_ref()?;
+    let source = current.source.as_deref()?;
+    let access = crate::provider_integration::quota_access(source, &fact.data)?;
+    if access
+        .coverage
+        .as_ref()
+        .is_some_and(|models| !models.iter().any(|covered| covered == model))
+    {
+        return None;
+    }
+    let observed = inputs::ExactInstant::from_chrono(fact.observed_at);
+    if at < &observed {
+        return None;
+    }
+    let age_bound = observed.add_seconds(guard.max_observation_age_seconds)?;
+    if at >= &age_bound {
+        return None;
+    }
+    let mut best: Option<(
+        inputs::ExactInstant,
+        &crate::provider_integration::QuotaAccessWindow,
+    )> = None;
+    for window in &access.windows {
+        if !matches!(window.access_state, "rate-limited" | "exhausted") {
+            continue;
+        }
+        let Ok(reset) = inputs::ExactInstant::parse(&window.reset_at) else {
+            continue;
+        };
+        if at >= &reset {
+            continue;
+        }
+        let valid_until = std::cmp::min(age_bound.clone(), reset);
+        if at >= &valid_until {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(current, _)| valid_until > *current)
+        {
+            best = Some((valid_until, window));
+        }
+    }
+    let (valid_until, window) = best?;
+    Some(AvailabilityHold {
+        reason_code: "quota_guard",
+        state: window.access_state,
+        window: window.window.clone(),
+        coverage: if access.coverage.is_some() {
+            "models"
+        } else {
+            "provider"
+        },
+        observed_at: inputs::timestamp(fact.observed_at),
+        valid_until: valid_until.canonical(),
+        reset_at: window.reset_at.clone(),
+        max_observation_age_seconds: guard.max_observation_age_seconds,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_publish_quota(
+    store: &Store,
+    config: &Config,
+    provider: &str,
+    data: Value,
+) -> DateTime<Utc> {
+    let captured = capture(store, config, provider, "quota").expect("quota capture");
+    commit(
+        store,
+        &captured,
+        Ok(AcquiredObservation { status: 200, data }),
+    )
+    .expect("quota publication");
+    read(store)
+        .expect("quota heads")
+        .heads
+        .values()
+        .find_map(|head| head.fact.as_ref().map(|fact| fact.observed_at))
+        .expect("quota fact")
+}
+
+pub(crate) fn routing_availability_for_admission(
+    snapshot: &inputs::Snapshot<'_>,
+    config: &Config,
+    provider: &str,
+    at: &inputs::ExactInstant,
+    captured_scope: (&str, &str),
+) -> Option<String> {
+    let selected = snapshot.provider_scope_binding(provider)?;
+    if selected.0 != captured_scope.0 || selected.1 != captured_scope.1 {
+        return None;
+    }
+    let observations = snapshot.observations()?;
+    routing_availability_selected(config, provider, at, selected, &observations.heads)
+        .ok()
+        .flatten()
+}
+
+fn routing_availability_selected(
+    config: &Config,
+    provider: &str,
+    at: &inputs::ExactInstant,
+    selected: (String, String),
+    heads: &Heads,
+) -> Result<Option<String>> {
+    if !config.providers.contains_key(provider) {
+        return Err(Error::new("unknown_resource", "Provider is not configured"));
+    }
+    for scope in ["quota", "auth"] {
+        let current = binding_with_scope(config, provider, scope, selected.clone())?;
+        let Some(head) = heads.heads.get(&signature(&current)) else {
+            continue;
+        };
+        let Some(fact) = &head.fact else {
+            continue;
+        };
+        let temporal = temporal_applicability(Some(fact), current.source.as_deref(), at);
+        if temporal.state == TemporalState::AsOfObservation
+            && fact.data.get("is_available").and_then(Value::as_bool) == Some(false)
+        {
+            return Ok(Some(format!(
+                "balance_unavailable:{provider}:{scope}:as_of:{}",
+                fact.observed_at.to_rfc3339()
+            )));
+        }
+    }
+    Ok(None)
 }
 
 fn routing_availability_impl(
@@ -666,25 +840,7 @@ fn routing_availability_impl(
         return Ok(None);
     };
     let heads = read(store)?;
-    for scope in ["quota", "auth"] {
-        let current = binding_with_scope(config, provider, scope, selected.clone())?;
-        let Some(head) = heads.heads.get(&signature(&current)) else {
-            continue;
-        };
-        let Some(fact) = &head.fact else {
-            continue;
-        };
-        let temporal = temporal_applicability(Some(fact), current.source.as_deref(), at);
-        if temporal.state == TemporalState::AsOfObservation
-            && fact.data.get("is_available").and_then(Value::as_bool) == Some(false)
-        {
-            return Ok(Some(format!(
-                "balance_unavailable:{provider}:{scope}:as_of:{}",
-                fact.observed_at.to_rfc3339()
-            )));
-        }
-    }
-    Ok(None)
+    routing_availability_selected(config, provider, at, selected, &heads)
 }
 
 #[cfg(test)]
@@ -1281,6 +1437,247 @@ mod tests {
         inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
         (dir, store, config)
     }
+    fn guarded_go_fixture(
+        guard: Option<config::QuotaGuard>,
+        status: &str,
+        reset: chrono::DateTime<Utc>,
+    ) -> (tempfile::TempDir, Store, Config, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().to_path_buf());
+        let mut config = Config::empty();
+        config.providers.insert(
+            "go".into(),
+            config::Provider {
+                integration: Some("opencode-go".into()),
+                quota_guard: guard,
+                models: [(
+                    "m".into(),
+                    config::Model {
+                        priority: 7,
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        );
+        config.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
+            id: "L0".into(),
+            protocol: "chat-completions".into(),
+            candidates: vec!["go/m".into()],
+            enabled: true,
+            continuity: None,
+            fallback: None,
+        });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let initial = config.clone();
+        inputs::reconcile(&store, &Config::empty(), &initial, &[]).unwrap();
+        let identity = inputs::provider_identity(&store, &initial, "go")
+            .unwrap()
+            .unwrap();
+        let key_ref =
+            crate::secrets::put(&store, &format!("provider:{identity}:go"), b"test-key").unwrap();
+        config.providers.get_mut("go").unwrap().auth = Some(config::Auth::ApiKey { key_ref });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(&store, &initial, &config, &[]).unwrap();
+        let reset = inputs::timestamp(reset);
+        let captured = capture(&store, &config, "go", "quota").unwrap();
+        let data = provider_integration::normalize_observation(
+            "go_usage_api",
+            &json!({"usage":{
+                "rolling":{"status":"ok","percent":0,"resetsAt":reset},
+                "weekly":{"status":status,"percent":30,"resetsAt":reset},
+                "monthly":{"status":"ok","percent":10,"resetsAt":reset}
+            }}),
+        )
+        .unwrap();
+        commit(
+            &store,
+            &captured,
+            Ok(AcquiredObservation { status: 200, data }),
+        )
+        .unwrap();
+        (dir, store, config, reset)
+    }
+
+    #[test]
+    fn quota_guard_hold_is_time_bounded_and_never_changes_priority() {
+        let reset = Utc::now() + chrono::Duration::hours(1);
+        let (_dir, store, config, reset_text) = guarded_go_fixture(
+            Some(config::QuotaGuard {
+                max_observation_age_seconds: 86_400,
+            }),
+            "rate-limited",
+            reset,
+        );
+        let observed = read(&store)
+            .unwrap()
+            .heads
+            .values()
+            .next()
+            .unwrap()
+            .fact
+            .as_ref()
+            .unwrap()
+            .observed_at;
+        let at = inputs::timestamp(observed + chrono::Duration::seconds(1));
+        let evidence =
+            crate::routing::explain(&store, &config, "L0", "chat-completions", Some(&at)).unwrap();
+        assert_eq!(evidence["selection"], Value::Null);
+        assert_eq!(
+            evidence["excluded_candidates"][0]["reason_code"],
+            "quota_guard"
+        );
+        assert_eq!(
+            evidence["priority_evaluations"][0]["priority_evaluation"]["effective_priority"],
+            7
+        );
+        let hold = &evidence["excluded_candidates"][0]["availability_hold"];
+        assert_eq!(hold["state"], "rate-limited");
+        assert_eq!(hold["window"], "weekly");
+        assert_eq!(hold["coverage"], "provider");
+        assert_eq!(hold["observed_at"], inputs::timestamp(observed));
+        assert_eq!(hold["reset_at"], reset_text);
+        assert_eq!(
+            hold["valid_until"],
+            inputs::ExactInstant::parse(&reset_text)
+                .unwrap()
+                .canonical()
+        );
+        assert_eq!(hold["max_observation_age_seconds"], 86_400);
+
+        let snapshot = inputs::Snapshot::capture(&store, &config);
+        let native = crate::gateway::NativeRequirements {
+            client: crate::gateway::NativeClient::Unknown,
+            go_session: false,
+            unattributed: true,
+        };
+        let mut decision = Value::Null;
+        let rejected = crate::routing::select_request_admitted(
+            &store,
+            &config,
+            "go/m",
+            "chat-completions",
+            observed + chrono::Duration::seconds(1),
+            crate::routing::RequestRequirements { native: &native },
+            &snapshot,
+            &Default::default(),
+            &mut decision,
+        )
+        .unwrap_err();
+        assert_eq!(rejected.code, "quota_guard");
+        assert_eq!(
+            decision["excluded_candidates"][0]["availability_hold"]["window"],
+            "weekly"
+        );
+
+        let captured = capture(&store, &config, "go", "quota").unwrap();
+        let available = provider_integration::normalize_observation(
+            "go_usage_api",
+            &json!({"usage":{
+                "rolling":{"status":"ok","percent":0,"resetsAt":reset_text},
+                "weekly":{"status":"ok","percent":0,"resetsAt":reset_text},
+                "monthly":{"status":"ok","percent":0,"resetsAt":reset_text}
+            }}),
+        )
+        .unwrap();
+        commit(
+            &store,
+            &captured,
+            Ok(AcquiredObservation {
+                status: 200,
+                data: available,
+            }),
+        )
+        .unwrap();
+        let mut stale_decision = Value::Null;
+        let stale = crate::routing::select_request_admitted(
+            &store,
+            &config,
+            "go/m",
+            "chat-completions",
+            observed + chrono::Duration::seconds(1),
+            crate::routing::RequestRequirements { native: &native },
+            &snapshot,
+            &Default::default(),
+            &mut stale_decision,
+        )
+        .unwrap_err();
+        assert_eq!(stale.code, "quota_guard");
+        assert_eq!(
+            stale_decision["excluded_candidates"][0]["availability_hold"]["state"],
+            "rate-limited"
+        );
+        let observed = read(&store)
+            .unwrap()
+            .heads
+            .values()
+            .next()
+            .unwrap()
+            .fact
+            .as_ref()
+            .unwrap()
+            .observed_at;
+        let at = inputs::timestamp(observed + chrono::Duration::seconds(1));
+        let evidence =
+            crate::routing::explain(&store, &config, "L0", "chat-completions", Some(&at)).unwrap();
+        assert_eq!(evidence["selection"]["qualified_model"], "go/m");
+
+        let (_dir, store, config, _) = guarded_go_fixture(None, "rate-limited", reset);
+        let evidence =
+            crate::routing::explain(&store, &config, "L0", "chat-completions", Some(&at)).unwrap();
+        assert_eq!(evidence["selection"]["qualified_model"], "go/m");
+
+        let (_dir, store, config, _) = guarded_go_fixture(
+            Some(config::QuotaGuard {
+                max_observation_age_seconds: 1,
+            }),
+            "rate-limited",
+            reset,
+        );
+        let observed = read(&store)
+            .unwrap()
+            .heads
+            .values()
+            .next()
+            .unwrap()
+            .fact
+            .as_ref()
+            .unwrap()
+            .observed_at;
+        let at = inputs::timestamp(observed + chrono::Duration::seconds(2));
+        let evidence =
+            crate::routing::explain(&store, &config, "L0", "chat-completions", Some(&at)).unwrap();
+        assert_eq!(evidence["selection"]["qualified_model"], "go/m");
+
+        let (_dir, store, config, _) = guarded_go_fixture(
+            Some(config::QuotaGuard {
+                max_observation_age_seconds: 86_400,
+            }),
+            "rate-limited",
+            reset,
+        );
+        let observed = read(&store)
+            .unwrap()
+            .heads
+            .values()
+            .next()
+            .unwrap()
+            .fact
+            .as_ref()
+            .unwrap()
+            .observed_at;
+        let at = inputs::timestamp(observed + chrono::Duration::seconds(3601));
+        let evidence =
+            crate::routing::explain(&store, &config, "L0", "chat-completions", Some(&at)).unwrap();
+        assert_eq!(evidence["selection"]["qualified_model"], "go/m");
+    }
+
     #[test]
     fn go_quota_failures_retain_exact_fact_without_sharing_or_inventing_availability() {
         let (_dir, store, config) = go_fixture();

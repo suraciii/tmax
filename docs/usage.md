@@ -417,6 +417,32 @@ in gateway request details. Failed attempts also appear in the separate local
 [error log](#gateway-error-log), even if a later fallback succeeds.
 
 
+## Quota guard
+
+`quota_guard` is an optional provider-scoped policy. When the latest quota
+observation for the provider exposes a qualified blocking window state such as
+`rate-limited` or `exhausted`, the provider is excluded from new selection until
+the earliest of the observation's applicability bound, the guard's maximum
+observation age, and the announced reset. Only integrations whose contract
+qualifies that state participate; currently that is OpenCode Go's
+`rate-limited` window status. Other plan quota reads remain display-only. The
+guard never changes model priority, enablement, or a retained session's
+destination.
+
+```sh
+tmax provider update opencode-go --set quota_guard.max_observation_age_seconds 3600
+tmax provider inspect opencode-go
+tmax model explain opencode-go/deepseek-v4.1-flash --protocol responses --state loaded
+tmax provider update opencode-go --clear quota_guard
+```
+
+The guard is absent by default because an exhausted included allowance may still
+allow paid continuation. If no reset is announced, no automatic hold is created.
+A generic 429, a capacity rejection, or a transport failure is not quota evidence;
+configure request fallback or failure policy separately. An observation older
+than the configured age does not hold the provider, so refresh the provider's
+quota observation when the guard should remain effective.
+
 ## Gateway error log
 
 Read the local error log directly with ordinary file tools:

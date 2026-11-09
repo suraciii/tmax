@@ -299,18 +299,27 @@ The response supplies no measurement timestamp, validity interval, raw allowance
 exact remaining amount, account/workspace identity, entitlement, or renewal date.
 Local retrieval time must remain labeled retrieval time, not provider `asOf`;
 freshness stays unqualified, with no synthesized `asOf`, TTL, or expiry. These
-consumed-only observations supply no priority-rule inputs or routing veto.
-Passing a reset announcement cannot recover quota locally. Unknown quota or
-renewal remains explicit, with a [Console](https://opencode.ai/console) link and
-optional user-maintained subscription information. A monthly plan does not
-establish a workspace's next renewal date.
+consumed-only observations supply no priority-rule inputs and create no implicit
+routing veto. With an explicit provider `quota_guard`, an observation within the
+guard's maximum observation age whose window access state is `rate-limited` may
+create an availability hold until the announced reset, scoped to the workspace's
+models; it does not infer denial for other windows or providers. `rate-limited`
+is the current qualified blocking state for this integration; do not infer an
+`exhausted` state from the consumed percentage.
+The guard's age bound is a user policy, not a provider freshness claim. Without
+the guard, the observation affects display only. A missing reset announcement
+yields no automatic hold. Passing a reset announcement cannot recover quota
+locally. Unknown quota or renewal remains explicit, with a
+[Console](https://opencode.ai/console) link and optional user-maintained
+subscription information. A monthly plan does not establish a workspace's next
+renewal date.
 
 Console budgets are not Go quota data and are not an integration dependency.
 Do not query or mirror Console credits, budgets, Extra Usage settings, or spending
 caps. These remain outside the [billing scope](../../product/spec.md#billing-quota-and-renewal-information).
 The only relevant Extra Usage fact is that upstream may continue charging after
 included allowance is exhausted. Apply the shared
-[eligibility evidence rules](../../model-routing/spec.md#selection-and-continuity)
+[candidate eligibility evidence rules](../../model-routing/spec.md#selection-and-continuity)
 without requiring access to those billing controls or changing the Go endpoint.
 
 ## Blocking failures and recovery

@@ -414,8 +414,8 @@ not scrape browser sessions or collect website passwords to fill these gaps.
 Quota refresh failure must not disable otherwise usable inference access or
 invalidate another provider instance's observations.
 
-Quota observations affect routing eligibility only through the qualified evidence
-rules in [Selection and continuity](../model-routing/spec.md#selection-and-continuity).
+Quota observations affect candidate eligibility only through the [qualified
+evidence rules](../model-routing/spec.md#selection-and-continuity).
 The [vision](#vision) permits user-defined priority rules over quota, reset, and
 price information. Such observations must not invent a rule or rewrite the user's
 configured priorities or schedules; evaluating a configured rule changes its
@@ -430,7 +430,11 @@ renewal information, or an API-billed provider's supported balance query.
 Paid continuation is only an upstream billing fact, not a tmax feature: exhausting
 included allowance need not stop requests or further charges. A brief provider
 note and console link are sufficient; tmax does not promise a spending ceiling.
-Routing follows admission evidence, not a model of the supplier's billing controls.
+An explicit provider `quota_guard` may choose to stop new selection at an
+exhausted or rate-limited window under the
+[routing contract](../model-routing/spec.md#selection-and-continuity); it is a
+user policy, not a spending ceiling or proof of upstream denial. Routing follows
+admission evidence, not a model of the supplier's billing controls.
 
 ## Rule-driven priorities
 
@@ -737,8 +741,9 @@ relocate the store, shorten the path, or choose an alternate control endpoint.
 The gateway must bound active requests, accepted request size, and request/response
 buffers. When local capacity is unavailable, reject a new request immediately
 with a distinguishable local-capacity result before upstream dispatch. There is
-no request waiting queue or failover for local capacity rejection. A caller decides
-whether to make a new request; rejection must not change priorities or eligibility.
+no request waiting queue or failover for local capacity rejection. A caller
+decides whether to make a new request; rejection must not change priorities or
+candidate eligibility.
 
 Streaming must propagate backpressure instead of accumulating unbounded output
 for a slow client. Enforce finite buffering even when an operation needs to

@@ -463,7 +463,12 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
     }
     if group == "model" && action == "explain" {
         let (id, protocol, session) = retained_session_arguments(request)?;
-        return Runtime::inspect_persisted_session(store, config, id, protocol, session);
+        let at = request
+            .arguments
+            .get("at")
+            .and_then(|values| values.first())
+            .map(String::as_str);
+        return Runtime::inspect_persisted_session(store, config, id, protocol, session, at);
     }
     if group == "history" || group == "usage" {
         return Ok(

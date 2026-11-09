@@ -61,6 +61,13 @@ pub(super) fn apply_fields(value: &mut Value, r: &Request, owner: &str) -> Resul
                 }
                 Value::Integer(n)
             }
+            "positive-integer" => {
+                let n = pair[1].parse::<i64>().map_err(|_| error())?;
+                if n <= 0 {
+                    return Err(error());
+                }
+                Value::Integer(n)
+            }
             "number" => {
                 let n = pair[1].parse::<f64>().map_err(|_| error())?;
                 if !n.is_finite() || n < 0.0 {
@@ -101,6 +108,11 @@ pub(in crate::operations) fn fields(owner: &str) -> &'static [(&'static str, &'s
             ("failure_policy.consecutive_failures", "integer"),
             ("failure_policy.priority", "integer"),
             ("failure_policy.duration_seconds", "integer"),
+            (
+                "quota_guard.max_observation_age_seconds",
+                "positive-integer",
+            ),
+            ("quota_guard", "container"),
             ("failure_policy", "container"),
             ("failure_policy.errors", "container"),
             ("endpoints", "container"),
@@ -211,6 +223,150 @@ mod tests {
         assert!(field_kind("alias", "fallback", true).is_ok());
         assert!(field_kind("alias", "fallback", false).is_err());
     }
+    #[test]
+    fn quota_guard_age_is_positive_and_policy_can_be_cleared() {
+        let mut request = Request {
+            command: vec!["provider".into(), "update".into()],
+            operands: vec!["p".into()],
+            arguments: BTreeMap::from([(
+                "set".into(),
+                vec![
+                    "quota_guard.max_observation_age_seconds".into(),
+                    "3600".into(),
+                ],
+            )]),
+            dry_run: true,
+            if_revision: None,
+        };
+        let mut value = table();
+        apply_fields(&mut value, &request, "provider").unwrap();
+        assert_eq!(
+            value["quota_guard"]["max_observation_age_seconds"].as_integer(),
+            Some(3600)
+        );
+        for invalid in ["0", "-1", "not-an-integer"] {
+            request.arguments.get_mut("set").unwrap()[1] = invalid.into();
+            assert!(apply_fields(&mut table(), &request, "provider").is_err());
+        }
+        assert!(field_kind("provider", "quota_guard", false).is_err());
+        request.arguments = BTreeMap::from([("clear".into(), vec!["quota_guard".into()])]);
+        apply_fields(&mut value, &request, "provider").unwrap();
+        assert!(value.get("quota_guard").is_none());
+    }
+    #[tokio::test]
+    async fn quota_guard_edits_persist_and_zero_never_saves() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::at(directory.path().into());
+        let original = "version=1\n[providers.p]\nintegration='deepseek'\n";
+        store.write_raw("tmax.toml", original.as_bytes()).unwrap();
+        let mut request = Request {
+            command: vec!["provider".into(), "update".into()],
+            operands: vec!["p".into()],
+            arguments: BTreeMap::from([(
+                "set".into(),
+                vec![
+                    "quota_guard.max_observation_age_seconds".into(),
+                    "3600".into(),
+                ],
+            )]),
+            dry_run: false,
+            if_revision: None,
+        };
+        super::super::execute(&store, &request).await.unwrap();
+        let saved = std::fs::read(store.root.join("tmax.toml")).unwrap();
+        assert_eq!(
+            crate::config::load(&store).unwrap().config.providers["p"]
+                .quota_guard
+                .as_ref()
+                .unwrap()
+                .max_observation_age_seconds,
+            3600
+        );
+        request.arguments.get_mut("set").unwrap()[1] = "0".into();
+        assert_eq!(
+            super::super::execute(&store, &request)
+                .await
+                .unwrap_err()
+                .code,
+            "invalid_arguments"
+        );
+        assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), saved);
+        request.arguments = BTreeMap::from([("clear".into(), vec!["quota_guard".into()])]);
+        super::super::execute(&store, &request).await.unwrap();
+        assert!(
+            crate::config::load(&store).unwrap().config.providers["p"]
+                .quota_guard
+                .is_none()
+        );
+    }
+    #[tokio::test]
+    async fn clearing_dotted_quota_guard_age_keeps_guard_enabled() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::at(directory.path().into());
+        store
+            .write_raw(
+                "tmax.toml",
+                b"version=1\n[providers.p]\nintegration='deepseek'\nquota_guard.max_observation_age_seconds=120\n",
+            )
+            .unwrap();
+        let request = Request {
+            command: vec!["provider".into(), "update".into()],
+            operands: vec!["p".into()],
+            arguments: BTreeMap::from([(
+                "clear".into(),
+                vec!["quota_guard.max_observation_age_seconds".into()],
+            )]),
+            dry_run: false,
+            if_revision: None,
+        };
+        super::super::execute(&store, &request).await.unwrap();
+        let loaded = crate::config::load(&store).unwrap();
+        assert_eq!(
+            loaded.config.providers["p"]
+                .quota_guard
+                .as_ref()
+                .unwrap()
+                .max_observation_age_seconds,
+            3600
+        );
+        let saved = std::fs::read_to_string(store.root.join("tmax.toml")).unwrap();
+        assert!(saved.contains("quota_guard"));
+    }
+
+    #[tokio::test]
+    async fn clearing_inline_quota_guard_age_keeps_guard_enabled() {
+        for text in [
+            "version=1\nproviders = { p = { integration='deepseek', quota_guard = { max_observation_age_seconds=120 } } }\n",
+            "version=1\nproviders = { p = { integration='deepseek', quota_guard.max_observation_age_seconds=120 } }\n",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = crate::storage::Store::at(directory.path().into());
+            store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+            let request = Request {
+                command: vec!["provider".into(), "update".into()],
+                operands: vec!["p".into()],
+                arguments: BTreeMap::from([(
+                    "clear".into(),
+                    vec!["quota_guard.max_observation_age_seconds".into()],
+                )]),
+                dry_run: false,
+                if_revision: None,
+            };
+            super::super::execute(&store, &request).await.unwrap();
+            let loaded = crate::config::load(&store).unwrap();
+            assert_eq!(
+                loaded.config.providers["p"]
+                    .quota_guard
+                    .as_ref()
+                    .unwrap()
+                    .max_observation_age_seconds,
+                3600
+            );
+            let saved = std::fs::read_to_string(store.root.join("tmax.toml")).unwrap();
+            assert!(saved.contains("quota_guard"), "{saved}");
+        }
+    }
+
     #[test]
     fn no_arbitrary_fields_and_parent_rebuild() {
         let r = Request {

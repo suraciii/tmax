@@ -156,7 +156,7 @@ routing rules, and the current winner must not narrow that set.
 | Empty native representation | If the native schema would reinterpret a known empty set as inheritance, block that target's application before writes rather than invent support. |
 
 This is a declaration for native consumers, not an extra gateway request
-allowlist. Existing non-effort request eligibility and retained-session checks
+allowlist. Existing non-effort candidate eligibility and retained-session checks
 remain unchanged; effort still cannot filter or rerank candidates. No alias
 capability override or new configuration setting is introduced.
 

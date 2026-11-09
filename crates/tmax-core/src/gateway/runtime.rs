@@ -2,7 +2,7 @@
 use super::{
     ACTIVE_LIMIT, CREDENTIAL_SECONDS,
     bindings::{Bindings, initialize_bindings},
-    errors::error_response,
+    errors::{error_response, error_response_with_message, quota_guard_message},
 };
 use crate::{
     Error, Result,
@@ -208,8 +208,16 @@ impl Flight {
             .remove(&self.record.request);
     }
     pub(super) fn reject(mut self, status: StatusCode, code: &str, stage: &str) -> Response {
+        let message = (code == "quota_guard")
+            .then(|| quota_guard_message(&self.record.decision))
+            .flatten();
         self.finish("rejected", stage, Some(code));
-        error_response(status, code, &self.record.request)
+        match message {
+            Some(message) => {
+                error_response_with_message(status, code, &message, &self.record.request)
+            }
+            None => error_response(status, code, &self.record.request),
+        }
     }
 }
 impl Drop for Flight {
@@ -237,6 +245,32 @@ impl Drop for Flight {
 mod tests {
     use super::*;
     use crate::gateway::{FORWARD_CHUNK_BYTES, INSPECTION_BYTES, REQUEST_BYTES};
+    #[tokio::test]
+    async fn quota_guard_rejection_includes_safe_boundary() {
+        use serde_json::json;
+        let temporary = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(Store::at(temporary.path().into()), "quota".into()).unwrap();
+        runtime.open();
+        let mut flight = runtime.admit(runtime.history.begin()).unwrap();
+        flight.record.decision = json!({
+            "continuation": {
+                "availability_hold": {"valid_until": "2026-11-09T03:00:00Z"}
+            }
+        });
+        let response = flight.reject(StatusCode::CONFLICT, "quota_guard", "selection");
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["type"], "quota_guard");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("2026-11-09T03:00:00Z")
+        );
+    }
+
     #[test]
     fn error_capture_keeps_dispatch_ordinals_and_marks_omissions() {
         let temporary = tempfile::tempdir().unwrap();
