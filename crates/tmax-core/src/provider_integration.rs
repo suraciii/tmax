@@ -46,6 +46,28 @@ pub fn integration_id(provider: &Provider) -> Result<&str> {
         .field("integration")),
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuotaDenial {
+    pub window: Option<String>,
+}
+
+pub(crate) fn quota_denial(provider: &Provider, status: u16, body: &[u8]) -> Option<QuotaDenial> {
+    if status != 429 || integration_id(provider).ok()? != "opencode-go" {
+        return None;
+    }
+    let body: Value = serde_json::from_slice(body).ok()?;
+    if body.get("error")?.get("type")?.as_str()? != "GoUsageLimitError" {
+        return None;
+    }
+    let window = body
+        .get("metadata")
+        .and_then(|m| m.get("limitName"))
+        .and_then(Value::as_str)
+        .filter(|name| matches!(*name, "rolling" | "weekly" | "monthly"))
+        .map(str::to_owned);
+    Some(QuotaDenial { window })
+}
 fn map(values: &[(&str, &str)]) -> BTreeMap<String, String> {
     values
         .iter()
@@ -406,6 +428,47 @@ pub fn observation_destination(
         ("minimax-cn-coding-plan", "quota") => Some(MINIMAX_CN_REMAINS_DESTINATION),
         ("minimax-coding-plan", "quota") => Some(MINIMAX_REMAINS_DESTINATION),
         _ => None,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuotaAccessWindow {
+    pub window: String,
+    pub access_state: &'static str,
+    pub reset_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuotaAccess {
+    pub coverage: Option<Vec<String>>,
+    pub windows: Vec<QuotaAccessWindow>,
+}
+
+pub(crate) fn quota_access(source: &str, data: &Value) -> Option<QuotaAccess> {
+    if source != GO_USAGE_DESTINATION.source {
+        return None;
+    }
+    let usage = data.get("usage")?;
+    let windows = ["rolling", "weekly", "monthly"]
+        .into_iter()
+        .map(|name| {
+            let window = usage.get(name)?;
+            let access_state = match window.get("status")?.as_str()? {
+                "ok" => "available",
+                "rate-limited" => "rate-limited",
+                _ => return None,
+            };
+            let reset_at = window.get("resetsAt")?.as_str().filter(|s| !s.is_empty())?;
+            Some(QuotaAccessWindow {
+                window: name.to_owned(),
+                access_state,
+                reset_at: reset_at.to_owned(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(QuotaAccess {
+        coverage: None,
+        windows,
     })
 }
 
@@ -1219,6 +1282,30 @@ pub fn dashboard(id: &str) -> &'static str {
 mod tests {
     use super::*;
     #[test]
+    fn go_quota_denial_requires_exact_provider_status_and_error_type() {
+        let go = Provider {
+            integration: Some("opencode-go".into()),
+            ..Default::default()
+        };
+        let other = Provider {
+            integration: Some("deepseek".into()),
+            ..Default::default()
+        };
+        let body = br#"{"error":{"message":"Go usage limit exceeded","type":"GoUsageLimitError"},"metadata":{"limitName":"monthly","workspace":"secret"},"type":"error"}"#;
+        assert_eq!(
+            quota_denial(&go, 429, body).unwrap().window.as_deref(),
+            Some("monthly")
+        );
+        assert!(quota_denial(&other, 429, body).is_none());
+        assert!(quota_denial(&go, 503, body).is_none());
+        assert!(quota_denial(&go, 429, br#"{"error":{"type":"rate_limit_error"}}"#).is_none());
+        assert!(quota_denial(&go, 429, br#"{"error":{"type":"CapacityError"}}"#).is_none());
+        assert!(quota_denial(&go, 429, &body[..body.len() - 1]).is_none());
+        let unknown =
+            br#"{"error":{"type":"GoUsageLimitError"},"metadata":{"limitName":"secret"}}"#;
+        assert_eq!(quota_denial(&go, 429, unknown).unwrap().window, None);
+    }
+    #[test]
     fn inference_operations_allow_only_declared_messages_beta_selector() {
         for (path, protocol) in [
             ("/chat/completions", "chat-completions"),
@@ -1532,6 +1619,97 @@ mod tests {
             "monthly":{"status":"ok","percent":62,"resetsAt":"2026-11-09T03:13:27.000Z"}
         }})
     }
+    #[test]
+    fn go_quota_access_projects_all_windows_and_current_states() {
+        let mut body = go_usage_body();
+        body["usage"]["rolling"]["percent"] = json!(999);
+        body["usage"]["weekly"]["status"] = json!("rate-limited");
+        let normalized = normalize_observation("go_usage_api", &body).unwrap();
+        assert_eq!(
+            quota_access("go_usage_api", &normalized),
+            Some(QuotaAccess {
+                coverage: None,
+                windows: vec![
+                    QuotaAccessWindow {
+                        window: "rolling".into(),
+                        access_state: "available",
+                        reset_at: "2026-10-23T19:04:44.687Z".into(),
+                    },
+                    QuotaAccessWindow {
+                        window: "weekly".into(),
+                        access_state: "rate-limited",
+                        reset_at: "2026-10-26T00:00:00.000Z".into(),
+                    },
+                    QuotaAccessWindow {
+                        window: "monthly".into(),
+                        access_state: "available",
+                        reset_at: "2026-11-09T03:13:27.000Z".into(),
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn go_quota_access_rejects_missing_or_malformed_windows() {
+        let valid = go_usage_body();
+        let mut cases = vec![
+            Value::Null,
+            json!({}),
+            json!({"usage": null}),
+            json!({"usage": []}),
+        ];
+        for name in ["rolling", "weekly", "monthly"] {
+            let mut missing_window = valid.clone();
+            missing_window["usage"]
+                .as_object_mut()
+                .unwrap()
+                .remove(name);
+            cases.push(missing_window);
+            let mut invalid_window = valid.clone();
+            invalid_window["usage"][name] = json!([]);
+            cases.push(invalid_window);
+            for field in ["status", "resetsAt"] {
+                let mut missing_field = valid.clone();
+                missing_field["usage"][name]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+                cases.push(missing_field);
+                for value in [Value::Null, json!(42), json!("")] {
+                    let mut invalid_field = valid.clone();
+                    invalid_field["usage"][name][field] = value;
+                    cases.push(invalid_field);
+                }
+            }
+            for status in ["unknown", "exhausted", "available"] {
+                let mut unknown_status = valid.clone();
+                unknown_status["usage"][name]["status"] = json!(status);
+                cases.push(unknown_status);
+            }
+        }
+        for data in cases {
+            assert_eq!(quota_access("go_usage_api", &data), None, "{data}");
+        }
+    }
+
+    #[test]
+    fn quota_access_rejects_non_go_sources() {
+        let data = go_usage_body();
+        for source in [
+            "",
+            "official_balance_api",
+            "official_models_api",
+            "kimi_usage_api",
+            "glm_monitor_api",
+            "minimax_plan_remains_api",
+            "stepfun_usage_api",
+            "unknown",
+        ] {
+            assert_eq!(quota_access(source, &data), None, "{source}");
+        }
+    }
+
     #[test]
     fn go_quota_declares_exact_separate_read_without_rule_inputs() {
         let provider = Provider {

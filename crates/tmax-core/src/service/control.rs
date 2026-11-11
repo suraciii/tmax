@@ -7,7 +7,7 @@ use super::{
     address, control_transport,
     daemon::{Shared, absent, daemon_control},
     failure,
-    startup::{autostart, autostart_status},
+    startup::autostart_status,
 };
 use crate::{Request, Result, config::Config, gateway::Runtime, storage::Store};
 use serde::{Deserialize, Serialize};
@@ -229,7 +229,7 @@ pub async fn status(store: &Store) -> Result<Value> {
             value
         }
     };
-    value["autostart"]=autostart_status(store).unwrap_or_else(|error|json!({"snapshot_state":"unavailable","reason_code":error.code,"reconciliation":"not_requested","repair":"gateway autostart enable|disable"}));
+    value["autostart"]=autostart_status(store).unwrap_or_else(|error|json!({"snapshot_state":"unavailable","reason_code":error.code,"reconciliation":"not_requested","repair":"gateway configure --set autostart true|false"}));
     value["supervision"] = super::supervisor::view(store, &value["daemon"]).await;
     match crate::config::load(store) {
         Ok(file) => {
@@ -250,12 +250,16 @@ pub async fn status(store: &Store) -> Result<Value> {
     }
     Ok(value)
 }
-pub async fn loaded(store: &Store) -> Result<Option<crate::config::LoadedFile>> {
-    Ok(loaded_with_metadata(store).await?.map(|(file, _)| file))
+pub(crate) struct LoadedSnapshot {
+    pub file: crate::config::LoadedFile,
+    pub metadata: Option<crate::catalog::Snapshot>,
+    pub quota_suspensions: Option<serde_json::Map<String, Value>>,
 }
-pub(crate) async fn loaded_with_metadata(
-    store: &Store,
-) -> Result<Option<(crate::config::LoadedFile, Option<crate::catalog::Snapshot>)>> {
+
+pub async fn loaded(store: &Store) -> Result<Option<crate::config::LoadedFile>> {
+    Ok(loaded_snapshot(store).await?.map(|snapshot| snapshot.file))
+}
+pub(crate) async fn loaded_snapshot(store: &Store) -> Result<Option<LoadedSnapshot>> {
     let Some(value) = rpc(store, "loaded", None, None).await? else {
         return Ok(None);
     };
@@ -297,15 +301,19 @@ pub(crate) async fn loaded_with_metadata(
             "Daemon loaded metadata is not recognized",
         )
     })?;
-    Ok(Some((
-        crate::config::LoadedFile {
+    Ok(Some(LoadedSnapshot {
+        file: crate::config::LoadedFile {
             config,
             exists: revision != "absent",
             revision,
             document,
         },
         metadata,
-    )))
+        quota_suspensions: value
+            .get("quota_suspensions")
+            .and_then(Value::as_object)
+            .cloned(),
+    }))
 }
 pub async fn activate(store: &Store, _config: &Config, revision: &str) -> Result<Value> {
     match rpc(store, "activate", None, Some(revision.into())).await {
@@ -373,24 +381,6 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
     }
     if group == "model" && action == "probe" {
         return crate::gateway::probe(store, config, request).await;
-    }
-    if group == "gateway" && action == "autostart" {
-        let enabled = match request
-            .command
-            .get(2)
-            .or_else(|| request.operands.first())
-            .map(String::as_str)
-        {
-            Some("enable") => true,
-            Some("disable") => false,
-            _ => {
-                return Err(failure(
-                    "invalid_argument",
-                    "Autostart requires enable or disable",
-                ));
-            }
-        };
-        return autostart(store, enabled, request.dry_run).await;
     }
     if group == "history" && action == "clear" && request.dry_run {
         return Ok(rpc(store,"control",Some(request.clone()),None).await?.unwrap_or_else(||json!({"dry_run":true,"snapshot_count":0,"retained_in_progress":0,"coverage":"no_daemon_history"})));
@@ -462,8 +452,24 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
         return maybe_browser(value, request);
     }
     if group == "model" && action == "explain" {
+        if request
+            .arguments
+            .get("state")
+            .and_then(|v| v.first())
+            .is_some_and(|v| v == "loaded")
+        {
+            return Err(failure(
+                "runtime_unavailable",
+                "The loaded daemon is no longer available to inspect the retained session",
+            ));
+        }
         let (id, protocol, session) = retained_session_arguments(request)?;
-        return Runtime::inspect_persisted_session(store, config, id, protocol, session);
+        let at = request
+            .arguments
+            .get("at")
+            .and_then(|values| values.first())
+            .map(String::as_str);
+        return Runtime::inspect_persisted_session(store, config, id, protocol, session, at);
     }
     if group == "history" || group == "usage" {
         return Ok(

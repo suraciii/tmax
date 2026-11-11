@@ -26,7 +26,7 @@ pub(super) fn autostart_status(store: &Store) -> Result<Value> {
     value["last_outcome"] = json!(state.last_outcome);
     value["last_attempt"] = json!(state.last_attempt);
     value["reconciliation"] = json!("not_requested");
-    value["repair"] = json!("gateway autostart enable|disable");
+    value["repair"] = json!("gateway configure --set autostart true|false");
     Ok(value)
 }
 
@@ -41,30 +41,14 @@ pub async fn reconcile_autostart(store: &Store, config: &Config, dry_run: bool) 
             ));
         }
     }
-    reconcile(store, enabled, dry_run, false).await
+    reconcile(store, enabled, dry_run).await
 }
-pub async fn autostart(store: &Store, enabled: bool, dry_run: bool) -> Result<Value> {
-    let file = crate::config::load(store)?;
-    let gateway = file.config.gateway.as_ref().ok_or_else(|| {
-        failure(
-            "gateway_unconfigured",
-            "Configure gateway before changing autostart",
-        )
-    })?;
-    if !dry_run && gateway.autostart != enabled {
-        return Err(failure(
-            "inputs_changed",
-            "Explicit registration reconciliation requires validated persisted intent",
-        ));
-    }
-    reconcile(store, enabled, dry_run, true).await
-}
-async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> Result<Value> {
+async fn reconcile(store: &Store, enabled: bool, dry_run: bool) -> Result<Value> {
     let state: Startup = store.read_json("autostart.json")?;
     let unchanged = |state: &Startup| {
         state.acknowledged == Some(enabled) || state.acknowledged.is_none() && !enabled
     };
-    if !force && unchanged(&state) {
+    if unchanged(&state) {
         return autostart_status(store);
     }
     if dry_run {
@@ -75,7 +59,7 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> 
     }
     let _guard = supervisor::lifecycle_lock(store).await?;
     let mut state: Startup = store.read_json("autostart.json")?;
-    if !force && unchanged(&state) {
+    if unchanged(&state) {
         return autostart_status(store);
     }
     state.acknowledged = Some(enabled);
@@ -98,6 +82,6 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool, force: bool) -> 
     );
     let metadata = store.write_json("autostart.json", &state);
     Ok(
-        json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"error":result.err(),"outcome_recording_error":metadata.err(),"status":autostart_status(store).ok(),"repair":"gateway autostart enable|disable","current_listeners":"unchanged"}),
+        json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"error":result.err(),"outcome_recording_error":metadata.err(),"status":autostart_status(store).ok(),"repair":"gateway configure --set autostart true|false","current_listeners":"unchanged"}),
     )
 }

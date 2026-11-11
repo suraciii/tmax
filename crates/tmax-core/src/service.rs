@@ -17,10 +17,10 @@ mod web;
 #[cfg(windows)]
 mod windows_web;
 
+pub(crate) use control::{LoadedSnapshot, browser_login, loaded_snapshot};
 pub use control::{activate, control, loaded, preview_activation, status};
-pub(crate) use control::{browser_login, loaded_with_metadata};
 pub use daemon::run_service;
-pub use startup::{autostart, reconcile_autostart};
+pub use startup::reconcile_autostart;
 pub use supervisor::service_exit_code;
 
 fn failure(code: &str, message: &str) -> Error {

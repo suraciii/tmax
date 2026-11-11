@@ -240,9 +240,10 @@ Discovery must not guess IDs or overwrite user-assigned priorities.
 Each model must have an integer base priority, optional calendar overrides,
 and an optional ordered list of named [priority rules](#priority-rules). Higher
 priority means preferred, not a traffic weight or a lower measured price.
-Zero and negative priorities remain eligible; disabling is a separate action.
-The initial base priority is zero. Priorities compare only among the requested
-alias's explicit candidates and never add another model to that list.
+Zero and negative priorities do not make a candidate ineligible; disabling is a
+separate action. The initial base priority is zero. Priorities compare only
+among the requested alias's explicit candidates and never add another model to
+that list.
 
 Candidate edits, priority changes, and disable/remove actions must report
 which model aliases, Agent selections, and bound sessions they affect; optional
@@ -501,9 +502,9 @@ report affected definitions and bound sessions under the continuity rules.
 Priorities, schedules, and ordered priority rules remain user-wide, not
 overridden per Agent, project, or model alias. Model aliases are shared within
 their native-protocol scope. Non-effort compatibility and upstream authorization
-filter eligibility, not preference scores; effort follows post-selection
-validation under [Request parameters](#request-parameters). There are no
-per-client model permissions.
+filter candidate eligibility, not preference scores; effort follows
+post-selection validation under [Request parameters](#request-parameters). There
+are no per-client model permissions.
 Equal-priority primary/standby behavior and all priority evaluation use the
 existing model settings, not another scenario-specific rule system.
 
@@ -591,14 +592,13 @@ Pending file settings must not supply facts under a different loaded definition.
 4. Resolve effort (fixed value, then explicit map, then identity) on the
    selected destination before publishing a new binding or dispatching. An
    undeclared or unknown value is forwarded unchanged; it neither rejects nor
-   replaces the destination. Use the selected model's provider authorization. If non-effort eligibility changes before dispatch, revalidate
-   the fixed model or select again among the alias's eligible candidates only
-   while the selection is unbound.
-   Any repeated selection captures a new coherent snapshot and instant; it must
-   not mix old and new revisions or
-   silently replace the evidence for the final decision. Do not release a
-   retained session binding, send a request with stale authorization, or switch
-   instances implicitly.
+   replaces the destination. Use the selected model's provider authorization.
+   If non-effort eligibility changes before dispatch, revalidate the fixed
+   model or select again among the alias's eligible candidates only while the
+   selection is unbound. Any repeated selection captures a new coherent snapshot
+   and instant; it must not mix old and new revisions or silently replace the
+   evidence for the final decision. Do not release a retained session binding,
+   send a request with stale authorization, or switch instances implicitly.
 5. Capture the selection evidence required by the
    [diagnostics contract](../diagnostics/spec.md#minimal-request-record) before
    forwarding the exact upstream model ID. Record the actual decision snapshot,
@@ -615,10 +615,11 @@ complete in order to evaluate priority. An explicitly
 opted-in service acquisition may publish facts independently under the input
 authority; request admission neither starts it nor waits for it.
 
-Known unavailable candidates may be skipped before dispatch only for non-effort
-eligibility. An effort rejection never enables this fallback. If no candidate
-remains, return an actionable unavailable result; do not use an unconfigured
-model or instance. Request-level attempts after dispatch require the explicit
+Known unavailable candidates may be skipped before dispatch only for a non-effort
+eligibility reason. An effort rejection never enables this fallback. If no
+candidate remains, return an actionable unavailable result; do not use an
+unconfigured model or instance. Request-level attempts after dispatch require
+the explicit
 [request fallback policy](#request-fallback-and-failure-priority-override).
 
 Local capacity shortage follows
@@ -638,20 +639,76 @@ A status code alone does not establish those facts. An upstream retry hint does
 not schedule replay. Ambiguous outcomes may be attempted through another provider
 only under the explicit transport-error fallback option and its disclosed risk.
 
-Quota-based exclusion requires authoritative, sufficiently fresh evidence of
-exhaustion that applies to the selected upstream identity, model coverage, and
-current quota window. Exclude only the affected models. A reset or expired
-observation must not leave an old window's depletion as permanent exclusion;
-freshness and reset semantics must be qualified by the provider integration.
+Quota-based exclusion requires source-qualified evidence scoped to the selected
+upstream identity, authorization, and model coverage. Confirmed blocking access
+follows [automatic quota suspension](#automatic-quota-suspension). A consumed
+percentage alone is not evidence of blocked access.
 Unknown, stale, estimated, or manually entered quota must not establish automatic
-exhaustion, and a failed usage refresh must not disable access. A generic rate-limit
-or network error is not proof of depleted subscription quota. These checks change
-eligibility, never effective priority or membership, and do not authorize hidden replay.
-Exhausted included allowance alone is not proof that upstream requests are blocked:
-the provider may permit paid continuation. Exclusion requires scoped evidence of
-unavailable access, not a guess about billing policy. Do not query or model Extra
-Usage settings, subscription add-on wallets, or budget/spending-cap controls for
-routing. A qualified API-balance observation remains valid availability evidence.
+exhaustion, and a failed usage refresh must not disable access. A generic
+rate-limit, capacity, transport, or network error is not proof of depleted
+subscription quota. These checks change candidate eligibility, never effective
+priority or membership, and do not authorize hidden replay. Exhausted included
+allowance alone is not proof that upstream requests are blocked: the provider may
+permit paid continuation.
+An explicit provider `quota_guard` is a separate included-allowance policy.
+With the guard enabled, an applicable quota observation whose
+access state is `rate-limited` or `exhausted` creates an availability hold until
+the earlier of the observation's applicability bound, the guard's maximum
+observation age, and its announced reset. The guard is absent by default and is a
+user choice about included allowance, not proof of upstream denial. Its scope is
+the observation's declared coverage; it never expands to another provider or
+window. Without an announced reset, no automatic quota hold is created. A hold
+changes candidate eligibility only: it does not change effective priority or
+enablement and does not silently move a retained session. Do not query or model
+Extra Usage settings, subscription add-on wallets, or budget/spending-cap controls
+for routing. A qualified API-balance observation remains valid availability
+evidence. The [availability boundaries](design.md) own the evidence and hold model.
+
+### Automatic quota suspension
+
+Source-qualified blocking quota evidence suspends the affected provider's
+authorization by default. Each provider integration owns its recognized denial
+and recovery evidence. Unsupported integrations and generic HTTP statuses do
+not acquire quota semantics.
+
+| Current state and event | Required transition |
+| --- | --- |
+| Available; qualified quota denial or new blocking quota observation | Persist `quota_suspended`; exclude the affected provider from subsequent selection |
+| Suspended; daemon restart or unrelated configuration change | Keep the suspension for the same authorization and destination |
+| Suspended; fresh successful quota check confirms all covered windows available | Clear the suspension automatically |
+| Suspended; failed, unknown, or malformed quota check | Keep the suspension; report the failed check separately |
+| Suspended; announced reset passes | Recheck quota; passing time alone does not recover access |
+| Suspended; explicit `provider quota-resume` | Clear the suspension and supersede evidence captured before the resume |
+| Manually resumed; new qualified denial or new blocking quota observation | Suspend again |
+| Any state; authorization or destination changes | Prior suspension does not apply to the replacement binding |
+| Suspension state unreadable or invalid | Exclude affected Go routing with `quota_state_unavailable`; do not infer recovery or overwrite the state |
+
+The running daemon checks suspended, enabled providers through their qualified
+non-inference quota API at most once per provider per 60 seconds. This recovery
+check does not start a daemon, sign in, or send inference probes. A stopped
+daemon or unavailable quota source cannot establish recovery. Manual quota
+refresh uses the same recovery rules.
+The reserved automatic-check deadline survives recovery and manual resume, so
+another denial cannot create repeated checks inside the same interval.
+
+Suspension changes neither `enabled` nor priority. A manually disabled provider
+stays disabled after automatic recovery or manual resume. Retained destinations
+report `quota_suspended` without moving the conversation. Stateless aliases may
+select another eligible candidate; replay of the failure-triggering request
+still requires its explicit fallback policy.
+
+Admission evidence identifies the suspension reason, source, observation time,
+and known window/reset/check boundary without raw upstream bodies. Manual resume
+and newer denial evidence fence older in-flight publications; an old successful
+check cannot clear a newer denial. Inspection never acquires or changes state.
+
+If saving a confirmed denial fails, preserve the upstream rejection and retain
+the affected binding's suspension in the running daemon. Report pending
+persistence and unconfirmed durability; protection across process loss is not
+guaranteed until the save succeeds. Later admissions must not treat an older,
+still-readable disk record as recovery. Retry local persistence before any
+automatic recovery check. A fresh manual resume supersedes the pending denial;
+an independent stale quota check does not.
 
 ### Request fallback and failure priority override
 
@@ -861,8 +918,8 @@ the existing definition and effective upstream declarations. Its separate
 Alias inspection exposes its configured candidate-effort map.
 Alias inspection also exposes the [common input capability](../integrations/spec.md#common-input-modalities),
 its candidate declarations and accepted metadata provenance, and per-Agent native
-representations. These derived declarations do not change request eligibility,
-priority, session bindings, or the backend-stable effort rule.
+representations. These derived declarations do not change candidate
+eligibility, priority, session bindings, or the backend-stable effort rule.
 
 Explanations expose `candidate_reasoning_effort` for each evaluated candidate and
 the selected destination; null means no fixed override, not a selected upstream
@@ -914,9 +971,9 @@ any blocking reason, not the winner for a new session. A configuration operation
 and its optional dry run must separately disclose effects on new sessions,
 bound sessions blocked at activation, and in-flight requests retaining their
 snapshots. Previews and dry runs must not reserve authorization, resolve secrets,
-refresh a login, acquire inputs, start acquisition, or consume quota. Eligibility
-may change before a live request; unknown remote status must not be labeled
-verified.
+refresh a login, acquire inputs, start acquisition, or consume quota. Candidate
+eligibility may change before a live request; unknown remote status must not be
+labeled verified.
 
 ## Pricing boundaries
 
@@ -981,8 +1038,8 @@ An applicable scheduled reset within the next 86400 seconds makes
 before reset is included; an earlier instant is outside the horizon. Expiry,
 withdrawal, or the announced instant removes this basis for new selections.
 Neither a match nor the passing of that instant verifies an actual reset,
-account quota recovery, or eligibility. The existing session retains its
-destination, and concrete native configuration remains unchanged.
+account quota recovery, or candidate eligibility. The existing session retains
+its destination, and concrete native configuration remains unchanged.
 
 ### Weekly allowance close to reset
 
@@ -1237,3 +1294,12 @@ response delivery; retained-session errors do not replay on a sibling.
     nor a request can guess a base or repair `/v1`. Reject undeclared operations
     and ID-only calls without a reliable original binding instead of selecting
     a current winner, searching resources, rewriting IDs, or failing over.
+36. Apply `quota_guard` only to an applicable quota observation whose declared
+    coverage includes the candidate and whose access state is `rate-limited` or
+    `exhausted`. A hold ends at the earlier of the source applicability bound,
+    the guard's maximum observation age, and the announced reset; no announced
+    reset creates no automatic quota hold. A generic rate-limit, capacity,
+    transport, or unknown failure is not quota evidence. The hold changes
+    candidate eligibility, never effective priority or enablement, and does not
+    reassign a retained destination. When every candidate is held, report the earliest
+    recovery boundary without dispatch or a guessed reset.

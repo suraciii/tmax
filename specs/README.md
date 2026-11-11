@@ -14,6 +14,8 @@ and the invariants it protects.
   overrides, secret references, and activation; [persisted-format example](configuration/example.toml).
 - [Model selection](model-routing/spec.md) — models.dev metadata, concrete model
   references, model aliases, ordered dynamic rules, schedules, and continuity.
+  - [Routing availability design](model-routing/design.md) — availability holds,
+    quota evidence boundaries, guard policy, and retained-session behavior.
   - [Rule inputs](model-routing/inputs/spec.md) — scoped quota/reset facts,
     manual registration, source acquisition, freshness, and publication.
 - [Integration support](integrations/spec.md) — shared agent boundaries, provider

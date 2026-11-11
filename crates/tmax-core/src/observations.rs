@@ -13,6 +13,13 @@ use std::collections::{BTreeMap, BTreeSet};
 const STATE: &str = "observations/heads.json";
 const SCOPES: [&str; 3] = ["auth", "models", "quota"];
 
+mod quota;
+pub(crate) use quota::{
+    automatic_quota_tick, quota_epoch_for_binding, quota_suspension_for_binding,
+    record_quota_denial, resume_quota_locked,
+};
+pub use quota::{quota_status, resume_quota};
+
 // Labels are deliberately not part of either the key or retained facts. Renaming a
 // provider changes only the projection, not the observation's authorization owner.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,10 +60,86 @@ struct Head {
     fact: Option<Fact>,
     last_attempt: Attempt,
 }
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Suspension {
+    source: String,
+    suspended_at: DateTime<Utc>,
+    window: Option<String>,
+    reset_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuotaState {
+    binding: Binding,
+    epoch: String,
+    manual_resume_revision: String,
+    #[serde(deserialize_with = "required_option")]
+    suspension: Option<Suspension>,
+    manually_resumed: bool,
+    #[serde(deserialize_with = "required_option")]
+    suppressed_fact_revision: Option<String>,
+    #[serde(deserialize_with = "required_option")]
+    latest_denial_at: Option<DateTime<Utc>>,
+    #[serde(deserialize_with = "required_option")]
+    latest_denial_revision: Option<String>,
+    #[serde(deserialize_with = "required_option")]
+    latest_available_check_started_at: Option<DateTime<Utc>>,
+    #[serde(deserialize_with = "required_option")]
+    next_check_at: Option<DateTime<Utc>>,
+}
+
+fn required_option<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+impl QuotaState {
+    fn new(binding: Binding) -> Self {
+        Self {
+            binding,
+            epoch: "0".into(),
+            manual_resume_revision: "0".into(),
+            suspension: None,
+            manually_resumed: false,
+            suppressed_fact_revision: None,
+            latest_denial_at: None,
+            latest_denial_revision: None,
+            latest_available_check_started_at: None,
+            next_check_at: None,
+        }
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Heads {
     heads: BTreeMap<String, Head>,
+    #[serde(default)]
+    quota: BTreeMap<String, QuotaState>,
+    #[serde(skip)]
+    unavailable_quota: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ObservationSnapshot {
+    heads: Heads,
+    pending: BTreeSet<String>,
+}
+
+pub(crate) fn snapshot(store: &Store) -> Result<ObservationSnapshot> {
+    let (heads, pending) = quota::effective_heads(store)?;
+    Ok(ObservationSnapshot { heads, pending })
+}
+
+pub(crate) fn snapshot_saved(store: &Store) -> Result<ObservationSnapshot> {
+    Ok(ObservationSnapshot {
+        heads: read(store)?,
+        pending: BTreeSet::new(),
+    })
 }
 
 fn signature(value: &impl Serialize) -> String {
@@ -197,6 +280,29 @@ fn read(store: &Store) -> Result<Heads> {
             return Err(invalid_record());
         }
     }
+    for (key, state) in heads.quota {
+        if key != signature(&state.binding)
+            || state.binding.scope != "quota"
+            || state.binding.integration != "opencode-go"
+            || state.binding.source.as_deref() != Some("go_usage_api")
+            || state.binding.provider_identity.is_empty()
+            || state.binding.authorization_generation.is_empty()
+            || state.epoch.is_empty()
+            || state.manual_resume_revision.is_empty()
+            || state.suspension.as_ref().is_some_and(|s| {
+                !matches!(s.source.as_str(), "go_usage_api" | "go_denial")
+                    || s.window
+                        .as_deref()
+                        .is_some_and(|w| !matches!(w, "rolling" | "weekly" | "monthly"))
+                    || s.reset_at
+                        .as_deref()
+                        .is_some_and(|r| inputs::ExactInstant::parse(r).is_err())
+            })
+        {
+            return Err(invalid_record());
+        }
+        canonical.quota.insert(key, state);
+    }
     Ok(canonical)
 }
 fn retained_bindings(runtime: &Runtime) -> Result<BTreeSet<String>> {
@@ -221,6 +327,7 @@ fn retained_bindings(runtime: &Runtime) -> Result<BTreeSet<String>> {
 fn prune(heads: &mut Heads, runtime: &Runtime) -> Result<()> {
     let keys = retained_bindings(runtime)?;
     heads.heads.retain(|k, _| keys.contains(k));
+    heads.quota.retain(|k, _| keys.contains(k));
     Ok(())
 }
 
@@ -228,11 +335,12 @@ fn prune(heads: &mut Heads, runtime: &Runtime) -> Result<()> {
 /// Keep only current saved/still-loaded bindings, never an observation archive.
 pub(crate) fn retain(store: &Store, runtime: &Runtime) -> Result<()> {
     let _observations = store.lock("observations")?;
-    let mut heads = read(store)?;
-    let before = heads.heads.len();
+    quota::prune_pending(store, runtime)?;
+    let (mut heads, _) = quota::effective_heads(store)?;
+    let before = (heads.heads.len(), heads.quota.len());
     prune(&mut heads, runtime)?;
-    if heads.heads.len() != before {
-        store.write_json(STATE, &heads)?;
+    if (heads.heads.len(), heads.quota.len()) != before {
+        quota::write_heads(store, &heads)?;
     }
     Ok(())
 }
@@ -240,6 +348,9 @@ pub(crate) fn retain(store: &Store, runtime: &Runtime) -> Result<()> {
 struct Capture {
     binding: Binding,
     head_revision: String,
+    quota_epoch: String,
+    denial_revision: Option<String>,
+    automatic_config: Option<String>,
     started_at: DateTime<Utc>,
 }
 fn capture(store: &Store, config: &Config, provider: &str, scope: &str) -> Result<Capture> {
@@ -266,9 +377,19 @@ fn capture(store: &Store, config: &Config, provider: &str, scope: &str) -> Resul
             "Provider authorization binding is unavailable",
         )
     })?;
-    let heads = read(store)?;
+    let (heads, _) = quota::effective_heads(store)?;
     Ok(Capture {
         head_revision: revision(heads.heads.get(&signature(&b))).into(),
+        quota_epoch: heads
+            .quota
+            .get(&signature(&b))
+            .map_or("0", |s| s.epoch.as_str())
+            .into(),
+        denial_revision: heads
+            .quota
+            .get(&signature(&b))
+            .and_then(|s| s.latest_denial_revision.clone()),
+        automatic_config: None,
         binding: b,
         started_at: Utc::now(),
     })
@@ -297,6 +418,18 @@ fn publish(
             "Provider observation head changed during acquisition",
         ));
     }
+    if captured.binding.source.as_deref() == Some("go_usage_api") {
+        let state = heads.quota.get(&key);
+        if state.map_or("0", |s| s.epoch.as_str()) != captured.quota_epoch
+            || state.and_then(|s| s.latest_denial_revision.as_ref())
+                != captured.denial_revision.as_ref()
+        {
+            return Err(Error::new(
+                "observations_changed",
+                "Quota authority changed during acquisition",
+            ));
+        }
+    }
     let new_revision = token();
     let (fact, outcome, reason_code) = match acquired {
         Ok(value) => (
@@ -322,6 +455,39 @@ fn publish(
             Some(error.code),
         ),
     };
+    if outcome == "completed"
+        && captured.binding.source.as_deref() == Some("go_usage_api")
+        && let Some(access) = fact
+            .as_ref()
+            .and_then(|f| provider_integration::quota_access("go_usage_api", &f.data))
+    {
+        let state = heads
+            .quota
+            .entry(key.clone())
+            .or_insert_with(|| QuotaState::new(captured.binding.clone()));
+        if let Some(window) = access
+            .windows
+            .iter()
+            .find(|w| w.access_state == "rate-limited")
+        {
+            state.next_check_at.get_or_insert(finished_at);
+            state.suspension = Some(Suspension {
+                source: "go_usage_api".into(),
+                suspended_at: finished_at,
+                window: Some(window.window.clone()),
+                reset_at: Some(window.reset_at.clone()),
+            });
+            state.manually_resumed = false;
+        } else if !access.windows.is_empty()
+            && access.windows.iter().all(|w| w.access_state == "available")
+        {
+            state.latest_available_check_started_at = Some(captured.started_at);
+            if state.suspension.take().is_some() {
+                state.epoch = token();
+            }
+            state.manually_resumed = false;
+        }
+    }
     let attempt = Attempt {
         revision: token(),
         started_at: captured.started_at,
@@ -367,11 +533,24 @@ fn commit(
     let _routing = store.lock("routing")?;
     let _observations = store.lock("observations")?;
     let runtime = inputs::read_runtime(store)?;
+    if let Some(expected) = &captured.automatic_config {
+        let loaded = runtime.loaded.as_ref().map(|view| signature(&view.config));
+        if loaded.as_ref() != Some(expected)
+            || signature(&runtime.saved.config) != *expected
+            || signature(&config::load(store)?.config) != *expected
+        {
+            return Err(Error::new(
+                "observations_changed",
+                "Loaded quota authority changed during acquisition",
+            ));
+        }
+    }
     let current = current_saved_binding(store, &runtime, &captured.binding)?;
-    let mut heads = read(store)?;
+    let (mut heads, _) = quota::effective_heads(store)?;
     let attempt = publish(&mut heads, captured, current.as_ref(), acquired, Utc::now())?;
     prune(&mut heads, &runtime)?;
-    store.write_json(STATE, &heads)?;
+    quota::prune_pending(store, &runtime)?;
+    quota::write_heads(store, &heads)?;
     Ok(attempt)
 }
 
@@ -627,6 +806,7 @@ pub fn routing_availability(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn routing_availability_for_binding(
     store: &Store,
     config: &Config,
@@ -635,6 +815,191 @@ pub(crate) fn routing_availability_for_binding(
     scope: (&str, &str),
 ) -> Result<Option<String>> {
     routing_availability_impl(store, config, provider, at, Some(scope))
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AvailabilityHold {
+    pub reason_code: &'static str,
+    pub state: &'static str,
+    pub window: String,
+    pub coverage: &'static str,
+    pub observed_at: String,
+    pub valid_until: String,
+    pub reset_at: String,
+    pub max_observation_age_seconds: i64,
+}
+
+/// A quota guard hold is derived from the exact retained quota fact captured
+/// with the admission snapshot. It never reads a priority input and never
+/// mutates the fact.
+pub(crate) fn quota_guard_hold_for_binding(
+    snapshot: &inputs::Snapshot<'_>,
+    config: &Config,
+    provider: &str,
+    model: &str,
+    at: &inputs::ExactInstant,
+    captured_scope: (&str, &str),
+) -> Option<AvailabilityHold> {
+    let provider_config = config.providers.get(provider)?;
+    let guard = provider_config.quota_guard.as_ref()?;
+    let selected = snapshot.provider_scope_binding(provider)?;
+    if selected.0 != captured_scope.0 || selected.1 != captured_scope.1 {
+        return None;
+    }
+    let observations = snapshot.observations()?;
+    let current = binding_with_scope(config, provider, "quota", selected).ok()?;
+    let head = observations.heads.heads.get(&signature(&current))?;
+    let fact = head.fact.as_ref()?;
+    if observations
+        .heads
+        .quota
+        .get(&signature(&current))
+        .and_then(|state| state.suppressed_fact_revision.as_deref())
+        == Some(fact.revision.as_str())
+    {
+        return None;
+    }
+    let source = current.source.as_deref()?;
+    let access = crate::provider_integration::quota_access(source, &fact.data)?;
+    if access
+        .coverage
+        .as_ref()
+        .is_some_and(|models| !models.iter().any(|covered| covered == model))
+    {
+        return None;
+    }
+    let observed = inputs::ExactInstant::from_chrono(fact.observed_at);
+    if at < &observed {
+        return None;
+    }
+    let age_bound = observed.add_seconds(guard.max_observation_age_seconds)?;
+    if at >= &age_bound {
+        return None;
+    }
+    let mut best: Option<(
+        inputs::ExactInstant,
+        &crate::provider_integration::QuotaAccessWindow,
+    )> = None;
+    for window in &access.windows {
+        if !matches!(window.access_state, "rate-limited" | "exhausted") {
+            continue;
+        }
+        let Ok(reset) = inputs::ExactInstant::parse(&window.reset_at) else {
+            continue;
+        };
+        if at >= &reset {
+            continue;
+        }
+        let valid_until = std::cmp::min(age_bound.clone(), reset);
+        if at >= &valid_until {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(current, _)| valid_until > *current)
+        {
+            best = Some((valid_until, window));
+        }
+    }
+    let (valid_until, window) = best?;
+    Some(AvailabilityHold {
+        reason_code: "quota_guard",
+        state: window.access_state,
+        window: window.window.clone(),
+        coverage: if access.coverage.is_some() {
+            "models"
+        } else {
+            "provider"
+        },
+        observed_at: inputs::timestamp(fact.observed_at),
+        valid_until: valid_until.canonical(),
+        reset_at: window.reset_at.clone(),
+        max_observation_age_seconds: guard.max_observation_age_seconds,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_fail_quota_denial(
+    store: &Store,
+    config: &Config,
+    provider: &str,
+    scope: (&str, &str),
+    epoch: &str,
+    denial: &provider_integration::QuotaDenial,
+) -> Result<()> {
+    quota::record_quota_denial_with_writer(store, config, provider, scope, epoch, denial, |_, _| {
+        Err(crate::storage::storage_error())
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_publish_quota(
+    store: &Store,
+    config: &Config,
+    provider: &str,
+    data: Value,
+) -> DateTime<Utc> {
+    let captured = capture(store, config, provider, "quota").expect("quota capture");
+    commit(
+        store,
+        &captured,
+        Ok(AcquiredObservation { status: 200, data }),
+    )
+    .expect("quota publication");
+    read(store)
+        .expect("quota heads")
+        .heads
+        .values()
+        .find_map(|head| head.fact.as_ref().map(|fact| fact.observed_at))
+        .expect("quota fact")
+}
+
+pub(crate) fn routing_availability_for_admission(
+    snapshot: &inputs::Snapshot<'_>,
+    config: &Config,
+    provider: &str,
+    at: &inputs::ExactInstant,
+    captured_scope: (&str, &str),
+) -> Option<String> {
+    let selected = snapshot.provider_scope_binding(provider)?;
+    if selected.0 != captured_scope.0 || selected.1 != captured_scope.1 {
+        return None;
+    }
+    let observations = snapshot.observations()?;
+    routing_availability_selected(config, provider, at, selected, &observations.heads)
+        .ok()
+        .flatten()
+}
+
+fn routing_availability_selected(
+    config: &Config,
+    provider: &str,
+    at: &inputs::ExactInstant,
+    selected: (String, String),
+    heads: &Heads,
+) -> Result<Option<String>> {
+    if !config.providers.contains_key(provider) {
+        return Err(Error::new("unknown_resource", "Provider is not configured"));
+    }
+    for scope in ["quota", "auth"] {
+        let current = binding_with_scope(config, provider, scope, selected.clone())?;
+        let Some(head) = heads.heads.get(&signature(&current)) else {
+            continue;
+        };
+        let Some(fact) = &head.fact else {
+            continue;
+        };
+        let temporal = temporal_applicability(Some(fact), current.source.as_deref(), at);
+        if temporal.state == TemporalState::AsOfObservation
+            && fact.data.get("is_available").and_then(Value::as_bool) == Some(false)
+        {
+            return Ok(Some(format!(
+                "balance_unavailable:{provider}:{scope}:as_of:{}",
+                fact.observed_at.to_rfc3339()
+            )));
+        }
+    }
+    Ok(None)
 }
 
 fn routing_availability_impl(
@@ -666,25 +1031,7 @@ fn routing_availability_impl(
         return Ok(None);
     };
     let heads = read(store)?;
-    for scope in ["quota", "auth"] {
-        let current = binding_with_scope(config, provider, scope, selected.clone())?;
-        let Some(head) = heads.heads.get(&signature(&current)) else {
-            continue;
-        };
-        let Some(fact) = &head.fact else {
-            continue;
-        };
-        let temporal = temporal_applicability(Some(fact), current.source.as_deref(), at);
-        if temporal.state == TemporalState::AsOfObservation
-            && fact.data.get("is_available").and_then(Value::as_bool) == Some(false)
-        {
-            return Ok(Some(format!(
-                "balance_unavailable:{provider}:{scope}:as_of:{}",
-                fact.observed_at.to_rfc3339()
-            )));
-        }
-    }
-    Ok(None)
+    routing_availability_selected(config, provider, at, selected, &heads)
 }
 
 #[cfg(test)]
@@ -704,6 +1051,16 @@ mod tests {
     fn capture_head(heads: &Heads, binding: Binding) -> Capture {
         Capture {
             head_revision: revision(heads.heads.get(&signature(&binding))).into(),
+            quota_epoch: heads
+                .quota
+                .get(&signature(&binding))
+                .map_or("0", |s| s.epoch.as_str())
+                .into(),
+            denial_revision: heads
+                .quota
+                .get(&signature(&binding))
+                .and_then(|s| s.latest_denial_revision.clone()),
+            automatic_config: None,
             binding,
             started_at: Utc::now(),
         }
@@ -1281,6 +1638,1099 @@ mod tests {
         inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
         (dir, store, config)
     }
+    fn guarded_go_fixture(
+        guard: Option<config::QuotaGuard>,
+        status: &str,
+        reset: chrono::DateTime<Utc>,
+    ) -> (tempfile::TempDir, Store, Config, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().to_path_buf());
+        let mut config = Config::empty();
+        config.providers.insert(
+            "go".into(),
+            config::Provider {
+                integration: Some("opencode-go".into()),
+                quota_guard: guard,
+                models: [(
+                    "m".into(),
+                    config::Model {
+                        priority: 7,
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        );
+        config.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
+            id: "L0".into(),
+            protocol: "chat-completions".into(),
+            candidates: vec!["go/m".into()],
+            enabled: true,
+            continuity: None,
+            fallback: None,
+        });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        let initial = config.clone();
+        inputs::reconcile(&store, &Config::empty(), &initial, &[]).unwrap();
+        let identity = inputs::provider_identity(&store, &initial, "go")
+            .unwrap()
+            .unwrap();
+        let key_ref =
+            crate::secrets::put(&store, &format!("provider:{identity}:go"), b"test-key").unwrap();
+        config.providers.get_mut("go").unwrap().auth = Some(config::Auth::ApiKey { key_ref });
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(&store, &initial, &config, &[]).unwrap();
+        let reset = inputs::timestamp(reset);
+        let captured = capture(&store, &config, "go", "quota").unwrap();
+        let data = provider_integration::normalize_observation(
+            "go_usage_api",
+            &json!({"usage":{
+                "rolling":{"status":"ok","percent":0,"resetsAt":reset},
+                "weekly":{"status":status,"percent":30,"resetsAt":reset},
+                "monthly":{"status":"ok","percent":10,"resetsAt":reset}
+            }}),
+        )
+        .unwrap();
+        commit(
+            &store,
+            &captured,
+            Ok(AcquiredObservation { status: 200, data }),
+        )
+        .unwrap();
+        (dir, store, config, reset)
+    }
+
+    #[test]
+    fn quota_suspension_survives_guard_expiry_and_resume_fences_old_evidence() {
+        let reset = Utc::now() + chrono::Duration::hours(1);
+        let (_dir, store, config, _) = guarded_go_fixture(
+            Some(config::QuotaGuard {
+                max_observation_age_seconds: 3600,
+            }),
+            "rate-limited",
+            reset,
+        );
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding(&runtime, &config, "go").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let snapshot = inputs::Snapshot::capture(&store, &config);
+        let now = inputs::ExactInstant::from_chrono(Utc::now());
+        assert!(quota_guard_hold_for_binding(&snapshot, &config, "go", "m", &now, scope).is_some());
+        let after_reset = inputs::ExactInstant::from_chrono(reset + chrono::Duration::seconds(1));
+        assert!(
+            quota_guard_hold_for_binding(&snapshot, &config, "go", "m", &after_reset, scope)
+                .is_none()
+        );
+        assert!(
+            quota_suspension_for_binding(&snapshot, &config, "go", &after_reset, scope).is_some()
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go", false).unwrap()["state"],
+            "suspended"
+        );
+        resume_quota(&store, &config, "go").unwrap();
+        let resumed = inputs::Snapshot::capture(&store, &config);
+        assert!(quota_guard_hold_for_binding(&resumed, &config, "go", "m", &now, scope).is_none());
+        assert!(quota_suspension_for_binding(&resumed, &config, "go", &now, scope).is_none());
+        assert_eq!(
+            quota_status(&store, &config, "go", false).unwrap()["state"],
+            "manually_resumed"
+        );
+        // An already captured admission remains a consistent historical snapshot.
+        assert!(quota_suspension_for_binding(&snapshot, &config, "go", &now, scope).is_some());
+    }
+
+    #[test]
+    fn historical_rate_limit_is_not_imported_but_resume_suppresses_its_guard() {
+        let (_dir, store, config, _) = guarded_go_fixture(
+            Some(config::QuotaGuard {
+                max_observation_age_seconds: 3600,
+            }),
+            "rate-limited",
+            Utc::now() + chrono::Duration::hours(1),
+        );
+        let mut historical = read(&store).unwrap();
+        historical.quota.clear();
+        // A record produced by an older version has no quota field at all.
+        store
+            .write_json(STATE, &json!({"heads":historical.heads}))
+            .unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding(&runtime, &config, "go").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let before = inputs::Snapshot::capture(&store, &config);
+        let at = inputs::ExactInstant::from_chrono(Utc::now());
+        assert!(quota_suspension_for_binding(&before, &config, "go", &at, scope).is_none());
+        assert!(quota_guard_hold_for_binding(&before, &config, "go", "m", &at, scope).is_some());
+        resume_quota(&store, &config, "go").unwrap();
+        let after = inputs::Snapshot::capture(&store, &config);
+        assert!(quota_guard_hold_for_binding(&after, &config, "go", "m", &at, scope).is_none());
+    }
+
+    #[test]
+    fn failed_exclusive_locks_retain_only_current_binding_denials() {
+        for failed_lock in ["configuration", "routing", "observations"] {
+            let (_dir, store, config) = go_fixture();
+            inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+            let initial = capture(&store, &config, "go-a", "quota").unwrap();
+            commit(&store, &initial, Ok(go_usage())).unwrap();
+            let before = std::fs::read(store.path(STATE).unwrap()).unwrap();
+            let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+            let a = snapshot.provider_scope_binding("go-a").unwrap();
+            let b = snapshot.provider_scope_binding("go-b").unwrap();
+            let scope = (a.0.as_str(), a.1.as_str());
+            let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+            let denial = provider_integration::QuotaDenial {
+                window: Some("monthly".into()),
+            };
+            let result = quota::record_quota_denial_with_locker(
+                &store,
+                &config,
+                "go-a",
+                scope,
+                &epoch,
+                &denial,
+                (
+                    |store, heads| store.write_json(STATE, heads),
+                    |store, name| {
+                        if name == failed_lock {
+                            Err(crate::storage::storage_error())
+                        } else {
+                            store.lock(name)
+                        }
+                    },
+                ),
+            );
+            assert_eq!(result.unwrap_err().code, "storage_unavailable");
+            assert_eq!(std::fs::read(store.path(STATE).unwrap()).unwrap(), before);
+            let current = inputs::Snapshot::capture_loaded(&store, &config, None);
+            let at = inputs::ExactInstant::from_chrono(Utc::now());
+            let evidence =
+                quota_suspension_for_binding(&current, &config, "go-a", &at, scope).unwrap();
+            assert_eq!(evidence["state"], "suspended");
+            assert_eq!(evidence["persistence"], "pending");
+            assert!(
+                quota_suspension_for_binding(&current, &config, "go-b", &at, (&b.0, &b.1))
+                    .is_none()
+            );
+            resume_quota(&store, &config, "go-a").unwrap();
+            quota::record_quota_denial_with_locker(
+                &store,
+                &config,
+                "go-a",
+                scope,
+                &epoch,
+                &denial,
+                (
+                    |store, heads| store.write_json(STATE, heads),
+                    |store, name| {
+                        if name == failed_lock {
+                            Err(crate::storage::storage_error())
+                        } else {
+                            store.lock(name)
+                        }
+                    },
+                ),
+            )
+            .unwrap_err();
+            assert_eq!(
+                quota_status(&store, &config, "go-a", true).unwrap()["state"],
+                "manually_resumed"
+            );
+            {
+                let _configuration = store.lock("configuration").unwrap();
+                let _routing = store.lock("routing").unwrap();
+                let _native = store.lock("native").unwrap();
+                inputs::authorization_changed_locked(&store, "go-a").unwrap();
+            }
+            quota::record_quota_denial_with_locker(
+                &store,
+                &config,
+                "go-a",
+                scope,
+                &epoch,
+                &denial,
+                (
+                    |store, heads| store.write_json(STATE, heads),
+                    |store, name| {
+                        if name == failed_lock {
+                            Err(crate::storage::storage_error())
+                        } else {
+                            store.lock(name)
+                        }
+                    },
+                ),
+            )
+            .unwrap_err();
+            assert_eq!(
+                quota_status(&store, &config, "go-a", true).unwrap()["state"],
+                "available"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_validation_is_scoped_and_repaired_after_authority_returns() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let initial = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &initial, Ok(go_usage())).unwrap();
+        let before = std::fs::read(store.path(STATE).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let a = snapshot.provider_scope_binding("go-a").unwrap();
+        let b = snapshot.provider_scope_binding("go-b").unwrap();
+        let scope = (a.0.as_str(), a.1.as_str());
+        let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+        store.write_raw(STATE, b"invalid").unwrap();
+        let denial = provider_integration::QuotaDenial { window: None };
+        quota::record_quota_denial_with_locker(
+            &store,
+            &config,
+            "go-a",
+            scope,
+            &epoch,
+            &denial,
+            (
+                |store, heads| store.write_json(STATE, heads),
+                |_, _| Err(crate::storage::storage_error()),
+            ),
+        )
+        .unwrap_err();
+        store.write_raw(STATE, &before).unwrap();
+        let current = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let at = inputs::ExactInstant::from_chrono(Utc::now());
+        let unavailable =
+            quota_suspension_for_binding(&current, &config, "go-a", &at, scope).unwrap();
+        assert_eq!(unavailable["reason_code"], "quota_state_unavailable");
+        assert!(
+            quota_suspension_for_binding(&current, &config, "go-b", &at, (&b.0, &b.1)).is_none()
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "unavailable"
+        );
+        let mut drift = config.clone();
+        drift.providers.get_mut("go-a").unwrap().enabled = false;
+        automatic_quota_tick(&store, &drift).await.unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "suspended"
+        );
+    }
+
+    #[test]
+    fn unreadable_receipt_cannot_override_resume_or_replacement() {
+        for replace in [false, true] {
+            let (_dir, store, config) = go_fixture();
+            inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+            let initial = capture(&store, &config, "go-a", "quota").unwrap();
+            commit(&store, &initial, Ok(go_usage())).unwrap();
+            let before = std::fs::read(store.path(STATE).unwrap()).unwrap();
+            let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+            let ids = snapshot.provider_scope_binding("go-a").unwrap();
+            let scope = (ids.0.as_str(), ids.1.as_str());
+            let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+            store.write_raw(STATE, b"invalid").unwrap();
+            let denial = provider_integration::QuotaDenial { window: None };
+            quota::record_quota_denial_with_locker(
+                &store,
+                &config,
+                "go-a",
+                scope,
+                &epoch,
+                &denial,
+                (
+                    |store, heads| store.write_json(STATE, heads),
+                    |_, _| Err(crate::storage::storage_error()),
+                ),
+            )
+            .unwrap_err();
+            store.write_raw(STATE, &before).unwrap();
+            if replace {
+                let _configuration = store.lock("configuration").unwrap();
+                let _routing = store.lock("routing").unwrap();
+                let _native = store.lock("native").unwrap();
+                inputs::authorization_changed_locked(&store, "go-a").unwrap();
+            } else {
+                resume_quota(&store, &config, "go-a").unwrap();
+            }
+            assert_eq!(
+                quota_status(&store, &config, "go-a", true).unwrap()["state"],
+                if replace {
+                    "available"
+                } else {
+                    "manually_resumed"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn external_fresh_success_but_not_failed_or_stale_check_clears_pending() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let initial = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &initial, Ok(go_usage())).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("go-a").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+        let denial = provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        test_fail_quota_denial(&store, &config, "go-a", scope, &epoch, &denial).unwrap_err();
+        let binding = binding_with_scope(&config, "go-a", "quota", ids).unwrap();
+        let mut disk = read(&store).unwrap();
+        let mut stale = capture_head(&disk, binding.clone());
+        stale.started_at = Utc::now() - chrono::Duration::seconds(5);
+        publish(
+            &mut disk,
+            &stale,
+            Some(&binding),
+            Ok(go_usage()),
+            Utc::now(),
+        )
+        .unwrap();
+        store.write_json(STATE, &disk).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "suspended"
+        );
+        let mut failed = capture_head(&disk, binding.clone());
+        failed.started_at = Utc::now() + chrono::Duration::seconds(1);
+        publish(
+            &mut disk,
+            &failed,
+            Some(&binding),
+            Err(Error::new("check_failed", "failed")),
+            failed.started_at,
+        )
+        .unwrap();
+        store.write_json(STATE, &disk).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "suspended"
+        );
+        let mut fresh = capture_head(&disk, binding.clone());
+        fresh.started_at = Utc::now() + chrono::Duration::seconds(2);
+        publish(
+            &mut disk,
+            &fresh,
+            Some(&binding),
+            Ok(go_usage()),
+            fresh.started_at,
+        )
+        .unwrap();
+        store.write_json(STATE, &disk).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "available"
+        );
+        let mut later_failure = capture_head(&disk, binding.clone());
+        later_failure.started_at = Utc::now() + chrono::Duration::seconds(3);
+        publish(
+            &mut disk,
+            &later_failure,
+            Some(&binding),
+            Err(Error::new("check_failed", "failed")),
+            later_failure.started_at,
+        )
+        .unwrap();
+        store.write_json(STATE, &disk).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "available"
+        );
+        let mut later_limit = capture_head(&disk, binding.clone());
+        later_limit.started_at = Utc::now() + chrono::Duration::seconds(4);
+        let data = provider_integration::normalize_observation("go_usage_api", &json!({"usage":{
+            "rolling":{"status":"ok","percent":0,"resetsAt":"2026-10-23T19:04:44.687Z"},
+            "weekly":{"status":"rate-limited","percent":100,"resetsAt":"2026-10-26T00:00:00.000Z"},
+            "monthly":{"status":"ok","percent":62,"resetsAt":"2026-11-09T03:13:27.000Z"}
+        }})).unwrap();
+        publish(
+            &mut disk,
+            &later_limit,
+            Some(&binding),
+            Ok(AcquiredObservation { status: 200, data }),
+            later_limit.started_at,
+        )
+        .unwrap();
+        store.write_json(STATE, &disk).unwrap();
+        let limited = quota_status(&store, &config, "go-a", true).unwrap();
+        assert_eq!(limited["state"], "suspended");
+        assert_eq!(limited["source"], "go_usage_api");
+        assert_eq!(limited["window"], "weekly");
+        assert!(limited.get("persistence").is_none());
+        let sibling = capture(&store, &config, "go-b", "quota").unwrap();
+        commit(&store, &sibling, Ok(go_usage())).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["window"],
+            "weekly"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_denial_write_blocks_only_binding_and_worker_repairs_during_drift() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let initial = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &initial, Ok(go_usage())).unwrap();
+        let before = std::fs::read(store.path(STATE).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let a = snapshot.provider_scope_binding("go-a").unwrap();
+        let b = snapshot.provider_scope_binding("go-b").unwrap();
+        let scope = (a.0.as_str(), a.1.as_str());
+        let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+        let denial = provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        assert_eq!(
+            test_fail_quota_denial(&store, &config, "go-a", scope, &epoch, &denial)
+                .unwrap_err()
+                .code,
+            "storage_unavailable"
+        );
+        assert_eq!(std::fs::read(store.path(STATE).unwrap()).unwrap(), before);
+        let current = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let at = inputs::ExactInstant::from_chrono(Utc::now());
+        let evidence = quota_suspension_for_binding(&current, &config, "go-a", &at, scope).unwrap();
+        assert_eq!(evidence["persistence"], "pending");
+        assert_eq!(evidence["durability"], "unconfirmed");
+        assert_eq!(evidence["persistence_error"], "storage_unavailable");
+        assert!(
+            quota_suspension_for_binding(&current, &config, "go-b", &at, (&b.0, &b.1)).is_none()
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "suspended"
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "available"
+        );
+
+        // Repair runs even when acquisition is gated by disabled/config drift.
+        let mut drift = config.clone();
+        drift.providers.get_mut("go-a").unwrap().enabled = false;
+        automatic_quota_tick(&store, &drift).await.unwrap();
+        let saved = quota_status(&store, &config, "go-a", false).unwrap();
+        assert_eq!(saved["state"], "suspended");
+        assert!(saved.get("persistence").is_none());
+        let failed_check = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(
+            &store,
+            &failed_check,
+            Err(Error::new("check_failed", "failed")),
+        )
+        .unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "suspended"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_repair_preserves_the_scheduled_recheck_deadline() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("go-a").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let denial = provider_integration::QuotaDenial { window: None };
+        record_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap();
+        let mut disk = read(&store).unwrap();
+        let key = signature(&binding_with_scope(&config, "go-a", "quota", ids.clone()).unwrap());
+        let deadline = Utc::now() + chrono::Duration::minutes(10);
+        disk.quota.get_mut(&key).unwrap().next_check_at = Some(deadline);
+        store.write_json(STATE, &disk).unwrap();
+        test_fail_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap_err();
+        automatic_quota_tick(&store, &config).await.unwrap();
+        let disk = read(&store).unwrap();
+        assert_eq!(disk.quota[&key].next_check_at, Some(deadline));
+        assert!(disk.quota[&key].suspension.is_some());
+        assert!(!disk.heads.contains_key(&key));
+        assert!(
+            quota_status(&store, &config, "go-a", true)
+                .unwrap()
+                .get("persistence")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn independent_stale_recovery_cannot_erase_pending_but_manual_resume_can() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("go-a").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let denial = provider_integration::QuotaDenial {
+            window: Some("weekly".into()),
+        };
+        record_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap();
+        let stale = capture(&store, &config, "go-a", "quota").unwrap();
+        let newer = provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        test_fail_quota_denial(&store, &config, "go-a", scope, "0", &newer).unwrap_err();
+
+        // An independent process sees only disk, so its stale check can commit.
+        let mut disk = read(&store).unwrap();
+        publish(
+            &mut disk,
+            &stale,
+            Some(&stale.binding),
+            Ok(go_usage()),
+            Utc::now(),
+        )
+        .unwrap();
+        store.write_json(STATE, &disk).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "available"
+        );
+        let effective = quota_status(&store, &config, "go-a", true).unwrap();
+        assert_eq!(effective["window"], "monthly");
+        assert_eq!(effective["persistence"], "pending");
+
+        // Simulate another process resuming and then publishing a later check.
+        let key = signature(&stale.binding);
+        let state = disk.quota.get_mut(&key).unwrap();
+        state.epoch = token();
+        state.manual_resume_revision = token();
+        state.manually_resumed = true;
+        state.suspension = None;
+        let after_resume = capture_head(&disk, stale.binding.clone());
+        publish(
+            &mut disk,
+            &after_resume,
+            Some(&after_resume.binding),
+            Ok(go_usage()),
+            Utc::now(),
+        )
+        .unwrap();
+        store.write_json(STATE, &disk).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "available"
+        );
+        resume_quota(&store, &config, "go-a").unwrap();
+    }
+
+    #[test]
+    fn unrelated_publication_preserves_pending_and_old_check_is_fenced() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("go-a").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let old_check = capture(&store, &config, "go-a", "quota").unwrap();
+        let sibling = capture(&store, &config, "go-b", "quota").unwrap();
+        let denial = provider_integration::QuotaDenial {
+            window: Some("rolling".into()),
+        };
+        test_fail_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap_err();
+        let overlapping = capture(&store, &config, "go-a", "quota").unwrap();
+        let later = provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        test_fail_quota_denial(&store, &config, "go-a", scope, "0", &later).unwrap_err();
+        assert_eq!(
+            commit(&store, &overlapping, Ok(go_usage()))
+                .unwrap_err()
+                .code,
+            "observations_changed"
+        );
+        assert_eq!(
+            commit(&store, &old_check, Ok(go_usage())).unwrap_err().code,
+            "observations_changed"
+        );
+        commit(&store, &sibling, Ok(go_usage())).unwrap();
+        let status = quota_status(&store, &config, "go-a", true).unwrap();
+        assert_eq!(status["state"], "suspended");
+        assert_eq!(status["window"], "monthly");
+        assert!(status.get("persistence").is_none());
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "suspended"
+        );
+    }
+
+    #[test]
+    fn invalidated_authorization_prunes_pending_denial() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("go-a").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let key = signature(&binding_with_scope(&config, "go-a", "quota", ids.clone()).unwrap());
+        let denial = provider_integration::QuotaDenial { window: None };
+        test_fail_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap_err();
+        assert!(quota::effective_heads(&store).unwrap().1.contains(&key));
+        {
+            let _configuration = store.lock("configuration").unwrap();
+            let _routing = store.lock("routing").unwrap();
+            let _native = store.lock("native").unwrap();
+            inputs::authorization_changed_locked(&store, "go-a").unwrap();
+        }
+        assert!(!quota::effective_heads(&store).unwrap().1.contains(&key));
+    }
+
+    #[test]
+    fn post_rename_error_does_not_claim_durable_suspension() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("go-a").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let denial = provider_integration::QuotaDenial { window: None };
+        quota::record_quota_denial_with_writer(
+            &store,
+            &config,
+            "go-a",
+            scope,
+            "0",
+            &denial,
+            |store, heads| {
+                store.write_json(STATE, heads)?;
+                Err(crate::storage::storage_error())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["durability"],
+            "unconfirmed"
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "suspended"
+        );
+        resume_quota(&store, &config, "go-a").unwrap();
+    }
+
+    #[test]
+    fn confirmed_recovery_supersedes_delayed_denials_and_requires_authority_fields() {
+        let (_directory, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("go-a").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+        let denial = provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        let ordinary_check = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &ordinary_check, Ok(go_usage())).unwrap();
+        record_quota_denial(&store, &config, "go-a", scope, &epoch, &denial).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "suspended"
+        );
+        let check = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &check, Ok(go_usage())).unwrap();
+        record_quota_denial(&store, &config, "go-a", scope, &epoch, &denial).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "available"
+        );
+
+        let intact = serde_json::to_value(read(&store).unwrap()).unwrap();
+        for field in [
+            "suspension",
+            "epoch",
+            "manual_resume_revision",
+            "manually_resumed",
+            "suppressed_fact_revision",
+            "latest_denial_at",
+            "latest_denial_revision",
+            "latest_available_check_started_at",
+            "next_check_at",
+        ] {
+            let mut damaged = intact.clone();
+            damaged["quota"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            store.write_json(STATE, &damaged).unwrap();
+            assert_eq!(read(&store).unwrap_err().code, "invalid_record");
+            let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+            let blocked = quota_suspension_for_binding(
+                &snapshot,
+                &config,
+                "go-a",
+                &inputs::ExactInstant::from_chrono(Utc::now()),
+                scope,
+            )
+            .unwrap();
+            assert_eq!(blocked["reason_code"], "quota_state_unavailable");
+        }
+    }
+
+    #[test]
+    fn denial_resume_and_observations_are_binding_scoped_and_fenced() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+        let denial = provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        let stale_check = capture(&store, &config, "go-a", "quota").unwrap();
+        record_quota_denial(&store, &config, "go-a", scope, &epoch, &denial).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "suspended"
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go-b", false).unwrap()["state"],
+            "available"
+        );
+        assert_eq!(
+            commit(&store, &stale_check, Ok(go_usage()))
+                .unwrap_err()
+                .code,
+            "observations_changed"
+        );
+        // The persisted state is read by a new Store, not an in-memory process cache.
+        let restarted = Store::at(store.home.clone());
+        assert_eq!(
+            quota_status(&restarted, &config, "go-a", false).unwrap()["window"],
+            "monthly"
+        );
+        let failed = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(
+            &store,
+            &failed,
+            Err(Error::new("source_format_error", "unknown")),
+        )
+        .unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "suspended"
+        );
+        let stale_check = capture(&store, &config, "go-a", "quota").unwrap();
+        resume_quota(&store, &config, "go-a").unwrap();
+        record_quota_denial(&store, &config, "go-a", scope, &epoch, &denial).unwrap();
+        assert_eq!(
+            commit(&store, &stale_check, Ok(go_usage()))
+                .unwrap_err()
+                .code,
+            "observations_changed"
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "manually_resumed"
+        );
+        let fresh = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let new_epoch = quota_epoch_for_binding(&fresh, &config, "go-a", scope);
+        record_quota_denial(&store, &config, "go-a", scope, &new_epoch, &denial).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "suspended"
+        );
+        let mut mixed = go_usage();
+        mixed.data["usage"]["weekly"]["status"] = json!("rate-limited");
+        let captured = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &captured, Ok(mixed)).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "suspended"
+        );
+        let captured = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &captured, Ok(go_usage())).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "available"
+        );
+    }
+
+    #[test]
+    fn authorization_replacement_prunes_suspension_and_rejects_old_denial() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let denial = provider_integration::QuotaDenial { window: None };
+        record_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "suspended"
+        );
+        {
+            let _configuration = store.lock("configuration").unwrap();
+            let _routing = store.lock("routing").unwrap();
+            let _native = store.lock("native").unwrap();
+            inputs::authorization_changed_locked(&store, "go-a").unwrap();
+        }
+        record_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap();
+        assert!(read(&store).unwrap().quota.is_empty());
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "available"
+        );
+    }
+
+    #[test]
+    fn overlapping_denials_fence_a_check_started_after_the_first_receipt() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let first = provider_integration::QuotaDenial {
+            window: Some("weekly".into()),
+        };
+        let second = provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        record_quota_denial(&store, &config, "go-a", scope, "0", &first).unwrap();
+        let check = capture(&store, &config, "go-a", "quota").unwrap();
+        record_quota_denial(&store, &config, "go-a", scope, "0", &second).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["window"],
+            "monthly"
+        );
+        assert_eq!(
+            commit(&store, &check, Ok(go_usage())).unwrap_err().code,
+            "observations_changed"
+        );
+        assert_eq!(
+            quota_status(&store, &config, "go-a", true).unwrap()["state"],
+            "suspended"
+        );
+    }
+
+    #[test]
+    fn denial_tracks_loaded_binding_across_unrelated_edit_and_explicit_rename() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let denial = provider_integration::QuotaDenial { window: None };
+        let mut renamed = config.clone();
+        let provider = renamed.providers.remove("go-a").unwrap();
+        renamed.providers.insert("renamed".into(), provider);
+        renamed.providers.get_mut("go-b").unwrap().enabled = false;
+        store
+            .write_raw("tmax.toml", toml::to_string(&renamed).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(
+            &store,
+            &config,
+            &renamed,
+            &[("go-a".into(), "renamed".into())],
+        )
+        .unwrap();
+        inputs::activate(&store, &renamed, &config::raw_revision(&store).unwrap()).unwrap();
+        record_quota_denial(&store, &config, "go-a", scope, "0", &denial).unwrap();
+        assert_eq!(
+            quota_status(&store, &renamed, "renamed", true).unwrap()["state"],
+            "suspended"
+        );
+    }
+
+    #[test]
+    fn changed_loaded_endpoint_contract_rejects_old_denial() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let mut replaced = config.clone();
+        let provider = replaced.providers.get_mut("go-a").unwrap();
+        provider.integration = Some("custom".into());
+        provider
+            .endpoints
+            .insert("chat-completions".into(), "https://example.com/v1".into());
+        store
+            .write_raw("tmax.toml", toml::to_string(&replaced).unwrap().as_bytes())
+            .unwrap();
+        inputs::reconcile(&store, &config, &replaced, &[]).unwrap();
+        inputs::activate(&store, &replaced, &config::raw_revision(&store).unwrap()).unwrap();
+        record_quota_denial(
+            &store,
+            &config,
+            "go-a",
+            scope,
+            "0",
+            &provider_integration::QuotaDenial { window: None },
+        )
+        .unwrap();
+        assert!(read(&store).unwrap().quota.is_empty());
+    }
+
+    #[test]
+    fn unavailable_and_historical_snapshots_are_not_presented_as_confirmed_denials() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let at = inputs::ExactInstant::from_chrono(Utc::now());
+        let empty = inputs::Snapshot::capture_loaded(&store, &config, None);
+        assert!(quota_suspension_for_binding(&empty, &config, "go-a", &at, scope).is_none());
+        record_quota_denial(
+            &store,
+            &config,
+            "go-a",
+            scope,
+            "0",
+            &provider_integration::QuotaDenial { window: None },
+        )
+        .unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let before = inputs::ExactInstant::from_chrono(Utc::now() - chrono::Duration::minutes(1));
+        let historical =
+            quota_suspension_for_binding(&snapshot, &config, "go-a", &before, scope).unwrap();
+        assert_eq!(historical["state"], "unavailable");
+        assert_eq!(historical["reason_code"], "quota_state_unavailable");
+        store.write_raw(STATE, b"not json").unwrap();
+        let broken = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let unavailable =
+            quota_suspension_for_binding(&broken, &config, "go-a", &at, scope).unwrap();
+        assert_eq!(unavailable["state"], "unavailable");
+        assert_eq!(unavailable["reason_code"], "quota_state_unavailable");
+        assert!(
+            record_quota_denial(
+                &store,
+                &config,
+                "go-a",
+                scope,
+                "0",
+                &provider_integration::QuotaDenial { window: None }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn directory_in_place_of_observations_is_unavailable() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        std::fs::create_dir_all(store.path(STATE).unwrap()).unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let at = inputs::ExactInstant::from_chrono(Utc::now());
+        let evidence =
+            quota_suspension_for_binding(&snapshot, &config, "go-a", &at, (&ids.0, &ids.1))
+                .unwrap();
+        assert_eq!(evidence["reason_code"], "quota_state_unavailable");
+    }
+
+    #[tokio::test]
+    async fn automatic_checks_reserve_the_next_attempt_even_when_credentials_fail() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let runtime = inputs::read_runtime(&store).unwrap();
+        let ids = inputs::provider_scope_binding_in_view(
+            &runtime,
+            runtime.loaded.as_ref().unwrap(),
+            "go-a",
+        )
+        .unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        record_quota_denial(
+            &store,
+            &config,
+            "go-a",
+            scope,
+            "0",
+            &provider_integration::QuotaDenial { window: None },
+        )
+        .unwrap();
+        automatic_quota_tick(&store, &config).await.unwrap();
+        let first = quota_status(&store, &config, "go-a", false).unwrap();
+        assert_eq!(first["state"], "suspended");
+        assert!(first["next_check_at"].is_string());
+        automatic_quota_tick(&store, &config).await.unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["next_check_at"],
+            first["next_check_at"]
+        );
+        assert_eq!(first["latest_check"]["outcome"], "failed");
+        assert_eq!(first["latest_check"]["reason_code"], "invalid_reference");
+        let deadline = first["next_check_at"].clone();
+        let first_check = first["latest_check"].clone();
+
+        resume_quota(&store, &config, "go-a").unwrap();
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+        let denial = provider_integration::QuotaDenial { window: None };
+        record_quota_denial(&store, &config, "go-a", scope, &epoch, &denial).unwrap();
+        automatic_quota_tick(&store, &config).await.unwrap();
+        let after_resume = quota_status(&store, &config, "go-a", false).unwrap();
+        assert_eq!(after_resume["next_check_at"], deadline);
+        assert_eq!(after_resume["latest_check"], first_check);
+
+        let check = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &check, Ok(go_usage())).unwrap();
+        assert_eq!(
+            quota_status(&store, &config, "go-a", false).unwrap()["state"],
+            "available"
+        );
+        let snapshot = inputs::Snapshot::capture_loaded(&store, &config, None);
+        let epoch = quota_epoch_for_binding(&snapshot, &config, "go-a", scope);
+        record_quota_denial(&store, &config, "go-a", scope, &epoch, &denial).unwrap();
+        let before_tick = quota_status(&store, &config, "go-a", false).unwrap();
+        automatic_quota_tick(&store, &config).await.unwrap();
+        let after_recovery = quota_status(&store, &config, "go-a", false).unwrap();
+        assert_eq!(after_recovery["next_check_at"], deadline);
+        assert_eq!(after_recovery["latest_check"], before_tick["latest_check"]);
+    }
+
     #[test]
     fn go_quota_failures_retain_exact_fact_without_sharing_or_inventing_availability() {
         let (_dir, store, config) = go_fixture();

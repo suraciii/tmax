@@ -414,8 +414,8 @@ not scrape browser sessions or collect website passwords to fill these gaps.
 Quota refresh failure must not disable otherwise usable inference access or
 invalidate another provider instance's observations.
 
-Quota observations affect routing eligibility only through the qualified evidence
-rules in [Selection and continuity](../model-routing/spec.md#selection-and-continuity).
+Quota observations affect candidate eligibility only through the [qualified
+evidence rules](../model-routing/spec.md#selection-and-continuity).
 The [vision](#vision) permits user-defined priority rules over quota, reset, and
 price information. Such observations must not invent a rule or rewrite the user's
 configured priorities or schedules; evaluating a configured rule changes its
@@ -430,7 +430,13 @@ renewal information, or an API-billed provider's supported balance query.
 Paid continuation is only an upstream billing fact, not a tmax feature: exhausting
 included allowance need not stop requests or further charges. A brief provider
 note and console link are sufficient; tmax does not promise a spending ceiling.
-Routing follows admission evidence, not a model of the supplier's billing controls.
+Confirmed blocked quota access automatically suspends the affected provider under
+the [routing lifecycle](../model-routing/spec.md#automatic-quota-suspension), with
+automatic quota-only recovery checks and an explicit manual resume. An optional
+provider `quota_guard` may also choose to stop new selection at an exhausted or
+rate-limited included-allowance window under that routing contract; it is a
+user policy, not a spending ceiling or proof of upstream denial. Routing follows
+admission evidence, not a model of the supplier's billing controls.
 
 ## Rule-driven priorities
 
@@ -573,12 +579,13 @@ restricting requests to the gateway. Runtime requests do not create configuratio
 The first gateway start must be explicit. Once started, it runs in the background
 independently of the launching terminal or Web session. Opening management,
 saving settings, or applying native configuration does not start inference.
-Closing the browser does not stop it. User-login autostart is optional and
-disabled until enabled; startup uses the current user's secret files. Missing or
-unavailable credentials produce an actionable blocked state, not false readiness.
+Closing the browser does not stop it. User-login autostart is enabled by
+default once the gateway is configured; an explicit disable is the opt-out.
+Startup uses the current user's secret files. Missing or unavailable
+credentials produce an actionable blocked state, not false readiness.
 The [supervised-service contract](../service/spec.md) owns native process recovery,
 explicit-stop suppression, platform limits, and migration from detached owners.
-CLI and Web provide stop and autostart controls. Stopping reports
+CLI and Web provide stop and login-start controls. Stopping reports
 known affected targets and does not switch them to upstream access;
 independently configured clients cannot be enumerated reliably.
 
@@ -737,8 +744,9 @@ relocate the store, shorten the path, or choose an alternate control endpoint.
 The gateway must bound active requests, accepted request size, and request/response
 buffers. When local capacity is unavailable, reject a new request immediately
 with a distinguishable local-capacity result before upstream dispatch. There is
-no request waiting queue or failover for local capacity rejection. A caller decides
-whether to make a new request; rejection must not change priorities or eligibility.
+no request waiting queue or failover for local capacity rejection. A caller
+decides whether to make a new request; rejection must not change priorities or
+candidate eligibility.
 
 Streaming must propagate backpressure instead of accumulating unbounded output
 for a slow client. Enforce finite buffering even when an operation needs to
@@ -764,6 +772,9 @@ as an accidental lifetime limit on an established inference stream. Explicit
 caller cancellation and qualified client/upstream deadlines remain observable.
 Only explicit [request fallback](../model-routing/spec.md#request-fallback-and-failure-priority-override)
 permits another attempt, before response delivery and without moving retained sessions.
+Provider-qualified quota-denial inspection may have a finite pre-delivery
+error-body budget under its integration contract. It must not become a timeout
+for successful inference or change an unclassified response's bytes.
 
 ### Outbound network policy
 
@@ -863,7 +874,7 @@ CLI and Web must expose the same next action for incomplete operations:
 | Concurrent or conflicting native edits | Inspect current inputs and issue the intended operation again; do not overwrite external changes or treat an earlier dry run as binding |
 | Partial native application | Show changed and unchanged targets/files; restore owned changes or issue a new operation based on current state |
 | Native login changed authorization before failure or rejected identity | Show affected native/shared consumers and block affected managed use; reestablish the intended identity through the qualified owner, then inspect current state |
-| Startup registration failed or drifted | Show saved intent separately from registration; explicitly enable or disable autostart to reconcile this authority's registration |
+| Startup registration failed or drifted | Show saved intent separately from registration; explicitly set or clear gateway autostart through configure to reconcile this authority's registration |
 | Applied but awaiting native reload | Perform the named agent reload/restart; do not reapply blindly |
 
 Results identify the requested operation, affected objects, completed effects,

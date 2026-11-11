@@ -12,8 +12,9 @@ The [shared integration contract](../spec.md) owns qualification states and agen
 boundaries. The [product contract](../../product/spec.md) owns provider lifecycle,
 security, billing observations, native configuration, and gateway forwarding. The
 [configuration contract](../../configuration/spec.md) owns configuration fields.
-[Model selection](../../model-routing/spec.md) owns protocol eligibility, schedules,
-and conversation continuity. Shared terms come from [CONTEXT.md](../../../CONTEXT.md).
+[Model selection](../../model-routing/spec.md) owns protocol qualification,
+schedules, and conversation continuity. Shared terms come from
+[CONTEXT.md](../../../CONTEXT.md).
 This specification adds no account resource, credential pool, or configuration schema.
 
 ## Authentication and account identity
@@ -256,7 +257,7 @@ success.
   source and time, keeps owner identity unverified, and does not verify a model.
 - Key replacement with unknown account identity needs no extra declaration.
   It invalidates prior credential observations and does not silently retain
-  conversation eligibility. Known different account access remains separate.
+  conversation continuity. Known different account access remains separate.
 - Two keys for one account do not increase displayed balance, quota, or concurrency.
   A supplied `user_id` does not establish account ownership or independent capacity.
 - The official Codex Responses scenario appears as documented and conditional on

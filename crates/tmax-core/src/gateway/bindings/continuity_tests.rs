@@ -115,6 +115,230 @@ fn opencode_first_use_and_resume_keep_the_selected_destination() {
     assert_eq!(restarted.bindings.lock().unwrap().entries.len(), 2);
 }
 
+#[test]
+fn retained_destination_quota_suspension_blocks_until_confirmed_recovery() {
+    let (_temporary, runtime, config) = fixture();
+    let mut go = config.clone();
+    let p = go.providers.get_mut("p").unwrap();
+    p.integration = Some("opencode-go".into());
+    p.endpoints.clear();
+    publish(&runtime, &config, &go, "quota-go");
+    runtime
+        .store
+        .write_raw("tmax.toml", toml::to_string(&go).unwrap().as_bytes())
+        .unwrap();
+    let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
+    let headers = native_headers(at);
+    let body = json!({"messages":[{"role":"user","content":"quota suspension test"}]});
+    let first = runtime
+        .choose(
+            &test_snapshot(&go, "quota-go"),
+            "dynamic",
+            "chat-completions",
+            &body,
+            &headers,
+            at + chrono::Duration::milliseconds(1),
+        )
+        .unwrap();
+    assert_eq!(first.selection.provider, "p");
+
+    let reset = Utc::now() + chrono::Duration::hours(1);
+    let reset_text = crate::inputs::timestamp(reset);
+    let data = crate::provider_integration::normalize_observation(
+        "go_usage_api",
+        &json!({"usage":{
+            "rolling":{"status":"ok","percent":0,"resetsAt":reset_text},
+            "weekly":{"status":"rate-limited","percent":30,"resetsAt":reset_text},
+            "monthly":{"status":"ok","percent":0,"resetsAt":reset_text}
+        }}),
+    )
+    .unwrap();
+    let observed = crate::observations::test_publish_quota(&runtime.store, &go, "p", data);
+    let held_at = observed + chrono::Duration::seconds(1);
+    let mut evidence = Value::Null;
+    let held = match runtime.choose_recorded(
+        &test_snapshot(&go, "quota-go"),
+        ("dynamic", "chat-completions"),
+        &crate::gateway::request_facts::RequestFacts::from_value(body.clone()).unwrap(),
+        &headers,
+        held_at,
+        &mut evidence,
+    ) {
+        Ok(_) => panic!("held retained destination must reject"),
+        Err(error) => error,
+    };
+    assert_eq!(held.code, "quota_suspended");
+    assert_eq!(
+        evidence["continuation"]["quota_suspension"]["window"],
+        "weekly"
+    );
+    assert!(held.message.contains("provider quota-resume"));
+    {
+        let bindings = runtime.bindings.lock().unwrap();
+        let binding = bindings.entries.values().next().unwrap();
+        assert_eq!(binding.provider, "p");
+        assert!(binding.blocked.is_none());
+    }
+    let session = {
+        let bindings = runtime.bindings.lock().unwrap();
+        bindings
+            .entries
+            .values()
+            .next()
+            .unwrap()
+            .context_handle
+            .clone()
+    };
+    let held_at_text = crate::inputs::timestamp(held_at);
+    let explanation = runtime
+        .inspect_session(
+            &go,
+            "dynamic",
+            "chat-completions",
+            &session,
+            false,
+            Some(&held_at_text),
+        )
+        .unwrap();
+    assert_eq!(explanation["continuation"]["state"], "blocked");
+    assert_eq!(
+        explanation["continuation"]["reason_code"],
+        "quota_suspended"
+    );
+    assert_eq!(
+        explanation["continuation"]["quota_suspension"]["state"],
+        "suspended"
+    );
+    assert_eq!(
+        explanation["continuation"]["quota_suspension"]["window"],
+        "weekly"
+    );
+
+    let after_reset = crate::inputs::timestamp(reset + chrono::Duration::seconds(1));
+    let explanation = runtime
+        .inspect_session(
+            &go,
+            "dynamic",
+            "chat-completions",
+            &session,
+            false,
+            Some(&after_reset),
+        )
+        .unwrap();
+    assert_eq!(explanation["continuation"]["state"], "blocked");
+    assert_eq!(
+        explanation["continuation"]["reason_code"],
+        "quota_suspended"
+    );
+
+    let available = crate::provider_integration::normalize_observation(
+        "go_usage_api",
+        &json!({"usage":{
+            "rolling":{"status":"ok","percent":0,"resetsAt":reset_text},
+            "weekly":{"status":"ok","percent":0,"resetsAt":reset_text},
+            "monthly":{"status":"ok","percent":0,"resetsAt":reset_text}
+        }}),
+    )
+    .unwrap();
+    let observed = crate::observations::test_publish_quota(&runtime.store, &go, "p", available);
+    let resumed = runtime
+        .choose(
+            &test_snapshot(&go, "quota-go"),
+            "dynamic",
+            "chat-completions",
+            &body,
+            &headers,
+            observed + chrono::Duration::seconds(1),
+        )
+        .unwrap();
+    assert_eq!(resumed.selection.provider, "p");
+    assert_eq!(
+        resumed.selection.evidence["selection_reason"],
+        "retained_destination"
+    );
+}
+
+#[test]
+fn unreadable_quota_state_blocks_retained_destination_and_preview() {
+    let (_temporary, runtime, config) = fixture();
+    let mut go = config.clone();
+    let provider = go.providers.get_mut("p").unwrap();
+    provider.integration = Some("opencode-go".into());
+    provider.endpoints.clear();
+    publish(&runtime, &config, &go, "quota-state-failure");
+    runtime
+        .store
+        .write_raw("tmax.toml", toml::to_string(&go).unwrap().as_bytes())
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "user-agent",
+        "opencode/stable/2.0.19/opencode".parse().unwrap(),
+    );
+    headers.insert("x-opencode-session", "ses_quota_failure".parse().unwrap());
+    let body = json!({"messages":[{"role":"user","content":"hello"}]});
+    let at = Utc::now();
+    let choice = runtime
+        .choose(
+            &test_snapshot(&go, "quota-state-failure"),
+            "dynamic",
+            "chat-completions",
+            &body,
+            &headers,
+            at,
+        )
+        .unwrap();
+    assert_eq!(choice.selection.provider, "p");
+    let session = runtime
+        .bindings
+        .lock()
+        .unwrap()
+        .entries
+        .values()
+        .next()
+        .unwrap()
+        .context_handle
+        .clone();
+    runtime
+        .store
+        .write_raw("observations/heads.json", b"{invalid")
+        .unwrap();
+
+    let mut evidence = Value::Null;
+    let error = runtime
+        .choose_recorded(
+            &test_snapshot(&go, "quota-state-failure"),
+            ("dynamic", "chat-completions"),
+            &crate::gateway::request_facts::RequestFacts::from_value(body).unwrap(),
+            &headers,
+            Utc::now(),
+            &mut evidence,
+        )
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "quota_state_unavailable");
+    assert_eq!(
+        evidence["continuation"]["reason_code"],
+        "quota_state_unavailable"
+    );
+    assert_eq!(
+        evidence["continuation"]["quota_suspension"]["state"],
+        "unavailable"
+    );
+    let preview = runtime
+        .inspect_session(&go, "dynamic", "chat-completions", &session, true, None)
+        .unwrap();
+    assert_eq!(preview["continuation"]["state"], "blocked");
+    assert_eq!(
+        preview["continuation"]["reason_code"],
+        "quota_state_unavailable"
+    );
+    assert_eq!(
+        preview["continuation"]["quota_suspension"]["state"],
+        "unavailable"
+    );
+}
+
 #[tokio::test]
 async fn retained_session_explanation_survives_deleted_candidates_and_never_clears_blockers() {
     let (directory, runtime, config) = fixture();
@@ -196,9 +420,16 @@ async fn retained_session_explanation_survives_deleted_candidates_and_never_clea
         ("dynamic", "chat-completions", "unrelated-handle"),
     ] {
         assert_eq!(
-            Runtime::inspect_persisted_session(&runtime.store, &removed, id, protocol, session)
-                .unwrap_err()
-                .code,
+            Runtime::inspect_persisted_session(
+                &runtime.store,
+                &removed,
+                id,
+                protocol,
+                session,
+                None,
+            )
+            .unwrap_err()
+            .code,
             "original_binding_unavailable"
         );
     }
@@ -208,6 +439,7 @@ async fn retained_session_explanation_survives_deleted_candidates_and_never_clea
         "dynamic",
         "chat-completions",
         &handle,
+        None,
     )
     .unwrap();
     assert_eq!(

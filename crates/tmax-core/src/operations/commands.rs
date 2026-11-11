@@ -142,6 +142,13 @@ const COMMANDS: &[Command] = &[
         mutation: true,
     },
     Command {
+        path: "provider quota-resume",
+        min: 1,
+        max: 1,
+        options: "",
+        mutation: true,
+    },
+    Command {
         path: "provider add",
         min: 1,
         max: 1,
@@ -740,7 +747,7 @@ const COMMANDS: &[Command] = &[
         path: "gateway configure",
         min: 0,
         max: 0,
-        options: "listen clear",
+        options: "listen set clear",
         mutation: true,
     },
     Command {
@@ -793,20 +800,6 @@ const COMMANDS: &[Command] = &[
         mutation: true,
     },
     Command {
-        path: "gateway autostart enable",
-        min: 0,
-        max: 0,
-        options: "",
-        mutation: true,
-    },
-    Command {
-        path: "gateway autostart disable",
-        min: 0,
-        max: 0,
-        options: "",
-        mutation: true,
-    },
-    Command {
         path: "web status",
         min: 0,
         max: 0,
@@ -833,6 +826,13 @@ const COMMANDS: &[Command] = &[
         max: 1,
         options: "protocol transport",
         mutation: true,
+    },
+    Command {
+        path: "dsh projection",
+        min: 0,
+        max: 1,
+        options: "home",
+        mutation: false,
     },
     Command {
         path: "history list",

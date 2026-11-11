@@ -156,6 +156,7 @@ mod capabilities;
 mod codex;
 mod credentials;
 mod dsh;
+pub(crate) use dsh::dsh_credential_ref_for;
 mod hermes;
 mod opencode;
 mod pi_omp;

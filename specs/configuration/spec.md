@@ -219,7 +219,7 @@ gateway access for subsequent requests; in-flight requests retain their admissio
 snapshots under the continuity contract. Retain existing conversation bindings
 but block their reuse rather than choosing another destination. Do not stop or
 hot-move an existing listener: it remains bound but unavailable until explicit
-listener operations. The absent autostart flag is disabled intent and follows
+listener operations. The absent autostart flag is enabled intent and follows
 the normal changed-intent reconciliation rules below.
 
 Reset does not sign out, revoke upstream credentials, apply or restore native
@@ -257,7 +257,13 @@ Supported provider fields:
 | `subscription` | Optional user-maintained subscription information |
 | `models` | Table of explicitly registered concrete models keyed by exact upstream model ID |
 | `inputs` | Optional table of named provider-local input declarations; omission means empty |
+| `quota_guard` | Optional provider-scoped policy table; omission disables it. See [Quota guard fields](#quota-guard-fields). |
 | `failure_policy` | Optional provider-wide consecutive-error fixed-priority policy; omission disables it. See [Failure policy fields](#failure-policy-fields). |
+
+`quota_guard` is provider-scoped and off when omitted. It adds no global setting.
+The [routing contract](../model-routing/spec.md#selection-and-continuity) owns its
+candidate eligibility effect and recovery; the provider integration owns a quota
+observation's access state and applicability.
 
 Provider integration selection uses tmax's qualified registry, not execution of the
 catalog's `npm` value or inference from a provider ID. The local integration
@@ -459,6 +465,20 @@ reads a secret, or creates another daemon. Without a running service,
 automatic acquisition is explicitly paused; explicit refresh and manual record
 operations remain available without one. Scheduling, safe credentials, publication,
 and late-result rejection belong to the input lifecycle, not configuration loading.
+
+### Quota guard fields
+
+`[providers.<id>.quota_guard]` is an optional policy table. Its presence enables
+the guard; omission disables it. It does not change effective priority or
+enablement. [Routing](../model-routing/spec.md#selection-and-continuity) owns the
+candidate eligibility and recovery rules; this table owns only the policy bound.
+
+| Field | Type and constraint |
+| --- | --- |
+| `max_observation_age_seconds` | Optional positive integer, default `3600`; the maximum age of a quota observation used by the guard at selection. |
+
+The age is a user-policy bound, not a provider-supplied validity interval or a
+claim that the observation remains true until then.
 
 ### Failure policy fields
 
@@ -757,16 +777,16 @@ but is also valid with no Agent targets:
 | --- | --- |
 | `listen` | Required numeric loopback IP and port in `host:port` form, with bracketed IPv6; port 1–65535 |
 | `key_ref` | Required provisioned opaque reference to the current protected local gateway access key, not an upstream credential |
-| `autostart` | Optional boolean, default false |
+| `autostart` | Optional boolean, default true |
 
 Non-loopback addresses are invalid. The public model list is derived directly
 from enabled provider-owned models and enabled alias definitions, within their
 declared supported protocols. Missing availability or compatibility evidence
-remains visible under the model-support and eligibility rules. There is no
-`gateway.models` table, separate publication resource, client registry, or private
-allowlist. Every holder of the current shared key uses the same published models;
-Agent native selections do not restrict this access. Catalog discovery never
-enrolls models automatically.
+remains visible under the model-support and candidate eligibility rules. There
+is no `gateway.models` table, separate publication resource, client registry, or
+private allowlist. Every holder of the current shared key uses the same published
+models; Agent native selections do not restrict this access. Catalog discovery
+never enrolls models automatically.
 
 Initial explicit `gateway configure --listen ADDRESS` generates the shared key
 once in a current-user-restricted plaintext storage-version-2 file under `~/.tmax`
@@ -792,9 +812,10 @@ changed-intent reconciliation rules.
 Saving gateway settings does not start a listener. Explicit sensitive key
 retrieval is separate from ordinary inspection under the
 [secret-protection contract](../product/spec.md#local-access-and-secret-protection).
-Listener startup, key handoff, and opt-in login startup follow the product's
-[model-gateway contract](../product/spec.md#model-gateway). The management Web
-interface has no authentication; the shared key remains required for inference.
+Listener startup, key handoff, and default-enabled login startup follow the
+product's [model-gateway contract](../product/spec.md#model-gateway). The
+management Web interface has no authentication; the shared key remains required
+for inference.
 
 ## Outbound network settings
 
@@ -890,8 +911,9 @@ hidden earlier file revision. A retained catalog snapshot is not a fallback for
 invalid configuration. Reload is not a path selector or document-input operation.
 
 Autostart registration is reconciled only when a save or explicit reload changes
-the desired `gateway.autostart` intent, or when the caller explicitly invokes
-autostart enable/disable. Missing or false is disabled intent. Keep the last
+the desired `gateway.autostart` intent. Missing or true is enabled intent; an
+explicit false is
+disabled intent. Keep the last
 acknowledged intent for tmax's sole authority as operational state under
 `~/.tmax`, independently of registration success and loaded service state, so
 manual edits can be recognized without a running service. With no acknowledged

@@ -294,7 +294,7 @@ inventing an error code or converting it into zero quota.
   the qualified regional usage read; renewal and reset completion remain
   unknown with dashboard links and optional user-maintained subscription
   information. Local traffic cannot masquerade as account-wide usage. Included
-  quota exhaustion alone does not establish routing ineligibility.
+  quota exhaustion does not by itself make a candidate ineligible.
 - The documented failure classes remain distinguishable even when they share
   HTTP 401 or 403. Recovery identifies the actual key, entitlement, window,
   temporary membership check, native login source, or risk-control problem without

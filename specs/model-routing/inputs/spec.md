@@ -14,9 +14,10 @@ An **input** is a named channel declared within one provider, not a global accou
 record or a model catalog entry. Its declaration fixes its kind, source, scope,
 explicit model coverage, and freshness limit. A quota input reports an allowance
 within one scope and reset window; a reset input reports a future reset forecast.
-Neither kind by itself establishes account-wide exhaustion, eligibility, actual
-reset completion, or subscription renewal. Rules consume normalized retained
-values, never remote pages, native credential files, or natural-language text.
+Neither kind by itself establishes account-wide exhaustion, candidate
+eligibility, actual reset completion, or subscription renewal. Rules consume
+normalized retained values, never remote pages, native credential files, or
+natural-language text.
 
 | Source | Meaning and availability boundary |
 | --- | --- |
@@ -504,9 +505,11 @@ If an otherwise qualified pending announcement's absolute timestamp is no longer
 future at publication, report `withdrawn` with `reset_time_passed` and publish an
 unavailable tombstone under the normal guards. Merely reaching an existing
 head's `reset_at` makes it expired even without a successful subsequent read;
-there is no deadline extension, reset-completed event, or automatic eligibility
-change. Historical or latest-reset sections cannot be promoted to a new future
-forecast, and an old error/absence cannot resurrect a withdrawn head.
+there is no deadline extension, reset-completed event, or automatic recovery
+fact. A separate availability policy may let its own observation bound expire;
+that is not evidence of recovery. Historical or latest-reset sections cannot be
+promoted to a new future forecast, and an old error/absence cannot resurrect a
+withdrawn head.
 
 The user or calling agent can always declare a separate manual reset input for
 explicit registration without credentials or a running service. They may also

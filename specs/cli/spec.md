@@ -17,6 +17,7 @@ The command surface is a target contract; see [Implementation status](#implement
 | Model aliases and candidates | [Model aliases](models/aliases/spec.md) |
 | Calendar and signal rules | [Rules](models/rules/spec.md) |
 | Agent targets, native provider bindings, application, and recovery | [Agents](agents/spec.md) |
+| DSH plugin projection | [DSH projection](dsh/spec.md) |
 | Calling-agent entry skill | [Skill installation](skill/spec.md) |
 | Network, gateway, and Web | [Service](service/spec.md) |
 | Probes and request history | [Diagnostics commands](service/diagnostics/spec.md) |

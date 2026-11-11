@@ -299,18 +299,40 @@ The response supplies no measurement timestamp, validity interval, raw allowance
 exact remaining amount, account/workspace identity, entitlement, or renewal date.
 Local retrieval time must remain labeled retrieval time, not provider `asOf`;
 freshness stays unqualified, with no synthesized `asOf`, TTL, or expiry. These
-consumed-only observations supply no priority-rule inputs or routing veto.
-Passing a reset announcement cannot recover quota locally. Unknown quota or
-renewal remains explicit, with a [Console](https://opencode.ai/console) link and
-optional user-maintained subscription information. A monthly plan does not
-establish a workspace's next renewal date.
+consumed-only observations supply no priority-rule inputs. A newly acquired
+`rate-limited` window is qualified blocking quota access and follows the shared
+[automatic suspension lifecycle](../../model-routing/spec.md#automatic-quota-suspension).
+Only a later successful quota check with all three windows `ok` confirms recovery.
+Do not infer an `exhausted` state from the consumed percentage. Passing a reset
+announcement alone cannot recover quota locally. An old retained observation is
+dated evidence, not a new suspension event on daemon startup or inspection.
+
+A qualified inference quota denial is HTTP `429` with a complete JSON error whose
+`error.type` is `GoUsageLimitError`. The optional `metadata.limitName` identifies
+`rolling`, `weekly`, or `monthly`; unknown names do not create a window identity.
+Generic 429s, capacity errors, malformed or truncated bodies, and errors from
+another provider integration do not qualify. Suspension must be recorded before
+request fallback or downstream delivery, without changing the original HTTP
+status, headers, or body. No workspace identifier or raw error body is required
+in suspension diagnostics.
+Inspection is limited to the gateway response-inspection byte budget and a
+two-second total error-body deadline. Only a complete body within both bounds
+may establish suspension. On expiry, oversize, or read failure, preserve the
+retained prefix and remaining response stream without classifying exhaustion.
+This deadline applies only to Go HTTP 429 error inspection, never generation.
+
+The optional included-allowance `quota_guard` remains separate from confirmed
+blocking access. Its observation-age bound is user policy, not provider freshness.
+Unknown quota or renewal remains explicit, with a
+[Console](https://opencode.ai/console) link and optional user-maintained subscription
+information. A monthly plan does not establish a workspace's next renewal date.
 
 Console budgets are not Go quota data and are not an integration dependency.
 Do not query or mirror Console credits, budgets, Extra Usage settings, or spending
 caps. These remain outside the [billing scope](../../product/spec.md#billing-quota-and-renewal-information).
 The only relevant Extra Usage fact is that upstream may continue charging after
 included allowance is exhausted. Apply the shared
-[eligibility evidence rules](../../model-routing/spec.md#selection-and-continuity)
+[candidate eligibility evidence rules](../../model-routing/spec.md#selection-and-continuity)
 without requiring access to those billing controls or changing the Go endpoint.
 
 ## Blocking failures and recovery
@@ -325,7 +347,7 @@ Go-specific error codes or undocumented management APIs.
 | Wrong workspace, absent Go entitlement, or an unqualified key kind | Show that Go access is unavailable or unverified with the known scope. Do not infer a Go-specific status code, buy a subscription, switch to pay-as-you-go, or select another workspace key silently. |
 | Missing or incomplete session/client identity | Block the affected setup or request path. Identify the agent version, transport, or auxiliary path that lacks coverage. Offer an upgrade or a qualified native/direct/forwarding configuration, not a forged user agent or static session header. A gateway forward to Go must still mint its own per-conversation attribution id when the client supplied no session header. |
 | Provider-reported model/protocol mismatch | Preserve the upstream rejection and identify the requested model and protocol. Incomplete local qualification evidence alone does not block a configured protocol. Do not translate requests or silently change the model. |
-| Provider-reported quota or billing denial | Preserve the reported cause, affected model/window, and any supplied reset information; direct the user to Console. Do not infer a different billing cause from HTTP status alone or query Console budgets to explain it. A depleted included allowance is not by itself proof that all Go access is blocked. |
+| Provider-reported quota or billing denial | Preserve the reported cause, affected model/window, and any supplied reset information. A qualified Go quota denial follows the automatic suspension lifecycle above; do not infer a different cause from HTTP status alone or query Console budgets. |
 | Generic rate limit, network failure, or ambiguous upstream rejection | Preserve the scoped failure and any supplied recovery information. Do not mark the subscription depleted, revoked, or expired without supporting evidence. |
 | Shared native account switch, lost session binding, or changed workspace authorization during continuation | Block unsafe continuation and show the affected target/session. Restore the qualified original selection where possible or require an explicit new conversation under the chosen provider; do not transfer upstream conversation state to another workspace. |
 

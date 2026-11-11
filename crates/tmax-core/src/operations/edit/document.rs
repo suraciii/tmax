@@ -81,6 +81,15 @@ pub(super) fn sync_table(
     before: Option<&Value>,
     after: &Value,
 ) -> Result<()> {
+    sync_table_inner(target, before, after, false)
+}
+
+fn sync_table_inner(
+    target: &mut dyn toml_edit::TableLike,
+    before: Option<&Value>,
+    after: &Value,
+    inline: bool,
+) -> Result<()> {
     let after = after.as_table().ok_or_else(error)?;
     let before = before.and_then(Value::as_table);
     if let Some(before) = before {
@@ -96,17 +105,52 @@ pub(super) fn sync_table(
             continue;
         }
         if value.is_table() {
+            let inline_child = inline
+                || target.get(key).is_some_and(|item| {
+                    matches!(
+                        item,
+                        toml_edit::Item::Value(toml_edit::Value::InlineTable(_))
+                    )
+                });
             if !target.get(key).is_some_and(toml_edit::Item::is_table_like) {
-                target.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+                target.insert(
+                    key,
+                    if inline {
+                        toml_edit::Item::Value(toml_edit::Value::InlineTable(
+                            toml_edit::InlineTable::new(),
+                        ))
+                    } else {
+                        toml_edit::Item::Table(toml_edit::Table::new())
+                    },
+                );
             }
-            sync_table(
+            sync_table_inner(
                 target
                     .get_mut(key)
                     .and_then(toml_edit::Item::as_table_like_mut)
                     .ok_or_else(error)?,
                 old,
                 value,
+                inline_child,
             )?;
+            if value.as_table().is_some_and(|table| table.is_empty())
+                && let Some(item) = target.get_mut(key)
+            {
+                if inline_child {
+                    if let Some(table) = item.as_inline_table_mut() {
+                        table.set_dotted(false);
+                    } else {
+                        *item = toml_edit::Item::Value(toml_edit::Value::InlineTable(
+                            toml_edit::InlineTable::new(),
+                        ));
+                    }
+                } else if let Some(table) = item.as_table_mut() {
+                    table.set_implicit(false);
+                    table.set_dotted(false);
+                } else {
+                    *item = toml_edit::Item::Table(toml_edit::Table::new());
+                }
+            }
         } else {
             let wrapper = Value::Table(toml::map::Map::from_iter([("v".into(), value.clone())]));
             let doc = toml_edit::ser::to_document(&wrapper).map_err(|_| error())?;

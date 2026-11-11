@@ -71,7 +71,7 @@ running listener bound but unavailable rather than stopping/moving it.
 `gateway stop` is separate. Native files/upstream consumers, stored secrets,
 credential ownership, and recovery records remain untouched. Do not sign out,
 apply/restore native settings, start services, or delete retained credentials.
-Omitted autostart means disabled intent and uses normal changed-intent
+Omitted autostart means enabled intent and uses normal changed-intent
 reconciliation. Report recovery/save/activation/autostart separately.
 Later setup uses ordinary commands, including explicit gateway provisioning.
 

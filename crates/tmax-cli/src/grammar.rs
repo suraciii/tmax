@@ -162,6 +162,7 @@ pub fn command() -> Command {
         .subcommand(catalog_commands())
         .subcommand(model_commands())
         .subcommand(agent_commands())
+        .subcommand(dsh_commands())
         .subcommand(skill_commands())
         .subcommand(network_commands())
         .subcommand(gateway_commands())
@@ -422,12 +423,13 @@ fn provider_commands() -> Command {
         "`subscription.plan`, `subscription.billing_period`: strings; `subscription.renewal_date`, `subscription.expiry_date`: YYYY-MM-DD dates; clear makes each manual fact unknown.\n",
         "`subscription.auto_renew`: boolean; clear means unknown, not false.\n",
         "`subscription.charge.amount`: nonnegative decimal string; `subscription.charge.currency`: uppercase three-letter currency string. Set or clear the pair together.\n",
+        "`quota_guard.max_observation_age_seconds`: positive integer seconds; when the quota guard is configured, defaults to 3600. Clear the field to restore the default.\n",
         "`failure_policy.enabled`: boolean, defaults true. `failure_policy.errors.http_statuses`: comma-separated unique HTTP statuses 400..599, e.g. 429,503; `failure_policy.errors.connection_errors` and `.transport_errors`: booleans. At least one error condition is required.\n",
         "`failure_policy.consecutive_failures`: positive integer count; `failure_policy.priority`: signed integer fixed replacement score (may be negative), not a cap; `failure_policy.duration_seconds`: positive integer seconds. Configure count, priority, duration, and errors together; incomplete policies are rejected atomically, even when disabled.\n",
         "Clear `failure_policy` to remove the complete policy, or clear optional error fields to restore their empty/false defaults while keeping at least one condition. Policy state is separate from configuration; provider failure-reset clears it explicitly. Active penalties expire at a fixed time, not extended by more failures or ended by success.\n",
         "Selecting transport errors or HTTP 5xx explicitly accepts that upstream execution or billing may already have occurred; these observations do not prove that an upstream rejected the request before execution.\n",
         "Example: tmax provider update custom-gateway --set failure_policy.errors.http_statuses 429,503 --set failure_policy.consecutive_failures 3 --set failure_policy.priority -100 --set failure_policy.duration_seconds 3600\n",
-        "Clear also accepts `endpoints`, `overrides`, `subscription`, and `subscription.charge`; endpoint tables use dedicated `--endpoint P URL`/`--clear-endpoint P` options, never scalar blobs.",
+        "Clear also accepts `quota_guard`, `endpoints`, `overrides`, `subscription`, and `subscription.charge`; endpoint tables use dedicated `--endpoint P URL`/`--clear-endpoint P` options, never scalar blobs.",
     );
     let add = mutation(
         edit_args(
@@ -485,11 +487,13 @@ fn provider_commands() -> Command {
         .arg(required_pos(1, "ID", "Local provider ID.")), true, false);
     let input = provider_input_commands();
     family("provider", "Create, inspect, authenticate, refresh, and remove provider access instances.", Command::new("provider")
-        .subcommand(leaf("list", "List provider IDs, names, enabled/authentication state, quota freshness, and affected-target counts.", "Compact retained-state read. It does not resolve secrets, refresh remotely, or verify upstream authorization.\n\nExit: 0 when the read completes.\nExample: tmax provider list"))
-        .subcommand(leaf("inspect", "Inspect a provider's configuration, inherited/effective metadata, access, inputs, and references.", "File and loaded projections, endpoint resolution, auth source/known-or-unknown identity, models, subscription/balance facts, input readiness, retained secret references, and file/loaded differences are distinct. No secret resolution or remote refresh.\n\nExit: 0 when inspection completes; unknown IDs are invalid input.\nExample: tmax provider inspect deepseek")
+        .subcommand(leaf("list", "List provider IDs, names, enabled/authentication state, quota status, and affected-target counts.", "Compact retained-state read, including safe file and loaded quota suspension projections. It does not resolve secrets, refresh remotely, or verify upstream authorization.\n\nExit: 0 when the read completes.\nExample: tmax provider list"))
+        .subcommand(leaf("inspect", "Inspect a provider's configuration, inherited/effective metadata, access, inputs, and references.", "File and loaded projections, endpoint resolution, quota guard policy and automatic quota suspension, auth source/known-or-unknown identity, models, subscription/balance facts, input readiness, retained secret references, and file/loaded differences are distinct. No secret resolution or remote refresh.\n\nExit: 0 when inspection completes; unknown IDs are invalid input.\nExample: tmax provider inspect deepseek")
             .arg(required_pos(1, "ID", "Local provider ID.")))
         .subcommand(refresh)
         .subcommand(mutation(leaf("failure-reset", "Clear a provider's retained failure streak and active priority penalty.", "Resets runtime failure state only; does not change policy, configuration revision, credentials, diagnostics, or bindings. It does not start a service. Dry-run shows current failure state without clearing it. --if-revision guards the saved configuration used to identify the provider.\n\nExit: 0 when reset or preview completes; 2 for unknown provider; 3 for changed inputs; 4 for persistence failure.\nExample: tmax provider failure-reset deepseek --dry-run")
+            .arg(required_pos(1, "ID", "Local provider ID.")), true, true))
+        .subcommand(mutation(leaf("quota-resume", "Clear a provider's automatic quota suspension.", "Clears only the retained automatic quota suspension; it does not enable a disabled provider, change settings, or verify upstream availability. A new confirmed quota denial can suspend the provider again. Dry-run shows current state without changing it; --if-revision guards the saved configuration used to identify the provider.\n\nExit: 0 when resumed or preview completes; 2 for unknown provider; 3 for changed inputs; 4 for persistence failure.\nExample: tmax provider quota-resume opencode-go --dry-run")
             .arg(required_pos(1, "ID", "Local provider ID.")), true, true))
         .subcommand(add)
         .subcommand(update)
@@ -982,6 +986,23 @@ fn model_alias_commands() -> Command {
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true))
         .subcommand_required(true)
 }
+fn dsh_commands() -> Command {
+    let projection = leaf(
+        "projection",
+        "Emit the versioned, secret-free DSH integration projection.",
+        "Read-only. Selects a declared DSH target by TARGET, --home, DSH_HOME, or the sole declared DSH target. Reports the target's gateway routes, public models, capability metadata, availability, the gateway credential reference name, and gateway readiness. It never resolves or emits key material, starts a service, applies native files, or refreshes remote state. Output is intended for a DSH plugin; schema_version changes require consumer review.\n\nExit: 0 when the projection was built, including unavailable gateway state; 2 for an unknown/ambiguous target; 4 for an unreadable configuration.\nExample: tmax dsh projection dsh-main",
+    )
+    .arg(value("home", "PATH", "Existing DSH home to match against a declared DSH target."))
+    .arg(positional(1, "TARGET", "Declared DSH target ID."));
+    family(
+        "dsh",
+        "Project tmax's DSH integration without managing DSH profiles.",
+        Command::new("dsh")
+            .subcommand(projection)
+            .subcommand_required(true),
+    )
+}
+
 fn agent_commands() -> Command {
     let agent_update = mutation(leaf("update", "Change explicit structural fields of one declared native target.", "At least one of --agent AGENT or --path PATH is required. Does not restore old files, import credentials, or write native configuration. Relative path operands resolve under ~/.tmax.\n\nExit: 0 when saved; 2 for invalid target/path; 4 for persistence or required safety/startup failure.\nExample: tmax agent update pi-main --path /home/user/.pi/agent")
         .arg(agent_value("agent", "codex, pi, omp, opencode, hermes, or dsh."))
@@ -1099,10 +1120,6 @@ fn network_commands() -> Command {
 }
 
 fn gateway_commands() -> Command {
-    let autostart = Command::new("autostart")
-        .about("Explicitly enable or disable this authority's per-user login-start registration.")
-        .subcommand(mutation(leaf("enable", "Save enabled startup intent and reconcile tmax's owned per-user login activation.", "Always reconciles even if already enabled. Does not start inference or change current listeners. Reports credential and user-session limitations. No implicit privilege elevation or linger. Unrelated startup entries are untouched.\n\nExit: 0 when save/reconciliation completes; 3 when action is required; 4 when requested registration fails.\nExample: tmax gateway autostart enable") , true, true))
-        .subcommand(mutation(leaf("disable", "Save disabled startup intent and remove future-login activation.", "Always reconciles even if already disabled. Does not stop current listeners or remove their supervision. An owned service definition may remain. Unrelated entries are untouched.\n\nExit: 0 when save/reconciliation completes; 4 when requested activation removal fails.\nExample: tmax gateway autostart disable"), true, true));
     let key = Command::new("key")
         .about("Explicitly replace or securely reveal the sole shared local gateway key.")
         .subcommand(mutation(leaf("replace", "Generate/store a new shared inference key and save its reference.", "Validates current config/ownership before provisioning. Saves and activates separately; a provisioned key remains discoverable for explicit cleanup after save failure. Does not update native or unmanaged clients. Replacing revokes old-key admission after activation; admitted requests retain their captured credential.\n\nDry-run does not generate/reserve a key or read protected input.\nExit: 0 when requested boundaries complete; 3 when action is required; 4 for credential/save/activation partial failure.\nExample: tmax gateway key replace --dry-run"), true, true))
@@ -1112,9 +1129,10 @@ fn gateway_commands() -> Command {
         .about("Inspect and explicitly control the background inference listener.")
         .subcommand(leaf("status", "Report actual daemon/listener identity, key readiness, publication, and safe-session conditions.", "Read actual daemon state and versions; saved/loaded network policy remains distinct. Does not read or reveal the shared key. Native target readiness is not an inference prerequisite.\n\nExit: 0 even when stopped, unavailable, or incompatible state is reported.\nExample: tmax gateway status"))
         .subcommand(mutation(
-            leaf("configure", "Create/edit the optional gateway settings; creation provisions the shared key explicitly.", "Initial creation requires --listen numeric loopback host:port and provisions one key. Existing edits retain the key. --clear autostart restores disabled intent but does not force reconciliation. No implicit start, native write, key repair, or key generation on an existing table. Report provision/save/activation separately.\n\nExit: 0 when save completes; 2 for invalid address/config; 3 for required action; 4 for provisioning, persistence, or required safety/startup failure.\nExample: tmax gateway configure --listen 127.0.0.1:17840")
+            leaf("configure", "Create/edit the optional gateway settings; creation provisions the shared key explicitly.", "Initial creation requires --listen numeric loopback host:port and provisions one key. Existing edits retain the key. --set autostart true|false writes explicit login-start intent; the default is enabled, so this is only needed to opt out or reverse one. --clear autostart restores the default enabled intent. A changed intent reconciles registration under the changed-intent rules. No implicit start, native write, key repair, or key generation on an existing table. Report provision/save/activation separately.\n\nExit: 0 when save completes; 2 for invalid address/config; 3 for required action; 4 for provisioning, persistence, or required safety/startup failure.\nExample: tmax gateway configure --listen 127.0.0.1:17840")
                 .arg(value("listen", "ADDRESS", "Numeric loopback host:port; IPv6 must be bracketed."))
-                .arg(value("clear", "FIELD", "Only autostart; restores disabled intent.").value_parser(["autostart"])),
+                .arg(pair("set", "FIELD", "VALUE", "Only autostart=true|false; sets explicit login-start intent."))
+                .arg(value("clear", "FIELD", "Only autostart; restores the default enabled intent.").value_parser(["autostart"])),
             true,
             true,
         ))
@@ -1124,7 +1142,6 @@ fn gateway_commands() -> Command {
             , true, false))
         .subcommand(mutation(leaf("restart", "Replace the daemon through its native manager using the on-disk executable.", "Preflights native management before interrupting an existing owner. Cancels in-flight work without replay, replaces the process with current valid settings, and restores the requested Web listener at its acknowledged address. Explicitly adopts saved inference-address changes and can transfer a compatible unsupervised owner. CLI success requires identified readiness; Web self-restart acknowledges pending and verifies the new process after reconnecting.\n\nExit: 0 when restarted; 3 for prerequisites/identity conflicts; 4 for failed/partial replacement.\nExample: tmax gateway restart")
             , true, false))
-        .subcommand(autostart)
         .subcommand(key)
         .subcommand_required(true)
 }
@@ -1379,6 +1396,32 @@ mod tests {
                 ])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn provider_quota_guard_set_and_clear_are_parsed() {
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "provider",
+                "update",
+                "p",
+                "--set",
+                "quota_guard.max_observation_age_seconds",
+                "3600",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(
+            request.arguments["set"],
+            ["quota_guard.max_observation_age_seconds", "3600"]
+        );
+
+        let matches = command()
+            .try_get_matches_from(["tmax", "provider", "update", "p", "--clear", "quota_guard"])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.arguments["clear"], ["quota_guard"]);
     }
 
     #[test]

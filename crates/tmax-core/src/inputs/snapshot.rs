@@ -19,6 +19,7 @@ use super::{
 pub(crate) struct Snapshot<'a> {
     runtime: Runtime,
     view: Option<View>,
+    observations: Option<crate::observations::ObservationSnapshot>,
     error: Option<&'static str>,
     metadata: Option<std::borrow::Cow<'a, crate::catalog::Snapshot>>,
 }
@@ -85,6 +86,11 @@ impl<'a> Snapshot<'a> {
                 Ok(Self {
                     runtime,
                     view,
+                    observations: if loaded {
+                        crate::observations::snapshot(store).ok()
+                    } else {
+                        crate::observations::snapshot_saved(store).ok()
+                    },
                     error: None,
                     metadata,
                 })
@@ -102,6 +108,7 @@ impl<'a> Snapshot<'a> {
         captured.unwrap_or_else(|error| Self {
             runtime: Runtime::default(),
             view: None,
+            observations: None,
             error: Some(match error.code.as_str() {
                 "invalid_record" => "invalid_record",
                 "inputs_changed" => "inputs_changed",
@@ -117,6 +124,12 @@ impl<'a> Snapshot<'a> {
         self.metadata
             .as_ref()
             .map(|snapshot| snapshot.revision.as_str())
+    }
+    pub(crate) fn observations(&self) -> Option<&crate::observations::ObservationSnapshot> {
+        self.observations.as_ref()
+    }
+    pub(crate) fn provider_scope_binding(&self, provider: &str) -> Option<(String, String)> {
+        provider_scope_binding_in_view(&self.runtime, self.view.as_ref()?, provider)
     }
     pub(crate) fn input_revision(&self, provider: &str, input: &str) -> Value {
         let b = self

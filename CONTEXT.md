@@ -56,13 +56,23 @@ reset condition. Its unit and coverage are part of its meaning.
 _Avoid_: Balance, local token count
 
 **Quota observation**:
-A source-attributed allowance fact with an observation time and explicit coverage
-and window scope. Several providers may observe the same upstream allowance.
+A source-attributed allowance fact for one provider, quota window, and model
+coverage, with an observation time, an access state, and any announced reset.
+Its source contract determines when it stops being applicable. It is evidence,
+not a permanent balance or a recovery guarantee.
 _Avoid_: Local balance, observed request usage, independent allowance per key
+
+**Quota access state**:
+The provider-qualified condition of a quota window in one quota observation:
+available, rate-limited, exhausted, unavailable, or unknown. Exhausted means the
+included allowance is consumed, not that upstream access is necessarily blocked.
+It is not inferred from a generic HTTP status or local request count.
+_Avoid_: Balance state, inferred quota denial, remaining quota
 
 **Reset announcement**:
 A source's statement that an allowance reset is planned for a specified time.
-It is not evidence that the reset occurred or an individual account recovered quota.
+It bounds the applicability of an earlier quota observation; passing it does not
+prove that the reset occurred or that an individual account recovered quota.
 _Avoid_: Confirmed quota, renewal date
 
 **Model**:
@@ -99,6 +109,34 @@ A representation of model capability declarations or derived alias common input
 capabilities and effort choices in an Agent's supported configuration vocabulary,
 not a native request preference.
 _Avoid_: Model copy, default selection, request transformation
+
+**Candidate eligibility**:
+Whether a configured model candidate may enter selection at an instant,
+determined by configuration, authorization, protocol or client requirements,
+applicable availability holds, and quota suspension. It is not effective
+priority, request admission, or a preference.
+_Avoid_: Routing eligibility, availability score, fallback result
+
+**Availability hold**:
+A scoped, time-bounded exclusion from candidate eligibility with a reason and
+evidence. It changes neither configured enablement nor effective priority, and
+does not move a retained session.
+_Avoid_: Suspension, disablement, cooldown, priority override
+
+**Quota suspension**:
+A provider-authorization-scoped exclusion from routing after qualified evidence
+of blocked quota access, retained until confirmed recovery or explicit manual
+resume. It is separate from user-configured enablement and preference.
+_Avoid_: Account deletion, permanent disablement, failure priority override
+
+**Quota guard**:
+A provider-scoped policy that turns an applicable quota observation whose access
+state is rate-limited or exhausted into an availability hold until the observation
+stops being applicable (including by the policy's maximum observation age) or its
+announced reset passes. It is a user choice about included allowance, not proof
+that upstream access is blocked, and it does not apply to another provider or
+window.
+_Avoid_: Quota enforcement, inferred denial, permanent disable
 
 **Effective priority**:
 A model's preference score at a particular instant, after applying

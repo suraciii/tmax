@@ -145,7 +145,7 @@ provider qualification.
 | --- | --- |
 | No `--at` | Use one coherent observation/admission instant with config, accepted metadata, and input revisions captured together. |
 | `--at INSTANT` | Use retained facts valid then; do not fetch, predict, or rebuild missing history. |
-| Candidate evidence | Return selected/excluded models, reasons/ties, effective priority, ordered signal-rule explanations, calendar fallback, zone/UTC offset, next boundary, and provenance/freshness under the [priority result contract](rules/spec.md#priority-evaluation-data). |
+| Candidate evidence | Return selected/excluded models, availability holds with reason/scope/boundary, reasons/ties, effective priority, ordered signal-rule explanations, calendar fallback, zone/UTC offset, next boundary, and provenance/freshness under the [priority result contract](rules/spec.md#priority-evaluation-data). |
 | Candidate effort | Show the alias-local configured choice under [Request parameters](../../model-routing/spec.md#request-parameters), independently of capability declarations. Do not present an omitted override as an upstream default. |
 | Support/access | Distinguish documented, verified, incompatible, and unknown support; missing qualification/credentials remain blocked/unknown, not fabricated access. |
 | Alias continuity | Shared by every caller of the definition; native selections/defaults/roles do not override it. |

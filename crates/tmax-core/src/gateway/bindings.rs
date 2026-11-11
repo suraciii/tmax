@@ -67,12 +67,14 @@ impl Runtime {
         protocol: &str,
         session: &str,
         loaded: bool,
+        at: Option<&str>,
     ) -> Result<Value> {
         let identities = if loaded {
             crate::inputs::Snapshot::capture_loaded(&self.store, config, None)
         } else {
             crate::inputs::Snapshot::capture(&self.store, config)
         };
+        let at = at.map(crate::inputs::ExactInstant::parse).transpose()?;
         let bindings = self.bindings.lock().expect("bindings mutex");
         retained_explanation(
             &bindings,
@@ -82,6 +84,7 @@ impl Runtime {
             protocol,
             session,
             "daemon",
+            at.as_ref(),
         )
     }
     pub(crate) fn inspect_persisted_session(
@@ -90,8 +93,10 @@ impl Runtime {
         public_id: &str,
         protocol: &str,
         session: &str,
+        at: Option<&str>,
     ) -> Result<Value> {
         let identities = crate::inputs::Snapshot::capture(store, config);
+        let at = at.map(crate::inputs::ExactInstant::parse).transpose()?;
         retained_explanation(
             &load_bindings(store)?,
             config,
@@ -100,6 +105,7 @@ impl Runtime {
             protocol,
             session,
             "persisted",
+            at.as_ref(),
         )
     }
     pub fn activate_bindings(&self, config: &Config, dry_run: bool) -> Result<Value> {
@@ -312,6 +318,60 @@ impl Runtime {
                 let _ = save_bindings(&self.store, bindings);
                 break 'retained Ok(None);
             }
+            let exact_at = crate::inputs::ExactInstant::from_chrono(now);
+            if let Some(suspension) = crate::observations::quota_suspension_for_binding(
+                identities,
+                config,
+                &binding.provider,
+                &exact_at,
+                (
+                    &binding.provider_identity,
+                    &binding.authorization_generation,
+                ),
+            ) {
+                let reason = suspension["reason_code"]
+                    .as_str()
+                    .unwrap_or("quota_state_unavailable");
+                let message = if reason == "quota_suspended" {
+                    "Retained destination is suspended awaiting quota recovery or provider quota-resume"
+                } else {
+                    "Retained destination quota state is unavailable"
+                };
+                let evidence = json!({
+                    "selection_reason":"retained_destination",
+                    "scope_handle":binding.context_handle,
+                    "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
+                    "continuation":{"state":"blocked","reason_code":reason,"quota_suspension":suspension},
+                    "original_decision":binding.decision,
+                });
+                *evidence_out = safe_evidence(&evidence);
+                return Err(Error::new(reason, message));
+            }
+            if let Some(hold) = crate::observations::quota_guard_hold_for_binding(
+                identities,
+                config,
+                &binding.provider,
+                &binding.model,
+                &exact_at,
+                (
+                    &binding.provider_identity,
+                    &binding.authorization_generation,
+                ),
+            ) {
+                let valid_until = hold.valid_until.clone();
+                let evidence = json!({
+                    "selection_reason":"retained_destination",
+                    "scope_handle":binding.context_handle,
+                    "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
+                    "continuation":{"state":"blocked","reason_code":"quota_guard","availability_hold":hold},
+                    "original_decision":binding.decision,
+                });
+                *evidence_out = safe_evidence(&evidence);
+                return Err(Error::new(
+                    "quota_guard",
+                    &format!("Retained destination is held by quota_guard until {valid_until}"),
+                ));
+            }
             let provider = &config.providers[&binding.provider];
             let mut evidence = json!({"selection_reason":"retained_destination","scope_handle":binding.context_handle,"original_decision":binding.decision,"selected":{ "provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},"effective_priority":binding.decision.get("selection").and_then(|v|v.get("priority"))});
             let effort = selected_request(
@@ -362,6 +422,7 @@ impl Runtime {
             crate::routing::RequestRequirements { native: &native },
             identities,
             attempted,
+            evidence_out,
         )?;
         let provider = &config.providers[&selection.provider];
         client_contract(provider, &native)?;
@@ -520,6 +581,7 @@ fn selected_request(
     Ok(effort.map(str::to_owned))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn retained_explanation(
     bindings: &Bindings,
     config: &Config,
@@ -528,6 +590,7 @@ fn retained_explanation(
     protocol: &str,
     session: &str,
     source: &str,
+    at: Option<&crate::inputs::ExactInstant>,
 ) -> Result<Value> {
     let key = native_context::binding_key(session, public_id, protocol);
     let binding = bindings
@@ -548,11 +611,54 @@ fn retained_explanation(
         .blocked
         .as_deref()
         .or_else(|| binding_blocker(config, binding, identities));
+    let exact_at = at
+        .cloned()
+        .unwrap_or_else(|| crate::inputs::ExactInstant::from_chrono(Utc::now()));
+    let suspension = if blocker.is_none() {
+        crate::observations::quota_suspension_for_binding(
+            identities,
+            config,
+            &binding.provider,
+            &exact_at,
+            (
+                &binding.provider_identity,
+                &binding.authorization_generation,
+            ),
+        )
+    } else {
+        None
+    };
+    let hold = if blocker.is_none() && suspension.is_none() {
+        crate::observations::quota_guard_hold_for_binding(
+            identities,
+            config,
+            &binding.provider,
+            &binding.model,
+            &exact_at,
+            (
+                &binding.provider_identity,
+                &binding.authorization_generation,
+            ),
+        )
+    } else {
+        None
+    };
+    let reason_code = blocker
+        .map(str::to_owned)
+        .or_else(|| {
+            suspension.as_ref().map(|evidence| {
+                evidence["reason_code"]
+                    .as_str()
+                    .unwrap_or("quota_state_unavailable")
+                    .to_owned()
+            })
+        })
+        .or_else(|| hold.as_ref().map(|hold| hold.reason_code.to_owned()));
     Ok(json!({
         "session":session,"session_source":source,"public_id":public_id,"protocol":protocol,
         "selection_reason":"retained_destination",
         "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
-        "continuation":{"state":if blocker.is_some(){"blocked"}else{"retained"},"reason_code":blocker,"stored_blocker":binding.blocked},
+        "continuation":{"state":if reason_code.is_some(){"blocked"}else{"retained"},"reason_code":reason_code,"stored_blocker":binding.blocked,"availability_hold":hold,"quota_suspension":suspension},
         "original_decision":safe_evidence(&binding.decision),"fresh_ranking":"not_evaluated"
     }))
 }
