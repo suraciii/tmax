@@ -13,12 +13,12 @@ cd tmax
 just dsh-install
 ```
 
-Restart or refresh DSH Web, then open **Plugins → tmax**. To update, pull and
+Restart or refresh DSH Web, then open **Settings → Models** and find the **tmax** card at the bottom. To update, pull and
 re-run `just dsh-install`; uninstall with `just dsh-remove`.
 
 ## Connect
 
-Open the **tmax** page in Plugins and select **Connect now**. This writes only
+On **Settings → Models**, use the **tmax** card and select **Connect now**. This writes only
 the DSH credential reference through `tmax dsh connect`; the key is never
 returned to the browser.
 

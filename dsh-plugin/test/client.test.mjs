@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-test('client bundle registers the tmax Plugins page', async () => {
+test('client bundle registers the tmax Models footer', async () => {
   let loaded
   globalThis.window = { __ModuleLoader__: { load: entry => { loaded = entry } } }
   const React = {
@@ -32,8 +32,8 @@ test('client bundle registers the tmax Plugins page', async () => {
     remote: { session: { modelCatalog: async () => ({ ok: true, value: { groups: [] } }) } },
   }
   module.apply(ctx)
-  assert.deepEqual(registrations.map(entry => entry.options.name).sort(), ['plugins.bundle.config', 'plugins.detail.actions'])
-  assert.equal(registrations[0].options.key, 'tmax')
+  assert.deepEqual(registrations.map(entry => entry.options.name), ['settings.models.footer'])
+  assert.equal(registrations[0].options.id, 'tmax')
   assert.equal(typeof registrations[0].component, 'function')
   delete globalThis.window
 })

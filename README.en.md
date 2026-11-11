@@ -52,7 +52,7 @@ cd tmax
 just dsh-install
 ```
 
-Restart or refresh DSH Web after installation, then use the **tmax** page in Plugins to connect and select models. The plugin requires a `tmax` executable
+Restart or refresh DSH Web after installation, then use the **tmax** card at the bottom of **Settings → Models** to connect and select models. The plugin requires a `tmax` executable
 on `PATH` plus a configured DSH target and gateway. To update, pull the
 repository, re-run `just dsh-install`, and restart/refresh DSH. Use
 `just dsh-remove` to uninstall.
