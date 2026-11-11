@@ -58,3 +58,11 @@ verify evidence_dir:
 # Retain PR-gate output and source provenance outside the repository.
 verify-pr evidence_dir:
     python3 -B scripts/verify.py --gate ci-pr {{quote(evidence_dir)}}
+
+# Install or update the DSH plugin from this checkout into a DSH profile.
+dsh-install profile="web":
+    dsh plugin --profile {{profile}} add "$PWD/dsh-plugin"
+
+# Remove the DSH plugin from a DSH profile.
+dsh-remove profile="web":
+    dsh plugin --profile {{profile}} remove tmax

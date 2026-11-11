@@ -48,10 +48,10 @@ DSH 插件源码随本仓库分发，不通过 npm 发布：
 ```sh
 git clone https://github.com/suraciii/tmax.git
 cd tmax
-dsh plugin --profile web add "$PWD/dsh-plugin"
+just dsh-install
 ```
 
-安装后重启或刷新 DSH Web，在 Settings 的 **tmax access** 中连接并选择模型。插件需要已在 `PATH` 中的 `tmax`，并配置好 DSH target 和 gateway。更新时拉取仓库后重新执行 `dsh plugin --profile web add "$PWD/dsh-plugin"`，再重启/刷新 DSH。
+安装后重启或刷新 DSH Web，在 Settings 的 **tmax access** 中连接并选择模型。插件需要已在 `PATH` 中的 `tmax`，并配置好 DSH target 和 gateway。更新时拉取仓库后重新执行 `just dsh-install`，再重启/刷新 DSH。卸载用 `just dsh-remove`。
 
 ## 文档
 

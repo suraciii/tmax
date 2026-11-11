@@ -37,12 +37,14 @@ repository and install the package directory into the `web` profile:
 ```sh
 git clone https://github.com/suraciii/tmax.git
 cd tmax
-dsh plugin --profile web add "$PWD/dsh-plugin"
+just dsh-install
 ```
 
-Restart or refresh DSH Web. To update, pull the repository and re-run the same
-`dsh plugin` command. The package is intentionally `private`; that is a
-distribution choice, not an install limitation.
+`just dsh-install` delegates to `dsh plugin --profile web add "$PWD/dsh-plugin"`.
+Restart or refresh DSH Web. To update, pull the repository and re-run
+`just dsh-install`; uninstall with `just dsh-remove`. The package is
+intentionally `private`; that is a distribution choice, not an install
+limitation.
 
 The bundle patch inserts one `tmax` row. Configure it in the profile's
 `cordis.patch.yml` if needed:
