@@ -60,8 +60,6 @@ window.__ModuleLoader__.load({
 
     function TmaxPanel({ t }) {
       const [state, setState] = React.useState({ phase: 'loading' })
-      const [connecting, setConnecting] = React.useState(false)
-      const [message, setMessage] = React.useState('')
       const load = React.useCallback(async () => {
         setState({ phase: 'loading' })
         let gateway
@@ -82,30 +80,6 @@ window.__ModuleLoader__.load({
         }
       }, [])
       React.useEffect(() => { void load() }, [load])
-      const connect = async () => {
-        setConnecting(true)
-        setMessage('')
-        try {
-          const response = await fetch(new URL('_tmax/connect', document.baseURI), {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: '{}',
-          })
-          const result = await response.json().catch(() => ({}))
-          if (!response.ok || result.ok !== true) {
-            setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
-            setConnecting(false)
-            return
-          }
-          setMessage(t('connectDone'))
-          await load()
-        } catch (error) {
-          setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
-        } finally {
-          setConnecting(false)
-        }
-      }
       const status = state.phase === 'connected'
         ? t('connected')
         : state.phase === 'failed' ? t('failed') : state.phase === 'loading' ? t('loading') : t('disconnected')
@@ -113,8 +87,7 @@ window.__ModuleLoader__.load({
       const children = [
         h('div', { key: 'head', style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
           h('span', { style: { width: 8, height: 8, borderRadius: 99, background: color, display: 'inline-block' } }),
-          h('strong', null, `${t('title')}: ${status}`),
-              h('button', { type: 'button', onClick: connect, disabled: connecting }, connecting ? t('connecting') : t('connect'))),
+          h('strong', null, `${t('title')}: ${status}`)),
         state.gateway !== undefined && h('div', { key: 'gateway', style: { color: '#6b7280', fontSize: 12 } },
           state.gateway && state.gateway.ready === true ? t('gatewayReady') : t('gatewayUnknown')),
       ]
@@ -127,7 +100,6 @@ window.__ModuleLoader__.load({
       }
       if (state.phase === 'failed') children.push(h('div', { key: 'failure', style: { color: '#b91c1c' } }, `${t('failure')}: ${state.message}`))
       if (state.phase === 'disconnected') children.push(h('p', { key: 'empty', style: { margin: 0 } }, t('empty')))
-      if (message !== '') children.push(h('p', { key: 'message', style: { margin: 0 } }, message))
       return h('div', { style: { display: 'grid', gap: 14, maxWidth: 720 } }, children)
     }
 
