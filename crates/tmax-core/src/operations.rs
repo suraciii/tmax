@@ -34,6 +34,11 @@ pub async fn execute(request: Request) -> Response {
         Err(e) => error_response(&operation, e, request.dry_run),
     }
 }
+#[cfg(test)]
+pub(crate) async fn test_dispatch(store: &Store, request: &Request) -> Result<Value> {
+    dispatch(store, request).await
+}
+
 async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     let path = r.command.join(" ");
     if matches!(
@@ -124,6 +129,9 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             Err(error) => Err(error),
         };
     }
+    if path == "dsh projection" {
+        return crate::agent_integration::dsh_projection(store, r).await;
+    }
     let file = match inspection::selected(store, r).await {
         Ok(Some(file)) => file,
         Ok(None) => {
@@ -151,7 +159,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         return crate::catalog::handle(store, config, r).await;
     }
     if path == "provider list" {
-        return inspection::provider_list(store, &file);
+        return inspection::provider_list(store, &file, r).await;
     }
     if path == "provider inspect" {
         return inspection::provider_inspect(store, &file, r).await;
@@ -176,6 +184,74 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         let _lock = store.lock("configuration")?;
         config::guard(store, &file.revision)?;
         return crate::failures::reset(store, config, provider);
+    }
+    if path == "provider quota-resume" {
+        let provider = operand(r, 0)?;
+        if r.if_revision
+            .as_ref()
+            .is_some_and(|expected| expected != &file.revision)
+        {
+            return Err(Error::new(
+                "inputs_changed",
+                "Saved configuration differs from the requested revision",
+            ));
+        }
+        let loaded = crate::service::loaded_snapshot(store).await;
+        let mut loaded_state = inspection::loaded_quota_projection(&loaded, provider);
+        let mut same_provider = false;
+        if let Ok(Some(snapshot)) = &loaded {
+            let saved_ids =
+                crate::inputs::Snapshot::capture(store, config).provider_scope_binding(provider);
+            let loaded_ids =
+                crate::inputs::Snapshot::capture_loaded(store, &snapshot.file.config, None)
+                    .provider_scope_binding(provider);
+            same_provider = saved_ids
+                .zip(loaded_ids)
+                .is_some_and(|(saved, loaded)| saved.0 == loaded.0)
+                && snapshot
+                    .file
+                    .config
+                    .providers
+                    .get(provider)
+                    .is_some_and(|p| {
+                        crate::provider_integration::integration_id(p).ok() == Some("opencode-go")
+                    });
+            if !same_provider {
+                loaded_state = json!({"state":"unavailable","reason_code":"binding_mismatch"});
+            }
+        }
+        if r.dry_run {
+            let file_state = crate::observations::quota_status(store, config, provider, false)?;
+            let mut state =
+                if file_state["state"] == "suspended" || file_state["state"] == "unsupported" {
+                    file_state.clone()
+                } else {
+                    loaded_state.clone()
+                };
+            state["views"] = json!({"file":file_state,"loaded":loaded_state});
+            return Ok(
+                json!({"provider":provider,"resumed":false,"quota_suspension":state,"requested":"provider quota-resume"}),
+            );
+        }
+        let _lock = store.lock("configuration")?;
+        config::guard(store, &file.revision)?;
+        let mut result = crate::observations::resume_quota_locked(store, config, provider)?;
+        if same_provider
+            && loaded_state["state"] == "suspended"
+            && result["state"] == "manually_resumed"
+        {
+            result["resumed"] = json!(true);
+        } else if result["state"] == "manually_resumed"
+            && result["resumed"] == false
+            && loaded_state["state"] == "unavailable"
+            && !matches!(
+                loaded_state["reason_code"].as_str(),
+                Some("no_loaded_snapshot" | "provider_missing")
+            )
+        {
+            result["resumed"] = Value::Null;
+        }
+        return Ok(result);
     }
     if path == "provider refresh" {
         let provider = config
@@ -272,6 +348,76 @@ mod tests {
             if_revision: None,
         }
     }
+    #[tokio::test]
+    async fn provider_quota_resume_previews_guards_revision_and_preserves_disablement() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=1\n[providers.p]\nintegration='opencode-go'\nenabled=false\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let config = config::parse(text).unwrap();
+        crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        crate::observations::test_publish_quota(
+            &store,
+            &config,
+            "p",
+            json!({
+                "usage": {
+                    "rolling":{"status":"ok","percent":1,"resetsAt":"2099-01-01T00:00:00Z"},
+                    "weekly":{"status":"rate-limited","percent":100,"resetsAt":"2099-01-01T00:00:00Z"},
+                    "monthly":{"status":"ok","percent":1,"resetsAt":"2099-01-01T00:00:00Z"}
+                },
+                "percent_basis":"consumed","percent_precision":"floored","reset_basis":"announcement"
+            }),
+        );
+        let state_path = store.root.join("observations/heads.json");
+        let before = std::fs::read(&state_path).unwrap();
+        let revision = config::revision(text.as_bytes());
+        let list = dispatch(&store, &request(&["provider", "list"], &[], &[]))
+            .await
+            .unwrap();
+        assert_eq!(
+            list["providers"][0]["quota_suspension"]["views"]["file"]["state"],
+            "suspended"
+        );
+        let inspect = dispatch(&store, &request(&["provider", "inspect"], &["p"], &[]))
+            .await
+            .unwrap();
+        assert_eq!(
+            inspect["quota_suspension"]["views"]["file"]["state"],
+            "suspended"
+        );
+        assert_eq!(
+            inspect["quota_suspension"]["views"]["loaded"]["state"],
+            "unavailable"
+        );
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        let mut command = request(&["provider", "quota-resume"], &["p"], &[]);
+        command.dry_run = true;
+        command.if_revision = Some(revision.clone());
+        let preview = dispatch(&store, &command).await.unwrap();
+        assert_eq!(preview["quota_suspension"]["state"], "suspended");
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        command.if_revision = Some("stale".into());
+        assert_eq!(
+            dispatch(&store, &command).await.unwrap_err().code,
+            "inputs_changed"
+        );
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        command.if_revision = Some(revision);
+        command.dry_run = false;
+        dispatch(&store, &command).await.unwrap();
+        assert_eq!(
+            crate::observations::quota_status(&store, &config, "p", false).unwrap()["state"],
+            "manually_resumed"
+        );
+        dispatch(&store, &command).await.unwrap();
+        assert_eq!(
+            std::fs::read(store.root.join("tmax.toml")).unwrap(),
+            text.as_bytes()
+        );
+        assert!(!config::load(&store).unwrap().config.providers["p"].enabled);
+    }
+
     #[tokio::test]
     async fn provider_failure_reset_previews_without_mutation_and_checks_revision() {
         let directory = tempfile::tempdir().unwrap();

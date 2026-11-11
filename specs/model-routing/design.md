@@ -17,6 +17,7 @@ behavior.
 | A window may cover one model or all models | Always exclude the whole provider | The observation's declared coverage determines the hold's scope; no implicit expansion |
 | A reset may happen early or not at all | Disable until manual reset | Source applicability, the guard's observation age, and the announced reset bound the hold; a newer observation wins; no reset creates no automatic quota hold |
 | A transient 429 may be quota exhaustion, rate limiting, or capacity | Treat every 429 as exhaustion | Only source-qualified quota evidence creates a quota hold; other failures remain request failures |
+| Confirmed quota denial must survive restart and allow manual intervention | Expire a copied flag on a timer, or set user `enabled=false` | Retain authorization-bound quota suspension separately; only confirmed recovery or explicit manual resume clears it |
 | A retained session may become ineligible | Silently select another provider | Block the retained destination with an actionable error; move only at a qualified new-session boundary |
 | A client may switch models on error | Rely on client fallback | Attempt fallback inside tmax only where the alias permits it, before response bytes |
 
@@ -39,6 +40,29 @@ model coverage:
 Several providers may observe the same upstream allowance. That does not make
 their observations interchangeable or establish that one provider's hold applies
 to another.
+
+## Suspension authority
+
+The [automatic suspension contract](spec.md#automatic-quota-suspension) differs
+from a time-bounded included-allowance hold. The provider observation authority
+owns suspension and its publication epoch alongside quota evidence. A scoped
+denial is a state transition, not a rewritten quota percentage or configuration.
+
+| Boundary | Invariant |
+| --- | --- |
+| Identity | Provider incarnation, authorization generation, integration, endpoint, and quota-source contract bind the state; a renamed label does not identify another account |
+| Publication | Capture the resume epoch before external I/O; manual resume fences older denials and checks, and a check begun before a newer denial cannot clear it |
+| Persistence | Successful saves survive restart; failed saves retain a coalesced binding-scoped pending denial in the daemon, with unconfirmed durability until local publication succeeds |
+| Recovery scheduling | Check only suspended enabled providers, through the supported quota source; reserve the next due boundary before I/O so failed checks cannot create a tight loop |
+| Manual resume | Supersede the existing suspension and old retained guard fact without changing user enablement; fresh evidence may suspend again |
+| Admission | Capture suspension with observation evidence; an in-flight attempt retains its original authority and cannot borrow a later account binding |
+| Independent writers | A distinct manual-resume revision supersedes pending denial state; a disk recovery epoch alone cannot erase a denial the checking process never observed |
+
+The pending record contains only its full binding, safe denial evidence, fences,
+and publication error. It is not a second quota history or a copied configuration.
+Reads merge the effective pending delta without writing. Successful publication
+acknowledges only the matching denial revision; a newer receipt cannot be lost.
+Disk-only and daemon-effective diagnostic projections remain separate.
 
 ## Hold derivation
 
@@ -165,7 +189,6 @@ held candidate or guess that a reset occurred.
 - Request history and selection explanation must show the hold reason, window,
   coverage, observation time, applicability/reset boundary, and the policy that
   authorized it, without exposing secrets.
-- The OpenCode Go integration's consumed-only usage observation creates no
-  implicit routing veto; an explicit `quota_guard` may use its current
-  `rate-limited` window under the rules above. The generic evidence model admits
-  an `exhausted` state only when a source contract independently qualifies it.
+- OpenCode Go's qualified blocking state and inference denial follow automatic
+  quota suspension. Consumed percentages alone remain display-only. The optional
+  `quota_guard` remains a distinct user policy for included allowance.

@@ -19,6 +19,218 @@ fn key_comparison_requires_exact_bytes() {
     assert!(!matches_key(b"abcx", b"abc"));
     assert!(!matches_key(b"ab", b"abc"));
 }
+#[tokio::test]
+async fn go_quota_inspection_waits_for_delayed_complete_json_and_replays_bytes() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let body = br#"{"error":{"message":"Go usage limit exceeded","type":"GoUsageLimitError"},"metadata":{"limitName":"monthly"},"type":"error"}"#.to_vec();
+    let expected = body.clone();
+    let app = Router::new().fallback(move || {
+        let body = body.clone();
+        async move {
+            let first = Bytes::copy_from_slice(&body[..30]);
+            let second = Bytes::copy_from_slice(&body[30..]);
+            let stream = futures_util::stream::unfold(
+                (0, first, second),
+                |(step, first, second)| async move {
+                    match step {
+                        0 => Some((Ok::<_, std::io::Error>(first.clone()), (1, first, second))),
+                        1 => {
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                            Some((Ok(second.clone()), (2, first, second)))
+                        }
+                        _ => None,
+                    }
+                },
+            );
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("x-upstream-test", "kept")],
+                Body::from_stream(stream),
+            )
+        }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+    let provider = crate::config::Provider {
+        integration: Some("opencode-go".into()),
+        ..Default::default()
+    };
+    let (response, denial) = inspect_quota_response(response, &provider).await;
+    assert_eq!(denial.unwrap().window.as_deref(), Some("monthly"));
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["x-upstream-test"], "kept");
+    let replay: Vec<_> = response
+        .into_stream()
+        .map(|chunk| chunk.unwrap())
+        .collect()
+        .await;
+    assert_eq!(replay.concat(), expected);
+    server.abort();
+}
+
+#[tokio::test]
+async fn go_inspection_timeout_replays_prefix_and_late_remainder_without_classifying() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let body = br#"{"error":{"type":"GoUsageLimitError"}}"#.to_vec();
+    let expected = body.clone();
+    let app = Router::new().fallback(move || {
+        let body = body.clone();
+        async move {
+            let first = Bytes::copy_from_slice(&body[..10]);
+            let second = Bytes::copy_from_slice(&body[10..]);
+            let stream = futures_util::stream::unfold(
+                (0, first, second),
+                |(step, first, second)| async move {
+                    match step {
+                        0 => Some((Ok::<_, std::io::Error>(first.clone()), (1, first, second))),
+                        1 => {
+                            tokio::time::sleep(Duration::from_millis(
+                                QUOTA_ERROR_INSPECTION_SECONDS * 1000 + 100,
+                            ))
+                            .await;
+                            Some((Ok(second.clone()), (2, first, second)))
+                        }
+                        _ => None,
+                    }
+                },
+            );
+            (StatusCode::TOO_MANY_REQUESTS, Body::from_stream(stream))
+        }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+    let provider = crate::config::Provider {
+        integration: Some("opencode-go".into()),
+        ..Default::default()
+    };
+    let (response, denial) = inspect_quota_response(response, &provider).await;
+    assert!(denial.is_none());
+    let replay: Vec<_> = response
+        .into_stream()
+        .map(|chunk| chunk.unwrap())
+        .collect()
+        .await;
+    assert_eq!(replay.concat(), expected);
+    server.abort();
+}
+
+#[tokio::test]
+async fn go_quota_inspection_replays_oversize_malformed_and_truncated_responses() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let provider = crate::config::Provider {
+        integration: Some("opencode-go".into()),
+        ..Default::default()
+    };
+    let valid = br#"{"error":{"type":"GoUsageLimitError"}}"#;
+    for (payload, truncated) in [
+        (vec![b'x'; INSPECTION_BYTES + 1], false),
+        (b"{invalid".to_vec(), false),
+        (valid.to_vec(), true),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let sent = payload.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.ends_with(b"\r\n\r\n") {
+                let read = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(read, 0, "request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let length = sent.len() + usize::from(truncated);
+            socket.write_all(format!("HTTP/1.1 429 Too Many Requests\r\nContent-Length: {length}\r\nX-Upstream-Test: kept\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            socket.write_all(&sent).await.unwrap();
+        });
+        let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+        let (response, denial) = inspect_quota_response(response, &provider).await;
+        assert!(denial.is_none());
+        assert_eq!(response.headers()["x-upstream-test"], "kept");
+        let chunks: Vec<_> = response.into_stream().collect().await;
+        assert_eq!(
+            chunks
+                .iter()
+                .filter_map(|chunk| chunk.as_ref().ok())
+                .flat_map(|chunk| chunk.iter().copied())
+                .collect::<Vec<_>>(),
+            payload
+        );
+        assert_eq!(chunks.iter().any(Result::is_err), truncated);
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_denial_persistence_keeps_original_response_and_safe_evidence() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let payload = r#"{"error":{"type":"GoUsageLimitError","message":"original upstream"},"metadata":{"limitName":"monthly"}}"#;
+    let app = Router::new().fallback(move || async move {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            [("x-upstream-test", "kept")],
+            payload,
+        )
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (_temporary, runtime, config) = fixture();
+    let mut go = config.clone();
+    let provider = go.providers.get_mut("p").unwrap();
+    provider.integration = Some("opencode-go".into());
+    provider.endpoints.clear();
+    publish(&runtime, &config, &go, "quota-persistence-failure");
+    runtime
+        .store
+        .write_raw("tmax.toml", toml::to_string(&go).unwrap().as_bytes())
+        .unwrap();
+    let lineage = crate::inputs::Snapshot::capture_loaded(&runtime.store, &go, None);
+    let (identity, authorization, _) = lineage.destination_identity("p", "m").unwrap();
+    let quota_epoch = crate::observations::quota_epoch_for_binding(
+        &lineage,
+        &go,
+        "p",
+        (&identity, &authorization),
+    );
+    let attempt = AttemptContext {
+        snapshot: Arc::new(crate::gateway::test_support::test_snapshot(
+            &go,
+            "quota-persistence-failure",
+        )),
+        provider: "p".into(),
+        identity,
+        authorization,
+        reset_epoch: "0".into(),
+        quota_epoch,
+    };
+    let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+    let inspected = inspect_quota_response(response, &go.providers["p"]).await;
+    assert!(inspected.1.is_some());
+    runtime
+        .store
+        .write_raw("observations/heads.json", b"{invalid")
+        .unwrap();
+    let mut record = runtime.history.begin();
+    let (response, failed) = persist_inspected_quota(inspected, &attempt, &runtime, &mut record);
+    assert!(failed);
+    assert!(record.decision["quota_state_error"].is_string());
+    assert_eq!(
+        crate::diagnostics::safe_evidence(&record.decision)["quota_state_error"],
+        record.decision["quota_state_error"]
+    );
+    assert!(record.evidence_gap);
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["x-upstream-test"], "kept");
+    let chunks: Vec<_> = response
+        .into_stream()
+        .map(|chunk| chunk.unwrap())
+        .collect()
+        .await;
+    assert_eq!(chunks.concat(), payload.as_bytes());
+    server.abort();
+}
 
 #[tokio::test]
 async fn forwarding_preserves_client_content_type_values_without_inventing_one() {

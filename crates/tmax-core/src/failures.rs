@@ -1417,12 +1417,13 @@ mod tests {
             "historical_state_unavailable"
         );
         assert!(before_trigger["active_priority"].is_null());
-        let explained = crate::routing::explain_loaded(
+        let explained = crate::routing::explain_loaded_effective(
             &store,
             &config,
             "p/m",
             "chat-completions",
             Some(&inputs::timestamp(at(19))),
+            None,
             None,
             None,
         )
@@ -1505,12 +1506,13 @@ mod tests {
         let bytes = std::fs::read(store.path(STATE).unwrap()).unwrap();
         let selected =
             crate::routing::select(&store, &config, "alias", "chat-completions", at(2)).unwrap();
-        let explained = crate::routing::explain_loaded(
+        let explained = crate::routing::explain_loaded_effective(
             &store,
             &config,
             "alias",
             "chat-completions",
             Some(&inputs::timestamp(at(2))),
+            None,
             None,
             None,
         )

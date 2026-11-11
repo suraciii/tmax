@@ -416,6 +416,36 @@ the last upstream rejection or transport failure, with a bounded attempt chain
 in gateway request details. Failed attempts also appear in the separate local
 [error log](#gateway-error-log), even if a later fallback succeeds.
 
+## Confirmed quota suspension
+
+By default, a confirmed OpenCode Go quota denial suspends that provider from
+gateway routing. A generic HTTP 429 does not establish quota exhaustion. The
+successfully saved suspension survives restarts and is distinct from both the
+optional quota guard and the provider's enabled setting. A qualified successful
+quota check that confirms all windows are available clears it; failed or unknown
+checks do not. An announced reset is a recheck hint, not proof of recovery.
+While the daemon runs with the configuration loaded, enabled suspended providers
+are checked through the quota API at most once per provider per 60 seconds.
+Retained destinations remain blocked rather than moving to another provider.
+If saving a denial fails, the daemon still excludes the affected provider and
+retries the save. The loaded status reports pending persistence and unconfirmed
+durability; the file view can differ. A crash can lose this unsaved protection.
+
+Inspect the safe saved and loaded status, or explicitly resume without waiting:
+
+```sh
+tmax provider list
+tmax provider inspect opencode-go
+tmax provider quota-resume opencode-go --dry-run
+tmax provider quota-resume opencode-go --if-revision REVISION
+```
+
+Use the saved configuration revision from inspection or configuration output for
+`REVISION`, or omit `--if-revision`. Preview makes no changes. Resume clears the
+automatic suspension without checking upstream availability or changing the
+enabled setting; an explicitly disabled provider remains disabled. A new
+confirmed denial or qualified exhausted observation can suspend it again. The
+Web provider detail also displays the loaded and saved views and offers resume.
 
 ## Quota guard
 
@@ -437,11 +467,13 @@ tmax provider update opencode-go --clear quota_guard
 ```
 
 The guard is absent by default because an exhausted included allowance may still
-allow paid continuation. If no reset is announced, no automatic hold is created.
-A generic 429, a capacity rejection, or a transport failure is not quota evidence;
-configure request fallback or failure policy separately. An observation older
-than the configured age does not hold the provider, so refresh the provider's
-quota observation when the guard should remain effective.
+allow paid continuation. If no reset is announced, the guard creates no hold;
+the separate confirmed quota suspension can still apply. A generic 429, a
+capacity rejection, or a transport failure is not quota evidence; configure
+request fallback or failure policy separately. An observation older than the
+configured age does not create a guard hold. Manual quota resume also prevents
+an unchanged older observation from immediately reinstating that hold; fresh
+qualified evidence may block routing again.
 
 ## Gateway error log
 
@@ -650,9 +682,11 @@ The manager can recover an unexpected process exit without a connected client.
 Recovery restores only still-requested listeners at their acknowledged addresses.
 It never replays interrupted inference.
 
-`tmax gateway autostart enable` opts into future user-manager/login activation.
-`disable` removes that activation without stopping current listeners or removing
-their supervision. A retained definition with login startup disabled is normal.
+A configured gateway starts at future user-manager/login activation by default;
+no declaration is required. `tmax gateway configure --set autostart false` is
+the explicit opt-out; `--clear autostart` (or `--set autostart true`) restores
+the default. Disabling does not stop current listeners or remove their
+supervision. A retained definition with login startup disabled is normal.
 No command implicitly enables Linux linger, elevates privileges, or installs a
 machine-wide service. Logout survival depends on the actual user-manager session.
 An unavailable manager returns `service_manager_unavailable`; it does not fall

@@ -112,9 +112,9 @@ _Avoid_: Model copy, default selection, request transformation
 
 **Candidate eligibility**:
 Whether a configured model candidate may enter selection at an instant,
-determined by configuration, authorization, protocol or client requirements, and
-applicable availability holds. It is not effective priority, request admission,
-or a preference.
+determined by configuration, authorization, protocol or client requirements,
+applicable availability holds, and quota suspension. It is not effective
+priority, request admission, or a preference.
 _Avoid_: Routing eligibility, availability score, fallback result
 
 **Availability hold**:
@@ -122,6 +122,12 @@ A scoped, time-bounded exclusion from candidate eligibility with a reason and
 evidence. It changes neither configured enablement nor effective priority, and
 does not move a retained session.
 _Avoid_: Suspension, disablement, cooldown, priority override
+
+**Quota suspension**:
+A provider-authorization-scoped exclusion from routing after qualified evidence
+of blocked quota access, retained until confirmed recovery or explicit manual
+resume. It is separate from user-configured enablement and preference.
+_Avoid_: Account deletion, permanent disablement, failure priority override
 
 **Quota guard**:
 A provider-scoped policy that turns an applicable quota observation whose access

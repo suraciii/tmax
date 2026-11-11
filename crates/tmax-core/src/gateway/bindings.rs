@@ -319,6 +319,34 @@ impl Runtime {
                 break 'retained Ok(None);
             }
             let exact_at = crate::inputs::ExactInstant::from_chrono(now);
+            if let Some(suspension) = crate::observations::quota_suspension_for_binding(
+                identities,
+                config,
+                &binding.provider,
+                &exact_at,
+                (
+                    &binding.provider_identity,
+                    &binding.authorization_generation,
+                ),
+            ) {
+                let reason = suspension["reason_code"]
+                    .as_str()
+                    .unwrap_or("quota_state_unavailable");
+                let message = if reason == "quota_suspended" {
+                    "Retained destination is suspended awaiting quota recovery or provider quota-resume"
+                } else {
+                    "Retained destination quota state is unavailable"
+                };
+                let evidence = json!({
+                    "selection_reason":"retained_destination",
+                    "scope_handle":binding.context_handle,
+                    "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
+                    "continuation":{"state":"blocked","reason_code":reason,"quota_suspension":suspension},
+                    "original_decision":binding.decision,
+                });
+                *evidence_out = safe_evidence(&evidence);
+                return Err(Error::new(reason, message));
+            }
             if let Some(hold) = crate::observations::quota_guard_hold_for_binding(
                 identities,
                 config,
@@ -583,10 +611,24 @@ fn retained_explanation(
         .blocked
         .as_deref()
         .or_else(|| binding_blocker(config, binding, identities));
-    let hold = if blocker.is_none() {
-        let exact_at = at
-            .cloned()
-            .unwrap_or_else(|| crate::inputs::ExactInstant::from_chrono(Utc::now()));
+    let exact_at = at
+        .cloned()
+        .unwrap_or_else(|| crate::inputs::ExactInstant::from_chrono(Utc::now()));
+    let suspension = if blocker.is_none() {
+        crate::observations::quota_suspension_for_binding(
+            identities,
+            config,
+            &binding.provider,
+            &exact_at,
+            (
+                &binding.provider_identity,
+                &binding.authorization_generation,
+            ),
+        )
+    } else {
+        None
+    };
+    let hold = if blocker.is_none() && suspension.is_none() {
         crate::observations::quota_guard_hold_for_binding(
             identities,
             config,
@@ -603,12 +645,20 @@ fn retained_explanation(
     };
     let reason_code = blocker
         .map(str::to_owned)
+        .or_else(|| {
+            suspension.as_ref().map(|evidence| {
+                evidence["reason_code"]
+                    .as_str()
+                    .unwrap_or("quota_state_unavailable")
+                    .to_owned()
+            })
+        })
         .or_else(|| hold.as_ref().map(|hold| hold.reason_code.to_owned()));
     Ok(json!({
         "session":session,"session_source":source,"public_id":public_id,"protocol":protocol,
         "selection_reason":"retained_destination",
         "selection":{"provider":binding.provider,"model":binding.model,"qualified_model":format!("{}/{}",binding.provider,binding.model),"model_identity":binding.model_identity,"candidate_reasoning_effort":config.candidate_effort(public_id, protocol, &binding.provider, &binding.model)},
-        "continuation":{"state":if reason_code.is_some(){"blocked"}else{"retained"},"reason_code":reason_code,"stored_blocker":binding.blocked,"availability_hold":hold},
+        "continuation":{"state":if reason_code.is_some(){"blocked"}else{"retained"},"reason_code":reason_code,"stored_blocker":binding.blocked,"availability_hold":hold,"quota_suspension":suspension},
         "original_decision":safe_evidence(&binding.decision),"fresh_ranking":"not_evaluated"
     }))
 }

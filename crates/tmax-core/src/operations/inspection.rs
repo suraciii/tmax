@@ -44,7 +44,7 @@ pub(super) fn model_list(config: &Config, r: &Request) -> Result<Value> {
 pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Value> {
     let loaded = if arg(r, "state") == Some("loaded") {
         Some(
-            crate::service::loaded_with_metadata(store)
+            crate::service::loaded_snapshot(store)
                 .await?
                 .ok_or_else(|| {
                     Error::new(
@@ -57,7 +57,10 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         None
     };
     // The target, candidates and accepted metadata must belong to the same view.
-    let c = loaded.as_ref().map(|(file, _)| &file.config).unwrap_or(c);
+    let c = loaded
+        .as_ref()
+        .map(|snapshot| &snapshot.file.config)
+        .unwrap_or(c);
     let config = c;
     let mut id = operand(r, 0)?.to_owned();
     let protocol = required(r, "protocol")?;
@@ -125,15 +128,16 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
     let advice = crate::routing::Advice {
         native: requirements,
     };
-    let mut data = if let Some((_, metadata)) = &loaded {
-        crate::routing::explain_loaded(
+    let mut data = if let Some(snapshot) = &loaded {
+        crate::routing::explain_loaded_effective(
             store,
             config,
             &id,
             protocol,
             arg(r, "at"),
-            metadata.as_ref(),
+            snapshot.metadata.as_ref(),
             Some(&advice),
+            Some(snapshot.quota_suspensions.as_ref()),
         )?
     } else {
         crate::routing::explain_native(store, config, &id, protocol, arg(r, "at"), Some(&advice))?
@@ -152,12 +156,55 @@ pub(crate) fn network_view(c: &Config, revision: &str, exists: bool, state: &str
     json!({"state":state,"snapshot_state":if exists{"available"}else{"absent"},"policy":{"snapshot_state":if exists{"available"}else{"absent"},"configuration_revision":revision,"configured":n,"effective":{"mode":mode,"proxy_url":u.as_ref().map(url::Url::as_str),"proxy_scheme":u.as_ref().map(url::Url::scheme),"proxy_host":u.as_ref().and_then(url::Url::host_str),"proxy_port":u.as_ref().and_then(|u|u.port().or_else(||match u.scheme(){"http"=>Some(80),"https"=>Some(443),"socks5"=>Some(1080),_=>None}))},"reason_code":if n.is_none(){json!("default_direct")}else{Value::Null}},"future_work_scope":if state=="loaded"{"daemon"}else{"independent_cli"}})
 }
 
-pub(super) fn provider_list(store: &Store, file: &config::LoadedFile) -> Result<Value> {
+fn quota_projection(store: &Store, config: &Config, id: &str, loaded: bool) -> Value {
+    crate::observations::quota_status(store, config, id, loaded)
+        .unwrap_or_else(|error| json!({"state":"unavailable","reason_code":error.code}))
+}
+
+pub(super) fn loaded_quota_projection(
+    loaded: &Result<Option<crate::service::LoadedSnapshot>>,
+    id: &str,
+) -> Value {
+    match loaded {
+        Ok(Some(snapshot)) if !snapshot.file.config.providers.contains_key(id) => {
+            json!({"state":"unavailable","reason_code":"provider_missing"})
+        }
+        Ok(Some(snapshot)) => snapshot
+            .quota_suspensions
+            .as_ref()
+            .and_then(|statuses| statuses.get(id))
+            .filter(|status| {
+                status.is_object() && status.get("state").and_then(Value::as_str).is_some()
+            })
+            .cloned()
+            .unwrap_or_else(
+                || json!({"state":"unavailable","reason_code":"quota_state_unavailable"}),
+            ),
+        Ok(None) => json!({"state":"unavailable","reason_code":"no_loaded_snapshot"}),
+        Err(error) => json!({"state":"unavailable","reason_code":error.code}),
+    }
+}
+
+pub(super) async fn provider_list(
+    store: &Store,
+    file: &config::LoadedFile,
+    r: &Request,
+) -> Result<Value> {
     let config = &file.config;
+    let saved = config::load(store);
+    let loaded = crate::service::loaded_snapshot(store).await;
     let providers = config.providers.iter().map(|(id,p)| {
             let observations = crate::observations::summary(store, config, id)
                 .unwrap_or_else(|error| json!({"state":"unavailable","reason_code":error.code}));
-            json!({"id":id,"name":p.overrides.name,"enabled":p.enabled,"authentication":match p.auth{Some(Auth::ApiKey{..})=>"api-key",Some(Auth::Login{..})=>"login",None=>"not_configured"},"subscription":p.subscription.as_ref().and_then(|s|s.plan.as_ref()),"observations":observations,"affected_targets":config.agents.values().filter(|t|t.providers.values().any(|e|e.provider.as_ref()==Some(id))).count()})
+            let file_quota = match &saved {
+                Ok(saved) if saved.config.providers.contains_key(id) => quota_projection(store, &saved.config, id, false),
+                Ok(_) => json!({"state":"unavailable","reason_code":"provider_missing"}),
+                Err(error) => json!({"state":"unavailable","reason_code":error.code}),
+            };
+            let loaded_quota = loaded_quota_projection(&loaded, id);
+            let mut quota = if arg(r, "state") == Some("loaded") { loaded_quota.clone() } else { file_quota.clone() };
+            quota["views"] = json!({"file":file_quota,"loaded":loaded_quota});
+            json!({"id":id,"name":p.overrides.name,"enabled":p.enabled,"authentication":match p.auth{Some(Auth::ApiKey{..})=>"api-key",Some(Auth::Login{..})=>"login",None=>"not_configured"},"subscription":p.subscription.as_ref().and_then(|s|s.plan.as_ref()),"observations":observations,"quota_suspension":quota,"affected_targets":config.agents.values().filter(|t|t.providers.values().any(|e|e.provider.as_ref()==Some(id))).count()})
         }).collect::<Vec<_>>();
     Ok(json!({"providers":providers,"revision":file.revision}))
 }
@@ -173,7 +220,7 @@ pub(super) async fn provider_inspect(
         .providers
         .get(id)
         .ok_or_else(|| Error::new("unknown_resource", "Provider is not configured"))?;
-    let loaded = crate::service::loaded(store).await;
+    let loaded = crate::service::loaded_snapshot(store).await;
     let endpoint = |c: &Config, revision: &str| -> Value {
         match c.providers.get(id) {
             Some(p) => {
@@ -185,7 +232,7 @@ pub(super) async fn provider_inspect(
         }
     };
     let loaded_endpoint = match &loaded {
-        Ok(Some(loaded)) => endpoint(&loaded.config, &loaded.revision),
+        Ok(Some(loaded)) => endpoint(&loaded.file.config, &loaded.file.revision),
         Ok(None) => {
             json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"resolution":null,"reason_code":"no_loaded_snapshot"})
         }
@@ -204,7 +251,7 @@ pub(super) async fn provider_inspect(
         }
     };
     let loaded_quota_guard = match &loaded {
-        Ok(Some(loaded)) => quota_guard(&loaded.config, &loaded.revision),
+        Ok(Some(loaded)) => quota_guard(&loaded.file.config, &loaded.file.revision),
         Ok(None) => {
             json!({"snapshot_state":"absent","configuration_revision":null,"policy":null,"reason_code":"no_loaded_snapshot"})
         }
@@ -220,7 +267,7 @@ pub(super) async fn provider_inspect(
         .and_then(|file| crate::failures::inspect(store, &file.config, id, now))
         .unwrap_or_else(unavailable);
     let loaded_failure = match &loaded {
-        Ok(Some(file)) => crate::failures::inspect_loaded(store, &file.config, id, now)
+        Ok(Some(file)) => crate::failures::inspect_loaded(store, &file.file.config, id, now)
             .unwrap_or_else(unavailable),
         Ok(None) => json!({"state":"unavailable","reason_code":"no_loaded_snapshot"}),
         Err(error) => unavailable(error.clone()),
@@ -231,8 +278,18 @@ pub(super) async fn provider_inspect(
         file_failure.clone()
     };
     failure_state["views"] = json!({"file":file_failure,"loaded":loaded_failure});
+    let file_quota = config::load(store)
+        .map(|file| quota_projection(store, &file.config, id, false))
+        .unwrap_or_else(unavailable);
+    let loaded_quota = loaded_quota_projection(&loaded, id);
+    let mut quota_suspension = if arg(r, "state") == Some("loaded") {
+        loaded_quota.clone()
+    } else {
+        file_quota.clone()
+    };
+    quota_suspension["views"] = json!({"file":file_quota,"loaded":loaded_quota});
     Ok(
-        json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"quota_guard":{"file":quota_guard(config,&file.revision),"loaded":loaded_quota_guard},"identity":null,"upstream_authentication":"unverified","observations":observations,"failure_state":failure_state,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
+        json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"quota_guard":{"file":quota_guard(config,&file.revision),"loaded":loaded_quota_guard},"quota_suspension":quota_suspension,"identity":null,"upstream_authentication":"unverified","observations":observations,"failure_state":failure_state,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
     )
 }
 
@@ -325,6 +382,44 @@ pub(super) fn agent_list(config: &Config) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn loaded_quota_uses_daemon_projection_and_fails_closed_when_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        store
+            .write_raw(
+                "tmax.toml",
+                b"version=1\n[providers.p]\nintegration='opencode-go'\n",
+            )
+            .unwrap();
+        let file = config::load(&store).unwrap();
+        let pending =
+            json!({"state":"suspended","persistence":"pending","durability":"unconfirmed"});
+        let mut loaded = Ok(Some(crate::service::LoadedSnapshot {
+            file,
+            metadata: None,
+            quota_suspensions: Some(serde_json::Map::from_iter([("p".into(), pending.clone())])),
+        }));
+        assert_eq!(loaded_quota_projection(&loaded, "p"), pending);
+        assert_eq!(
+            loaded_quota_projection(&loaded, "other")["reason_code"],
+            "provider_missing"
+        );
+        loaded.as_mut().unwrap().as_mut().unwrap().quota_suspensions = None;
+        assert_eq!(
+            loaded_quota_projection(&loaded, "p")["reason_code"],
+            "quota_state_unavailable"
+        );
+        assert_eq!(
+            loaded_quota_projection(&Ok(None), "p")["reason_code"],
+            "no_loaded_snapshot"
+        );
+        assert_eq!(
+            loaded_quota_projection(&Err(Error::new("daemon_unavailable", "unavailable")), "p")["state"],
+            "unavailable"
+        );
+    }
+
     #[tokio::test]
     async fn provider_inspection_exposes_quota_guard_policy() {
         let directory = tempfile::tempdir().unwrap();

@@ -6,7 +6,9 @@ mod selection;
 mod test_support;
 
 pub use priority::validate_model;
-pub(crate) use selection::{Advice, explain_loaded, explain_native, select_request_admitted};
+pub(crate) use selection::{
+    Advice, explain_loaded_effective, explain_native, select_request_admitted,
+};
 pub use selection::{
     RequestRequirements, Selection, explain, select, select_request, select_request_loaded,
 };

@@ -109,6 +109,7 @@ enum SelectionView<'a> {
         metadata: Option<&'a crate::catalog::Snapshot>,
         request: Option<RequestRequirements<'a>>,
         context: Option<&'a Advice<'a>>,
+        quota: Option<Option<&'a serde_json::Map<String, Value>>>,
     },
     Admitted {
         snapshot: &'a Snapshot<'a>,
@@ -125,22 +126,25 @@ fn decision(
     exact_at: &inputs::ExactInstant,
     view: SelectionView<'_>,
 ) -> Result<(Value, Option<Selection>)> {
-    let (snapshot, native, context, excluded_providers) = match view {
+    let (snapshot, native, context, excluded_providers, quota) = match view {
         SelectionView::Saved { context } => (
             Cow::Owned(Snapshot::capture(store, config)),
             None,
             context,
+            None,
             None,
         ),
         SelectionView::Loaded {
             metadata,
             request,
             context,
+            quota,
         } => (
             Cow::Owned(Snapshot::capture_loaded(store, config, metadata)),
             request.map(|request| request.native),
             context,
             None,
+            quota,
         ),
         SelectionView::Admitted {
             snapshot,
@@ -151,6 +155,7 @@ fn decision(
             Some(request.native),
             None,
             Some(excluded_providers),
+            None,
         ),
     };
     let (alias, candidates) = candidates(config, id, protocol)?;
@@ -223,8 +228,50 @@ fn decision(
         } else {
             None
         };
+        let quota_suspension = if reason.is_none()
+            && observed_unavailability.is_none()
+            && let Some((incarnation, authorization, _)) = &identity
+        {
+            if let Some(statuses) = quota {
+                if crate::provider_integration::integration_id(p).ok() != Some("opencode-go") {
+                    None
+                } else {
+                    let status = statuses.and_then(|statuses| statuses.get(&provider));
+                    match status.and_then(|status| status["state"].as_str()) {
+                        Some("available" | "manually_resumed") => None,
+                        Some("suspended") => {
+                            let status = status.unwrap();
+                            let suspended_at = status["suspended_at"]
+                                .as_str()
+                                .and_then(|at| inputs::ExactInstant::parse(at).ok());
+                            if suspended_at.as_ref().is_some_and(|at| exact_at >= at) {
+                                Some(status.clone())
+                            } else {
+                                Some(
+                                    json!({"state":"unavailable","reason_code":"quota_state_unavailable"}),
+                                )
+                            }
+                        }
+                        _ => Some(
+                            json!({"state":"unavailable","reason_code":"quota_state_unavailable"}),
+                        ),
+                    }
+                }
+            } else {
+                crate::observations::quota_suspension_for_binding(
+                    snapshot.as_ref(),
+                    config,
+                    &provider,
+                    exact_at,
+                    (incarnation, authorization),
+                )
+            }
+        } else {
+            None
+        };
         let quota_hold = if reason.is_none()
             && observed_unavailability.is_none()
+            && quota_suspension.is_none()
             && let Some((incarnation, authorization, _)) = &identity
         {
             crate::observations::quota_guard_hold_for_binding(
@@ -240,6 +287,11 @@ fn decision(
         };
         let reason = reason
             .or(observed_unavailability.as_deref())
+            .or(quota_suspension.as_ref().map(|evidence| {
+                evidence["reason_code"]
+                    .as_str()
+                    .unwrap_or("quota_state_unavailable")
+            }))
             .or(quota_hold.as_ref().map(|hold| hold.reason_code));
         let priority = evaluation["effective_priority"]
             .as_i64()
@@ -249,6 +301,9 @@ fn decision(
             let mut candidate = json!({"qualified_model":qualified,"reason_code":reason,"native_requirement":native_assessment.as_ref().and_then(|result| result.as_ref().err()).map(|error| json!({"code":error.code,"message":error.message}))});
             if let Some(hold) = &quota_hold {
                 candidate["availability_hold"] = json!(hold);
+            }
+            if let Some(suspension) = &quota_suspension {
+                candidate["quota_suspension"] = suspension.clone();
             }
             excluded.push(candidate);
         } else if let Some((provider_identity, authorization_generation, identity)) = identity {
@@ -357,6 +412,28 @@ fn request_unavailable(evidence: &Value) -> Error {
         && !excluded.is_empty()
         && excluded
             .iter()
+            .all(|candidate| candidate["reason_code"].as_str() == Some("quota_state_unavailable"))
+    {
+        return Error::new(
+            "quota_state_unavailable",
+            "Quota state is unavailable for all configured candidates",
+        );
+    }
+    if let Some(excluded) = evidence["excluded_candidates"].as_array()
+        && !excluded.is_empty()
+        && excluded
+            .iter()
+            .all(|candidate| candidate["reason_code"].as_str() == Some("quota_suspended"))
+    {
+        return Error::new(
+            "quota_suspended",
+            "All configured candidates are suspended awaiting quota recovery or provider quota-resume",
+        );
+    }
+    if let Some(excluded) = evidence["excluded_candidates"].as_array()
+        && !excluded.is_empty()
+        && excluded
+            .iter()
             .all(|candidate| candidate["reason_code"].as_str() == Some("quota_guard"))
     {
         let earliest = excluded
@@ -430,6 +507,7 @@ pub fn select_request_loaded(
             metadata,
             request: Some(request),
             context: None,
+            quota: None,
         },
     )?;
     selection.ok_or_else(|| request_unavailable(&evidence))
@@ -474,7 +552,8 @@ pub(crate) fn select_request_admitted(
     })
 }
 
-pub(crate) fn explain_loaded(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn explain_loaded_effective(
     store: &Store,
     config: &Config,
     id: &str,
@@ -482,6 +561,7 @@ pub(crate) fn explain_loaded(
     at: Option<&str>,
     metadata: Option<&crate::catalog::Snapshot>,
     context: Option<&Advice<'_>>,
+    quota: Option<Option<&serde_json::Map<String, Value>>>,
 ) -> Result<Value> {
     let now = Utc::now();
     let text = at
@@ -500,6 +580,7 @@ pub(crate) fn explain_loaded(
             metadata,
             request: None,
             context,
+            quota,
         },
     )
     .map(|(evidence, _)| evidence)
@@ -507,7 +588,7 @@ pub(crate) fn explain_loaded(
 
 #[cfg(test)]
 mod tests {
-    use super::{Advice, explain_loaded, explain_native, request_unavailable};
+    use super::{Advice, explain_loaded_effective, explain_native, request_unavailable};
     use crate::{
         config::{self, Config, Model, Provider},
         inputs,
@@ -599,7 +680,7 @@ mod tests {
                 gateway: false,
             }),
         };
-        let evidence = explain_loaded(
+        let evidence = explain_loaded_effective(
             &store,
             &loaded,
             "L0",
@@ -607,6 +688,7 @@ mod tests {
             None,
             Some(&old_metadata),
             Some(&context),
+            None,
         )
         .unwrap();
         assert_eq!(evidence["metadata_revision"], "loaded-metadata");

@@ -407,3 +407,13 @@ fn effort_map_binary_surface_requires_supported_protocol_and_finite_operands() {
         json_error(&tmax(&args));
     }
 }
+
+#[test]
+fn dsh_projection_help_is_offline_and_names_the_schema_boundary() {
+    let output = tmax(&["help", "dsh", "projection"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("DSH"));
+    assert!(text.contains("schema_version"));
+}

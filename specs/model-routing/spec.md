@@ -639,12 +639,10 @@ A status code alone does not establish those facts. An upstream retry hint does
 not schedule replay. Ambiguous outcomes may be attempted through another provider
 only under the explicit transport-error fallback option and its disclosed risk.
 
-Quota-based exclusion requires authoritative, sufficiently fresh evidence of
-unavailable access or a blocking quota access state that applies to the selected
-upstream identity, model coverage, and current quota window. Exclude only the
-affected models. A reset or expired observation must not leave an old window's
-depletion as permanent exclusion; freshness and reset semantics must be
-qualified by the provider integration.
+Quota-based exclusion requires source-qualified evidence scoped to the selected
+upstream identity, authorization, and model coverage. Confirmed blocking access
+follows [automatic quota suspension](#automatic-quota-suspension). A consumed
+percentage alone is not evidence of blocked access.
 Unknown, stale, estimated, or manually entered quota must not establish automatic
 exhaustion, and a failed usage refresh must not disable access. A generic
 rate-limit, capacity, transport, or network error is not proof of depleted
@@ -652,8 +650,8 @@ subscription quota. These checks change candidate eligibility, never effective
 priority or membership, and do not authorize hidden replay. Exhausted included
 allowance alone is not proof that upstream requests are blocked: the provider may
 permit paid continuation.
-Exclusion requires scoped evidence of unavailable access or an explicit provider
-`quota_guard` policy. With the guard enabled, an applicable quota observation whose
+An explicit provider `quota_guard` is a separate included-allowance policy.
+With the guard enabled, an applicable quota observation whose
 access state is `rate-limited` or `exhausted` creates an availability hold until
 the earlier of the observation's applicability bound, the guard's maximum
 observation age, and its announced reset. The guard is absent by default and is a
@@ -665,6 +663,52 @@ enablement and does not silently move a retained session. Do not query or model
 Extra Usage settings, subscription add-on wallets, or budget/spending-cap controls
 for routing. A qualified API-balance observation remains valid availability
 evidence. The [availability boundaries](design.md) own the evidence and hold model.
+
+### Automatic quota suspension
+
+Source-qualified blocking quota evidence suspends the affected provider's
+authorization by default. Each provider integration owns its recognized denial
+and recovery evidence. Unsupported integrations and generic HTTP statuses do
+not acquire quota semantics.
+
+| Current state and event | Required transition |
+| --- | --- |
+| Available; qualified quota denial or new blocking quota observation | Persist `quota_suspended`; exclude the affected provider from subsequent selection |
+| Suspended; daemon restart or unrelated configuration change | Keep the suspension for the same authorization and destination |
+| Suspended; fresh successful quota check confirms all covered windows available | Clear the suspension automatically |
+| Suspended; failed, unknown, or malformed quota check | Keep the suspension; report the failed check separately |
+| Suspended; announced reset passes | Recheck quota; passing time alone does not recover access |
+| Suspended; explicit `provider quota-resume` | Clear the suspension and supersede evidence captured before the resume |
+| Manually resumed; new qualified denial or new blocking quota observation | Suspend again |
+| Any state; authorization or destination changes | Prior suspension does not apply to the replacement binding |
+| Suspension state unreadable or invalid | Exclude affected Go routing with `quota_state_unavailable`; do not infer recovery or overwrite the state |
+
+The running daemon checks suspended, enabled providers through their qualified
+non-inference quota API at most once per provider per 60 seconds. This recovery
+check does not start a daemon, sign in, or send inference probes. A stopped
+daemon or unavailable quota source cannot establish recovery. Manual quota
+refresh uses the same recovery rules.
+The reserved automatic-check deadline survives recovery and manual resume, so
+another denial cannot create repeated checks inside the same interval.
+
+Suspension changes neither `enabled` nor priority. A manually disabled provider
+stays disabled after automatic recovery or manual resume. Retained destinations
+report `quota_suspended` without moving the conversation. Stateless aliases may
+select another eligible candidate; replay of the failure-triggering request
+still requires its explicit fallback policy.
+
+Admission evidence identifies the suspension reason, source, observation time,
+and known window/reset/check boundary without raw upstream bodies. Manual resume
+and newer denial evidence fence older in-flight publications; an old successful
+check cannot clear a newer denial. Inspection never acquires or changes state.
+
+If saving a confirmed denial fails, preserve the upstream rejection and retain
+the affected binding's suspension in the running daemon. Report pending
+persistence and unconfirmed durability; protection across process loss is not
+guaranteed until the save succeeds. Later admissions must not treat an older,
+still-readable disk record as recovery. Retry local persistence before any
+automatic recovery check. A fresh manual resume supersedes the pending denial;
+an independent stale quota check does not.
 
 ### Request fallback and failure priority override
 

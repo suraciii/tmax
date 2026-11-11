@@ -427,6 +427,10 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "attempts"
                 | "upstream_status"
                 | "failure_state_error"
+                | "quota_state_error"
+                | "persistence"
+                | "durability"
+                | "persistence_error"
                 | "base_priority"
                 | "fallback"
                 | "calendar"
@@ -467,6 +471,8 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "received_at"
                 | "valid_until"
                 | "reset_at"
+                | "suspended_at"
+                | "next_check_at"
                 | "max_observation_age_seconds"
                 | "remaining_percent"
                 | "remaining"
@@ -492,6 +498,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                 | "priority_evaluations"
                 | "excluded_candidates"
                 | "availability_hold"
+                | "quota_suspension"
                 | "priority_used_for_ranking"
                 | "priority_evaluation"
                 | "selected_evaluation"
@@ -561,6 +568,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                     "effort_resolution",
                     "attempts",
                     "failure_state_error",
+                    "quota_state_error",
                     "selected_rule_id",
                     "winning_rule",
                     "calendar_fallback",
@@ -571,6 +579,7 @@ pub fn safe_evidence(value: &Value) -> Value {
                     "matched",
                     "continuation",
                     "availability_hold",
+                    "quota_suspension",
                     "excluded_candidates",
                     "original_decision",
                     "decision",
@@ -626,12 +635,14 @@ fn decision_summary(value: &Value) -> Value {
         "reason_code",
         "continuation",
         "availability_hold",
+        "quota_suspension",
         "effective_priority",
         "priority",
         "selection",
         "selected",
         "effort_resolution",
         "failure_state_error",
+        "quota_state_error",
         "selected_rule_id",
         "winning_rule",
         "calendar_fallback",
@@ -650,16 +661,22 @@ fn decision_summary(value: &Value) -> Value {
         let mut retained = Vec::new();
         let mut bytes = 0;
         for candidate in excluded.iter().take(64) {
-            let Some(hold) = candidate.get("availability_hold") else {
+            if candidate.get("availability_hold").is_none()
+                && candidate.get("quota_suspension").is_none()
+            {
                 continue;
-            };
+            }
             let mut row = serde_json::Map::new();
             for key in ["qualified_model", "reason_code"] {
                 if let Some(value) = candidate.get(key) {
                     row.insert(key.into(), value.clone());
                 }
             }
-            row.insert("availability_hold".into(), hold.clone());
+            for key in ["availability_hold", "quota_suspension"] {
+                if let Some(evidence) = candidate.get(key) {
+                    row.insert(key.into(), evidence.clone());
+                }
+            }
             let row = Value::Object(row);
             let size = encoded_size(&row).max(value_memory(&row));
             if bytes + size > RECORD_BYTES / 4 {
@@ -758,6 +775,32 @@ mod tests {
         assert!(result.get("body").is_none());
         assert_eq!(result["evidence_gap"], true);
     }
+    #[test]
+    fn suspension_evidence_survives_bounded_summary_without_upstream_payload() {
+        let evidence = safe_evidence(&json!({
+            "excluded_candidates":[{"qualified_model":"p/m","reason_code":"quota_suspended",
+                "quota_suspension":{"state":"suspended","source":"go_usage_api","window":"monthly",
+                    "suspended_at":"2026-11-09T00:00:00Z","next_check_at":"2026-11-09T00:01:00Z",
+                    "persistence":"pending","durability":"unconfirmed","persistence_error":"storage_unavailable",
+                    "body":"private workspace"}}]
+        }));
+        let summary = decision_summary(&evidence);
+        let row = &summary["excluded_candidates"][0];
+        assert_eq!(row["reason_code"], "quota_suspended");
+        assert_eq!(row["quota_suspension"]["window"], "monthly");
+        assert_eq!(row["quota_suspension"]["persistence"], "pending");
+        assert_eq!(row["quota_suspension"]["durability"], "unconfirmed");
+        assert_eq!(
+            row["quota_suspension"]["persistence_error"],
+            "storage_unavailable"
+        );
+        assert_eq!(
+            row["quota_suspension"]["next_check_at"],
+            "2026-11-09T00:01:00Z"
+        );
+        assert!(row["quota_suspension"].get("body").is_none());
+    }
+
     #[test]
     fn availability_hold_survives_evidence_and_history_projection() {
         let decision = json!({

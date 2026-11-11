@@ -89,6 +89,12 @@ pub(super) fn safe_message(code: &str) -> &'static str {
         "quota_guard" => {
             "A destination is held by the local quota guard; inspect local request metadata for the recovery boundary"
         }
+        "quota_suspended" => {
+            "Destination suspended awaiting quota recovery or provider quota-resume"
+        }
+        "quota_state_unavailable" => {
+            "Destination quota state is unavailable; inspect local request metadata"
+        }
         _ => "Request unavailable at the indicated stage; inspect local request metadata",
     }
 }
@@ -96,6 +102,13 @@ pub(super) fn safe_message(code: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_quota_state_is_not_described_as_suspension() {
+        let message = safe_message("quota_state_unavailable");
+        assert!(message.contains("unavailable"));
+        assert!(!message.contains("suspend"));
+    }
 
     #[test]
     fn quota_guard_messages_name_scope_and_earliest_boundary() {

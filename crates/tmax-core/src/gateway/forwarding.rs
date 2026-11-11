@@ -1,6 +1,7 @@
 //! Same-protocol routing and pull-driven upstream response forwarding.
 use super::{
-    FORWARD_CHUNK_BYTES, REQUEST_BYTES, RequestFacts,
+    FORWARD_CHUNK_BYTES, INSPECTION_BYTES, QUOTA_ERROR_INSPECTION_SECONDS, REQUEST_BYTES,
+    RequestFacts,
     client_identity::{hop_header, upstream_headers},
     errors::error_response,
     request_body,
@@ -355,6 +356,12 @@ pub(super) async fn forward(
             identity: choice.provider_identity.clone(),
             authorization: choice.authorization_generation.clone(),
             reset_epoch: failure_epochs.epoch(&choice.provider_identity).to_owned(),
+            quota_epoch: crate::observations::quota_epoch_for_binding(
+                &lineage,
+                &snapshot.config,
+                &selection.provider,
+                (&choice.provider_identity, &choice.authorization_generation),
+            ),
         };
         attempts.push(
             json!({"provider":selection.provider,"qualified_model":flight.record.qualified_model,
@@ -379,9 +386,39 @@ pub(super) async fn forward(
             dispatch.resolved = true;
             result
         };
-        let result = result.map_err(reqwest::Error::without_url);
+        let mut quota_state_failed = false;
+        let result = match result.map_err(reqwest::Error::without_url) {
+            Ok(response)
+                if response.status() == StatusCode::TOO_MANY_REQUESTS
+                    && crate::provider_integration::integration_id(provider).ok()
+                        == Some("opencode-go") =>
+            {
+                let inspected = tokio::select! {
+                    biased;
+                    _ = flight.cancel.changed() => {
+                        finish_pending_attempt(&mut flight.record, "interrupted", Some("force_stop"));
+                        flight.finish("interrupted", "upstream_response", Some("force_stop"));
+                        return error_response(StatusCode::SERVICE_UNAVAILABLE, "force_stop", &id);
+                    }
+                    inspected = inspect_quota_response(response, provider) => inspected,
+                };
+                let (response, failed) =
+                    persist_inspected_quota(inspected, &attempt, &runtime, &mut flight.record);
+                quota_state_failed = failed;
+                Ok(response)
+            }
+            Ok(response) => Ok(UpstreamResponse::Original(response)),
+            Err(error) => Err(error),
+        };
         let (status, reason) = match &result {
-            Ok(response) => (Some(response.status().as_u16()), None),
+            Ok(response) => (
+                Some(response.status().as_u16()),
+                response.is_denial().then_some(if quota_state_failed {
+                    "quota_state_unavailable"
+                } else {
+                    "quota_suspended"
+                }),
+            ),
             Err(error) => (
                 None,
                 Some(if error.is_connect() {
@@ -396,7 +433,10 @@ pub(super) async fn forward(
         }
         attempts.resolve(status, reason);
         attempts.apply(&mut flight.record);
-        if fallback.is_some_and(|conditions| crate::failures::matches(conditions, status, reason)) {
+        if !quota_state_failed
+            && fallback
+                .is_some_and(|conditions| crate::failures::matches(conditions, status, reason))
+        {
             let mut evidence = Value::Null;
             match runtime.choose_untried(
                 &snapshot,
@@ -481,6 +521,7 @@ pub(super) async fn forward(
     let status = response.status();
     let headers = response.headers().clone();
     let request_id = upstream_request_id(&headers);
+    let safe_denial = response.is_denial();
     flight.record.upstream_status = Some(status.as_u16());
     flight.record.stage = "upstream_response".into();
     runtime.history.update(flight.record.clone());
@@ -489,10 +530,11 @@ pub(super) async fn forward(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("text/event-stream"));
     let state = ForwardStream {
-        upstream: Box::pin(response.bytes_stream()),
+        upstream: response.into_stream(),
         pending: Bytes::new(),
         flight,
         observer: Observer::new(protocol, sse, status.is_success()),
+        safe_denial,
         error_stage: if sse && status.is_success() {
             "upstream_stream"
         } else {
@@ -549,8 +591,8 @@ pub(super) async fn forward(
     let mut downstream = Response::new(Body::from_stream(stream));
     *downstream.status_mut() = status;
     for (name, value) in &headers {
-        if !hop_header(name.as_str()) && name != "content-length" {
-            downstream.headers_mut().insert(name.clone(), value.clone());
+        if !hop_header(name.as_str()) {
+            downstream.headers_mut().append(name.clone(), value.clone());
         }
     }
     if let Ok(v) = id.parse() {
@@ -558,6 +600,134 @@ pub(super) async fn forward(
     }
     downstream
 }
+type UpstreamStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send>>;
+
+enum UpstreamResponse {
+    Original(reqwest::Response),
+    Inspected {
+        status: StatusCode,
+        headers: HeaderMap,
+        stream: UpstreamStream,
+        denial: bool,
+    },
+}
+impl UpstreamResponse {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::Original(response) => response.status(),
+            Self::Inspected { status, .. } => *status,
+        }
+    }
+    fn headers(&self) -> &HeaderMap {
+        match self {
+            Self::Original(response) => response.headers(),
+            Self::Inspected { headers, .. } => headers,
+        }
+    }
+    fn is_denial(&self) -> bool {
+        matches!(self, Self::Inspected { denial: true, .. })
+    }
+    fn into_stream(self) -> UpstreamStream {
+        match self {
+            Self::Original(response) => Box::pin(response.bytes_stream()),
+            Self::Inspected { stream, .. } => stream,
+        }
+    }
+}
+
+// Keep the original chunks and any stream error for downstream; only a
+// complete body within the inspection bound can be quota evidence.
+async fn inspect_quota_response(
+    response: reqwest::Response,
+    provider: &crate::config::Provider,
+) -> (
+    UpstreamResponse,
+    Option<crate::provider_integration::QuotaDenial>,
+) {
+    let status = response.status();
+    let headers = response.headers().clone();
+    let mut upstream = Box::pin(response.bytes_stream());
+    let mut prefix = Vec::new();
+    let mut inspected_bytes = 0usize;
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(QUOTA_ERROR_INSPECTION_SECONDS);
+    let complete = loop {
+        match tokio::time::timeout_at(deadline, upstream.next()).await {
+            Ok(None) => break true,
+            Ok(Some(Ok(bytes))) => {
+                if bytes.is_empty() {
+                    continue;
+                }
+                inspected_bytes = inspected_bytes.saturating_add(bytes.len());
+                let fits = inspected_bytes <= INSPECTION_BYTES;
+                prefix.push(Ok(bytes));
+                if !fits {
+                    break false;
+                }
+            }
+            Ok(Some(Err(error))) => {
+                prefix.push(Err(error));
+                break false;
+            }
+            Err(_) => break false,
+        }
+    };
+    let denial = if !complete {
+        None
+    } else if let [Ok(bytes)] = prefix.as_slice() {
+        crate::provider_integration::quota_denial(provider, status.as_u16(), bytes)
+    } else {
+        let mut body = Vec::with_capacity(inspected_bytes);
+        for bytes in prefix.iter().filter_map(|chunk| chunk.as_ref().ok()) {
+            body.extend_from_slice(bytes);
+        }
+        crate::provider_integration::quota_denial(provider, status.as_u16(), &body)
+    };
+    let stream = Box::pin(futures_util::stream::iter(prefix).chain(upstream));
+    (
+        UpstreamResponse::Inspected {
+            status,
+            headers,
+            stream,
+            denial: denial.is_some(),
+        },
+        denial,
+    )
+}
+
+// Persistence is evidence bookkeeping, not permission to replace an upstream response.
+fn persist_inspected_quota(
+    (response, denial): (
+        UpstreamResponse,
+        Option<crate::provider_integration::QuotaDenial>,
+    ),
+    attempt: &AttemptContext,
+    runtime: &Runtime,
+    record: &mut crate::diagnostics::Record,
+) -> (UpstreamResponse, bool) {
+    let failed = if let Some(denial) = &denial {
+        match crate::observations::record_quota_denial(
+            &runtime.store,
+            &attempt.snapshot.config,
+            &attempt.provider,
+            (&attempt.identity, &attempt.authorization),
+            &attempt.quota_epoch,
+            denial,
+        ) {
+            Ok(()) => false,
+            Err(error) => {
+                record.decision["quota_state_error"] = json!(error.code);
+                record.evidence_gap = true;
+                true
+            }
+        }
+    } else {
+        false
+    };
+    (response, failed)
+}
+
 fn upstream_request_id(headers: &HeaderMap) -> Option<(String, bool)> {
     ["request-id", "x-request-id"].iter().find_map(|name| {
         headers
@@ -571,11 +741,22 @@ fn upstream_request_id(headers: &HeaderMap) -> Option<(String, bool)> {
             })
     })
 }
-fn record_fallback_error(response: reqwest::Response, flight: &mut Flight) {
+fn record_fallback_error(response: UpstreamResponse, flight: &mut Flight) {
     let captured_at = Utc::now();
     let status = Some(response.status().as_u16());
     let request_id = upstream_request_id(response.headers());
-    let mut stream = response.bytes_stream();
+    if response.is_denial() {
+        flight.record_error(
+            captured_at,
+            "upstream_response",
+            status,
+            request_id,
+            "Upstream confirmed quota exhaustion".into(),
+            false,
+        );
+        return;
+    }
+    let mut stream = response.into_stream();
     let mut body = Vec::new();
     let mut truncated = true;
     loop {
@@ -709,6 +890,7 @@ struct AttemptContext {
     identity: String,
     authorization: String,
     reset_epoch: String,
+    quota_epoch: String,
 }
 impl AttemptContext {
     fn record(
@@ -742,6 +924,7 @@ struct ForwardStream {
     pending: Bytes,
     flight: Flight,
     observer: Observer,
+    safe_denial: bool,
     error_stage: &'static str,
     done: bool,
     attempt: Option<AttemptContext>,
@@ -760,7 +943,11 @@ impl ForwardStream {
                 self.error_stage,
                 self.flight.record.upstream_status,
                 self.request_id.clone(),
-                error,
+                if self.safe_denial {
+                    "Upstream confirmed quota exhaustion".into()
+                } else {
+                    error
+                },
                 truncated,
             );
         }

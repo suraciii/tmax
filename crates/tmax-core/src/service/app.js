@@ -268,7 +268,7 @@ function renderProviderList() {
   const filtered=state.providers.filter(p=>`${p.id} ${providerName(p.id)} ${serviceName(state.config.providers[p.id])}`.toLowerCase().includes(state.query.toLowerCase()));
   if (!filtered.length) { $('provider-list').innerHTML=`<div class="panel">${empty(state.query?'没有匹配的接入':'还没有添加接入',state.query?'试试其他名称或 ID。':'选择集成类型或自定义端点，保存后配置授权和模型。',state.query?'':button('添加接入','provider-add','','primary','plus'),'providers')}</div>`; return; }
   const groups=Map.groupBy?Map.groupBy(filtered,p=>serviceName(state.config.providers[p.id])):filtered.reduce((m,p)=>{const k=serviceName(state.config.providers[p.id]);m.set(k,[...(m.get(k)||[]),p]);return m;},new Map());
-  $('provider-list').innerHTML=[...groups].map(([name,providers])=>`<div class="section-label"><h2>${escapeHtml(name)}</h2><p>${providers.length} 个独立实例</p></div><div class="cards">${providers.map(p=>{const config=state.config.providers[p.id];const observation=p.observations?.observations?.find(o=>o.scope==='quota');return `<article class="provider-card"><div class="card-top"><div class="avatar blue">${escapeHtml(name.slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p class="mono">${escapeHtml(p.id)}</p></div>${authBadge(p)}</div><div class="card-facts">${fact('模型',Object.keys(config.models || {}).length+' 个')}${fact('订阅计划',config.subscription?.plan || '未记录')}${quotaCard(observation)}${fact('使用此接入的工具',p.affected_targets+' 个配置')}</div><div class="card-actions">${button('管理接入','provider-detail',p.id,'small','',`管理接入 ${providerName(p.id)}`)}${button(p.authentication==='not_configured'?'配置授权':'更新授权','provider-auth',p.id,'soft small','key',`${p.authentication==='not_configured'?'配置授权':'更新授权'} ${providerName(p.id)}`)}</div></article>`;}).join('')}</div>`).join('');
+  $('provider-list').innerHTML=[...groups].map(([name,providers])=>`<div class="section-label"><h2>${escapeHtml(name)}</h2><p>${providers.length} 个独立实例</p></div><div class="cards">${providers.map(p=>{const config=state.config.providers[p.id];const observation=p.observations?.observations?.find(o=>o.scope==='quota');return `<article class="provider-card"><div class="card-top"><div class="avatar blue">${escapeHtml(name.slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p class="mono">${escapeHtml(p.id)}</p></div>${authBadge(p)}</div><div class="card-facts">${fact('模型',Object.keys(config.models || {}).length+' 个')}${fact('订阅计划',config.subscription?.plan || '未记录')}${(quotaCard(observation) + quotaSuspensionCard(p))}${fact('使用此接入的工具',p.affected_targets+' 个配置')}</div><div class="card-actions">${button('管理接入','provider-detail',p.id,'small','',`管理接入 ${providerName(p.id)}`)}${button(p.authentication==='not_configured'?'配置授权':'更新授权','provider-auth',p.id,'soft small','key',`${p.authentication==='not_configured'?'配置授权':'更新授权'} ${providerName(p.id)}`)}</div></article>`;}).join('')}</div>`).join('');
 }
 function renderModels() {
   $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">模型别名</button></div>${searchBox('搜索模型或接入')}</div>${state.modelKind==='alias'?notice('模型别名是引用已有模型的命名配置。每个候选是模型引用及别名内的局部设置，不是独立模型。可为每个候选设置推理强度覆盖；未设置时不改写客户端请求。别名仅用于网关，不自动改变工具的直接连接。'):''}<div id="model-list"></div>`;
@@ -482,13 +482,36 @@ function providerFailureState(data, id) {
     notice('只统计策略匹配的错误；普通成功会清除连续计数，生效中的固定优先级不受成功影响，且不会延长到期时间。')+
     `<div class="actions">${button('配置错误策略','provider-failure-policy',id,'small')}${button('重置错误状态','provider-failure-reset',id,'small danger')}</div>`;
 }
+function quotaSuspensionCard(provider) {
+  const views=provider.quota_suspension?.views;
+  if(views?.loaded?.state==='suspended')return fact('额度路由','已自动暂停')+(views.loaded.persistence==='pending'?notice('暂停状态保存失败，正在重试；保存成功前无法保证重启后仍受保护。','warning'):'');
+  if(!views?.loaded || views.loaded.state==='unavailable')return fact('额度路由（当前）','状态不可用')+(views?.file?.state==='suspended'?fact('额度路由（已保存）','已自动暂停'):'');
+  if(views?.file?.state==='suspended' && views.loaded.state!=='suspended')return fact('额度路由（已保存）','已自动暂停');
+  return '';
+}
+function providerQuotaSuspension(data,id) {
+  const selected=data.quota_suspension, loaded=selected?.views?.loaded, saved=selected?.views?.file || selected;
+  const labels={suspended:'因额度耗尽暂停路由',available:'未因额度暂停',manually_resumed:'已手动恢复',unsupported:'不支持自动额度暂停',unavailable:'状态不可用'};
+  const renderView=(status,title)=>{
+    const heading=`<h3 class="subheading">${escapeHtml(title)}</h3>`;
+    if(!status||!Object.hasOwn(labels,status.state))return heading+notice('无法确定额度暂停状态，请刷新重试。','warning');
+    return heading+`<div class="detail-facts">${fact('额度路由状态',labels[status.state])}${status.state==='suspended'?fact('暂停时间',status.suspended_at || '未知')+fact('额度周期',status.window || '未知')+fact('下次检查',status.next_check_at || '未知'):''}</div>`+
+      (status.state==='unavailable'?notice('无法读取此配置视图的暂停状态。'+(status.reason_code?' 原因代码：'+escapeHtml(status.reason_code):''),'warning'):'')+
+      (status.state==='suspended' && status.persistence==='pending'?notice('运行中的守护进程已暂停路由，但保存暂停状态失败，正在重试。保存成功前无法保证重启后仍受保护。','warning'):'')+
+      (status.state==='available'?notice('此视图未暂停路由；这不代表已确认上游额度可用。'):'')+
+      (status.state==='suspended' && status.latest_check && status.latest_check.outcome!=='completed'?notice('最近额度检查未成功，继续保持暂停。'+(status.latest_check.reason_code?' 原因代码：'+escapeHtml(status.latest_check.reason_code):''),'warning'):'');
+  };
+  return renderView(loaded,'额度暂停 · 已加载配置（当前路由）')+
+    (JSON.stringify(saved)!==JSON.stringify(loaded)?renderView(saved,'额度暂停 · 已保存配置投影'):'')+
+    ((loaded?.state==='suspended'||saved?.state==='suspended')?notice('恢复不会验证上游额度，也不会启用已停用的接入；新的确认额度拒绝仍会再次暂停。','warning')+`<div class="actions">${button('手动恢复额度路由','provider-quota-resume',id,'small')}</div>`:'');
+}
 async function providerDetail(id) {
   const generation=openDialog(providerName(id),'<div class="loading">正在读取接入详情…</div>','PROVIDER');
   try {
     const [data,inputs]=await Promise.all([read('provider inspect',[id]),read('provider input list',[id]).catch(()=>null)]);
     if(generation!==state.dialogGeneration)return;
     const p=data.provider;
-    $('dialog-content').innerHTML=`<div class="actions">${button('编辑信息','provider-edit',id,'primary','settings')}${button('配置授权','provider-auth',id,'','key')}${button('添加模型','model-add',id,'','plus')}</div><div class="detail-facts">${fact('本地 ID',id)}${fact('集成类型',serviceName(p))}${fact('授权',p.auth?'已配置 · 上游未验证':'尚未配置')}${fact('账户身份',data.identity || '未知')}${fact('订阅计划',p.subscription?.plan || '未记录')}${fact('续费日期',dateValue(data.renewal) || '未知')}</div>${quotaSection(data,id)}${inputs?.inputs?.length?detail(inputs,'查看额度输入及新鲜度'):''}${detail(data,'查看继承、覆盖值、端点与完整详情')}<h3 class="subheading">更多操作</h3><div class="actions">${button('高级编辑','provider-advanced',id,'small')}${button('移除接入','provider-remove',id,'small danger')}</div>`;
+    $('dialog-content').innerHTML=`<div class="actions">${button('编辑信息','provider-edit',id,'primary','settings')}${button('配置授权','provider-auth',id,'','key')}${button('添加模型','model-add',id,'','plus')}</div><div class="detail-facts">${fact('本地 ID',id)}${fact('集成类型',serviceName(p))}${fact('授权',p.auth?'已配置 · 上游未验证':'尚未配置')}${fact('账户身份',data.identity || '未知')}${fact('订阅计划',p.subscription?.plan || '未记录')}${fact('续费日期',dateValue(data.renewal) || '未知')}</div>${providerQuotaSuspension(data,id)}${quotaSection(data,id)}${inputs?.inputs?.length?detail(inputs,'查看额度输入及新鲜度'):''}${detail(data,'查看继承、覆盖值、端点与完整详情')}<h3 class="subheading">更多操作</h3><div class="actions">${button('高级编辑','provider-advanced',id,'small')}${button('移除接入','provider-remove',id,'small danger')}</div>`;
     $('dialog-content').insertAdjacentHTML('beforeend',providerFailureState(data,id));
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error')+notice('接入检查失败，错误计数与固定优先级状态未知。','warning')+`<div class="actions">${button('配置错误策略','provider-failure-policy',id)}${button('重置错误状态','provider-failure-reset',id,'danger')}</div>`;}
 }
@@ -830,7 +853,7 @@ function configureGateway() {
 }
 
 const operandLabels={'Provider ID':'接入 ID','Qualified model':'具体模型引用','Alias ID':'别名','Target ID':'工具配置名称','Native provider entry':'工具内来源名称','Model ID':'模型 ID','Catalog provider ID':'目录提供商 ID','Request handle':'请求记录标识','Recovery handle':'恢复记录标识','Native role':'原生模型角色'};
-const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','gateway autostart enable':'启用登录时启动','gateway autostart disable':'关闭登录时启动','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除接入','model remove':'移除模型','model alias remove':'移除模型别名','provider refresh':'查询上游信息','provider login':'登录接入','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
+const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除接入','model remove':'移除模型','model alias remove':'移除模型别名','provider refresh':'查询上游信息','provider login':'登录接入','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
 const operationEffects={
   'skill install':'将 tmax 使用说明安装到本机技能目录，供编程工具读取。可先预览目标路径；不会修改模型配置。',
   'gateway start':'启动本地网关；新进程由系统托管，确认就绪后才报告成功。不会启用登录自启动。',
@@ -937,6 +960,7 @@ async function dispatch(action,id) {
     case 'provider-edit': editProvider(id);break;
     case 'provider-failure-policy': providerFailurePolicy(id);break;
     case 'provider-failure-reset': formDialog('重置接入错误状态',`清除 ${escapeHtml(id)} 的连续错误计数和生效中的固定优先级。不会删除策略，也不会验证上游已经恢复。`,notice('请先预览影响；确认重置后，后续请求重新累计错误。'),()=>({operation:'provider failure-reset',operands:[id]}),{submit:'重置错误状态',success:'错误状态已重置',onSaved:()=>providerDetail(id)});break;
+    case 'provider-quota-resume': formDialog('手动恢复额度路由',`清除 ${escapeHtml(id)} 的自动额度暂停状态。不会检查上游额度，也不会启用已停用的接入。`,notice('请先预览影响；新的确认额度拒绝仍会再次暂停此接入。','warning'),()=>({operation:'provider quota-resume',operands:[id]}),{submit:'恢复额度路由',success:'额度暂停状态已清除',onSaved:()=>providerDetail(id)});break;
     case 'provider-auth': providerAuth(id);break;
     case 'provider-remove': openOperation('provider remove',[id]);break;
     case 'provider-advanced': openOperation('provider update',[id]);break;
@@ -965,7 +989,7 @@ async function dispatch(action,id) {
     case 'agent-restore': openOperation('agent restore',[id]);break;
     case 'agent-advanced': openOperation('agent inspect',[id]);break;
     case 'gateway-configure': configureGateway();break;
-    case 'autostart': formDialog('登录时启动','这会更改本机的登录启动注册。启用后，下次登录会按已保存配置启动网关。',field('enabled','登录时启动',String(state.runtime?.autostart?.login_enabled || false),{options:[['false','关闭'],['true','启用']]}),()=>({operation:'gateway autostart '+(value('enabled')==='true'?'enable':'disable')}),{stayOpen:true});break;
+    case 'autostart': formDialog('登录时启动','登录时启动默认开启：下次登录会按已保存配置自动启动网关。关闭后下次登录不再自动启动；当前运行中的网关不受影响。',field('enabled','登录时启动',String(state.runtime?.autostart?.saved_intent ?? true),{options:[['false','关闭'],['true','启用']]}),()=>({operation:'gateway configure',args:{set:['autostart',value('enabled')]}}),{stayOpen:true});break;
     case 'reveal': await revealKey();break;
     case 'hide-key': clearReveal();break;
     case 'history': await history();break;

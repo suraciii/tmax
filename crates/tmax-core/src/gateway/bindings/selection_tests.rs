@@ -537,3 +537,175 @@ fn request_capabilities_never_filter_alias_ranking() {
     );
     assert_eq!(body, original);
 }
+
+#[test]
+fn confirmed_denial_skips_provider_and_manual_resume_fences_old_admission() {
+    let (_directory, runtime, config) = fixture();
+    let mut go = config.clone();
+    let provider = go.providers.get_mut("p").unwrap();
+    provider.integration = Some("opencode-go".into());
+    provider.endpoints.clear();
+    go.model_aliases[0].continuity = Some("stateless".into());
+    publish(&runtime, &config, &go, "suspension");
+    runtime
+        .store
+        .write_raw("tmax.toml", toml::to_string(&go).unwrap().as_bytes())
+        .unwrap();
+    let lineage = crate::inputs::Snapshot::capture_loaded(&runtime.store, &go, None);
+    let (incarnation, authorization, _) = lineage.destination_identity("p", "m").unwrap();
+    let epoch = crate::observations::quota_epoch_for_binding(
+        &lineage,
+        &go,
+        "p",
+        (&incarnation, &authorization),
+    );
+    let denial = crate::provider_integration::quota_denial(
+        &go.providers["p"],
+        429,
+        br#"{"error":{"type":"GoUsageLimitError"},"metadata":{"limitName":"monthly"}}"#,
+    )
+    .unwrap();
+    crate::observations::record_quota_denial(
+        &runtime.store,
+        &go,
+        "p",
+        (&incarnation, &authorization),
+        &epoch,
+        &denial,
+    )
+    .unwrap();
+    let body = json!({"messages":[{"role":"user","content":"hello"}]});
+    let choose = || {
+        let at = Utc::now();
+        runtime
+            .choose(
+                &test_snapshot(&go, "suspension"),
+                "dynamic",
+                "chat-completions",
+                &body,
+                &native_headers(at),
+                at,
+            )
+            .unwrap()
+    };
+    let choice = choose();
+    assert_eq!(choice.selection.provider, "q");
+    let excluded = choice.selection.evidence["excluded_candidates"]
+        .as_array()
+        .unwrap();
+    let denied = excluded
+        .iter()
+        .find(|entry| entry["qualified_model"] == "p/m")
+        .unwrap();
+    assert_eq!(denied["reason_code"], "quota_suspended");
+    assert_eq!(denied["quota_suspension"]["window"], "monthly");
+    let safe = crate::diagnostics::safe_evidence(&choice.selection.evidence);
+    assert_eq!(
+        safe["excluded_candidates"][0]["quota_suspension"]["state"],
+        "suspended"
+    );
+    let at = Utc::now();
+    let mut evidence = Value::Null;
+    let error = runtime
+        .choose_recorded(
+            &test_snapshot(&go, "suspension"),
+            ("p/m", "chat-completions"),
+            &crate::gateway::request_facts::RequestFacts::from_value(body.clone()).unwrap(),
+            &native_headers(at),
+            at,
+            &mut evidence,
+        )
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "quota_suspended");
+    assert!(error.message.contains("provider quota-resume"));
+    assert_eq!(
+        evidence["excluded_candidates"][0]["quota_suspension"]["window"],
+        "monthly"
+    );
+
+    crate::observations::resume_quota(&runtime.store, &go, "p").unwrap();
+    crate::observations::record_quota_denial(
+        &runtime.store,
+        &go,
+        "p",
+        (&incarnation, &authorization),
+        &epoch,
+        &denial,
+    )
+    .unwrap();
+    let resumed = choose();
+    assert_eq!(resumed.selection.provider, "p");
+}
+
+#[test]
+fn unreadable_go_quota_state_excludes_only_go_candidates() {
+    let (_directory, runtime, config) = fixture();
+    let mut go = config.clone();
+    let provider = go.providers.get_mut("p").unwrap();
+    provider.integration = Some("opencode-go".into());
+    provider.endpoints.clear();
+    go.model_aliases[0].continuity = Some("stateless".into());
+    publish(&runtime, &config, &go, "unreadable-quota");
+    let at = Utc::now();
+    let body = json!({"messages":[{"role":"user","content":"hello"}]});
+    let headers = native_headers(at);
+    let snapshot = test_snapshot(&go, "unreadable-quota");
+    assert_eq!(
+        runtime
+            .choose(&snapshot, "p/m", "chat-completions", &body, &headers, at)
+            .unwrap()
+            .selection
+            .provider,
+        "p"
+    );
+    runtime
+        .store
+        .write_raw("observations/heads.json", b"{invalid")
+        .unwrap();
+    let choice = runtime
+        .choose(
+            &snapshot,
+            "dynamic",
+            "chat-completions",
+            &body,
+            &headers,
+            at,
+        )
+        .unwrap();
+    assert_eq!(choice.selection.provider, "q");
+    let excluded = choice.selection.evidence["excluded_candidates"]
+        .as_array()
+        .unwrap();
+    let go_entry = excluded
+        .iter()
+        .find(|entry| entry["qualified_model"] == "p/m")
+        .unwrap();
+    assert_eq!(go_entry["reason_code"], "quota_state_unavailable");
+    assert_eq!(go_entry["quota_suspension"]["state"], "unavailable");
+    let mut evidence = Value::Null;
+    let error = runtime
+        .choose_recorded(
+            &snapshot,
+            ("p/m", "chat-completions"),
+            &crate::gateway::request_facts::RequestFacts::from_value(body.clone()).unwrap(),
+            &headers,
+            at,
+            &mut evidence,
+        )
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "quota_state_unavailable");
+    assert_eq!(
+        evidence["continuation"]["quota_suspension"]["reason_code"],
+        "quota_state_unavailable"
+    );
+    assert_eq!(
+        runtime
+            .choose(&snapshot, "q/m", "chat-completions", &body, &headers, at)
+            .unwrap()
+            .selection
+            .provider,
+        "q"
+    );
+}

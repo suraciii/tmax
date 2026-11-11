@@ -116,15 +116,12 @@ fn opencode_first_use_and_resume_keep_the_selected_destination() {
 }
 
 #[test]
-fn retained_destination_quota_hold_rejects_without_moving_or_persisting_a_block() {
+fn retained_destination_quota_suspension_blocks_until_confirmed_recovery() {
     let (_temporary, runtime, config) = fixture();
     let mut go = config.clone();
     let p = go.providers.get_mut("p").unwrap();
     p.integration = Some("opencode-go".into());
     p.endpoints.clear();
-    p.quota_guard = Some(crate::config::QuotaGuard {
-        max_observation_age_seconds: 3600,
-    });
     publish(&runtime, &config, &go, "quota-go");
     runtime
         .store
@@ -132,7 +129,7 @@ fn retained_destination_quota_hold_rejects_without_moving_or_persisting_a_block(
         .unwrap();
     let at = runtime.bindings.lock().unwrap().epoch + chrono::Duration::milliseconds(2);
     let headers = native_headers(at);
-    let body = json!({"messages":[{"role":"user","content":"quota guard test"}]});
+    let body = json!({"messages":[{"role":"user","content":"quota suspension test"}]});
     let first = runtime
         .choose(
             &test_snapshot(&go, "quota-go"),
@@ -170,18 +167,12 @@ fn retained_destination_quota_hold_rejects_without_moving_or_persisting_a_block(
         Ok(_) => panic!("held retained destination must reject"),
         Err(error) => error,
     };
-    assert_eq!(held.code, "quota_guard");
+    assert_eq!(held.code, "quota_suspended");
     assert_eq!(
-        evidence["continuation"]["availability_hold"]["window"],
+        evidence["continuation"]["quota_suspension"]["window"],
         "weekly"
     );
-    assert!(
-        held.message.contains(
-            &crate::inputs::ExactInstant::parse(&reset_text)
-                .unwrap()
-                .canonical()
-        )
-    );
+    assert!(held.message.contains("provider quota-resume"));
     {
         let bindings = runtime.bindings.lock().unwrap();
         let binding = bindings.entries.values().next().unwrap();
@@ -210,13 +201,16 @@ fn retained_destination_quota_hold_rejects_without_moving_or_persisting_a_block(
         )
         .unwrap();
     assert_eq!(explanation["continuation"]["state"], "blocked");
-    assert_eq!(explanation["continuation"]["reason_code"], "quota_guard");
     assert_eq!(
-        explanation["continuation"]["availability_hold"]["state"],
-        "rate-limited"
+        explanation["continuation"]["reason_code"],
+        "quota_suspended"
     );
     assert_eq!(
-        explanation["continuation"]["availability_hold"]["window"],
+        explanation["continuation"]["quota_suspension"]["state"],
+        "suspended"
+    );
+    assert_eq!(
+        explanation["continuation"]["quota_suspension"]["window"],
         "weekly"
     );
 
@@ -231,8 +225,11 @@ fn retained_destination_quota_hold_rejects_without_moving_or_persisting_a_block(
             Some(&after_reset),
         )
         .unwrap();
-    assert_eq!(explanation["continuation"]["state"], "retained");
-    assert!(explanation["continuation"]["availability_hold"].is_null());
+    assert_eq!(explanation["continuation"]["state"], "blocked");
+    assert_eq!(
+        explanation["continuation"]["reason_code"],
+        "quota_suspended"
+    );
 
     let available = crate::provider_integration::normalize_observation(
         "go_usage_api",
@@ -258,6 +255,87 @@ fn retained_destination_quota_hold_rejects_without_moving_or_persisting_a_block(
     assert_eq!(
         resumed.selection.evidence["selection_reason"],
         "retained_destination"
+    );
+}
+
+#[test]
+fn unreadable_quota_state_blocks_retained_destination_and_preview() {
+    let (_temporary, runtime, config) = fixture();
+    let mut go = config.clone();
+    let provider = go.providers.get_mut("p").unwrap();
+    provider.integration = Some("opencode-go".into());
+    provider.endpoints.clear();
+    publish(&runtime, &config, &go, "quota-state-failure");
+    runtime
+        .store
+        .write_raw("tmax.toml", toml::to_string(&go).unwrap().as_bytes())
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "user-agent",
+        "opencode/stable/2.0.19/opencode".parse().unwrap(),
+    );
+    headers.insert("x-opencode-session", "ses_quota_failure".parse().unwrap());
+    let body = json!({"messages":[{"role":"user","content":"hello"}]});
+    let at = Utc::now();
+    let choice = runtime
+        .choose(
+            &test_snapshot(&go, "quota-state-failure"),
+            "dynamic",
+            "chat-completions",
+            &body,
+            &headers,
+            at,
+        )
+        .unwrap();
+    assert_eq!(choice.selection.provider, "p");
+    let session = runtime
+        .bindings
+        .lock()
+        .unwrap()
+        .entries
+        .values()
+        .next()
+        .unwrap()
+        .context_handle
+        .clone();
+    runtime
+        .store
+        .write_raw("observations/heads.json", b"{invalid")
+        .unwrap();
+
+    let mut evidence = Value::Null;
+    let error = runtime
+        .choose_recorded(
+            &test_snapshot(&go, "quota-state-failure"),
+            ("dynamic", "chat-completions"),
+            &crate::gateway::request_facts::RequestFacts::from_value(body).unwrap(),
+            &headers,
+            Utc::now(),
+            &mut evidence,
+        )
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "quota_state_unavailable");
+    assert_eq!(
+        evidence["continuation"]["reason_code"],
+        "quota_state_unavailable"
+    );
+    assert_eq!(
+        evidence["continuation"]["quota_suspension"]["state"],
+        "unavailable"
+    );
+    let preview = runtime
+        .inspect_session(&go, "dynamic", "chat-completions", &session, true, None)
+        .unwrap();
+    assert_eq!(preview["continuation"]["state"], "blocked");
+    assert_eq!(
+        preview["continuation"]["reason_code"],
+        "quota_state_unavailable"
+    );
+    assert_eq!(
+        preview["continuation"]["quota_suspension"]["state"],
+        "unavailable"
     );
 }
 

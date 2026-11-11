@@ -86,7 +86,11 @@ impl<'a> Snapshot<'a> {
                 Ok(Self {
                     runtime,
                     view,
-                    observations: crate::observations::snapshot(store).ok(),
+                    observations: if loaded {
+                        crate::observations::snapshot(store).ok()
+                    } else {
+                        crate::observations::snapshot_saved(store).ok()
+                    },
                     error: None,
                     metadata,
                 })

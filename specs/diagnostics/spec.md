@@ -35,6 +35,7 @@ them; success in one row must not supply success in another.
 | Shared gateway access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled, protocol-qualified publication list. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a saved reference is not proof of a readable key. |
 | Model reachability | The exact provider authorization, model, native protocol, transport, and tested capability scope of a successful or failed request. Catalog presence, model discovery, authentication success, and quota-query success must not verify inference or untested capabilities. |
 | Quota freshness | The latest applicable provider observation, its freshness, and the latest refresh outcome. Unknown, stale, unavailable, and manual information must remain distinct from a fresh authoritative observation. Quota, balance, credential expiry, quota reset, and renewal must remain separate facts. |
+| Quota suspension | Automatic routing exclusion for one provider authorization versus user-configured disablement; source-qualified cause, suspension time, known window/reset, next quota check, latest check failure, and explicit manual-resume outcome. A reset announcement is not confirmed recovery. |
 | Priority inputs | Each declared provider-local quota/reset channel's source, declaration and current-head revisions, scope/model coverage, normalized value or unavailable reason, applicability to saved versus loaded settings, and latest acquisition outcome. Manual quota, a public reset forecast, provider quota evidence, and an actual completed reset are different facts. Acquisition intent, a running/paused/blocked acquisition state, and head freshness must remain distinct. |
 | Outbound network | Saved versus loaded global mode and nonsecret gateway destination, with the policy used by the operation. A configured gateway is not proof of network reachability. Native-agent networking is outside this evidence scope. |
 
@@ -100,6 +101,14 @@ changed scope. A process restart must not reuse an earlier listener instance's
 availability as current evidence. An unrelated change need not invalidate evidence
 whose dependencies are known to be unchanged.
 
+Quota suspension can be effective in the daemon while persistence is pending.
+The loaded projection must come from that daemon, not a local reread of disk.
+Report `persistence: pending`, `durability: unconfirmed`, and a safe
+`persistence_error` when a confirmed denial could not be saved. The file
+projection remains disk-only. If the daemon cannot be inspected, its effective
+state is unavailable, not inferred from the file. Pending durability must warn
+that a process crash can lose the unsaved suspension.
+
 Superseded or stale evidence may remain visible as dated evidence only where
 its owning lifecycle retains it. It must not supply a current successful/green
 status for a replacement scope. This does not require a catalog of old input
@@ -151,6 +160,10 @@ for general background checks, sign-in, or inference probes. Input/acquisition
 views must report the saved/loaded intent, active or paused/blocked condition,
 latest attempt, and known due state without starting the service or acquiring a fact.
 Admission and preview consume published heads without waiting for acquisition.
+
+The [automatic quota suspension lifecycle](../model-routing/spec.md#automatic-quota-suspension)
+also permits bounded non-inference recovery checks for already suspended providers
+while the existing daemon runs. It does not permit background inference probes.
 
 An explicit observation refresh must identify the provider, check kind, and
 requested scope before it runs. Supported non-inference authentication,
@@ -218,6 +231,7 @@ decision evidence and its gaps without rerunning selection or adding unretained 
 | Selected destination | Selected qualified model, local provider reference, and a safe local handle for the selected authorization generation, only after selection actually occurs. The handle must not reveal a secret, secret fingerprint, upstream account identifier, or native session token. |
 | Admission and revisions | Admission timestamp, loaded configuration revision, accepted metadata revision, and the coherent vector of relevant input declaration/head revisions or explicit absent/cleared states used at admission. Retain safe scope/authorization-generation handles, not upstream identity strings. A rejection before admission shows receipt time and that admission did not occur. If pre-dispatch revalidation repeats selection, distinguish the snapshot/instant actually used by that decision from the initial one. |
 | Availability holds | For each excluded candidate, safe provider/model reference, controlled hold reason, quota window and coverage scope, observation time, applicability and reset boundaries, and whether an enabled `quota_guard` authorized the hold. Do not retain raw source payloads or secret material. |
+| Quota suspension | Controlled `quota_suspended` reason, qualified local provider/model, source, suspension time, and known quota window/reset/next-check boundary. Preserve this evidence in bounded history without upstream workspace identifiers or raw denial bodies. |
 | Decision basis | Actual selection instant; fixed concrete, new dynamic, or retained-destination reason; selected named signal rule or calendar/base fallback; effective priority; and stable tie-break reason when relevant. Include ordered captured rule outcomes and their controlled reasons, including shadowing, without claiming unevaluated predicates. A fixed destination's displayed priority is not the cause of its selection. Inapplicable, omitted, or unavailable details remain explicit. |
 | Configured candidate effort | Selected validated `candidate_reasoning_effort`, or null for no configured override; never infer the caller's omitted value or upstream default. Optional competing-candidate details remain bounded. For a retained destination, keep the current request's configured effort distinct from its original decision. This is decision metadata, not reasoning content or request-body capture. |
 | Effort resolution | Root `effort_resolution` records `input_effort` and `upstream_effort` as strings or null, plus `source`: `fixed`, `map`, `identity`, or `omitted`. Keep caller input distinct from the resolved upstream value; null omission is not an upstream default. Read the backend from the existing selected `qualified_model`, not from the effort name. Retain this bounded evidence on selected-backend effort rejections as well as dispatched requests; no alternate backend, full request body, or reasoning content is captured. |

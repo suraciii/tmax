@@ -973,7 +973,7 @@ mod tests {
                 Some(&advice),
             )
             .unwrap(),
-            crate::routing::explain_loaded(
+            crate::routing::explain_loaded_effective(
                 &store,
                 &config,
                 "p/m",
@@ -981,6 +981,7 @@ mod tests {
                 None,
                 None,
                 Some(&advice),
+                None,
             )
             .unwrap(),
         ] {

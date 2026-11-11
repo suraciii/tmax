@@ -10,13 +10,18 @@ use std::path::Path;
 const DSH_EFFORT_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 pub(in crate::agent_integration) fn dsh_credential_ref(scope: &Path, entry: &Entry) -> String {
+    dsh_credential_ref_for(scope, &entry.name, &entry.protocol)
+}
+
+/// Stable DSH credential reference name for one native route and protocol.
+pub(crate) fn dsh_credential_ref_for(scope: &Path, name: &str, protocol: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     digest.update(scope.as_os_str().as_encoded_bytes());
     digest.update(b"\0");
-    digest.update(entry.name.as_bytes());
+    digest.update(name.as_bytes());
     digest.update(b"\0");
-    digest.update(entry.protocol.as_bytes());
+    digest.update(protocol.as_bytes());
     format!("TMAX_{:X}", digest.finalize())
 }
 

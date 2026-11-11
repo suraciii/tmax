@@ -211,7 +211,20 @@ impl Daemon {
         self.runtime.stop()
     }
     pub(super) fn loaded_view(&self) -> Value {
-        json!({"configuration":self.loaded.as_ref().map(|v|&v.0),"revision":self.loaded.as_ref().map(|v|&v.1),"metadata":self.loaded_metadata.as_deref()})
+        let quota = self.loaded.as_ref().map(|(config, _)| {
+            config
+                .providers
+                .keys()
+                .map(|id| {
+                    let status = crate::observations::quota_status(&self.store, config, id, true)
+                        .unwrap_or_else(
+                            |error| json!({"state":"unavailable","reason_code":error.code}),
+                        );
+                    (id.clone(), status)
+                })
+                .collect::<serde_json::Map<String, Value>>()
+        });
+        json!({"configuration":self.loaded.as_ref().map(|v|&v.0),"revision":self.loaded.as_ref().map(|v|&v.1),"metadata":self.loaded_metadata.as_deref(),"quota_suspensions":quota})
     }
     pub(super) fn preview_activation(&self, candidate: Option<&Config>) -> Result<Value> {
         if let Some(candidate) = candidate {
@@ -571,7 +584,22 @@ async fn run_owned(
             biased;
             _ = shutdown.requested.notified() => break,
             _ = controls.join_next(), if !controls.is_empty() => {},
-            _=interval.tick()=>{if acquisition.as_ref().is_none_or(JoinHandle::is_finished){let captured={let daemon=state.lock().await;daemon.loaded.as_ref().map(|v|(daemon.store.clone(),v.0.clone()))};if let Some((store,config))=captured {acquisition=Some(tokio::spawn(async move{let _=crate::inputs::automatic_tick(&store,&config).await;}));}}},
+            _ = interval.tick() => {
+                if acquisition.as_ref().is_none_or(JoinHandle::is_finished) {
+                    let captured = {
+                        let daemon = state.lock().await;
+                        daemon.loaded.as_ref().map(|v| (daemon.store.clone(), v.0.clone()))
+                    };
+                    if let Some((store, config)) = captured {
+                        acquisition = Some(tokio::spawn(async move {
+                            let _ = tokio::join!(
+                                crate::inputs::automatic_tick(&store, &config),
+                                crate::observations::automatic_quota_tick(&store, &config),
+                            );
+                        }));
+                    }
+                }
+            },
             connection=listener.accept()=>{let stream=connection?;let Ok(slot)=connection_slots.clone().try_acquire_owned()else{drop(stream);continue};let state=state.clone();controls.spawn(async move{let _slot=slot;serve_control(state,stream).await});}
         }
     }
@@ -783,6 +811,284 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     #[cfg(windows)]
     use {super::super::windows_web, axum::Router};
+    #[tokio::test]
+    async fn loaded_view_exposes_daemon_pending_quota_without_changing_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=1\n[providers.p]\nintegration='opencode-go'\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let config = crate::config::parse(text).unwrap();
+        crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        let runtime = Runtime::new(store.clone(), "quota-view".into()).unwrap();
+        let mut daemon = Daemon::new(
+            store.clone(),
+            "quota-view".into(),
+            runtime,
+            Arc::new(Shutdown::new()),
+        );
+        daemon.activate(None).await.unwrap();
+        store
+            .write_json("observations/heads.json", &json!({"heads":{},"quota":{}}))
+            .unwrap();
+        let before = std::fs::read(store.root.join("observations/heads.json")).unwrap();
+        let snapshot = crate::inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("p").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let epoch = crate::observations::quota_epoch_for_binding(&snapshot, &config, "p", scope);
+        let denial = crate::provider_integration::QuotaDenial {
+            window: Some("monthly".into()),
+        };
+        assert!(
+            crate::observations::test_fail_quota_denial(
+                &store, &config, "p", scope, &epoch, &denial
+            )
+            .is_err()
+        );
+        let status = &daemon.loaded_view()["quota_suspensions"]["p"];
+        assert_eq!(status["state"], "suspended");
+        assert_eq!(status["persistence"], "pending");
+        assert_eq!(status["durability"], "unconfirmed");
+        assert_eq!(
+            crate::observations::quota_status(&store, &config, "p", false).unwrap()["state"],
+            "available"
+        );
+        assert_eq!(
+            std::fs::read(store.root.join("observations/heads.json")).unwrap(),
+            before
+        );
+        #[cfg(unix)]
+        {
+            let mut listener = control_transport::Listener::bind(&store).await.unwrap();
+            let daemon = Arc::new(Mutex::new(daemon));
+            let server = tokio::spawn(async move {
+                loop {
+                    let stream = listener.accept().await.unwrap();
+                    serve_control(daemon.clone(), stream).await.unwrap();
+                }
+            });
+            let loaded = crate::service::loaded_snapshot(&store)
+                .await
+                .unwrap()
+                .unwrap();
+            let projected = &loaded.quota_suspensions.unwrap()["p"];
+            assert_eq!(projected["state"], "suspended");
+            assert_eq!(projected["persistence"], "pending");
+            assert_eq!(
+                std::fs::read(store.root.join("observations/heads.json")).unwrap(),
+                before
+            );
+            server.abort();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn independent_commands_use_daemon_pending_quota() {
+        const CHILD: &str = "TMAX_TEST_PENDING_QUOTA_CHILD";
+        if let Some(home) = std::env::var_os(CHILD) {
+            let store = Store::at(home.into());
+            let command = |path: &[&str], operands: &[&str], args: &[(&str, &str)]| Request {
+                command: path.iter().map(|s| (*s).into()).collect(),
+                operands: operands.iter().map(|s| (*s).into()).collect(),
+                arguments: args
+                    .iter()
+                    .map(|(k, v)| ((*k).into(), vec![(*v).into()]))
+                    .collect(),
+                dry_run: false,
+                if_revision: None,
+            };
+            let explain = |state: &str, native: bool| {
+                let mut args = vec![("protocol", "chat-completions"), ("state", state)];
+                if native {
+                    args.push(("target", "client"));
+                }
+                command(&["model", "explain"], &["dynamic"], &args)
+            };
+            let saved = crate::operations::test_dispatch(&store, &explain("file", false))
+                .await
+                .unwrap();
+            assert_eq!(saved["selection"]["provider"], "p");
+            for native in [false, true] {
+                let loaded = crate::operations::test_dispatch(&store, &explain("loaded", native))
+                    .await
+                    .unwrap();
+                assert_eq!(loaded["selection"]["provider"], "q");
+                assert_eq!(loaded["excluded_candidates"][0]["qualified_model"], "p/m");
+                assert_eq!(
+                    loaded["excluded_candidates"][0]["reason_code"],
+                    "quota_suspended"
+                );
+                assert_eq!(
+                    loaded["excluded_candidates"][0]["quota_suspension"]["persistence"],
+                    "pending"
+                );
+            }
+            let loaded_snapshot = crate::service::loaded_snapshot(&store)
+                .await
+                .unwrap()
+                .unwrap();
+            let unknown = crate::routing::explain_loaded_effective(
+                &store,
+                &loaded_snapshot.file.config,
+                "dynamic",
+                "chat-completions",
+                None,
+                loaded_snapshot.metadata.as_ref(),
+                None,
+                Some(None),
+            )
+            .unwrap();
+            assert_eq!(unknown["selection"]["provider"], "q");
+            assert_eq!(
+                unknown["excluded_candidates"][0]["reason_code"],
+                "quota_state_unavailable"
+            );
+            let before = std::fs::read(store.root.join("observations/heads.json")).unwrap();
+            let mut resume = command(&["provider", "quota-resume"], &["p"], &[]);
+            resume.dry_run = true;
+            let preview = crate::operations::test_dispatch(&store, &resume)
+                .await
+                .unwrap();
+            assert_eq!(preview["quota_suspension"]["state"], "suspended");
+            assert_eq!(
+                preview["quota_suspension"]["views"]["file"]["state"],
+                "available"
+            );
+            assert_eq!(
+                preview["quota_suspension"]["views"]["loaded"]["persistence"],
+                "pending"
+            );
+            assert_eq!(
+                std::fs::read(store.root.join("observations/heads.json")).unwrap(),
+                before
+            );
+            resume.dry_run = false;
+            let result = crate::operations::test_dispatch(&store, &resume)
+                .await
+                .unwrap();
+            assert_eq!(result["resumed"], true);
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let mut config = Config::empty();
+        for (id, priority) in [("p", 10), ("q", 1)] {
+            let mut provider = crate::config::Provider {
+                integration: Some(if id == "p" { "opencode-go" } else { "custom" }.into()),
+                enabled: true,
+                ..Default::default()
+            };
+            if id == "q" {
+                provider
+                    .endpoints
+                    .insert("chat-completions".into(), "http://127.0.0.1:9/v1".into());
+            }
+            provider.models.insert(
+                "m".into(),
+                crate::config::Model {
+                    enabled: true,
+                    priority,
+                    ..Default::default()
+                },
+            );
+            config.providers.insert(id.into(), provider);
+        }
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
+        let initial = config.clone();
+        for id in ["p", "q"] {
+            let identity = crate::inputs::provider_identity(&store, &initial, id)
+                .unwrap()
+                .unwrap();
+            let reference = crate::secrets::put(
+                &store,
+                &format!("provider:{identity}:{id}"),
+                b"test-provider-key",
+            )
+            .unwrap();
+            config.providers.get_mut(id).unwrap().auth =
+                Some(crate::config::Auth::ApiKey { key_ref: reference });
+        }
+        config.model_aliases.push(crate::config::ModelAlias {
+            id: "dynamic".into(),
+            protocol: "chat-completions".into(),
+            candidates: vec!["p/m".into(), "q/m".into()],
+            enabled: true,
+            continuity: None,
+            fallback: None,
+            candidate_reasoning_effort: Default::default(),
+        });
+        config.agents.insert(
+            "client".into(),
+            crate::config::AgentTarget {
+                agent: "opencode".into(),
+                scope: directory.path().join("native"),
+                providers: Default::default(),
+                default: None,
+                roles: Default::default(),
+            },
+        );
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        crate::inputs::reconcile(&store, &initial, &config, &[]).unwrap();
+        let runtime = Runtime::new(store.clone(), "quota-command".into()).unwrap();
+        let mut daemon = Daemon::new(
+            store.clone(),
+            "quota-command".into(),
+            runtime,
+            Arc::new(Shutdown::new()),
+        );
+        daemon.activate(None).await.unwrap();
+        store
+            .write_json("observations/heads.json", &json!({"heads":{},"quota":{}}))
+            .unwrap();
+        let snapshot = crate::inputs::Snapshot::capture_loaded(&store, &config, None);
+        let ids = snapshot.provider_scope_binding("p").unwrap();
+        let scope = (ids.0.as_str(), ids.1.as_str());
+        let epoch = crate::observations::quota_epoch_for_binding(&snapshot, &config, "p", scope);
+        assert!(
+            crate::observations::test_fail_quota_denial(
+                &store,
+                &config,
+                "p",
+                scope,
+                &epoch,
+                &crate::provider_integration::QuotaDenial {
+                    window: Some("monthly".into())
+                }
+            )
+            .is_err()
+        );
+        let saved =
+            crate::routing::explain(&store, &config, "dynamic", "chat-completions", None).unwrap();
+        assert_eq!(saved["selection"]["provider"], "p");
+        let mut listener = control_transport::Listener::bind(&store).await.unwrap();
+        let daemon = Arc::new(Mutex::new(daemon));
+        let server = tokio::spawn(async move {
+            loop {
+                let stream = listener.accept().await.unwrap();
+                serve_control(daemon.clone(), stream).await.unwrap();
+            }
+        });
+        let status = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("service::daemon::tests::independent_commands_use_daemon_pending_quota")
+            .arg("--nocapture")
+            .env(CHILD, directory.path())
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(
+            crate::observations::quota_status(&store, &config, "p", true).unwrap()["state"],
+            "manually_resumed"
+        );
+        server.abort();
+    }
+
     #[tokio::test]
     async fn loaded_advice_retains_accepted_metadata_without_an_inference_snapshot() {
         let directory = tempfile::tempdir().unwrap();

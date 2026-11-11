@@ -46,6 +46,28 @@ pub fn integration_id(provider: &Provider) -> Result<&str> {
         .field("integration")),
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuotaDenial {
+    pub window: Option<String>,
+}
+
+pub(crate) fn quota_denial(provider: &Provider, status: u16, body: &[u8]) -> Option<QuotaDenial> {
+    if status != 429 || integration_id(provider).ok()? != "opencode-go" {
+        return None;
+    }
+    let body: Value = serde_json::from_slice(body).ok()?;
+    if body.get("error")?.get("type")?.as_str()? != "GoUsageLimitError" {
+        return None;
+    }
+    let window = body
+        .get("metadata")
+        .and_then(|m| m.get("limitName"))
+        .and_then(Value::as_str)
+        .filter(|name| matches!(*name, "rolling" | "weekly" | "monthly"))
+        .map(str::to_owned);
+    Some(QuotaDenial { window })
+}
 fn map(values: &[(&str, &str)]) -> BTreeMap<String, String> {
     values
         .iter()
@@ -1259,6 +1281,30 @@ pub fn dashboard(id: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn go_quota_denial_requires_exact_provider_status_and_error_type() {
+        let go = Provider {
+            integration: Some("opencode-go".into()),
+            ..Default::default()
+        };
+        let other = Provider {
+            integration: Some("deepseek".into()),
+            ..Default::default()
+        };
+        let body = br#"{"error":{"message":"Go usage limit exceeded","type":"GoUsageLimitError"},"metadata":{"limitName":"monthly","workspace":"secret"},"type":"error"}"#;
+        assert_eq!(
+            quota_denial(&go, 429, body).unwrap().window.as_deref(),
+            Some("monthly")
+        );
+        assert!(quota_denial(&other, 429, body).is_none());
+        assert!(quota_denial(&go, 503, body).is_none());
+        assert!(quota_denial(&go, 429, br#"{"error":{"type":"rate_limit_error"}}"#).is_none());
+        assert!(quota_denial(&go, 429, br#"{"error":{"type":"CapacityError"}}"#).is_none());
+        assert!(quota_denial(&go, 429, &body[..body.len() - 1]).is_none());
+        let unknown =
+            br#"{"error":{"type":"GoUsageLimitError"},"metadata":{"limitName":"secret"}}"#;
+        assert_eq!(quota_denial(&go, 429, unknown).unwrap().window, None);
+    }
     #[test]
     fn inference_operations_allow_only_declared_messages_beta_selector() {
         for (path, protocol) in [
