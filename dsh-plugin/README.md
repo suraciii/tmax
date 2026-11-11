@@ -29,15 +29,25 @@ tmax dsh connect --home "$DSH_HOME" --dry-run
 tmax dsh connect --home "$DSH_HOME"
 ```
 
-## What the page shows
+## What the card shows
 
-- connection and gateway readiness;
-- the projected model count and model IDs;
-- provider errors and blockers;
-- one explicit connect action;
-- a compact **usage and limits** block for providers that report quota or
-  billing rows, with used/remaining percentage, reset time, and a provider
-  dashboard link.
+The card sits at the bottom of **Settings → Models**, after the provider list, and
+uses the same material as the provider rows above it. It follows the light and
+dark themes because every colour comes from a `--dsw-alias-*` token.
+
+- a status dot, plus a tag only when the state is not "connected";
+- the projected model count and gateway readiness;
+- the projected model IDs;
+- the one action the card exists for: **Connect**, in primary weight, and only
+  while access is not working;
+- **usage and limits** per provider: each window as the amount still left, the
+  reset date of the tightest window, and the provider dashboard behind its name.
+
+Each window is reported in one direction (`remaining`) even though tmax reports
+some windows as consumed and others as remaining, so the reader never converts
+in their head. Windows a provider never names collapse into one count when their
+values match. Providers that report nothing readable are omitted rather than
+shown as blank rows.
 
 It also registers the `tmax_status` tool and the `tmax` skill for agents.
 
