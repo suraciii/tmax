@@ -71,6 +71,53 @@ function targetArgs(config) {
   return ['--home', home]
 }
 
+/** Read compact, secret-free provider usage for the Models card. */
+async function readUsage(config) {
+  const listed = await runTmax(config, ['provider', 'list'])
+  if (listed.code !== 'ok' || listed.status !== 'success') {
+    throw new Error(`${listed.code || 'provider_list_failed'}: ${listed.message || 'tmax provider list failed'}`)
+  }
+  const candidates = (listed.data?.providers || []).filter(provider =>
+    provider.observations?.billing_state === 'observed'
+    || provider.quota_suspension?.state === 'available'
+    || provider.quota_suspension?.state === 'suspended')
+  const providers = await Promise.all(candidates.map(async provider => {
+    const inspected = await runTmax(config, ['provider', 'inspect', String(provider.id)])
+    if (inspected.code !== 'ok' || inspected.status !== 'success') {
+      return { id: provider.id, name: provider.name, error: inspected.code || 'inspect_failed' }
+    }
+    const data = inspected.data || {}
+    const billing = data.observations?.billing
+    return {
+      id: provider.id,
+      name: provider.name || provider.id,
+      enabled: provider.enabled,
+      quota: {
+        state: data.quota_suspension?.state,
+        reason: data.quota_suspension?.reason_code,
+        resetAt: data.quota_suspension?.reset_at,
+        source: data.quota_suspension?.source,
+        window: data.quota_suspension?.window,
+      },
+      billing: billing === undefined ? undefined : {
+        kind: billing.kind,
+        state: billing.state,
+        dashboard: billing.dashboard,
+        freshness: billing.freshness,
+        rows: (billing.display?.rows || []).map(row => ({
+          label: row.label,
+          basis: row.basis,
+          percent: row.percent,
+          counters: row.counters,
+          reset: row.reset,
+          status: row.status,
+        })),
+      },
+    }
+  }))
+  return { providers }
+}
+
 /** Map tmax's DSH capabilities to the pi-ai model shape the adapter consumes. */
 function modelFromProjection(route, model, providerName = route.name) {
   const caps = model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : {}
@@ -303,6 +350,16 @@ export async function apply(ctx, config = {}) {
         send(res, 200, summary())
       },
     }), 'tmax: GET /_tmax/status')
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/_tmax/usage',
+      handler: async (req, res) => {
+        if (rejected(req, res)) return
+        if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
+        try { send(res, 200, { ok: true, ...(await readUsage(config)) }) }
+        catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
+      },
+    }), 'tmax: GET /_tmax/usage')
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/_tmax/connect',

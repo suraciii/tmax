@@ -24,6 +24,19 @@ window.__ModuleLoader__.load({
       connectFailed: 'Connect failed',
       connectAction: 'Connect',
       connectedAction: 'Connected',
+      usage: 'Usage and limits',
+      limitReset: 'resets',
+      limitRemaining: 'remaining',
+      limitDashboard: 'Provider dashboard',
+      usageUnknown: 'Usage information is unavailable.',
+      usedPercent: 'used',
+      remainingPercent: 'remaining',
+      quotaAvailable: 'available',
+      quotaSuspended: 'suspended',
+      quotaNone: 'no quota data',
+      windowRolling: 'rolling',
+      windowWeekly: 'weekly',
+      windowMonthly: 'monthly',
       gatewayReady: 'Gateway ready',
       gatewayUnknown: 'Gateway not ready',
     }
@@ -43,6 +56,19 @@ window.__ModuleLoader__.load({
       connectFailed: '连接失败',
       connectAction: '连接',
       connectedAction: '已连接',
+      usage: '用量与额度',
+      limitReset: '重置',
+      limitRemaining: '剩余',
+      limitDashboard: '供应商后台',
+      usageUnknown: '暂时拿不到用量信息。',
+      usedPercent: '已用',
+      remainingPercent: '剩余',
+      quotaAvailable: '可用',
+      quotaSuspended: '已暂停',
+      quotaNone: '无额度数据',
+      windowRolling: '滚动',
+      windowWeekly: '周',
+      windowMonthly: '月',
       gatewayReady: 'gateway 已就绪',
       gatewayUnknown: 'gateway 未就绪',
     }
@@ -122,7 +148,59 @@ window.__ModuleLoader__.load({
       if (state.phase === 'failed') children.push(h('div', { key: 'failure', style: { color: '#b91c1c' } }, `${t('failure')}: ${state.message}`))
       if (state.phase === 'disconnected') children.push(h('p', { key: 'empty', style: { margin: 0 } }, t('empty')))
       if (message !== '') children.push(h('p', { key: 'message', style: { color: '#b91c1c', margin: 0 } }, message))
+      children.push(h(Usage, { key: 'usage', t }))
       return h('div', { style: { display: 'grid', gap: 14, maxWidth: 720 } }, children)
+    }
+
+    function rowLabel(label, t) {
+      if (label === null || label === undefined) return ''
+      if (typeof label === 'string') return label
+      if (label.key === 'bucket') return [label.name, label.window].filter(Boolean).join(' ')
+      if (label.key === 'duration') return `${label.duration ?? ''} ${label.unit ?? ''}`.trim()
+      const names = { rolling: 'windowRolling', weekly: 'windowWeekly', monthly: 'windowMonthly', weekly_allowance: 'windowWeekly', limit: 'windowMonthly' }
+      return names[label.key] ? t(names[label.key]) : (label.key || '')
+    }
+
+    function quotaLabel(state, t) {
+      if (state === 'available') return t('quotaAvailable')
+      if (state === 'suspended') return t('quotaSuspended')
+      return t('quotaNone')
+    }
+
+    function Usage({ t }) {
+      const [state, setState] = React.useState({ phase: 'loading' })
+      React.useEffect(() => {
+        let live = true
+        fetch(new URL('_tmax/usage', document.baseURI), { credentials: 'same-origin' })
+          .then(response => response.ok ? response.json() : undefined)
+          .then(value => { if (live) setState(value?.ok ? { phase: 'ready', providers: value.providers || [] } : { phase: 'failed' }) })
+          .catch(() => { if (live) setState({ phase: 'failed' }) })
+        return () => { live = false }
+      }, [])
+      if (state.phase === 'loading') return h('div', { style: { color: '#6b7280', fontSize: 12 } }, t('loading'))
+      if (state.phase !== 'ready' || state.providers.length === 0) return h('div', { style: { color: '#6b7280', fontSize: 12 } }, t('usageUnknown'))
+      return h('div', { key: 'usage', style: { display: 'grid', gap: 8 } },
+        h('div', { style: { fontWeight: 600 } }, t('usage')),
+        state.providers.filter(provider => (provider.billing?.rows || []).some(row => row.percent !== undefined || row.counters?.limit !== undefined)).sort((a, b) => (a.quota?.state === 'suspended' ? -1 : b.quota?.state === 'suspended' ? 1 : 0)).map(provider => {
+          const rows = (provider.billing?.rows || []).filter(row => row.percent !== undefined || row.counters?.limit !== undefined)
+          const color = provider.quota?.state === 'suspended' ? '#b91c1c' : provider.quota?.state === 'available' ? '#15803d' : '#6b7280'
+          return h('div', { key: provider.id, style: { display: 'grid', gap: 4, borderTop: '1px solid #f3f4f6', paddingTop: 6 } },
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+              h('strong', { style: { fontSize: 13 } }, provider.name),
+              h('span', { style: { color, fontSize: 12 } }, quotaLabel(provider.quota?.state, t))),
+            rows.map((row, index) => h('div', { key: String(index), style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 } },
+              h('span', { style: { minWidth: 90, color: '#4b5563' } }, rowLabel(row.label, t)),
+              typeof row.percent === 'number'
+                ? h('span', { style: { flex: 1, height: 6, background: '#e5e7eb', borderRadius: 99 } },
+                  h('span', { style: { display: 'block', width: `${Math.max(0, Math.min(100, row.basis === 'remaining_percent' ? 100 - row.percent : row.percent))}%`, height: 6, background: row.status === 'rate-limited' ? '#b91c1c' : '#2563eb', borderRadius: 99 } }))
+                : null,
+              typeof row.percent === 'number' ? h('span', null, row.basis === 'remaining_percent' ? `${t('remainingPercent')} ${row.percent}%` : `${row.percent}% ${t('usedPercent')}`) : null,
+              row.counters?.limit !== undefined ? h('span', null, `${t('limitRemaining')} ${row.counters.remaining ?? '?'} / ${row.counters.limit}`) : null,
+              (row.reset?.at || typeof row.reset?.raw === 'number') ? h('span', { style: { color: '#6b7280' } }, `${t('limitReset')} ${new Date(row.reset.at || row.reset.raw).toLocaleDateString()}`) : null)),
+            provider.billing?.dashboard
+              ? h('a', { href: provider.billing.dashboard, target: '_blank', rel: 'noreferrer', style: { fontSize: 12 } }, t('limitDashboard'))
+              : null)
+        }))
     }
 
     let ctx

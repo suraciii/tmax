@@ -34,7 +34,10 @@ tmax dsh connect --home "$DSH_HOME"
 - connection and gateway readiness;
 - the projected model count and model IDs;
 - provider errors and blockers;
-- one explicit connect action.
+- one explicit connect action;
+- a compact **usage and limits** block for providers that report quota or
+  billing rows, with used/remaining percentage, reset time, and a provider
+  dashboard link.
 
 It also registers the `tmax_status` tool and the `tmax` skill for agents.
 
