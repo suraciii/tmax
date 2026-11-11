@@ -1,4 +1,4 @@
-// Client half: a minimal tmax section in Settings.
+// Client half: the tmax bundle page in DSH's Plugins view.
 //
 // It reads the live Host model catalog; it never runs a CLI or receives a key.
 // The connect command is shown for the user to run in a terminal, so the page
@@ -54,7 +54,7 @@ window.__ModuleLoader__.load({
       return catalog.failures.find(failure => failure.id === 'tmax' || failure.id.endsWith('tmax'))
     }
 
-    function Status({ t }) {
+    function TmaxPanel({ t }) {
       const [state, setState] = React.useState({ phase: 'loading' })
       const [connecting, setConnecting] = React.useState(false)
       const [message, setMessage] = React.useState('')
@@ -132,13 +132,11 @@ window.__ModuleLoader__.load({
       ctx = context
       context.effect(() => context.locale.register(NS, { en, zh }), 'tmax: settings locale')
       const t = context.locale.bind(NS)
-      context.effect(() => context.slots.inject('settings.section', () => context.slots.register({
-        name: 'settings.section',
-        id: 'tmax',
-        order: 40,
-        label: () => t('title'),
+      context.effect(() => context.slots.inject('plugins.bundle.config', () => context.slots.register({
+        name: 'plugins.bundle.config',
+        key: 'tmax',
         locale: NS,
-      }, Status)), 'tmax: settings section')
+      }, TmaxPanel)), 'tmax: bundle page')
     }
 
     return { inject: ['slots', 'locale', 'remote'], apply }

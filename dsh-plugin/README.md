@@ -2,8 +2,8 @@
 
 A DSH plugin that projects tmax's gateway access into a DSH profile. Development
 slice (M0): dynamic model projection, `tmax_status`, the `tmax` skill,
-`tmax dsh connect` credential-reference handoff, and a read-only **Settings →
-tmax access** section.
+`tmax dsh connect` credential-reference handoff, and the **tmax** page in
+DSH Plugins.
 
 ## Requirements
 
@@ -110,9 +110,9 @@ tmax dsh projection --home "$DSH_HOME" | jq '.data.routes[] | {name, protocol, m
 Then open the Web model picker. The route appears under `providerPrefix` +
 `name` (for example `tmaxp-tmax`); models keep their tmax public IDs.
 
-## Client Settings section
+## Client Plugins page
 
-`client.js` registers one `settings.section` titled **tmax access**. It reads
+`client.js` registers the **tmax** bundle page in Plugins. It reads
 the live Host model catalog through `ctx.remote.session.modelCatalog()` and
 shows:
 
@@ -143,12 +143,11 @@ checks dynamic route registration, resolved adapter defaults, capability
 mapping (text fallback, unknown-context filtering, no `maxTokens`), the status
 tool, the skill, and the missing-tmax path. The client test loads the real
 `client.js` through a fake `window.__ModuleLoader__` and checks the one
-settings-section registration.
+plugins bundle-page registration.
 
 ## Current limits
 
-- Tool: `tmax_status` only. The Settings section shows connect, gateway
-  readiness, and the model list.
+- Tool: `tmax_status` only. The Plugins page shows connect, gateway readiness, and the model list.
 - Still not included: automatic legacy migration and model badges. Install and
   uninstall stay with DSH; distribution is source-based.
 - A gateway whose daemon identity is unknown reports `ready: null`; the plugin
