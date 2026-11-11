@@ -35,6 +35,20 @@ pub(super) fn mutate(root: &mut Value, r: &Request, path: &str, info: &mut Json)
             } else if let Some(listen) = arg(r, "listen") {
                 put(root, &["gateway", "listen"], string(listen))?;
             }
+            for chunk in args(r, "set").chunks(2) {
+                let [field, value] = chunk else {
+                    return Err(error());
+                };
+                match (field.as_str(), value.as_str()) {
+                    ("autostart", "true") => {
+                        put(root, &["gateway", "autostart"], Value::Boolean(true))?
+                    }
+                    ("autostart", "false") => {
+                        put(root, &["gateway", "autostart"], Value::Boolean(false))?
+                    }
+                    _ => return Err(error()),
+                }
+            }
             for clear in args(r, "clear") {
                 if clear != "autostart" {
                     return Err(error());
@@ -56,14 +70,6 @@ pub(super) fn mutate(root: &mut Value, r: &Request, path: &str, info: &mut Json)
                 return Err(error());
             }
             info["stored_secrets"] = json!("retained");
-        }
-        "gateway autostart enable" | "gateway autostart disable" => {
-            get(root, &["gateway"])?;
-            put(
-                root,
-                &["gateway", "autostart"],
-                Value::Boolean(path.ends_with("enable")),
-            )?;
         }
         _ => return Err(error()),
     }

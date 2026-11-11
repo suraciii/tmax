@@ -219,7 +219,7 @@ gateway access for subsequent requests; in-flight requests retain their admissio
 snapshots under the continuity contract. Retain existing conversation bindings
 but block their reuse rather than choosing another destination. Do not stop or
 hot-move an existing listener: it remains bound but unavailable until explicit
-listener operations. The absent autostart flag is disabled intent and follows
+listener operations. The absent autostart flag is enabled intent and follows
 the normal changed-intent reconciliation rules below.
 
 Reset does not sign out, revoke upstream credentials, apply or restore native
@@ -777,7 +777,7 @@ but is also valid with no Agent targets:
 | --- | --- |
 | `listen` | Required numeric loopback IP and port in `host:port` form, with bracketed IPv6; port 1–65535 |
 | `key_ref` | Required provisioned opaque reference to the current protected local gateway access key, not an upstream credential |
-| `autostart` | Optional boolean, default false |
+| `autostart` | Optional boolean, default true |
 
 Non-loopback addresses are invalid. The public model list is derived directly
 from enabled provider-owned models and enabled alias definitions, within their
@@ -812,9 +812,10 @@ changed-intent reconciliation rules.
 Saving gateway settings does not start a listener. Explicit sensitive key
 retrieval is separate from ordinary inspection under the
 [secret-protection contract](../product/spec.md#local-access-and-secret-protection).
-Listener startup, key handoff, and opt-in login startup follow the product's
-[model-gateway contract](../product/spec.md#model-gateway). The management Web
-interface has no authentication; the shared key remains required for inference.
+Listener startup, key handoff, and default-enabled login startup follow the
+product's [model-gateway contract](../product/spec.md#model-gateway). The
+management Web interface has no authentication; the shared key remains required
+for inference.
 
 ## Outbound network settings
 
@@ -910,8 +911,9 @@ hidden earlier file revision. A retained catalog snapshot is not a fallback for
 invalid configuration. Reload is not a path selector or document-input operation.
 
 Autostart registration is reconciled only when a save or explicit reload changes
-the desired `gateway.autostart` intent, or when the caller explicitly invokes
-autostart enable/disable. Missing or false is disabled intent. Keep the last
+the desired `gateway.autostart` intent. Missing or true is enabled intent; an
+explicit false is
+disabled intent. Keep the last
 acknowledged intent for tmax's sole authority as operational state under
 `~/.tmax`, independently of registration success and loaded service state, so
 manual edits can be recognized without a running service. With no acknowledged

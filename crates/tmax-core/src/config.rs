@@ -327,7 +327,7 @@ pub struct ModelReference {
 pub struct Gateway {
     pub listen: String,
     pub key_ref: String,
-    #[serde(default)]
+    #[serde(default = "yes")]
     pub autostart: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1083,6 +1083,20 @@ mod tests {
         assert!(c.providers["x"].models["a"].enabled);
         assert!(Provider::default().enabled);
         assert!(Model::default().enabled);
+    }
+
+    #[test]
+    fn gateway_autostart_defaults_to_enabled_and_explicit_false_opts_out() {
+        let gateway = |text: &str| parse(text).unwrap().gateway.unwrap().autostart;
+        assert!(gateway(
+            "version=1\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='a'\n"
+        ));
+        assert!(gateway(
+            "version=1\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='a'\nautostart=true\n"
+        ));
+        assert!(!gateway(
+            "version=1\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='a'\nautostart=false\n"
+        ));
     }
     #[test]
     fn unknown_nested_fields_are_rejected_without_echo() {

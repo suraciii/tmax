@@ -84,8 +84,6 @@ pub fn is_edit(path: &str) -> bool {
             | "gateway configure"
             | "gateway key replace"
             | "gateway remove"
-            | "gateway autostart enable"
-            | "gateway autostart disable"
     )
 }
 fn mutate(root: &mut Value, r: &Request) -> Result<(Json, Vec<(String, String)>)> {
@@ -153,9 +151,7 @@ fn mutate(root: &mut Value, r: &Request) -> Result<(Json, Vec<(String, String)>)
         | "network direct"
         | "gateway configure"
         | "gateway key replace"
-        | "gateway remove"
-        | "gateway autostart enable"
-        | "gateway autostart disable" => service_settings::mutate(root, r, &path, &mut info)?,
+        | "gateway remove" => service_settings::mutate(root, r, &path, &mut info)?,
         _ => return Err(error()),
     }
     Ok((info, renames))
@@ -496,11 +492,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     } else {
         activate_saved(store, &candidate, &saved, &mut data).await;
     }
-    let autostart = if path.starts_with("gateway autostart ") {
-        crate::service::autostart(store, path.ends_with("enable"), false).await
-    } else {
-        crate::service::reconcile_autostart(store, &candidate, false).await
-    };
+    let autostart = crate::service::reconcile_autostart(store, &candidate, false).await;
     match autostart {
         Ok(v) => data["autostart"] = v,
         Err(e) => {

@@ -16,7 +16,6 @@ proxy_url = "http://127.0.0.1:8080"
 [gateway]
 listen = "127.0.0.1:17840"
 key_ref = "local-gateway"
-autostart = false
 
 [providers.opencode-go]
 metadata = "opencode-go"

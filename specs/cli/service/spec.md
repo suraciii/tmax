@@ -40,8 +40,8 @@ These addresses do not claim a running proxy or successful connectivity.
 
 ## Gateway configuration and field coverage
 
-`gateway configure [--listen ADDRESS] [--clear autostart]` creates/edits the optional
-gateway table. At least one operand is required; creation requires listen and
+`gateway configure [--listen ADDRESS] [--set autostart true|false] [--clear autostart]`
+creates/edits the optional
 explicitly provisions the sole shared key in a current-user-restricted plaintext
 storage-version-2 file, saving its `key_ref` with the settings. Listen is numeric
 loopback `host:port` (bracket IPv6), port 1–65535. Preserve unrelated settings and
@@ -55,15 +55,15 @@ Report provisioning, save, and activation separately. Dry-run describes key
 provisioning without generating/reserving a reference or reading key bytes. Actual
 provisioning uses `data.gateway_key` from the shared-key contract; failed save retains
 any orphan reference for explicit cleanup. Never return key bytes.
-Clear autostart restores disabled intent, not unconditional registration retry.
+Clear autostart restores the default enabled intent, not unconditional registration retry.
 
 `gateway remove` requires stopped inference and resolved native `--gateway` entry
 references. It removes gateway configuration/access, not the stored secret, native
 files, or unknown external copies. It never stops inference implicitly. Saved
 listen changes require explicit restart when the running listener cannot activate
 them. Do not silently move it or report it current. Both commands support common
-dry-run/guards and separate save/activation outcomes. Explicit autostart
-enable/disable sets the boolean and always reconciles registration.
+dry-run/guards and separate save/activation outcomes. A changed `autostart`
+intent set through configure reconciles registration under the changed-intent rules.
 
 Provider/model/model-alias operations own their existing definitions and shared
 publication; Agent operations own native bindings/selections; gateway configuration
@@ -72,6 +72,11 @@ client resource, per-Agent key, or gateway-model command family exists. Standalo
 compatible local clients need no registered or complete Agent target.
 
 ## Autostart
+
+Autostart intent defaults to enabled for a configured gateway; no declaration is
+required. `gateway configure --set autostart false` is the explicit opt-out,
+`--set autostart true` or `--clear autostart` restores the default enabled
+intent. No separate autostart command family exists.
 
 The [save/reload contract](../../configuration/spec.md#save-reload-and-apply) owns
 last-acknowledged desired startup intent. Save/reload reconciles registration only
@@ -101,8 +106,6 @@ follow [their independent lifecycle](../providers/authentication/spec.md#shared-
 | `gateway start` | Reuse compatible running inference without reload, or validate saved config/shared key and start inference in the sole owner. New processes use native supervision independently of autostart; success requires actual readiness. No managed-target prerequisite, key provisioning, or native application. |
 | `gateway stop` | Stop inference, not Web, and suppress its pending recovery even while the process is absent. Cancel in-flight requests as transports allow and report the actual interrupted set; never wait for in-flight work. |
 | `gateway restart` | Recycle through the native manager from the on-disk executable; explicitly transition a compatible unsupervised owner after preflight. Cancel in-flight work, release ownership, start inference with current valid settings (including saved address changes), and restore a requested Web listener. Report success only after requested listeners are ready. |
-| `gateway autostart enable` | Save true and always reconcile per-user login activation; disclose credential and session limitations without starting inference. |
-| `gateway autostart disable` | Save false and always reconcile removal of login activation, not current inference or its supervision. |
 | `web open [--listen ADDRESS] [--no-browser]` | Start/reuse management in the sole compatible daemon, using native supervision for a new process; report its ready URL and open the browser unless suppressed. Do not implicitly start inference or reload. |
 | `web stop` | Stop management and suppress its pending recovery, not inference/native agents. If neither listener remains requested, disarm process recovery and release ownership. |
 
@@ -150,7 +153,7 @@ Examples: `tmax gateway configure --listen 127.0.0.1:17840`,
 `tmax gateway configure --clear autostart`, `tmax gateway start`,
 `tmax gateway key show`, `tmax gateway key replace`,
 `tmax gateway stop --dry-run`, `tmax gateway stop`, `tmax gateway restart`,
-`tmax gateway autostart enable`, `tmax gateway autostart disable`, `tmax gateway remove`,
+`tmax gateway configure --set autostart false`, `tmax gateway remove`,
 `tmax web open --no-browser`, `tmax web open --listen 127.0.0.1:17841`, and
 `tmax web stop`. Independent examples are not an automatic sequence.
 
