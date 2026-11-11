@@ -99,6 +99,7 @@ async function readUsage(config) {
         source: data.quota_suspension?.source,
         window: data.quota_suspension?.window,
       },
+      observedAt: data.observations?.billing?.observation?.observed_at,
       billing: billing === undefined ? undefined : {
         kind: billing.kind,
         state: billing.state,
@@ -360,6 +361,28 @@ export async function apply(ctx, config = {}) {
         catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
       },
     }), 'tmax: GET /_tmax/usage')
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/_tmax/usage/refresh',
+      handler: async (req, res) => {
+        if (rejected(req, res)) return
+        if (req.method !== 'POST') { send(res, 405, { code: 'method-not-allowed' }); return }
+        try {
+          const before = await readUsage(config)
+          // Quota checks reach the provider, so only providers that already
+          // report a billing observation are asked; the rest have nothing to
+          // refresh and would only cost a failed round trip.
+          const candidates = before.providers.filter(provider =>
+            provider.billing?.state === 'observed' && provider.error === undefined)
+          await Promise.all(candidates.map(provider =>
+            runTmax(config, ['provider', 'refresh', String(provider.id), '--scope', 'quota'])
+              .catch(error => log(`quota refresh failed for "${provider.id}": ${error instanceof Error ? error.message : String(error)}`))))
+          send(res, 200, { ok: true, ...(await readUsage(config)) })
+        } catch (error) {
+          send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }), 'tmax: POST /_tmax/usage/refresh')
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/_tmax/connect',

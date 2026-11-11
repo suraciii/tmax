@@ -47,6 +47,24 @@ meter, so a row never needs mental arithmetic. Providers that report nothing
 readable are omitted rather than shown as blank rows. Every colour resolves
 through a `--dsw-alias-*` token, so the page follows the light and dark themes.
 
+A quota reading is a timestamped observation, not a live fact. Opening the page
+paints the cached reading and then asks tmax to re-observe each provider
+(`tmax provider refresh <id> --scope quota`), so the numbers shown are today's;
+each provider carries the age of its own reading, and a reading older than five
+minutes is labelled rather than presented as current.
+
+## HTTP routes
+
+Both are served on the DSH web server and guarded by the composition's
+`connection.requestRejection` fence.
+
+| Route | Effect |
+|---|---|
+| `GET /_tmax/status` | Secret-free projection summary, gateway readiness, models, blockers. |
+| `GET /_tmax/usage` | Provider quota rows as last observed, with their observation time. |
+| `POST /_tmax/usage/refresh` | Re-observes quotas through tmax, then returns the same payload. |
+| `POST /_tmax/connect` | Runs `tmax dsh connect` for the configured target, then refreshes. |
+
 It also registers the `tmax_status` tool and the `tmax` skill for agents.
 
 ## Limitations

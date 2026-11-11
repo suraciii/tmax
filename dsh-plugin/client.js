@@ -39,6 +39,13 @@ window.__ModuleLoader__.load({
       usage: 'Usage and limits',
       usageUnknown: 'No provider reports a quota yet.',
       usageFailed: 'Usage is unavailable right now.',
+      usageLive: 'Live',
+      usageRevalidating: 'Checking provider quotas…',
+      staleData: 'stale',
+      minutesAgo: 'min ago',
+      hoursAgo: 'h ago',
+      daysAgo: 'd ago',
+      justNow: 'just now',
       left: 'left',
       suspended: 'Suspended',
       dashboard: 'Provider dashboard',
@@ -79,6 +86,13 @@ window.__ModuleLoader__.load({
       usage: '用量与额度',
       usageUnknown: '还没有 provider 上报额度。',
       usageFailed: '暂时拿不到用量数据。',
+      usageLive: '实时',
+      usageRevalidating: '正在刷新供应商额度…',
+      staleData: '数据陈旧',
+      minutesAgo: '分钟前',
+      hoursAgo: '小时前',
+      daysAgo: '天前',
+      justNow: '刚刚',
       left: '剩余',
       suspended: '已暂停',
       dashboard: '供应商后台',
@@ -134,6 +148,8 @@ window.__ModuleLoader__.load({
 .tmx-providerName { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--dsw-alias-label-primary); text-decoration: none; }
 a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2px; }
 .tmx-external { flex: none; margin-top: 1px; color: var(--dsw-alias-label-secondary); }
+.tmx-age { margin-left: auto; flex: none; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.tmx-age[data-tone='warn'] { color: var(--dsw-alias-state-warn-primary); }
 .tmx-providerHead a:hover .tmx-external { color: var(--dsw-alias-label-primary); }
 .tmx-windows { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .tmx-window { display: grid; grid-template-columns: 104px minmax(0, 1fr) minmax(52px, auto) minmax(84px, auto); align-items: center; gap: 12px; font-size: 12px; line-height: 18px; }
@@ -263,12 +279,12 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
         }
       }, [path])
       React.useEffect(() => { void load() }, [load])
-      return [state, load]
+      return [state, load, setState]
     }
 
     function TmaxPage({ t }) {
       const [status, reloadStatus] = useEndpoint('/_tmax/status')
-      const [usage, reloadUsage] = useEndpoint('/_tmax/usage')
+      const [usage, reloadUsage, setUsage] = useEndpoint('/_tmax/usage')
       const [catalog, setCatalog] = React.useState({ phase: 'loading' })
       const [busy, setBusy] = React.useState(false)
       const [message, setMessage] = React.useState('')
@@ -289,10 +305,33 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
 
       React.useEffect(() => { void loadCatalog() }, [loadCatalog])
 
+      const [quotaBusy, setQuotaBusy] = React.useState(false)
+      const refreshQuota = React.useCallback(async () => {
+        setQuotaBusy(true)
+        try {
+          const response = await fetch(new URL('/_tmax/usage/refresh', document.baseURI), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          })
+          const value = response.ok ? await response.json() : undefined
+          if (value?.ok === true) setUsage({ phase: 'ready', value })
+        } catch {
+          // A failed quota pass leaves the cached reading on screen, aged.
+        } finally {
+          setQuotaBusy(false)
+        }
+      }, [setUsage])
+
+      // A quota page opened on purpose should show today's numbers: paint the
+      // cached read, then re-observe without blocking that first paint.
+      React.useEffect(() => { void refreshQuota() }, [refreshQuota])
+
       const refresh = async () => {
         setBusy(true)
         setMessage('')
-        await Promise.all([reloadStatus(), reloadUsage(), loadCatalog()])
+        await Promise.all([reloadStatus(), loadCatalog(), refreshQuota()])
         setBusy(false)
       }
 
@@ -363,6 +402,7 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
           t('usage'),
           rows.length > 0 ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${rows.length} ${t('providerUnit')}`) : null,
+          quotaBusy ? h('span', { className: 'tmx-sectionNote', key: 'busy' }, t('usageRevalidating')) : null,
         ]),
         usageBody(usage.phase, usageFailed, rows, t),
         usageFailed
@@ -486,11 +526,37 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           h('span', { className: 'tmx-windowReset' }, t('loading')))))
     }
 
+    /** How long ago a quota reading was taken, in the reader's own units. */
+    function ageText(observedAt, t) {
+      if (typeof observedAt !== 'string') return undefined
+      const at = new Date(observedAt)
+      if (Number.isNaN(at.getTime())) return undefined
+      const seconds = Math.max(0, Math.round((Date.now() - at.getTime()) / 1000))
+      if (seconds < 45) return t('justNow')
+      const minutes = Math.round(seconds / 60)
+      if (minutes < 60) return `${minutes} ${t('minutesAgo')}`
+      const hours = Math.round(minutes / 60)
+      if (hours < 24) return `${hours} ${t('hoursAgo')}`
+      return `${Math.round(hours / 24)} ${t('daysAgo')}`
+    }
+
+    /** A reading older than this is not worth presenting as a current fact. */
+    const STALE_AFTER_MS = 5 * 60 * 1000
+
+    function isStale(observedAt) {
+      if (typeof observedAt !== 'string') return false
+      const at = new Date(observedAt).getTime()
+      return Number.isNaN(at) ? false : Date.now() - at > STALE_AFTER_MS
+    }
+
     /** One provider: its name, its state, and one bar per window. */
     function providerCard(entry, t) {
       const { provider, windows, suspended, tone } = entry
       const name = provider.name || provider.id
       const dashboard = provider.billing?.dashboard
+      const observedAt = provider.observedAt
+      const age = ageText(observedAt, t)
+      const stale = isStale(observedAt)
       return h('div', { className: 'tmx-card tmx-provider', key: provider.id },
         h('div', { className: 'tmx-providerHead' },
           dashboard === undefined
@@ -502,7 +568,14 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
               rel: 'noreferrer',
               title: t('dashboard'),
             }, [name, h(ExternalMark, { key: 'mark' })]),
-          suspended ? h('span', { className: 'tmx-chip', 'data-tone': 'error' }, t('suspended')) : null),
+          suspended ? h('span', { className: 'tmx-chip', 'data-tone': 'error' }, t('suspended')) : null,
+          age === undefined
+            ? null
+            : h('span', {
+              className: 'tmx-age',
+              'data-tone': stale ? 'warn' : undefined,
+              title: observedAt,
+            }, stale ? `${t('staleData')} · ${age}` : age)),
         h('ul', { className: 'tmx-windows' },
           windows.map((item, index) => {
             const itemTone = item.consumed === undefined ? 'ok' : toneFor(item.consumed)
