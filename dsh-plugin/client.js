@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const NS = 'tmaxDshSettings'
     const en = {
-      title: 'tmax access',
+      title: 'tmax',
       loading: 'Reading model catalog…',
       connected: 'Connected',
       disconnected: 'Not connected',
@@ -22,11 +22,13 @@ window.__ModuleLoader__.load({
       connecting: 'Connecting…',
       connectDone: 'Connected. Refreshing model catalog…',
       connectFailed: 'Connect failed',
+      connectAction: 'Connect',
+      connectedAction: 'Connected',
       gatewayReady: 'Gateway ready',
       gatewayUnknown: 'Gateway not ready',
     }
     const zh = {
-      title: 'tmax 访问',
+      title: 'tmax',
       loading: '正在读取模型目录…',
       connected: '已连接',
       disconnected: '未连接',
@@ -39,6 +41,8 @@ window.__ModuleLoader__.load({
       connecting: '连接中…',
       connectDone: '已连接，正在刷新模型目录…',
       connectFailed: '连接失败',
+      connectAction: '连接',
+      connectedAction: '已连接',
       gatewayReady: 'gateway 已就绪',
       gatewayUnknown: 'gateway 未就绪',
     }
@@ -127,6 +131,45 @@ window.__ModuleLoader__.load({
       return h('div', { style: { display: 'grid', gap: 14, maxWidth: 720 } }, children)
     }
 
+    function TmaxAction({ t, subject }) {
+      const isTmax = subject?.kind === 'bundle' && subject.pkg?.name === 'tmax'
+      const [phase, setPhase] = React.useState('idle')
+      const [message, setMessage] = React.useState('')
+      React.useEffect(() => {
+        if (!isTmax) return
+        let live = true
+        fetch(new URL('_tmax/status', document.baseURI), { credentials: 'same-origin' })
+          .then(response => response.ok ? response.json() : undefined)
+          .then(status => { if (live && status?.gateway?.ready === true) setPhase('connected') })
+          .catch(() => {})
+        return () => { live = false }
+      }, [isTmax])
+      if (!isTmax) return null
+      const connect = async () => {
+        setPhase('connecting')
+        setMessage('')
+        try {
+          const response = await fetch(new URL('_tmax/connect', document.baseURI), {
+            method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: '{}',
+          })
+          const result = await response.json().catch(() => ({}))
+          if (!response.ok || result.ok !== true) {
+            setPhase('idle')
+            setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
+            return
+          }
+          setPhase('connected')
+        } catch (error) {
+          setPhase('idle')
+          setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+        h('button', { type: 'button', onClick: connect, disabled: phase === 'connecting' },
+          phase === 'connected' ? t('connectedAction') : phase === 'connecting' ? t('connecting') : t('connectAction')),
+        message ? h('span', { style: { color: '#b91c1c', fontSize: 12 } }, message) : null)
+    }
+
     let ctx
     function apply(context) {
       ctx = context
@@ -137,8 +180,11 @@ window.__ModuleLoader__.load({
         key: 'tmax',
         locale: NS,
       }, TmaxPanel)), 'tmax: bundle page')
+      context.effect(() => context.slots.inject('plugins.detail.actions', () => context.slots.register({
+        name: 'plugins.detail.actions', id: 'tmax-connect', locale: NS,
+      }, TmaxAction)), 'tmax: connect action')
     }
 
-    return { inject: ['slots', 'locale', 'remote'], apply }
+    return { inject: ['slots', 'locale', 'remote', 'remote.session'], apply }
   },
 })

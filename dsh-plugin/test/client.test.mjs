@@ -16,7 +16,7 @@ test('client bundle registers the tmax Plugins page', async () => {
     assert.equal(specifier, 'react')
     return React
   })
-  assert.deepEqual(module.inject, ['slots', 'locale', 'remote'])
+  assert.deepEqual(module.inject, ['slots', 'locale', 'remote', 'remote.session'])
   const registrations = []
   const effects = []
   const ctx = {
@@ -26,14 +26,13 @@ test('client bundle registers the tmax Plugins page', async () => {
       bind() { return key => key },
     },
     slots: {
-      inject(name, fn) { assert.equal(name, 'plugins.bundle.config'); fn() },
+      inject(name, fn) { effects.push(name); fn() },
       register(options, component) { registrations.push({ options, component }); return () => {} },
     },
     remote: { session: { modelCatalog: async () => ({ ok: true, value: { groups: [] } }) } },
   }
   module.apply(ctx)
-  assert.equal(registrations.length, 1)
-  assert.equal(registrations[0].options.name, 'plugins.bundle.config')
+  assert.deepEqual(registrations.map(entry => entry.options.name).sort(), ['plugins.bundle.config', 'plugins.detail.actions'])
   assert.equal(registrations[0].options.key, 'tmax')
   assert.equal(typeof registrations[0].component, 'function')
   delete globalThis.window
