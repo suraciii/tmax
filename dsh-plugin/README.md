@@ -13,14 +13,14 @@ cd tmax
 just dsh-install
 ```
 
-Restart or refresh DSH Web, then open **Settings → Models** and find the **tmax** card at the bottom. To update, pull and
-re-run `just dsh-install`; uninstall with `just dsh-remove`.
+Restart or refresh DSH Web, then open **tmax** in the sidebar panel list, beside
+Plugins and Schedules. To update, pull and re-run `just dsh-install`; uninstall
+with `just dsh-remove`.
 
 ## Connect
 
-On **Settings → Models**, use the **tmax** card and select **Connect now**. This writes only
-the DSH credential reference through `tmax dsh connect`; the key is never
-returned to the browser.
+On the **tmax** page, select **Connect**. This writes only the DSH credential
+reference through `tmax dsh connect`; the key is never returned to the browser.
 
 The terminal equivalents are:
 
@@ -29,25 +29,23 @@ tmax dsh connect --home "$DSH_HOME" --dry-run
 tmax dsh connect --home "$DSH_HOME"
 ```
 
-## What the card shows
+## The page
 
-The card sits at the bottom of **Settings → Models**, after the provider list, and
-uses the same material as the provider rows above it. It follows the light and
-dark themes because every colour comes from a `--dsw-alias-*` token.
+The plugin claims a first-level page: `sidebar.panellist` adds the **tmax** row
+beside Plugins and Schedules, and `main` renders the page itself, so it owns a
+full content column instead of competing for room inside a settings section.
 
-- a status dot, plus a tag only when the state is not "connected";
-- the projected model count and gateway readiness;
-- the projected model IDs;
-- the one action the card exists for: **Connect**, in primary weight, and only
-  while access is not working;
-- **usage and limits** per provider: each window as the amount still left, the
-  reset date of the tightest window, and the provider dashboard behind its name.
+- **Access** — the DSH target, its home, the gateway address and readiness, and
+  the route protocol, plus any blocker or Host error.
+- **Models** — the projected model IDs as chips, or the reason there are none.
+- **Usage and limits** — one card per provider that reports a quota, ordered by
+  how much attention it needs. Each window gets a meter, its share consumed, and
+  its reset date; the provider name opens that provider's own dashboard.
 
-Each window is reported in one direction (`remaining`) even though tmax reports
-some windows as consumed and others as remaining, so the reader never converts
-in their head. Windows a provider never names collapse into one count when their
-values match. Providers that report nothing readable are omitted rather than
-shown as blank rows.
+Both tmax window conventions (consumed and remaining) become the same filling
+meter, so a row never needs mental arithmetic. Providers that report nothing
+readable are omitted rather than shown as blank rows. Every colour resolves
+through a `--dsw-alias-*` token, so the page follows the light and dark themes.
 
 It also registers the `tmax_status` tool and the `tmax` skill for agents.
 

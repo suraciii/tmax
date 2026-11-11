@@ -51,7 +51,7 @@ cd tmax
 just dsh-install
 ```
 
-安装后重启或刷新 DSH Web，在 **Settings → Models** 底部的 **tmax** 卡片中连接并选择模型。插件需要已在 `PATH` 中的 `tmax`，并配置好 DSH target 和 gateway。更新时拉取仓库后重新执行 `just dsh-install`，再重启/刷新 DSH。卸载用 `just dsh-remove`。
+安装后重启或刷新 DSH Web，在侧栏打开 **tmax** 页面连接并查看模型与额度。插件需要已在 `PATH` 中的 `tmax`，并配置好 DSH target 和 gateway。更新时拉取仓库后重新执行 `just dsh-install`，再重启/刷新 DSH。卸载用 `just dsh-remove`。
 
 ## 文档
 

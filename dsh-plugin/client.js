@@ -1,108 +1,158 @@
-// Client half: the tmax access card on DSH's Models settings page.
+// Client half: tmax's own page in DSH, reached from the sidebar panel list.
 //
-// It reads the live Host model catalog and the secret-free usage route; it
-// never runs a CLI itself and never receives a key. Every colour resolves
-// through a `--dsw-alias-*` token so the card follows the light and dark
-// themes instead of shipping its own palette.
+// The page is a first-level entry beside Plugins and Schedules, so it owns a
+// full content column instead of competing for room in a settings footer. It
+// reads the Host model catalog and the secret-free usage route; it never runs a
+// CLI itself and never receives a key. Every colour resolves through a
+// `--dsw-alias-*` token so the page follows the light and dark themes.
 window.__ModuleLoader__.load({
   id: 'tmax',
   factory(require) {
     const React = require('react')
-    const NS = 'tmaxDshSettings'
+    const NS = 'tmaxDshPage'
     const h = React.createElement
 
     const en = {
+      panel: 'tmax',
       title: 'tmax',
+      subtitle: 'Model access and provider limits managed by tmax.',
       loading: 'Reading model catalog…',
       connected: 'Connected',
       disconnected: 'Not connected',
       failed: 'Provider failed',
-      empty: 'No tmax models are registered yet.',
+      empty: 'This profile exposes no tmax models yet.',
       hint: 'Connecting writes the DSH credential reference. The key is never copied or shown.',
-      models: 'models',
-      failure: 'Host error',
+      connect: 'Connect',
       connecting: 'Connecting…',
       connectFailed: 'Connect failed',
-      connectAction: 'Connect',
+      refresh: 'Refresh',
+      access: 'Access',
+      target: 'Target',
+      home: 'DSH home',
+      gateway: 'Gateway',
+      gatewayReady: 'ready',
+      gatewayNotReady: 'not ready',
+      protocol: 'Protocol',
+      modelsSection: 'Models',
+      modelsUnit: 'models',
+      providerUnit: 'providers',
       usage: 'Usage and limits',
-      usageUnknown: 'No provider reports quotas yet.',
-      remaining: 'remaining',
-      quotaSuspended: 'Suspended',
+      usageUnknown: 'No provider reports a quota yet.',
+      usageFailed: 'Usage is unavailable right now.',
+      left: 'left',
+      suspended: 'Suspended',
+      dashboard: 'Provider dashboard',
       windowRolling: 'rolling',
       windowWeekly: 'weekly',
       windowMonthly: 'monthly',
       windowGeneric: 'limit',
-      resets: 'resets',
-      gatewayReady: 'gateway ready',
-      gatewayUnknown: 'gateway not ready',
-      openDashboard: 'Open provider dashboard',
       unitMinute: 'min',
       unitHour: 'h',
+      blocker: 'Blocker',
+      hostError: 'Host error',
+      retry: 'Retry',
     }
     const zh = {
+      panel: 'tmax',
       title: 'tmax',
+      subtitle: '查看 tmax 管理的模型访问与供应商额度。',
       loading: '正在读取模型目录…',
       connected: '已连接',
       disconnected: '未连接',
       failed: 'provider 加载失败',
-      empty: '还没有注册 tmax 模型。',
+      empty: '当前 profile 还没有暴露 tmax 模型。',
       hint: '连接会写入 DSH 凭据引用，密钥不会被复制或显示。',
-      models: '个模型',
-      failure: 'Host 错误',
+      connect: '连接',
       connecting: '连接中…',
       connectFailed: '连接失败',
-      connectAction: '连接',
+      refresh: '刷新',
+      access: '访问',
+      target: '目标',
+      home: 'DSH 目录',
+      gateway: '网关',
+      gatewayReady: '已就绪',
+      gatewayNotReady: '未就绪',
+      protocol: '协议',
+      modelsSection: '模型',
+      modelsUnit: '个模型',
+      providerUnit: '个供应商',
       usage: '用量与额度',
       usageUnknown: '还没有 provider 上报额度。',
-      remaining: '剩余',
-      quotaSuspended: '已暂停',
+      usageFailed: '暂时拿不到用量数据。',
+      left: '剩余',
+      suspended: '已暂停',
+      dashboard: '供应商后台',
       windowRolling: '滚动',
       windowWeekly: '周',
       windowMonthly: '月',
       windowGeneric: '额度',
-      resets: '重置',
-      gatewayReady: 'gateway 已就绪',
-      gatewayUnknown: 'gateway 未就绪',
-      openDashboard: '打开供应商后台',
       unitMinute: '分钟',
       unitHour: '小时',
+      blocker: '阻塞项',
+      hostError: 'Host 错误',
+      retry: '重试',
     }
 
-    // Scoped to `tmax-`; injected once so the card can use the app's own
-    // material, focus ring, and hover behaviour instead of inline literals.
     const STYLE = `
-.tmax-section { display: flex; flex-direction: column; gap: 10px; margin-top: 32px; max-width: 720px; color: var(--dsw-alias-label-primary); }
-.tmax-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
-.tmax-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.tmax-name { font-size: 14px; line-height: 22px; font-weight: 500; color: var(--dsw-alias-label-primary); }
-.tmax-tag { flex: none; padding: 1px 6px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
-.tmax-tag[data-tone='error'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-primary); }
-.tmax-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
-.tmax-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
-.tmax-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
-.tmax-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
-.tmax-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
-.tmax-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; line-height: 18px; cursor: pointer; }
-.tmax-button[data-kind='primary'] { border-color: transparent; background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
-@media (hover: hover) { .tmax-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-solid); } .tmax-button[data-kind='primary']:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); } }
-.tmax-button:disabled { opacity: 0.4; cursor: default; }
-.tmax-meta { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-.tmax-models { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
-.tmax-error { font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-error-primary); overflow-wrap: anywhere; }
-.tmax-divider { height: 0; border-top: 0.5px solid var(--dsw-alias-border-l1); }
-.tmax-usage { display: flex; flex-direction: column; gap: 8px; }
-.tmax-usage-title { font-size: 12px; line-height: 18px; font-weight: 500; color: var(--dsw-alias-label-secondary); margin-bottom: 2px; }
-.tmax-usage-row { display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 18px; }
-.tmax-usage-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.tmax-usage-name { color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-a.tmax-usage-name { text-decoration: none; }
-a.tmax-usage-name:hover { text-decoration: underline; text-underline-offset: 2px; }
-.tmax-usage-values { display: flex; flex-wrap: wrap; gap: 2px 12px; min-width: 0; padding-left: 10px; }
-.tmax-usage-reset { margin-left: auto; flex: none; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
-.tmax-value { color: var(--dsw-alias-label-secondary); white-space: nowrap; }
-.tmax-value[data-tone='warn'] { color: var(--dsw-alias-state-warn-label); }
-.tmax-value[data-tone='error'] { color: var(--dsw-alias-state-error-primary); }
-.tmax-hint { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-page { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font-size: 14px; line-height: 1.6; }
+.tmx-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; --dsh-scrollbar-width: 9px; --dsh-scrollbar-thumb-border: 2px; }
+.tmx-content { max-width: 960px; margin: 0 auto; padding: 0 clamp(24px, 4vw, 48px) 64px; }
+.tmx-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding-top: 28px; margin-bottom: 8px; }
+.tmx-heading h1 { flex: 0 1 auto; min-width: 0; max-width: 100%; margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; }
+.tmx-headState { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; font-size: 13px; line-height: 20px; font-weight: 400; color: var(--dsw-alias-label-secondary); vertical-align: middle; }
+.tmx-actions { display: flex; flex: none; align-items: center; gap: 8px; white-space: nowrap; }
+.tmx-sub { margin: 0 0 28px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.tmx-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
+.tmx-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
+.tmx-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
+.tmx-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
+.tmx-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 14px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
+.tmx-button[data-kind='primary'] { border-color: transparent; background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
+@media (hover: hover) {
+  .tmx-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-solid); }
+  .tmx-button[data-kind='primary']:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
+}
+.tmx-button:disabled { opacity: 0.4; cursor: default; }
+.tmx-section { margin-bottom: 32px; }
+.tmx-sectionTitle { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 14px; line-height: 22px; font-weight: 500; }
+.tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
+.tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 16px 18px; }
+.tmx-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px 24px; margin: 0; }
+.tmx-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tmx-fact dt { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-fact dd { margin: 0; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.tmx-factValue { display: inline-flex; align-items: center; gap: 6px; }
+.tmx-mono { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; }
+.tmx-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tmx-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); font-size: 12px; line-height: 18px; }
+.tmx-chipKind { font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.tmx-note { margin: 12px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-error { margin: 12px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-error-primary); overflow-wrap: anywhere; }
+.tmx-providers { display: flex; flex-direction: column; gap: 12px; }
+.tmx-provider { display: flex; flex-direction: column; gap: 12px; }
+.tmx-providerHead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tmx-providerName { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--dsw-alias-label-primary); text-decoration: none; }
+a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2px; }
+.tmx-external { flex: none; margin-top: 1px; color: var(--dsw-alias-label-secondary); }
+.tmx-providerHead a:hover .tmx-external { color: var(--dsw-alias-label-primary); }
+.tmx-windows { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tmx-window { display: grid; grid-template-columns: 104px minmax(0, 1fr) minmax(52px, auto) minmax(84px, auto); align-items: center; gap: 12px; font-size: 12px; line-height: 18px; }
+.tmx-windowName { color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmx-bar { position: relative; height: 6px; border-radius: 99px; background: var(--dsw-alias-border-l1); overflow: hidden; }
+.tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-business-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
+.tmx-barFill[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
+.tmx-barFill[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
+.tmx-windowValue { text-align: end; font-variant-numeric: tabular-nums; }
+.tmx-windowValue[data-tone='warn'] { color: var(--dsw-alias-state-warn-primary); }
+.tmx-windowValue[data-tone='error'] { color: var(--dsw-alias-state-error-primary); }
+.tmx-windowReset { text-align: end; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.tmx-windowReset[data-empty='true'] { visibility: hidden; }
+.tmx-skeleton .tmx-bar { background: var(--dsw-alias-border-l1); overflow: hidden; }
+.tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+@media (max-width: 720px) {
+  .tmx-window { grid-template-columns: 88px minmax(0, 1fr) minmax(46px, auto); }
+  .tmx-windowReset { display: none; }
+}
 `
 
     const WINDOW_NAMES = {
@@ -112,111 +162,6 @@ a.tmax-usage-name:hover { text-decoration: underline; text-underline-offset: 2px
       weekly_allowance: 'windowWeekly',
     }
 
-    function windowName(label, index, t) {
-      if (label !== null && typeof label === 'object') {
-        if (typeof label.key === 'string' && WINDOW_NAMES[label.key] !== undefined) {
-          return t(WINDOW_NAMES[label.key])
-        }
-        const parts = [label.name, label.window].filter(part => typeof part === 'string' && part !== '')
-        if (parts.length > 0) return parts.join(' ')
-      }
-      if (label !== null && typeof label === 'object' && label.key === 'duration') {
-        const count = label.duration ?? ''
-        const unit = label.unit === 'TIME_UNIT_MINUTE' ? t('unitMinute') : label.unit === 'TIME_UNIT_HOUR' ? t('unitHour') : label.unit ?? ''
-        return `${count} ${unit}`.trim()
-      }
-      return `${t('windowGeneric')} ${index + 1}`
-    }
-
-    /**
-     * One window as a single direction: how much is left. tmax reports some
-     * windows as consumed and others as remaining, and a mixed list makes the
-     * reader convert in their head; one direction removes that.
-     */
-    function reading(row, index, t) {
-      const name = windowName(row.label, index, t)
-      const generic = name === `${t('windowGeneric')} ${index + 1}`
-      const reset = resetAt(row.reset)
-      if (typeof row.percent === 'number') {
-        const remaining = row.basis === 'remaining_percent' ? row.percent : 100 - row.percent
-        return {
-          text: `${name} ${t('remaining')} ${Math.max(0, Math.round(remaining))}%`,
-          remaining: Math.max(0, remaining),
-          generic,
-          reset,
-        }
-      }
-      const limit = row.counters?.limit
-      if (limit !== undefined && limit !== null) {
-        const left = row.counters.remaining
-        const total = Number(limit)
-        const leftNumber = Number(left)
-        const remaining = Number.isFinite(total) && total > 0 && Number.isFinite(leftNumber) ? (leftNumber / total) * 100 : undefined
-        return {
-          text: `${name} ${t('remaining')} ${left ?? '?'}/${limit}`,
-          remaining,
-          generic: false,
-          reset,
-        }
-      }
-      return undefined
-    }
-
-    /**
-     * A provider can report several windows it never names — three identical
-     * "limit" rows read as noise. Only unnamed windows with the same remaining
-     * amount collapse; named windows always keep their own label.
-     */
-    function collapse(readings, t) {
-      const groups = new Map()
-      for (const item of readings) {
-        const key = item.generic === true ? `g:${Math.round(item.remaining ?? -1)}` : `i:${item.text}`
-        const group = groups.get(key)
-        if (group === undefined) groups.set(key, { items: [item], generic: item.generic === true })
-        else group.items.push(item)
-      }
-      return [...groups.values()].map(({ items, generic }) => {
-        if (!generic || items.length < 2) return items[0]
-        const count = items.length
-        const remaining = Math.round(items[0].remaining ?? 0)
-        return {
-          ...items[0],
-          text: `${t('windowGeneric')} ×${count} ${t('remaining')} ${remaining}%`,
-          reset: items.map(item => item.reset).filter(Boolean).sort((a, b) => a - b)[0],
-        }
-      })
-    }
-
-    /**
-     * Providers ordered by how much attention they need: exhausted first, then
-     * the tightest window. A provider with no readable window is dropped rather
-     * than shown as a row of blanks.
-     */
-    function usageRows(providers, t) {
-      return providers
-        .map(provider => {
-          const readings = collapse(
-            (provider.billing?.rows || []).map((row, index) => reading(row, index, t)).filter(Boolean), t)
-          if (readings.length === 0) return undefined
-          const tightest = readings.reduce((worst, item) =>
-            (item.remaining ?? 100) < (worst.remaining ?? 100) ? item : worst, readings[0])
-          const suspended = provider.quota?.state === 'suspended'
-          const tightestRemaining = tightest.remaining ?? 100
-          return {
-            provider,
-            readings,
-            suspended,
-            reset: tightest.reset ?? resetAt(provider.quota?.resetAt),
-            tone: suspended || tightestRemaining <= 0 ? 'error' : tightestRemaining <= 20 ? 'warn' : 'ok',
-          }
-        })
-        .filter(Boolean)
-        .sort((a, b) => Number(b.suspended) - Number(a.suspended)
-          || (a.readings.reduce((n, r) => Math.min(n, r.remaining ?? 100), 100))
-            - (b.readings.reduce((n, r) => Math.min(n, r.remaining ?? 100), 100))
-          || a.provider.name.localeCompare(b.provider.name))
-    }
-
     function resetAt(reset) {
       const at = reset?.at ?? (typeof reset?.raw === 'number' ? reset.raw : undefined)
       if (at === undefined) return undefined
@@ -224,56 +169,138 @@ a.tmax-usage-name:hover { text-decoration: underline; text-underline-offset: 2px
       return Number.isNaN(date.getTime()) ? undefined : date
     }
 
-    function TmaxCard({ t }) {
+    function windowName(label, index, t) {
+      if (label !== null && typeof label === 'object') {
+        if (typeof label.key === 'string' && WINDOW_NAMES[label.key] !== undefined) {
+          return t(WINDOW_NAMES[label.key])
+        }
+        if (label.key === 'duration') {
+          const count = label.duration ?? ''
+          const unit = label.unit === 'TIME_UNIT_MINUTE' ? t('unitMinute') : label.unit === 'TIME_UNIT_HOUR' ? t('unitHour') : label.unit ?? ''
+          return `${count} ${unit}`.trim()
+        }
+        const parts = [label.name, label.window].filter(part => typeof part === 'string' && part !== '')
+        if (parts.length > 0) return parts.join(' ')
+      }
+      return `${t('windowGeneric')} ${index + 1}`
+    }
+
+    function toneFor(consumed) {
+      return consumed >= 100 ? 'error' : consumed >= 80 ? 'warn' : 'ok'
+    }
+
+    /**
+     * One window as a share of what it started with. tmax reports some windows
+     * as consumed and others as remaining; both become the single consumed
+     * fraction a filling bar can show.
+     */
+    function windowReading(row, index, t) {
+      const name = windowName(row.label, index, t)
+      const reset = resetAt(row.reset)
+      if (typeof row.percent === 'number') {
+        const consumed = row.basis === 'remaining_percent' ? 100 - row.percent : row.percent
+        return {
+          name,
+          consumed: Math.max(0, Math.min(100, consumed)),
+          text: `${Math.round(consumed)}%`,
+          reset,
+        }
+      }
+      const limit = row.counters?.limit
+      if (limit !== undefined && limit !== null) {
+        const total = Number(limit)
+        const used = Number(row.counters.currentValue ?? row.counters.usage ?? (total - Number(row.counters.remaining)))
+        const consumed = Number.isFinite(total) && total > 0 && Number.isFinite(used) ? (used / total) * 100 : undefined
+        return {
+          name,
+          consumed: consumed === undefined ? undefined : Math.max(0, Math.min(100, consumed)),
+          text: `${t('left')} ${row.counters.remaining ?? '?'}/${limit}`,
+          reset,
+        }
+      }
+      return undefined
+    }
+
+    /** Providers ordered by how much attention they need, each with its windows. */
+    function providerRows(providers, t) {
+      return providers
+        .map(provider => {
+          const windows = (provider.billing?.rows || [])
+            .map((row, index) => windowReading(row, index, t))
+            .filter(Boolean)
+          if (windows.length === 0) return undefined
+          const known = windows.filter(item => item.consumed !== undefined)
+          const worst = known.reduce((max, item) => Math.max(max, item.consumed), 0)
+          const suspended = provider.quota?.state === 'suspended'
+          return {
+            provider,
+            windows,
+            suspended,
+            worst: known.length === 0 ? 0 : worst,
+            tone: suspended || (known.length > 0 && worst >= 100) ? 'error' : worst >= 80 ? 'warn' : 'ok',
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => Number(b.suspended) - Number(a.suspended) || b.worst - a.worst
+          || (a.provider.name || a.provider.id).localeCompare(b.provider.name || b.provider.id))
+    }
+
+    /**
+     * One GET route as component state. The mapper lives at the call site so this
+     * hook keeps a stable `load`: an identity that changes per render would make
+     * its effect refetch forever.
+     */
+    function useEndpoint(path) {
       const [state, setState] = React.useState({ phase: 'loading' })
-      const [usage, setUsage] = React.useState({ phase: 'loading' })
-      const [connecting, setConnecting] = React.useState(false)
+      const load = React.useCallback(async () => {
+        setState(previous => ({ phase: previous.value === undefined ? 'loading' : 'refreshing', value: previous.value }))
+        try {
+          const response = await fetch(new URL(path, document.baseURI), { credentials: 'same-origin' })
+          if (!response.ok) throw new Error(`HTTP ${response.status}`)
+          setState({ phase: 'ready', value: await response.json() })
+        } catch (error) {
+          setState({ phase: 'failed', message: error instanceof Error ? error.message : String(error) })
+        }
+      }, [path])
+      React.useEffect(() => { void load() }, [load])
+      return [state, load]
+    }
+
+    function TmaxPage({ t }) {
+      const [status, reloadStatus] = useEndpoint('/_tmax/status')
+      const [usage, reloadUsage] = useEndpoint('/_tmax/usage')
+      const [catalog, setCatalog] = React.useState({ phase: 'loading' })
+      const [busy, setBusy] = React.useState(false)
       const [message, setMessage] = React.useState('')
 
-      const loadUsage = React.useCallback(async () => {
-        try {
-          const response = await fetch(new URL('_tmax/usage', document.baseURI), { credentials: 'same-origin' })
-          const value = response.ok ? await response.json() : undefined
-          setUsage(value?.ok === true ? { phase: 'ready', providers: value.providers || [] } : { phase: 'failed' })
-        } catch {
-          setUsage({ phase: 'failed' })
-        }
-      }, [])
-
-      const load = React.useCallback(async () => {
-        setState({ phase: 'loading' })
-        let gateway
-        try {
-          const response = await fetch(new URL('_tmax/status', document.baseURI), { credentials: 'same-origin' })
-          if (response.ok) gateway = (await response.json()).gateway
-        } catch {}
+      const loadCatalog = React.useCallback(async () => {
         try {
           const response = await ctx.remote.session.modelCatalog()
           if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`)
           const groups = response.value.groups || []
           const group = groups.find(item => item.id === 'tmax' || item.id.endsWith('tmax'))
-          if (group !== undefined) {
-            setState({ phase: 'connected', group, gateway })
-            return
-          }
           const failures = response.value.failures || []
           const failure = failures.find(item => item.id === 'tmax' || item.id.endsWith('tmax'))
-          setState(failure === undefined ? { phase: 'disconnected', gateway } : { phase: 'failed', message: failure.message, gateway })
+          setCatalog(failure === undefined ? { phase: 'ready', group } : { phase: 'failed', message: failure.message })
         } catch (error) {
-          setState({ phase: 'failed', message: error instanceof Error ? error.message : String(error), gateway })
+          setCatalog({ phase: 'failed', message: error instanceof Error ? error.message : String(error) })
         }
       }, [])
 
-      React.useEffect(() => {
-        void load()
-        void loadUsage()
-      }, [load, loadUsage])
+      React.useEffect(() => { void loadCatalog() }, [loadCatalog])
+
+      const refresh = async () => {
+        setBusy(true)
+        setMessage('')
+        await Promise.all([reloadStatus(), reloadUsage(), loadCatalog()])
+        setBusy(false)
+      }
 
       const connect = async () => {
-        setConnecting(true)
+        setBusy(true)
         setMessage('')
         try {
-          const response = await fetch(new URL('_tmax/connect', document.baseURI), {
+          const response = await fetch(new URL('/_tmax/connect', document.baseURI), {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'content-type': 'application/json' },
@@ -284,89 +311,225 @@ a.tmax-usage-name:hover { text-decoration: underline; text-underline-offset: 2px
             setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
             return
           }
-          await Promise.all([load(), loadUsage()])
+          await Promise.all([reloadStatus(), reloadUsage(), loadCatalog()])
         } catch (error) {
           setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
         } finally {
-          setConnecting(false)
+          setBusy(false)
         }
       }
 
-      const connected = state.phase === 'connected'
-      const tone = connected ? 'ok' : state.phase === 'failed' ? 'error' : 'idle'
-      const statusTag = state.phase === 'loading'
-        ? t('loading')
-        : connected ? t('connected') : state.phase === 'failed' ? t('failed') : t('disconnected')
+      const connected = catalog.phase === 'ready' && catalog.group !== undefined
+      const tone = connected ? 'ok' : catalog.phase === 'failed' ? 'error' : 'idle'
+      const statusText = connected ? t('connected') : catalog.phase === 'failed' ? t('failed') : catalog.phase === 'loading' ? t('loading') : t('disconnected')
+      const gateway = status.value?.gateway
+      const route = (status.value?.routes || [])[0]
 
-      const meta = [state.gateway === undefined ? undefined : state.gateway.ready === true ? t('gatewayReady') : t('gatewayUnknown')]
-        .filter(Boolean)
-      if (connected) meta.unshift(`${state.group.models.length} ${t('models')}`)
+      const providers = usage.value?.ok === true ? usage.value.providers || [] : []
+      const usageFailed = usage.phase === 'failed' || (usage.phase !== 'loading' && usage.value !== undefined && usage.value.ok !== true)
+      const rows = providers.length > 0 ? providerRows(providers, t) : []
 
-      const children = [
-        h('div', { key: 'head', className: 'tmax-head' },
-          h('span', { className: 'tmax-dot', 'data-tone': tone }),
-          h('span', { className: 'tmax-name' }, t('title')),
-          state.phase === 'connected'
-            ? null
-            : h('span', { className: 'tmax-tag', 'data-tone': tone === 'error' ? 'error' : undefined }, statusTag),
-          h('div', { className: 'tmax-actions' },
-            connected
-              ? null
-              : h('button', { type: 'button', className: 'tmax-button', 'data-kind': 'primary', onClick: connect, disabled: connecting },
-                connecting ? t('connecting') : t('connectAction')))),
-        meta.length > 0 ? h('div', { key: 'meta', className: 'tmax-meta' }, meta.join(' · ')) : null,
+      const gatewayDot = h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': gateway?.ready === true ? 'ok' : 'idle' })
+      const facts = [
+        fact(t('target'), status.value?.target?.id),
+        fact(t('home'), status.value?.target?.path, 'tmx-mono'),
+        h('div', { className: 'tmx-fact', key: 'gateway' }, [
+          h('dt', { key: 'dt' }, t('gateway')),
+          h('dd', { key: 'dd' }, h('span', { className: 'tmx-factValue' }, [
+            gatewayDot,
+            h('span', { className: 'tmx-mono', key: 'listen' }, gateway?.listen ?? '—'),
+            h('span', { key: 'state' }, gateway?.ready === true ? t('gatewayReady') : t('gatewayNotReady')),
+          ])),
+        ]),
+        fact(t('protocol'), route?.protocol),
       ]
+      const accessSection = h('section', { className: 'tmx-section', key: 'access' }, [
+        h('h2', { className: 'tmx-sectionTitle', key: 'title' }, t('access')),
+        h('div', { className: 'tmx-card', key: 'card' }, [
+          h('dl', { className: 'tmx-facts', key: 'facts' }, facts),
+          ...blockerNotes(status.value, t),
+        ]),
+      ])
 
-      if (connected) {
-        // A registered provider can still project no model; that is its own state,
-        // not a silent blank under the model count.
-        children.push(state.group.models.length === 0
-          ? h('div', { key: 'empty', className: 'tmax-hint' }, t('empty'))
-          : h('div', { key: 'models', className: 'tmax-models' },
-            state.group.models
-              .map(model => model.name === model.id ? model.id : `${model.name} (${model.id})`)
-              .join(' · ')))
-      }
-      if (state.phase === 'failed') {
-        children.push(h('div', { key: 'failure', className: 'tmax-error' }, `${t('failure')}: ${state.message}`))
-      }
-      if (message !== '') children.push(h('div', { key: 'message', className: 'tmax-error' }, message))
-      if (!connected) children.push(h('div', { key: 'hint', className: 'tmax-hint' }, t('hint')))
+      const modelsSection = h('section', { className: 'tmx-section', key: 'models' }, [
+        h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
+          t('modelsSection'),
+          connected ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${catalog.group.models.length} ${t('modelsUnit')}`) : null,
+        ]),
+        h('div', { className: 'tmx-card', key: 'card' }, modelsBody(catalog, connected, t)),
+      ])
 
-      // Usage is a separate delivery from the catalog: one may be readable while
-      // the other is not, so it renders on its own state.
-      if (usage.phase === 'ready') {
-        const rows = usageRows(usage.providers, t)
-        if (rows.length > 0) {
-          children.push(h('div', { key: 'divider', className: 'tmax-divider' }))
-          children.push(h('div', { key: 'usage', className: 'tmax-usage' },
-            h('div', { className: 'tmax-usage-title' }, t('usage')),
-            rows.map(entry => {
-              const name = entry.provider.name || entry.provider.id
-              const dashboard = entry.provider.billing?.dashboard
-              const label = dashboard === undefined
-                ? h('span', { className: 'tmax-usage-name', title: name }, name)
-                : h('a', { className: 'tmax-usage-name', href: dashboard, target: '_blank', rel: 'noreferrer', title: t('openDashboard') }, name)
-              return h('div', { key: entry.provider.id, className: 'tmax-usage-row' },
-                h('div', { className: 'tmax-usage-head' },
-                  label,
-                  entry.suspended ? h('span', { className: 'tmax-tag', 'data-tone': 'error' }, t('quotaSuspended')) : null,
-                  entry.reset === undefined
-                    ? null
-                    : h('span', { className: 'tmax-usage-reset' }, `${t('resets')} ${entry.reset.toLocaleDateString()}`)),
-                h('div', { className: 'tmax-usage-values' },
-                  entry.readings.map((item, index) => h('span', { key: String(index), className: 'tmax-value', 'data-tone': entry.tone === 'error' && (item.remaining ?? 100) <= 0 ? 'error' : 'ok' }, item.text))))
-            })))
-        } else if (connected) {
-          // Quota is only a claim worth making once access works; a first-run
-          // card says what is missing instead of what it cannot measure yet.
-          children.push(h('div', { key: 'divider', className: 'tmax-divider' }))
-          children.push(h('div', { key: 'usage', className: 'tmax-hint' }, t('usageUnknown')))
-        }
-      }
+      const usageSection = h('section', { className: 'tmx-section', key: 'usage' }, [
+        h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
+          t('usage'),
+          rows.length > 0 ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${rows.length} ${t('providerUnit')}`) : null,
+        ]),
+        usageBody(usage.phase, usageFailed, rows, t),
+        usageFailed
+          ? h('p', { className: 'tmx-note', key: 'retry' },
+            h('button', { type: 'button', className: 'tmx-button', onClick: reloadUsage }, t('retry')))
+          : null,
+      ])
 
-      return h('section', { className: 'tmax-section' },
-        h('div', { className: 'tmax-card' }, children))
+      const heading = h('div', { className: 'tmx-heading', key: 'heading' }, [
+        h('h1', { key: 'title' }, [
+          t('title'),
+          h('span', { className: 'tmx-headState', key: 'state' }, [
+            h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': tone }),
+            statusText,
+          ]),
+        ]),
+        h('div', { className: 'tmx-actions', key: 'actions' }, [
+          h('button', { type: 'button', className: 'tmx-button', key: 'refresh', onClick: refresh, disabled: busy },
+            busy ? t('loading') : t('refresh')),
+          connected
+            ? null
+            : h('button', {
+              type: 'button',
+              className: 'tmx-button',
+              key: 'connect',
+              'data-kind': 'primary',
+              onClick: connect,
+              disabled: busy,
+            }, busy ? t('connecting') : t('connect')),
+        ]),
+      ])
+
+      return h('div', { className: 'tmx-page', 'data-tmax-page': '1' },
+        h('div', { className: 'tmx-scroll' },
+          h('div', { className: 'tmx-content' }, [
+            heading,
+            h('p', { className: 'tmx-sub', key: 'sub' }, t('subtitle')),
+            message === '' ? null : h('p', { className: 'tmx-error', key: 'message' }, message),
+            accessSection,
+            modelsSection,
+            usageSection,
+          ])))
+    }
+
+    function blockerNotes(status, t) {
+      const notes = []
+      const blockers = status?.blockers || []
+      if (blockers.length > 0) {
+        notes.push(h('p', { className: 'tmx-error', key: 'blockers' },
+          `${t('blocker')}: ${blockers.map(blocker => typeof blocker === 'string' ? blocker : JSON.stringify(blocker)).join('; ')}`))
+      }
+      if (status?.lastError) {
+        notes.push(h('p', { className: 'tmx-error', key: 'error' }, `${t('hostError')}: ${status.lastError}`))
+      }
+      return notes
+    }
+
+    function usageBody(phase, failed, rows, t) {
+      if (failed) {
+        return h('div', { className: 'tmx-card' },
+          h('p', { className: 'tmx-empty' }, t('usageFailed')))
+      }
+      if (phase === 'loading') return h('div', { className: 'tmx-card tmx-skeleton' }, skeleton(t))
+      if (rows.length === 0) {
+        return h('div', { className: 'tmx-card' }, h('p', { className: 'tmx-empty' }, t('usageUnknown')))
+      }
+      return h('div', { className: 'tmx-providers' }, rows.map(entry => providerCard(entry, t)))
+    }
+
+    /** The models section states the reason it has nothing, not just nothing. */
+    function modelsBody(catalog, connected, t) {
+      if (catalog.phase === 'failed') {
+        return [h('p', { className: 'tmx-empty', key: 'error' }, `${t('hostError')}: ${catalog.message}`)]
+      }
+      if (!connected) {
+        return [
+          h('p', { className: 'tmx-empty', key: 'empty' }, t('empty')),
+          h('p', { className: 'tmx-note', key: 'hint' }, t('hint')),
+        ]
+      }
+      if (catalog.group.models.length === 0) {
+        return [h('p', { className: 'tmx-empty', key: 'empty' }, t('empty'))]
+      }
+      return [h('ul', { className: 'tmx-chips', key: 'chips' },
+        catalog.group.models.map(model => h('li', { className: 'tmx-chip', key: model.id },
+          h('span', null, model.name ?? model.id),
+          model.name === model.id ? null : h('span', { className: 'tmx-chipKind' }, model.id))))]
+    }
+
+    /** A drawn "opens elsewhere" mark, at the size of the text it follows. */
+    function ExternalMark() {
+      return h('svg', {
+        className: 'tmx-external',
+        width: 11,
+        height: 11,
+        viewBox: '0 0 12 12',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.3,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+      },
+        h('path', { d: 'M4.5 2.5H2.5v7h7V7.5' }),
+        h('path', { d: 'M7 2.5h2.5V5' }),
+        h('path', { d: 'M9.5 2.5 5.5 6.5' }))
+    }
+
+    function fact(label, value, className) {
+      return h('div', { className: 'tmx-fact', key: label },
+        h('dt', null, label),
+        h('dd', { className }, value ?? '—'))
+    }
+
+    function skeleton(t) {
+      return h('div', { className: 'tmx-windows' },
+        [0, 1, 2].map(index => h('div', { className: 'tmx-window', key: index },
+          h('span', { className: 'tmx-windowName' }, '—'),
+          h('span', { className: 'tmx-bar' }),
+          h('span', { className: 'tmx-windowValue' }, '—'),
+          h('span', { className: 'tmx-windowReset' }, t('loading')))))
+    }
+
+    /** One provider: its name, its state, and one bar per window. */
+    function providerCard(entry, t) {
+      const { provider, windows, suspended, tone } = entry
+      const name = provider.name || provider.id
+      const dashboard = provider.billing?.dashboard
+      return h('div', { className: 'tmx-card tmx-provider', key: provider.id },
+        h('div', { className: 'tmx-providerHead' },
+          dashboard === undefined
+            ? h('span', { className: 'tmx-providerName', title: name }, name)
+            : h('a', {
+              className: 'tmx-providerName',
+              href: dashboard,
+              target: '_blank',
+              rel: 'noreferrer',
+              title: t('dashboard'),
+            }, [name, h(ExternalMark, { key: 'mark' })]),
+          suspended ? h('span', { className: 'tmx-chip', 'data-tone': 'error' }, t('suspended')) : null),
+        h('ul', { className: 'tmx-windows' },
+          windows.map((item, index) => {
+            const itemTone = item.consumed === undefined ? 'ok' : toneFor(item.consumed)
+            return h('li', { className: 'tmx-window', key: String(index) },
+              h('span', { className: 'tmx-windowName', title: item.name }, item.name),
+              h('span', { className: 'tmx-bar', role: 'meter', 'aria-valuenow': Math.round(item.consumed ?? 0), 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': `${name} ${item.name}` },
+                h('span', { className: 'tmx-barFill', 'data-tone': itemTone, style: { width: `${item.consumed ?? 0}%` } })),
+              h('span', { className: 'tmx-windowValue', 'data-tone': itemTone }, item.text),
+              h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
+                item.reset === undefined ? '' : `${item.reset.toLocaleDateString()}`))
+          })))
+    }
+
+    /** The sidebar glyph: a gauge, because "how much is left" is what the page answers. */
+    function TmaxIcon({ size = 16 }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.4,
+        strokeLinecap: 'round',
+        'aria-hidden': 'true',
+      },
+        h('path', { d: 'M2.4 12.4a6.4 6.4 0 1 1 11.2 0' }),
+        h('path', { d: 'M8 12.1 10.7 8.2' }))
     }
 
     let ctx
@@ -374,22 +537,28 @@ a.tmax-usage-name:hover { text-decoration: underline; text-underline-offset: 2px
     function apply(context) {
       ctx = context
       context.effect(() => {
-        // A non-window platform has no document; the card is simply never drawn there.
+        // A non-window platform has no document; the page is simply never drawn there.
         if (typeof document === 'undefined') return
         const tag = document.createElement('style')
         tag.dataset.plugin = 'tmax'
         tag.textContent = STYLE
         document.head.appendChild(tag)
         return () => { tag.remove() }
-      }, 'tmax: card styles')
-      context.effect(() => context.locale.register(NS, { en, zh }), 'tmax: card locale')
+      }, 'tmax: page styles')
+      context.effect(() => context.locale.register(NS, { en, zh }), 'tmax: page locale')
       const t = context.locale.bind(NS)
-      context.effect(() => context.slots.inject('settings.models.footer', () => context.slots.register({
-        name: 'settings.models.footer',
+      context.effect(() => context.slots.inject('sidebar.panellist', () => context.slots.register({
+        name: 'sidebar.panellist',
         id: 'tmax',
-        order: 10,
+        order: 20,
+        label: () => t('panel'),
         locale: NS,
-      }, props => h(TmaxCard, { t: props.t ?? t }))), 'tmax: models footer')
+      }, TmaxIcon)), 'tmax: sidebar entry')
+      context.effect(() => context.slots.inject('main', () => context.slots.register({
+        name: 'main',
+        key: 'tmax',
+        locale: NS,
+      }, props => h(TmaxPage, { t: props.t ?? t }))), 'tmax: page')
     }
 
     return { inject: ['slots', 'locale', 'remote', 'remote.session'], apply }
