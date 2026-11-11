@@ -1,0 +1,8 @@
+- insert:
+    - id: tmax
+      name: tmax
+      config:
+        home: ""
+        target: ""
+        refreshSeconds: 60
+        providerPrefix: ""

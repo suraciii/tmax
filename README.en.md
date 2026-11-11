@@ -42,6 +42,21 @@ just build
 ./target/release/tmax integration list
 ```
 
+## Use from DeepSeek Harness
+
+The DSH plugin ships with this repository; it is not published to npm:
+
+```sh
+git clone https://github.com/suraciii/tmax.git
+cd tmax
+dsh plugin --profile web add "$PWD/dsh-plugin"
+```
+
+Restart or refresh DSH Web after installation, then use **tmax access** in
+Settings to connect and select models. The plugin requires a `tmax` executable
+on `PATH` plus a configured DSH target and gateway. To update, pull the
+repository, re-run the same `dsh plugin` command, and restart/refresh DSH.
+
 ## Documentation
 
 - [CLI usage](docs/usage.md) — provider and model setup, native configuration,

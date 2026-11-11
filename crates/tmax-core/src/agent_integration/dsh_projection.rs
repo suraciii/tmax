@@ -28,7 +28,7 @@ pub async fn projection(store: &Store, request: &Request) -> Result<Value> {
     build(store, &file, id, target).await
 }
 
-fn select_target<'a>(
+pub(super) fn select_target<'a>(
     config: &'a Config,
     requested: Option<&'a str>,
     home: Option<&str>,

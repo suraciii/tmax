@@ -835,6 +835,13 @@ const COMMANDS: &[Command] = &[
         mutation: false,
     },
     Command {
+        path: "dsh connect",
+        min: 0,
+        max: 1,
+        options: "home",
+        mutation: true,
+    },
+    Command {
         path: "history list",
         min: 0,
         max: 0,

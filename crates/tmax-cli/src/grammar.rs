@@ -994,11 +994,23 @@ fn dsh_commands() -> Command {
     )
     .arg(value("home", "PATH", "Existing DSH home to match against a declared DSH target."))
     .arg(positional(1, "TARGET", "Declared DSH target ID."));
+    let connect = mutation(
+        leaf(
+            "connect",
+            "Write tmax gateway credential references into one DSH home.",
+            "Selects a declared DSH target by TARGET, --home, DSH_HOME, or the sole declared DSH target. Requires a configured gateway and at least one gateway route. Writes only the stable credential reference names for the target's gateway routes into the target DSH .credentials.yaml, preserving unrelated entries; it never writes a DSH patch, an llm-tmax artifact, or a provider route, starts a service, or emits a key. --dry-run checks the target, DSH home, file permissions, and planned references without reading the credential document or resolving a secret.\n\nExit: 0 when connected or previewed; 2 for invalid/ambiguous target or missing gateway; 4 for credentials/configuration failure.\nExample: tmax dsh connect dsh-main --dry-run",
+        )
+        .arg(value("home", "PATH", "Existing DSH home to match against a declared DSH target."))
+        .arg(positional(1, "TARGET", "Declared DSH target ID.")),
+        true,
+        false,
+    );
     family(
         "dsh",
-        "Project tmax's DSH integration without managing DSH profiles.",
+        "Project and connect tmax's DSH integration without managing DSH profiles.",
         Command::new("dsh")
             .subcommand(projection)
+            .subcommand(connect)
             .subcommand_required(true),
     )
 }

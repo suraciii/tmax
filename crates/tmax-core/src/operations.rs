@@ -132,6 +132,9 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     if path == "dsh projection" {
         return crate::agent_integration::dsh_projection(store, r).await;
     }
+    if path == "dsh connect" {
+        return crate::agent_integration::dsh_connect(store, r).await;
+    }
     let file = match inspection::selected(store, r).await {
         Ok(Some(file)) => file,
         Ok(None) => {

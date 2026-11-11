@@ -39,6 +39,20 @@ just build
 ./target/release/tmax integration list
 ```
 
+<a id="dsh"></a>
+
+## 在 DeepSeek Harness 中使用
+
+DSH 插件源码随本仓库分发，不通过 npm 发布：
+
+```sh
+git clone https://github.com/suraciii/tmax.git
+cd tmax
+dsh plugin --profile web add "$PWD/dsh-plugin"
+```
+
+安装后重启或刷新 DSH Web，在 Settings 的 **tmax access** 中连接并选择模型。插件需要已在 `PATH` 中的 `tmax`，并配置好 DSH target 和 gateway。更新时拉取仓库后重新执行 `dsh plugin --profile web add "$PWD/dsh-plugin"`，再重启/刷新 DSH。
+
 ## 文档
 
 - [CLI 使用指南](docs/usage.md) — 接入和模型设置、原生配置及本地网关。

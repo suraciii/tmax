@@ -417,3 +417,13 @@ fn dsh_projection_help_is_offline_and_names_the_schema_boundary() {
     assert!(text.contains("DSH"));
     assert!(text.contains("schema_version"));
 }
+
+#[test]
+fn dsh_connect_help_is_offline_and_mentions_dry_run() {
+    let output = tmax(&["help", "dsh", "connect"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("--dry-run"));
+    assert!(text.contains("credentials"));
+}
