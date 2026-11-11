@@ -1,4 +1,4 @@
-// Client half: a read-only tmax section in Settings.
+// Client half: a minimal tmax section in Settings.
 //
 // It reads the live Host model catalog; it never runs a CLI or receives a key.
 // The connect command is shown for the user to run in a terminal, so the page
@@ -14,13 +14,7 @@ window.__ModuleLoader__.load({
       connected: 'Connected',
       disconnected: 'Not connected',
       failed: 'Provider failed',
-      refresh: 'Refresh',
-      connectTitle: 'Connect the existing DSH home',
-      connectBody: 'Run this once in a terminal, then refresh:',
-      connectCommand: 'tmax dsh connect --home "$DSH_HOME"',
-      copy: 'Copy command',
-      copied: 'Copied',
-      empty: 'No tmax models are registered yet. Run the connect command, then refresh.',
+      empty: 'No tmax models are registered yet. Use Connect.',
       hint: 'This page is read-only. The command writes only the DSH credential reference; it never prints the key.',
       models: 'models',
       failure: 'Host error',
@@ -30,9 +24,6 @@ window.__ModuleLoader__.load({
       connectFailed: 'Connect failed',
       gatewayReady: 'Gateway ready',
       gatewayUnknown: 'Gateway not ready',
-      fallback: 'If the page cannot run the command, use the terminal command below.',
-      providers: 'Provider access',
-      quota: 'quota',
     }
     const zh = {
       title: 'tmax 访问',
@@ -40,13 +31,7 @@ window.__ModuleLoader__.load({
       connected: '已连接',
       disconnected: '未连接',
       failed: 'provider 加载失败',
-      refresh: '刷新',
-      connectTitle: '连接现有 DSH home',
-      connectBody: '在终端执行一次，然后刷新：',
-      connectCommand: 'tmax dsh connect --home "$DSH_HOME"',
-      copy: '复制命令',
-      copied: '已复制',
-      empty: '还没有注册 tmax 模型。执行连接命令后刷新。',
+      empty: '还没有注册 tmax 模型。点击“立即连接”。',
       hint: '本页只读。命令只写入 DSH 凭据引用，不会输出密钥。',
       models: '个模型',
       failure: 'Host 错误',
@@ -56,9 +41,6 @@ window.__ModuleLoader__.load({
       connectFailed: '连接失败',
       gatewayReady: 'gateway 已就绪',
       gatewayUnknown: 'gateway 未就绪',
-      fallback: '如果页面无法执行命令，使用下方终端命令。',
-      providers: 'provider 访问状态',
-      quota: '配额',
     }
     const h = React.createElement
 
@@ -74,41 +56,28 @@ window.__ModuleLoader__.load({
 
     function Status({ t }) {
       const [state, setState] = React.useState({ phase: 'loading' })
-      const [copied, setCopied] = React.useState(false)
       const [connecting, setConnecting] = React.useState(false)
       const [message, setMessage] = React.useState('')
       const load = React.useCallback(async () => {
         setState({ phase: 'loading' })
         let gateway
-        let access
         try {
-          const [statusResponse, accessResponse] = await Promise.all([
-            fetch(new URL('_tmax/status', document.baseURI), { credentials: 'same-origin' }),
-            fetch(new URL('_tmax/access', document.baseURI), { credentials: 'same-origin' }),
-          ])
+          const statusResponse = await fetch(new URL('_tmax/status', document.baseURI), { credentials: 'same-origin' })
           if (statusResponse.ok) gateway = (await statusResponse.json()).gateway
-          if (accessResponse.ok) access = await accessResponse.json()
         } catch {}
         try {
           const response = await ctx.remote.session.modelCatalog()
           if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`)
           const group = findGroup(response.value)
           const failure = findFailure(response.value)
-          if (group) setState({ phase: 'connected', group, gateway, access })
-          else if (failure) setState({ phase: 'failed', message: failure.message, gateway, access })
-          else setState({ phase: 'disconnected', gateway, access })
+          if (group) setState({ phase: 'connected', group, gateway })
+          else if (failure) setState({ phase: 'failed', message: failure.message, gateway })
+          else setState({ phase: 'disconnected', gateway })
         } catch (error) {
-          setState({ phase: 'failed', message: error instanceof Error ? error.message : String(error), gateway, access })
+          setState({ phase: 'failed', message: error instanceof Error ? error.message : String(error), gateway })
         }
       }, [])
       React.useEffect(() => { void load() }, [load])
-      const copy = async () => {
-        try {
-          await navigator.clipboard.writeText(t('connectCommand'))
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        } catch {}
-      }
       const connect = async () => {
         setConnecting(true)
         setMessage('')
@@ -141,8 +110,7 @@ window.__ModuleLoader__.load({
         h('div', { key: 'head', style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
           h('span', { style: { width: 8, height: 8, borderRadius: 99, background: color, display: 'inline-block' } }),
           h('strong', null, `${t('title')}: ${status}`),
-          h('button', { type: 'button', onClick: load }, t('refresh')),
-          h('button', { type: 'button', onClick: connect, disabled: connecting }, connecting ? t('connecting') : t('connect'))),
+              h('button', { type: 'button', onClick: connect, disabled: connecting }, connecting ? t('connecting') : t('connect'))),
         state.gateway !== undefined && h('div', { key: 'gateway', style: { color: '#6b7280', fontSize: 12 } },
           state.gateway && state.gateway.ready === true ? t('gatewayReady') : t('gatewayUnknown')),
       ]
@@ -153,28 +121,9 @@ window.__ModuleLoader__.load({
             state.group.models.map(model => h('li', { key: model.id },
               model.name === model.id ? model.id : `${model.name} · ${model.id}`)))))
       }
-      if (state.access && Array.isArray(state.access.providers) && state.access.providers.length > 0) {
-        children.push(h('div', { key: 'access' },
-          h('div', { style: { fontWeight: 600, marginBottom: 4 } }, t('providers')),
-          h('ul', { style: { margin: 0, paddingLeft: 20, lineHeight: 1.7 } },
-            state.access.providers.slice(0, 12).map(provider => h('li', { key: provider.id },
-              `${provider.name || provider.id} · ${provider.authentication || 'unknown'} · ${provider.enabled ? 'enabled' : 'disabled'}`
-              + (provider.quota && provider.quota !== 'unsupported' ? ` · ${t('quota')}: ${provider.quota}` : ''))))))
-      }
       if (state.phase === 'failed') children.push(h('div', { key: 'failure', style: { color: '#b91c1c' } }, `${t('failure')}: ${state.message}`))
       if (state.phase === 'disconnected') children.push(h('p', { key: 'empty', style: { margin: 0 } }, t('empty')))
       if (message !== '') children.push(h('p', { key: 'message', style: { margin: 0 } }, message))
-      children.push(h('div', {
-        key: 'connect',
-        style: { borderTop: '1px solid #e5e7eb', paddingTop: 12, display: 'grid', gap: 8 },
-      },
-      h('strong', null, t('connectTitle')),
-      h('p', { style: { margin: 0 } }, t('connectBody')),
-      h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-        h('code', { style: { background: '#f3f4f6', padding: '6px 8px', borderRadius: 6, userSelect: 'all' } }, t('connectCommand')),
-        h('button', { type: 'button', onClick: copy }, copied ? t('copied') : t('copy'))),
-      h('p', { style: { margin: 0, color: '#6b7280', fontSize: 12 } }, t('hint')),
-      h('p', { style: { margin: 0, color: '#6b7280', fontSize: 12 } }, t('fallback'))))
       return h('div', { style: { display: 'grid', gap: 14, maxWidth: 720 } }, children)
     }
 

@@ -71,44 +71,6 @@ function targetArgs(config) {
   return ['--home', home]
 }
 
-/** Compact, secret-free provider access view for the Settings page and tools. */
-async function readAccess(config, provider) {
-  if (provider) {
-    const envelope = await runTmax(config, ['provider', 'inspect', String(provider)])
-    if (envelope.code !== 'ok' || envelope.status !== 'success') {
-      throw new Error(`${envelope.code || 'provider_inspect_failed'}: ${envelope.message || 'tmax provider inspect failed'}`)
-    }
-    const data = envelope.data || {}
-    return {
-      provider: data.id || provider,
-      failure_state: data.failure_state,
-      quota_guard: data.quota_guard,
-      quota_suspension: data.quota_suspension,
-      renewal: data.renewal,
-      observations: data.observations,
-    }
-  }
-  const envelope = await runTmax(config, ['provider', 'list'])
-  if (envelope.code !== 'ok' || envelope.status !== 'success') {
-    throw new Error(`${envelope.code || 'provider_list_failed'}: ${envelope.message || 'tmax provider list failed'}`)
-  }
-  const data = envelope.data || {}
-  return {
-    revision: data.revision,
-    providers: (data.providers || []).map(item => ({
-      id: item.id,
-      name: item.name,
-      enabled: item.enabled,
-      authentication: item.authentication,
-      affected_targets: item.affected_targets,
-      billing: item.observations?.billing_kind,
-      billing_state: item.observations?.billing_state,
-      quota: item.quota_suspension?.state,
-      subscription: item.subscription,
-    })),
-  }
-}
-
 /** Map tmax's DSH capabilities to the pi-ai model shape the adapter consumes. */
 function modelFromProjection(route, model, providerName = route.name) {
   const caps = model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : {}
@@ -343,30 +305,6 @@ export async function apply(ctx, config = {}) {
     }), 'tmax: GET /_tmax/status')
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/_tmax/access',
-      handler: async (req, res) => {
-        if (rejected(req, res)) return
-        if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
-        try { send(res, 200, { ok: true, ...(await readAccess(config)) }) }
-        catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
-      },
-    }), 'tmax: GET /_tmax/access')
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/_tmax/refresh',
-      handler: async (req, res) => {
-        if (rejected(req, res)) return
-        if (req.method !== 'POST') { send(res, 405, { code: 'method-not-allowed' }); return }
-        try {
-          await refresh()
-          send(res, 200, { ok: true, ...summary() })
-        } catch (error) {
-          send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error), ...summary() })
-        }
-      },
-    }), 'tmax: POST /_tmax/refresh')
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
       path: '/_tmax/connect',
       handler: async (req, res) => {
         if (rejected(req, res)) return
@@ -425,84 +363,6 @@ export async function apply(ctx, config = {}) {
       },
       presentCall: () => ({ card: 'generic', title: 'tmax status', kind: 'read', rawInput: {} }),
     })), 'tmax: status tool')
-    ctx.effect(() => tools.register(toolsModule.defineTool({
-      name: 'tmax_access',
-      description: 'Read tmax provider access, authentication, subscription, quota guard/suspension, and affected target counts. Pass provider for one provider; omit it for the list. Read-only.',
-      parameters: {
-        provider: { type: 'string', description: 'Optional exact tmax provider ID.' },
-      },
-      output: {
-        schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-      },
-      async execute(args) {
-        return readAccess(config, args.provider)
-      },
-      presentCall: args => ({ card: 'generic', title: args.provider ? `tmax access: ${args.provider}` : 'tmax access', kind: 'read', rawInput: args }),
-    })), 'tmax: access tool')
-    ctx.effect(() => tools.register(toolsModule.defineTool({
-      name: 'tmax_explain_model',
-      description: 'Explain one projected tmax model: route, protocol, alias/concrete kind, availability, continuity, candidate count, and DSH capability metadata. Read-only.',
-      parameters: {
-        model: { type: 'string', required: true, description: 'Exact public model ID.' },
-      },
-      output: {
-        schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-      },
-      async execute(args) {
-        const projection = lastProjection || await refresh()
-        for (const route of projection.routes || []) {
-          const found = (route.models || []).find(model => model.id === args.model)
-          if (found) return { ...found, route: route.name, gateway: projection.gateway }
-        }
-        return { error: 'model_not_projected', model: args.model, routes: (projection.routes || []).map(route => route.name) }
-      },
-      presentCall: args => ({ card: 'generic', title: `tmax model: ${args.model}`, kind: 'read', rawInput: args }),
-    })), 'tmax: explain model tool')
-    ctx.effect(() => tools.register(toolsModule.defineTool({
-      name: 'tmax_refresh',
-      description: 'Re-read tmax projection and republish the DSH model catalog. Does not start the gateway or write credentials.',
-      parameters: {},
-      output: {
-        schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-      },
-      async execute() {
-        const projection = await refresh()
-        return { routes: (projection.routes || []).map(route => route.name), blockers: projection.blockers || [], gateway: projection.gateway }
-      },
-      presentCall: () => ({ card: 'generic', title: 'tmax refresh', kind: 'action', rawInput: {} }),
-    })), 'tmax: refresh tool')
-    ctx.effect(() => tools.register(toolsModule.defineTool({
-      name: 'tmax_manage',
-      description: 'Controlled tmax provider enable/disable. Requires dryRun or an explicit confirmation string "<action>:<provider>". Never handles keys or starts the gateway.',
-      parameters: {
-        action: { type: 'string', required: true, enum: ['provider-enable', 'provider-disable'], description: 'Exact operation.' },
-        provider: { type: 'string', required: true, description: 'Exact tmax provider ID.' },
-        dryRun: { type: 'boolean', description: 'Preview only.' },
-        confirm: { type: 'string', description: 'Required for a real write: "<action>:<provider>".' },
-      },
-      output: {
-        schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-      },
-      async execute(args) {
-        const enabled = args.action === 'provider-enable'
-        if (!args.dryRun && args.confirm !== `${args.action}:${args.provider}`) {
-          return { ok: false, blocker: { code: 'confirmation_required', message: `Pass confirm "${args.action}:${args.provider}" or dryRun:true` } }
-        }
-        const access = await readAccess(config)
-        const commandArgs = ['provider', 'update', args.provider, '--set', 'enabled', String(enabled)]
-        if (args.dryRun) commandArgs.push('--dry-run')
-        else if (access.revision) commandArgs.push('--if-revision', access.revision)
-        const envelope = await runTmax(config, commandArgs)
-        if (envelope.code !== 'ok' && envelope.code !== 'dry_run_ready') return envelope
-        if (!args.dryRun) await refresh()
-        return envelope
-      },
-      presentCall: args => ({ card: 'generic', title: `tmax ${args.action}: ${args.provider}`, kind: 'write', rawInput: args }),
-    })), 'tmax: manage tool')
   }
 
   const skills = ctx.get('skills')

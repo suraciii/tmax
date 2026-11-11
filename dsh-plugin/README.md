@@ -121,14 +121,12 @@ shows:
   fallback;
 - the Host provider failure message when the catalog lookup fails.
 
-The Host half serves three trusted routes, guarded by the composition's
+The Host half serves two trusted routes, guarded by the composition's
 `connection.requestRejection` fence:
 
 | Route | Effect |
 | --- | --- |
 | `GET /_tmax/status` | Secret-free projection summary, gateway readiness, models, blockers. |
-| `POST /_tmax/refresh` | Re-reads `tmax dsh projection` and republishes the catalog. |
-| `GET /_tmax/access` | Compact provider access: auth, billing, quota suspension, affected targets. |
 | `POST /_tmax/connect` | Runs `tmax dsh connect` for the configured target, then refreshes. |
 
 The connect route is an explicit user action. It writes only DSH credential
@@ -149,11 +147,10 @@ settings-section registration.
 
 ## Current limits
 
-- Tools: `tmax_status`, `tmax_access`, `tmax_explain_model`, `tmax_refresh`, and
-  `tmax_manage` (provider enable/disable with dry-run plus an explicit
-  confirmation string). The Settings section shows compact provider access.
-- Still not included: automatic legacy migration, uninstall automation, model
-  badges, and a GitHub release/tagging pipeline. Distribution is source-based.
+- Tool: `tmax_status` only. The Settings section shows connect, gateway
+  readiness, and the model list.
+- Still not included: automatic legacy migration and model badges. Install and
+  uninstall stay with DSH; distribution is source-based.
 - A gateway whose daemon identity is unknown reports `ready: null`; the plugin
   does not reinterpret that as ready or as a hard stop.
 - The linked package is installed in the `web` profile and the live registry
