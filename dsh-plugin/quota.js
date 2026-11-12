@@ -105,6 +105,13 @@ function hostAndPath(url) {
   }
 }
 
+/** The rows one vendor's response projects to — the surface the contract pins. */
+export function quotaRowsFor(vendorId, body) {
+  const vendor = VENDORS.find(entry => entry.id === vendorId)
+  if (vendor === undefined) throw new Error(`unknown vendor: ${vendorId}`)
+  return vendor.read(body)
+}
+
 /** The destination a vendor's quota read must use for this host. */
 function quotaUrlFor(vendor, baseURL) {
   if (vendor.altQuotaUrl !== undefined && hostAndPath(baseURL).startsWith(vendor.altQuotaUrl[0])) {
@@ -221,7 +228,7 @@ function readStepfun(body) {
       return { error: 'credit bucket is not a pair of amounts', reasonCode: 'source_format_error' }
     }
     const row = {
-      label: { key: 'credit', kind: typeof bucket.type === 'string' ? bucket.type : undefined },
+      label: { key: 'credit', kind: typeof bucket.type === 'string' ? bucket.type : null },
       basis: 'credit',
       counters: { remaining: bucket.remaining, total: bucket.total },
       reset: epochReset(bucket.resets_at_ms),
@@ -268,7 +275,9 @@ function readGlm(body) {
     const row = {
       label: { key: 'limit', type, unit, number },
       basis: percent !== undefined ? 'consumed_percent' : 'counters',
-      reset: epochReset(limit.nextResetTime),
+      reset: limit.nextResetTime === undefined
+        ? { kind: 'absent' }
+        : { kind: 'unqualified_epoch_millis', raw: limit.nextResetTime, encoding: 'epoch_milliseconds_unqualified' },
     }
     if (percent !== undefined) row.percent = percent
     if (hasCounters) row.counters = { usage: counters[0], currentValue: counters[1], remaining: counters[2] }
@@ -301,15 +310,11 @@ function readKimi(body) {
       const counters = countersOf(entry.detail)
       if (counters === undefined) continue
       const window = isObject(entry.window) ? entry.window : {}
+      const label = { key: 'duration' }
       const duration = count(window.duration)
-      rows.push({
-        label: duration === undefined
-          ? { key: 'duration' }
-          : { key: 'duration', duration, unit: typeof window.timeUnit === 'string' ? window.timeUnit : undefined },
-        basis: 'counters',
-        counters,
-        reset: resetOf(entry.detail),
-      })
+      if (duration !== undefined) label.duration = duration
+      if (typeof window.timeUnit === 'string') label.unit = window.timeUnit
+      rows.push({ label, basis: 'counters', counters, reset: resetOf(entry.detail) })
     }
   }
   if (rows.length === 0) return { error: 'no counter in the response', reasonCode: 'source_format_error' }
@@ -345,13 +350,17 @@ function readMinimax(body) {
       const percent = count(bucket[percentKey])
       if (percent === undefined) return { error: 'remaining percent is not whole', reasonCode: 'source_format_error' }
       const status = count(bucket[statusKey])
-      rows.push(percentRow(
-        { key: 'bucket', name: bucket.model_name, window },
-        'remaining_percent',
+      rows.push({
+        label: { key: 'bucket', name: bucket.model_name, window },
+        basis: 'remaining_percent',
         percent,
-        epochReset(bucket[endKey]),
-        status === undefined ? {} : { status },
-      ))
+        status: status === undefined ? null : status,
+        reset: {
+          kind: 'window_end',
+          raw: Number.isInteger(bucket[endKey]) ? bucket[endKey] : null,
+          encoding: 'epoch_milliseconds',
+        },
+      })
     }
   }
   if (rows.length === 0) return { error: 'no window in the response', reasonCode: 'source_format_error' }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, it } from 'node:test'
 
-import { observeProvider, vendorFor, vendorForKey } from '../quota.js'
+import { observeProvider, quotaRowsFor, vendorFor, vendorForKey } from '../quota.js'
 
 const realFetch = globalThis.fetch
 
@@ -162,4 +163,16 @@ describe('failure states', () => {
     const record = await read('stepfun', 'https://api.stepfun.com/step_plan/v1')
     assert.equal(record.reasonCode, 'upstream_rejection')
   })
+})
+
+describe('shared contract', () => {
+  const contract = JSON.parse(readFileSync(new URL('./fixtures/quota-contract.json', import.meta.url), 'utf8'))
+
+  for (const testCase of contract.cases) {
+    it(`projects ${testCase.name} exactly as tmax does`, () => {
+      const read = quotaRowsFor(testCase.vendor, testCase.body)
+      assert.equal(read.error, undefined, read.error)
+      assert.deepEqual(read.rows, testCase.rows)
+    })
+  }
 })

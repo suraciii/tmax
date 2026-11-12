@@ -403,12 +403,22 @@ export async function apply(ctx, config = {}) {
     const discovered = discoverAgentProviders()
     if (discovered === undefined) return { ok: true, providers: [], reason: 'agent-settings-unavailable' }
     const { providers, credentials } = discovered
-    const records = await Promise.all(providers.map(provider => observeProvider({
-      provider: provider.provider,
-      baseURL: provider.baseURL,
-      apiKeyEnv: provider.apiKeyEnv,
-      resolveKey: async ref => (await credentials.resolve(ref))?.value,
-    })))
+    const byAccount = new Map()
+    const records = await Promise.all(providers.map(async provider => {
+      const identity = `${provider.vendor ?? 'unknown'}::${provider.apiKeyEnv ?? provider.provider}`
+      const shared = byAccount.get(identity)
+      // The reading is shared; the identity is not — two configuration entries
+      // remain two cards, each with its own id.
+      if (shared !== undefined) return { ...shared, id: `dsh:${provider.provider}` }
+      const record = await observeProvider({
+        provider: provider.provider,
+        baseURL: provider.baseURL,
+        apiKeyEnv: provider.apiKeyEnv,
+        resolveKey: async ref => (await credentials.resolve(ref))?.value,
+      })
+      byAccount.set(identity, record)
+      return record
+    }))
     const value = {
       ok: true,
       generatedAt: new Date().toISOString(),

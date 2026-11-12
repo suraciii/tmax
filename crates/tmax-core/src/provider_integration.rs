@@ -1281,6 +1281,31 @@ pub fn dashboard(id: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The DSH plugin reimplements these quota reads in JavaScript, because it
+    /// reads the agent's credential store rather than tmax's. One fixture file
+    /// holds the response bodies and the rows both sides must publish from them,
+    /// so a change on either side breaks the other's test in the same commit.
+    #[test]
+    fn dsh_plugin_quota_contract_rows_match() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../dsh-plugin/test/fixtures/quota-contract.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let document: Value = serde_json::from_str(&text).expect("contract fixture is JSON");
+        let cases = document["cases"].as_array().expect("cases array");
+        assert!(!cases.is_empty(), "the contract has no cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            let source = case["source"].as_str().expect("case source");
+            let body = &case["body"];
+            let normalized = normalize_observation(source, body)
+                .unwrap_or_else(|error| panic!("{name}: normalization failed: {error:?}"));
+            let display = quota_display(source, &normalized)
+                .unwrap_or_else(|| panic!("{name}: no display projection"));
+            assert_eq!(&display["rows"], &case["rows"], "case {name}");
+        }
+    }
     #[test]
     fn go_quota_denial_requires_exact_provider_status_and_error_type() {
         let go = Provider {

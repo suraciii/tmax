@@ -57,6 +57,7 @@ window.__ModuleLoader__.load({
       reasonFailed: 'the vendor reports this plan as unusable',
       reasonUnknown: 'the quota read failed',
       agentReading: 'agent config read',
+      agentIncluded: 'including',
       agentUnreadable: 'agent-configured providers could not be read',
       allUnverified: 'tmax has not verified availability for these models.',
       defaultModel: 'Default model',
@@ -134,6 +135,7 @@ window.__ModuleLoader__.load({
       reasonFailed: '厂商报告该套餐当前不可用',
       reasonUnknown: '额度读取失败',
       agentReading: 'agent 配置读取于',
+      agentIncluded: '其中来自 agent 配置',
       agentUnreadable: '无法读取 agent 中配置的供应商',
       allUnverified: '这些模型的可用性尚未经过 tmax 验证。',
       defaultModel: '默认模型',
@@ -725,7 +727,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const usageSection = h('section', { className: 'tmx-section', key: 'usage' }, [
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
           t('usage'),
-          rows.length > 0 ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${rows.length} ${t('providerUnit')}`) : null,
+          rows.length > 0
+            ? h('span', { className: 'tmx-sectionNote', key: 'note' }, agentOnly(providers, rows.length, t))
+            : null,
           quotaBusy
             ? h('span', { className: 'tmx-sectionNote', key: 'busy' }, t('usageRevalidating'))
             : agentSectionNote(agent, providers, t) ?? freshNote(rows, t),
@@ -948,6 +952,13 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         key: 'agentAge',
         'data-tone': isStale(agent.value.generatedAt) ? 'warn' : undefined,
       }, `${t('agentReading')} ${age}`)
+    }
+
+    /** A count that silently mixes two sources is a count nobody can check. */
+    function agentOnly(providers, total, t) {
+      const extra = providers.filter(provider => provider.source === 'dsh' && provider.alsoInAgent !== true).length
+      const label = `${total} ${t('providerUnit')}`
+      return extra === 0 ? label : `${label} ${t('agentIncluded')} ${extra}`
     }
 
     /** Freshness is said once for the section; only stale cards repeat it. */

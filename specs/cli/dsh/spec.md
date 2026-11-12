@@ -98,6 +98,27 @@ not replaced with DSH defaults. Alias entries also report `continuity` and
 `schema_version` is a consumer compatibility gate. A consumer that does not
 recognize it must refuse the projection rather than guess field meaning.
 
+## Providers the agent configures itself
+
+`projection` and `connect` run tmax → DSH. There is no reverse command: tmax
+does not observe a model provider that only the agent is configured with.
+
+The boundary is credential ownership, not a missing feature. `auth.key_ref`
+resolves only inside tmax's own user-restricted secret file, and catalog `env`
+names never cause environment access, so tmax cannot read the credential the
+agent holds. Adopting such a provider would require re-entering its key into
+tmax's store and would then describe a second copy that drifts from the agent.
+
+The DSH page therefore reads those providers itself, one implementation per
+vendor, and shares a *contract* with the core rather than code:
+`dsh-plugin/test/fixtures/quota-contract.json` holds each vendor's response body
+and the rows both sides must publish from it. `crates/tmax-core` asserts the
+Rust projection against it and the plugin asserts its own read against the same
+file, so a quota projection change on either side breaks the other's test.
+
+A vendor without a quota source here has no source at all; neither surface
+reports it as zero.
+
 ## Connection
 
 ```text

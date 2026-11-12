@@ -1,0 +1,212 @@
+{
+  "contract": "tmax quota display rows, shared by the Rust core and the DSH plugin",
+  "notes": [
+    "Each case is one vendor response body and the display rows tmax publishes for it.",
+    "crates/tmax-core asserts the Rust projection against these rows;",
+    "dsh-plugin/test/quota.test.mjs asserts the plugin's own read against the same rows.",
+    "A behaviour change on either side must change this file, in one commit."
+  ],
+  "cases": [
+    {
+      "name": "stepfun credit bucket",
+      "vendor": "stepfun-token-plan",
+      "source": "stepfun_usage_api",
+      "body": {
+        "schema_version": 1,
+        "scope": "personal_account",
+        "observed_at_ms": 1793945261957,
+        "plan": { "state": "known", "family": "token", "name": "Token-Pro", "subscription": { "expires_at_ms": 1804143379000 } },
+        "quota": {
+          "state": "known",
+          "allowed": true,
+          "reason": null,
+          "windows": [],
+          "credit_buckets": [
+            {
+              "type": "subscription",
+              "total": "8000000000",
+              "remaining": "7556481546",
+              "resets_at_ms": 1795073471000,
+              "expires_at_ms": 1804143379000
+            }
+          ]
+        }
+      },
+      "rows": [
+        {
+          "label": { "key": "credit", "kind": "subscription" },
+          "basis": "credit",
+          "counters": { "remaining": "7556481546", "total": "8000000000" },
+          "reset": { "kind": "window_end", "raw": 1795073471000, "encoding": "epoch_milliseconds" },
+          "expiry": { "raw": 1804143379000, "encoding": "epoch_milliseconds" }
+        }
+      ]
+    },
+    {
+      "name": "stepfun bucket with no reset or expiry",
+      "vendor": "stepfun-token-plan",
+      "source": "stepfun_usage_api",
+      "body": {
+        "schema_version": 1,
+        "scope": "personal_account",
+        "observed_at_ms": 1793945261957,
+        "plan": { "name": "Token-Pro" },
+        "quota": {
+          "state": "known",
+          "allowed": true,
+          "windows": [],
+          "credit_buckets": [{ "type": "subscription", "total": "100", "remaining": "40" }]
+        }
+      },
+      "rows": [
+        {
+          "label": { "key": "credit", "kind": "subscription" },
+          "basis": "credit",
+          "counters": { "remaining": "40", "total": "100" },
+          "reset": { "kind": "absent" }
+        }
+      ]
+    },
+    {
+      "name": "glm monitor limits, percentage and counters",
+      "vendor": "glm-coding-plan",
+      "source": "glm_monitor_api",
+      "body": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "max",
+          "limits": [
+            { "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 17, "nextResetTime": 1793128801192 },
+            { "type": "TIME_LIMIT", "unit": 5, "number": 1, "usage": 4000, "currentValue": 12, "remaining": 3988, "percentage": 0 }
+          ]
+        }
+      },
+      "rows": [
+        {
+          "label": { "key": "limit", "type": "TOKENS_LIMIT", "unit": 3, "number": 5 },
+          "basis": "consumed_percent",
+          "percent": 17,
+          "reset": { "kind": "unqualified_epoch_millis", "raw": 1793128801192, "encoding": "epoch_milliseconds_unqualified" }
+        },
+        {
+          "label": { "key": "limit", "type": "TIME_LIMIT", "unit": 5, "number": 1 },
+          "basis": "consumed_percent",
+          "percent": 0,
+          "counters": { "usage": 4000, "currentValue": 12, "remaining": 3988 },
+          "reset": { "kind": "absent" }
+        }
+      ]
+    },
+    {
+      "name": "kimi counters with an overlapping window list",
+      "vendor": "kimi-code-plan-cn",
+      "source": "kimi_usage_api",
+      "body": {
+        "usage": { "limit": "100", "used": "9", "remaining": "91", "resetTime": "2026-11-06T15:42:16.495050Z" },
+        "limits": [
+          {
+            "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+            "detail": { "limit": "100", "remaining": "100" }
+          }
+        ]
+      },
+      "rows": [
+        {
+          "label": { "key": "weekly_allowance" },
+          "basis": "counters",
+          "counters": { "limit": "100", "used": "9", "remaining": "91" },
+          "reset": { "kind": "provider_timestamp", "at": "2026-11-06T15:42:16.495050Z" }
+        },
+        {
+          "label": { "key": "duration", "duration": 300, "unit": "TIME_UNIT_MINUTE" },
+          "basis": "counters",
+          "counters": { "limit": "100", "remaining": "100" },
+          "reset": { "kind": "absent" }
+        }
+      ]
+    },
+    {
+      "name": "minimax buckets, video weekly only",
+      "vendor": "minimax-cn-coding-plan",
+      "source": "minimax_plan_remains_api",
+      "body": {
+        "base_resp": { "status_code": 0, "status_msg": "success" },
+        "model_remains": [
+          {
+            "model_name": "general",
+            "current_interval_remaining_percent": 100,
+            "current_interval_status": 1,
+            "end_time": 1793142132831,
+            "current_weekly_remaining_percent": 40,
+            "current_weekly_status": 3,
+            "weekly_end_time": 1794182400000
+          },
+          {
+            "model_name": "video",
+            "current_weekly_remaining_percent": 100,
+            "weekly_end_time": 1794182400000
+          }
+        ]
+      },
+      "rows": [
+        {
+          "label": { "key": "bucket", "name": "general", "window": "interval" },
+          "basis": "remaining_percent",
+          "percent": 100,
+          "status": 1,
+          "reset": { "kind": "window_end", "raw": 1793142132831, "encoding": "epoch_milliseconds" }
+        },
+        {
+          "label": { "key": "bucket", "name": "general", "window": "weekly" },
+          "basis": "remaining_percent",
+          "percent": 40,
+          "status": 3,
+          "reset": { "kind": "window_end", "raw": 1794182400000, "encoding": "epoch_milliseconds" }
+        },
+        {
+          "label": { "key": "bucket", "name": "video", "window": "weekly" },
+          "basis": "remaining_percent",
+          "percent": 100,
+          "status": null,
+          "reset": { "kind": "window_end", "raw": 1794182400000, "encoding": "epoch_milliseconds" }
+        }
+      ]
+    },
+    {
+      "name": "opencode go, three required windows",
+      "vendor": "opencode-go",
+      "source": "go_usage_api",
+      "body": {
+        "usage": {
+          "rolling": { "status": "ok", "percent": 0, "resetsAt": "2026-11-13T01:03:00.000Z" },
+          "weekly": { "status": "ok", "percent": 51, "resetsAt": "2026-11-16T00:00:00.000Z" },
+          "monthly": { "status": "rate-limited", "percent": 100, "resetsAt": "2026-11-17T00:00:00.000Z" }
+        }
+      },
+      "rows": [
+        {
+          "label": { "key": "rolling" },
+          "basis": "consumed_percent",
+          "percent": 0,
+          "status": "ok",
+          "reset": { "kind": "announced", "at": "2026-11-13T01:03:00.000Z" }
+        },
+        {
+          "label": { "key": "weekly" },
+          "basis": "consumed_percent",
+          "percent": 51,
+          "status": "ok",
+          "reset": { "kind": "announced", "at": "2026-11-16T00:00:00.000Z" }
+        },
+        {
+          "label": { "key": "monthly" },
+          "basis": "consumed_percent",
+          "percent": 100,
+          "status": "rate-limited",
+          "reset": { "kind": "announced", "at": "2026-11-17T00:00:00.000Z" }
+        }
+      ]
+    }
+  ]
+}

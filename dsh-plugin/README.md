@@ -127,7 +127,10 @@ request time, and only the vendor's JSON ever crosses back to the page.
 - The vendor quota reads are implemented twice — once in tmax (Rust) and once in
   this plugin — because the two read different credential stores: tmax can only
   reach keys in its own secret file, and the agent's keys live in DSH's. They
-  share a contract, not code, so a vendor change must be made in both places.
+  share a contract, not code: `test/fixtures/quota-contract.json` holds each
+  vendor's response body and the rows both sides must project from it, and
+  `crates/tmax-core` asserts the same file from its own test. Changing a quota
+  projection means changing that fixture, which breaks the other side's test.
 - Install/uninstall stays with DSH; tmax does not manage DSH profiles.
 
 ## License
