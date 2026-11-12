@@ -4,3 +4,7 @@
 __pycache__/
 *.py[cod]
 .beads/
+
+# local design-review and plugin-page artifacts
+/outputs/
+/.impeccable/
