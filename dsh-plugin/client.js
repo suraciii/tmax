@@ -61,11 +61,14 @@ window.__ModuleLoader__.load({
       agentIncluded: 'of which only in the agent:',
       agentUnreadable: 'agent-configured providers could not be read',
       agentSettingsUnavailable: 'agent settings are unavailable, so only tmax providers are shown',
+      agentNotRead: '(agent config not read)',
       allUnverified: 'tmax has not verified availability for these models.',
       defaultModel: 'Default model',
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
       staleData: 'stale',
+      snapshot: 'snapshot',
+      refreshing: 'Refreshing…',
       freshReading: 'readings are current',
       minutesAgo: 'min ago',
       hoursAgo: 'h ago',
@@ -141,11 +144,14 @@ window.__ModuleLoader__.load({
       agentIncluded: '其中仅在 agent 中配置：',
       agentUnreadable: '无法读取 agent 中配置的供应商',
       agentSettingsUnavailable: '读不到 agent 设置，只显示 tmax 的供应商',
+      agentNotRead: '（agent 配置未读取）',
       allUnverified: '这些模型的可用性尚未经过 tmax 验证。',
       defaultModel: '默认模型',
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
       staleData: '数据陈旧',
+      snapshot: '快照',
+      refreshing: '刷新中…',
       freshReading: '读数为最新',
       minutesAgo: '分钟前',
       hoursAgo: '小时前',
@@ -202,10 +208,12 @@ window.__ModuleLoader__.load({
 .tmx-sectionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
 /* The section's own count is an annotation, never a second title. */
 .tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
+.tmx-status { margin: -4px 0 12px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-sectionNote[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 .tmx-sectionNote[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; }
-.tmx-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px 24px; margin: 0; }
+.tmx-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 24px; margin: 0; }
+@media (max-width: 900px) { .tmx-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .tmx-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tmx-fact dt { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-fact dd { margin: 0; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
@@ -236,14 +244,15 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 .tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
 .tmx-bar[data-zero='true']::after { content: ''; position: absolute; inset-inline-start: 0; top: 0; width: 3px; height: 100%; background: var(--dsw-alias-label-tertiary); }
 .tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-business-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
-.tmx-barFill[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
-.tmx-barFill[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
+.tmx-barFill[data-tone='warn'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 65%, var(--dsw-alias-label-primary)); }
+.tmx-barFill[data-tone='error'] { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 82%, var(--dsw-alias-label-primary)); }
 .tmx-windowValue { font-size: 12px; line-height: 18px; text-align: end; font-variant-numeric: tabular-nums; }
 .tmx-windowValue[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 .tmx-windowValue[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-windowReset { font-size: 12px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 .tmx-windowReset[data-empty='true'] { visibility: hidden; }
 .tmx-windowWide { grid-column: 2 / 4; text-align: start; color: var(--dsw-alias-label-secondary); }
+.tmx-provenance { margin-inline-start: auto; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-suspend { margin: 0; font-size: 12px; line-height: 18px; color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .tmx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
@@ -740,15 +749,17 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       ])
 
       const usageSection = h('section', { className: 'tmx-section', key: 'usage' }, [
+        // A heading is the one landmark that must not change shape as data
+        // moves: the count is part of the title, everything else lives below it.
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
           t('usage'),
           rows.length > 0
-            ? h('span', { className: 'tmx-sectionNote', key: 'note' }, agentOnly(providers, rows.length, t))
+            ? h('span', { className: 'tmx-sectionNote', key: 'note' }, agentOnly(providers, rows.length, t, agent))
             : null,
-          quotaBusy
-            ? h('span', { className: 'tmx-sectionNote', key: 'busy' }, t('usageRevalidating'))
-            : agentSectionNote(agent, providers, t) ?? freshNote(rows, t),
         ]),
+        quotaBusy
+          ? h('p', { className: 'tmx-status', key: 'busy' }, t('usageRevalidating'))
+          : agentSectionNote(agent, providers, t, loadAgent) ?? freshNote(rows, t),
         usage.phase === 'failed' && rows.length > 0
           ? h('p', { className: 'tmx-cardNote', key: 'stale' }, [
             h('span', { className: 'tmx-errorText', key: 'text' }, `${t('usageFailed')} ${usage.message === undefined ? '' : describeError(usage.message, t)}`.trim()),
@@ -954,30 +965,34 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      * section says how old the snapshot is — once, not on every card. A read
      * that failed says so rather than leaving the source looking absent.
      */
-    function agentSectionNote(agent, providers, t) {
+    function agentSectionNote(agent, providers, t, retry) {
       const fromAgent = providers.some(provider => provider.source === 'dsh' || provider.alsoInAgent === true)
       if (agent.phase === 'failed') {
-        return h('span', { className: 'tmx-sectionNote', key: 'agentFailed', 'data-tone': 'error', title: agent.message },
-          t('agentUnreadable'))
+        return h('p', { className: 'tmx-cardNote', key: 'agentFailed' }, [
+          h('span', { className: 'tmx-errorText', key: 'text', title: agent.message },
+            `${t('agentUnreadable')}${agent.message === undefined ? '' : `：${describeError(agent.message, t)}`}`),
+          h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: () => retry(true) }, t('retryInline')),
+        ])
       }
       if (agent.value?.ok === true && agent.value.reason === 'agent-settings-unavailable') {
-        return h('span', { className: 'tmx-sectionNote', key: 'agentUnavailable', 'data-tone': 'warn' },
-          t('agentSettingsUnavailable'))
+        return h('p', { className: 'tmx-status', key: 'agentUnavailable', 'data-tone': 'warn' }, t('agentSettingsUnavailable'))
       }
-      if (!fromAgent || agent.value?.ok !== true || agent.value.cached !== true) return null
+      if (!fromAgent || agent.value?.ok !== true) return null
       const age = ageText(agent.value.generatedAt, t)
       if (age === undefined) return null
-      return h('span', {
-        className: 'tmx-sectionNote',
+      return h('p', {
+        className: 'tmx-status',
         key: 'agentAge',
         'data-tone': isStale(agent.value.generatedAt) ? 'warn' : undefined,
       }, `${t('agentReading')} ${age}`)
     }
 
-    /** A count that silently mixes two sources is a count nobody can check. */
-    function agentOnly(providers, total, t) {
+    /** A count that silently mixes two sources, or hides a source that failed, is unverifiable. */
+    function agentOnly(providers, total, t, agent) {
       const extra = providers.filter(provider => provider.source === 'dsh' && provider.alsoInAgent !== true).length
-      const label = `${total} ${t('providerUnit')}`
+      const label = agent.phase === 'failed'
+        ? `${total} ${t('providerUnit')} ${t('agentNotRead')}`
+        : `${total} ${t('providerUnit')}`
       return extra === 0 ? label : `${label} ${t('agentIncluded')} ${extra}`
     }
 
@@ -986,7 +1001,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (rows.length === 0) return null
       const stale = rows.filter(entry => isStale(entry.provider.observedAt))
       return stale.length === 0
-        ? h('span', { className: 'tmx-sectionNote', key: 'fresh' }, t('freshReading'))
+        ? h('p', { className: 'tmx-status', key: 'fresh' }, t('freshReading'))
         : null
     }
 
@@ -1068,7 +1083,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             ? h('span', { className: 'tmx-chip', key: 'source' }, t('sourceDsh'))
             : null,
           entry.alsoInAgent ? h('span', { className: 'tmx-chip', key: 'both', title: entry.matchedByReading ? t('sourceBothByReading') : undefined }, t('sourceBoth')) : null,
-          age === undefined || !stale
+          entry.source === 'dsh'
+            ? h('span', { className: 'tmx-provenance', key: 'snapshot' }, `${t('snapshot')} · ${ageText(entry.provider.observedAt, t) ?? t('unknown')}`)
+            : null,
+          age === undefined || !stale || quotaBusy
             ? null
             : h('span', {
               className: 'tmx-age',
@@ -1126,7 +1144,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (entry.source !== 'dsh' || entry.reasonCode === undefined) return null
       const key = AGENT_REASONS[entry.reasonCode] ?? 'reasonUnknown'
       const text = entry.reasonCode === 'credential_unavailable' && entry.credentialRef !== undefined
-        ? `${t(key)} ${entry.credentialRef}`
+        ? `${t(key)}：${entry.credentialRef}`
         : t(key)
       return h('p', { className: 'tmx-suspend', key: 'agent' }, text)
     }
