@@ -41,7 +41,7 @@ window.__ModuleLoader__.load({
       providerUnit: 'providers',
       usage: 'Usage and limits',
       usageUnknown: 'No provider reports a quota yet.',
-      usageFailed: 'Usage is unavailable right now.',
+      usageFailed: 'Usage is unavailable',
       retryInline: 'Retry',
       reasonCredential: 'no credential for',
       reasonUpstream: 'the vendor refused the quota read',
@@ -111,7 +111,7 @@ window.__ModuleLoader__.load({
       providerUnit: '个供应商',
       usage: '用量与额度',
       usageUnknown: '还没有 provider 上报额度。',
-      usageFailed: '暂时拿不到用量数据。',
+      usageFailed: '暂时拿不到用量数据',
       retryInline: '重试',
       reasonCredential: '没有可用的凭据：',
       reasonUpstream: '厂商拒绝了这次额度读取',
@@ -289,11 +289,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       } catch {
         return String(value)
       }
-    }
-
-    function formatTimestamp(value) {
-      const date = new Date(value)
-      return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(dateLocale)
     }
 
     /** Dates read in the interface's language, not the browser's. */
@@ -787,7 +782,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             h('span', { className: 'tmx-errorText', key: 'text', title: usage.message },
               tmaxProviders.length > 0 && updatedAt !== undefined
                 ? `${t('usageStale')} ${clockOf(updatedAt)}${usage.message === undefined ? '' : ` · ${describeError(usage.message, t)}`}`
-                : `${t('usageFailed')}${usage.message === undefined ? '' : ` ${describeError(usage.message, t)}`}`),
+                : `${t('usageFailed')}${usage.message === undefined ? '' : ` · ${describeError(usage.message, t)}`}`),
             h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: refreshQuota }, t('retryInline')),
           ])
           : null,
@@ -807,7 +802,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             ? null
             : h('span', { className: 'tmx-updated', key: 'updated' }, `${t('updatedAt')} ${clockOf(updatedAt)}`),
           h('button', { type: 'button', className: 'tmx-button', key: 'refresh', onClick: refresh, disabled: busy || quotaBusy, 'data-busy': busy || quotaBusy },
-            busy ? t('refreshing') : t('refresh')),
+            busy || quotaBusy ? t('refreshing') : t('refresh')),
           connected || catalog.phase !== 'ready'
             ? null
             : h('button', {
@@ -970,7 +965,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (agent?.phase === 'failed') return t('agentUnreadable')
       if (catalog.phase === 'failed') return `${t('hostError')}: ${describeError(catalog.message, t)}`
       if (status.phase === 'failed') return `${t('hostError')}: ${describeError(status.message, t)}`
-      if (usage.phase === 'failed') return `${t('usageFailed')} ${usage.message === undefined ? '' : describeError(usage.message, t)}`.trim()
+      if (usage.phase === 'failed') return `${t('usageFailed')}${usage.message === undefined ? '' : ` · ${describeError(usage.message, t)}`}`
       return verdict.text
     }
 
