@@ -76,8 +76,10 @@ reads the cache and shows it; it re-observes the providers
 older than five minutes, or never read. Reaching a provider costs a live request
 each, so a fresh open costs none. A deliberate **Refresh** always re-observes.
 
-The page states one thing about time: `更新于 HH:mm`, taken from the data's own
-observation time rather than from the moment the page read its cache. Providers
+The page states one thing about time: `更新于 HH:mm`, taken from the **oldest**
+reading on screen rather than the newest, and from the data rather than from the
+moment the page read its cache — so it can never overstate freshness, and it
+carries a date once the reading is not from today. Providers
 are not annotated individually and no reading is branded stale — either the
 number is what tmax last observed, and the header says when, or the read failed
 and the failure is named. A failed read or refresh keeps the last good table and

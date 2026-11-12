@@ -17,7 +17,6 @@ window.__ModuleLoader__.load({
       title: 'tmax',
       subtitle: 'Model access and provider limits managed by tmax.',
       loading: 'Reading model catalog…',
-      statePartial: 'Quota unreadable',
       checking: 'Checking…',
       stateReady: 'Reachable',
       stateGateway: 'Gateway not ready',
@@ -53,7 +52,10 @@ window.__ModuleLoader__.load({
       reasonUnknown: 'the quota read failed',
       agentUnreadable: 'agent-configured providers could not be read',
       agentSettingsUnavailable: 'agent settings are unavailable, so only tmax providers are shown',
-      agentNotRead: '(agent config not read)',
+      agentNotRead: 'agent config not read',
+      tmaxNotRead: 'tmax quota not read',
+      rowCaption: 'window · used · reset',
+      usageStale: 'refresh failed, showing',
       defaultModel: 'Default model',
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
@@ -85,7 +87,6 @@ window.__ModuleLoader__.load({
       title: 'tmax',
       subtitle: '模型访问与供应商额度。',
       loading: '正在读取模型目录…',
-      statePartial: '额度读取失败',
       checking: '检查中…',
       stateReady: '可用',
       stateGateway: '网关未就绪',
@@ -121,7 +122,10 @@ window.__ModuleLoader__.load({
       reasonUnknown: '额度读取失败',
       agentUnreadable: '无法读取 agent 中配置的供应商',
       agentSettingsUnavailable: '读不到 agent 设置，只显示 tmax 的供应商',
-      agentNotRead: '（agent 配置未读取）',
+      agentNotRead: 'agent 配置未读取',
+      tmaxNotRead: 'tmax 额度未读取',
+      rowCaption: '窗口 · 已用 · 重置',
+      usageStale: '刷新失败，显示',
       defaultModel: '默认模型',
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
@@ -180,6 +184,7 @@ window.__ModuleLoader__.load({
 /* The section's own count is an annotation, never a second title. */
 .tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
 .tmx-status { margin: -4px 0 12px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-caption { margin: -4px 0 10px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-sectionNote[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 .tmx-sectionNote[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; }
@@ -244,31 +249,35 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 
 
     /**
-     * The page says when its data was taken, so the number is the data's own
-     * timestamp — never the moment this component happened to read a cache.
+     * When the data on screen was taken. The oldest visible reading, not the
+     * newest: a page that claims to be as fresh as its freshest subfetch would
+     * overstate every row above it. The agent snapshot only counts when an
+     * agent-sourced card is actually drawn.
      */
-    function newestReading(providers, agent) {
-      const candidates = [
-        ...providers.map(provider => provider.observedAt),
-        agent?.ok === true ? agent.generatedAt : undefined,
-      ].filter(value => typeof value === 'string')
-      let newest
+    function asOfReading(providers) {
+      const candidates = providers.map(provider => provider.observedAt)
+      let oldest
       for (const value of candidates) {
+        if (typeof value !== 'string') continue
         const at = new Date(value).getTime()
         if (Number.isNaN(at)) continue
-        if (newest === undefined || at > newest) newest = at
+        if (oldest === undefined || at < oldest) oldest = at
       }
-      return newest === undefined ? undefined : new Date(newest).toISOString()
+      return oldest === undefined ? undefined : new Date(oldest).toISOString()
     }
 
     /** Wall-clock time, in the reader's language and without a date. */
     function clockOf(iso) {
       const date = new Date(iso)
       if (Number.isNaN(date.getTime())) return ''
+      const sameDay = date.toDateString() === new Date().toDateString()
       try {
-        return new Intl.DateTimeFormat(dateLocale, { hour: '2-digit', minute: '2-digit' }).format(date)
+        // A clock time alone turns yesterday into "just now" after midnight.
+        return new Intl.DateTimeFormat(dateLocale, sameDay
+          ? { hour: '2-digit', minute: '2-digit' }
+          : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
       } catch {
-        return date.toISOString().slice(11, 16)
+        return sameDay ? date.toISOString().slice(11, 16) : date.toISOString().slice(5, 16).replace('T', ' ')
       }
     }
 
@@ -498,7 +507,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             reasonCode: provider.reasonCode,
             credentialRef: provider.credentialRef,
             worst: known.length === 0 ? 0 : worst,
-            tone: suspended || (known.length > 0 && worst >= 100) ? 'error' : worst >= 80 ? 'warn' : 'ok',
           }
         })
         .sort((a, b) => Number(b.suspended) - Number(a.suspended) || b.worst - a.worst
@@ -587,7 +595,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const loadUsage = React.useCallback(async () => {
         try {
           const response = await fetch(new URL('/_tmax/usage', document.baseURI), { credentials: 'same-origin' })
-          const value = response.ok ? await response.json() : undefined
+          const value = await readBody(response)
           if (value?.ok !== true) throw new Error(value?.error ?? `HTTP ${response.status}`)
           setUsage({ phase: 'ready', value })
           return value
@@ -610,7 +618,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             headers: { 'content-type': 'application/json' },
             body: '{}',
           })
-          const value = response.ok ? await response.json() : undefined
+          const value = await readBody(response)
           if (value?.ok !== true) throw new Error(value?.error ?? `HTTP ${response.status}`)
           setUsage({ phase: 'ready', value })
         } catch (error) {
@@ -629,7 +637,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         try {
           const path = force ? '/_tmax/dsh-usage?force=1' : '/_tmax/dsh-usage'
           const response = await fetch(new URL(path, document.baseURI), { credentials: 'same-origin' })
-          const value = response.ok ? await response.json() : undefined
+          const value = await readBody(response)
           if (value?.ok !== true) throw new Error(value?.error ?? `HTTP ${response.status}`)
           setAgent({ phase: 'ready', value })
         } catch (error) {
@@ -655,7 +663,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const refresh = async () => {
         setBusy(true)
         setMessage('')
-        await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), refreshQuota(), loadAgent(true)])
+        // The forced re-observe must be the last writer: a cache read that
+        // finishes after it would paper over a failed refresh.
+        await Promise.all([reloadStatus(), loadCatalog(), loadAgent(true)])
+        await loadUsage()
+        await refreshQuota()
         setBusy(false)
       }
 
@@ -674,7 +686,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
             return
           }
-          await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), refreshQuota(), loadAgent(true)])
+          // The forced re-observe must be the last writer: a cache read that
+        // finishes after it would paper over a failed refresh.
+        await Promise.all([reloadStatus(), loadCatalog(), loadAgent(true)])
+        await loadUsage()
+        await refreshQuota()
         } catch (error) {
           setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
         } finally {
@@ -688,8 +704,8 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const tmaxProviders = usage.value?.ok === true ? usage.value.providers || [] : []
       const agentRecords = agent.value?.ok === true ? agent.value.providers || [] : []
       const providers = mergeSources(tmaxProviders, agentRecords).providers
-      const updatedAt = newestReading(tmaxProviders, agent.value)
-      const verdict = pageVerdict({ catalog, status, usage, connected }, t)
+      const updatedAt = asOfReading(providers)
+      const verdict = pageVerdict({ catalog, status, connected }, t)
       const usageFailed = usage.phase === 'failed' || (usage.phase !== 'loading' && usage.value !== undefined && usage.value.ok !== true)
       const rows = providers.length > 0 ? providerRows(providers, t) : []
 
@@ -727,7 +743,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
                 h('dt', { key: 'dt' }, '—'),
                 h('dd', { key: 'dd' }, h('span', { className: 'tmx-skeletonBar' })),
               ])))
-            : h('dl', { className: 'tmx-facts', key: 'facts' }, facts),
+            : status.phase === 'failed'
+              ? null
+              : h('dl', { className: 'tmx-facts', key: 'facts' }, facts),
           status.phase === 'failed'
             ? h('div', { className: 'tmx-cardNote', key: 'failure' }, [
               h('span', { className: 'tmx-errorText', key: 'text' },
@@ -753,15 +771,23 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
           t('usage'),
           rows.length > 0
-            ? h('span', { className: 'tmx-sectionNote', key: 'note' }, providerCount(rows.length, t, agent))
+            ? h('span', { className: 'tmx-sectionNote', key: 'note' }, providerCount(rows.length, t, agent, usage.phase === 'failed' && tmaxProviders.length === 0))
             : null,
         ]),
+        rows.length === 0
+          ? null
+          : h('p', { className: 'tmx-caption', key: 'caption' }, t('rowCaption')),
         quotaBusy
           ? h('p', { className: 'tmx-status', key: 'busy' }, t('usageRevalidating'))
           : agentSectionNote(agent, providers, t, loadAgent),
-        usage.phase === 'failed' && rows.length > 0
+        usage.phase === 'failed'
           ? h('p', { className: 'tmx-cardNote', key: 'stale' }, [
-            h('span', { className: 'tmx-errorText', key: 'text' }, `${t('usageFailed')} ${usage.message === undefined ? '' : describeError(usage.message, t)}`.trim()),
+            // Kept readings and no readings are different sentences; the page
+            // must not say "no data" while it is drawing data.
+            h('span', { className: 'tmx-errorText', key: 'text', title: usage.message },
+              tmaxProviders.length > 0 && updatedAt !== undefined
+                ? `${t('usageStale')} ${clockOf(updatedAt)}${usage.message === undefined ? '' : ` · ${describeError(usage.message, t)}`}`
+                : `${t('usageFailed')}${usage.message === undefined ? '' : ` ${describeError(usage.message, t)}`}`),
             h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: refreshQuota }, t('retryInline')),
           ])
           : null,
@@ -908,8 +934,8 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      * are doing. A provider that used up its quota is a fact about one card, not
      * a condition of the page.
      */
-    function pageVerdict({ catalog, status, usage, connected }, t) {
-      if (catalog.phase === 'loading' || status.phase === 'loading' || usage.phase === 'loading') {
+    function pageVerdict({ catalog, status, connected }, t) {
+      if (catalog.phase === 'loading' || status.phase === 'loading') {
         return { tone: 'idle', text: t('checking') }
       }
       if (catalog.phase === 'failed') return { tone: 'error', text: t('stateUnreadable') }
@@ -919,9 +945,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           : { tone: 'idle', text: t('checking') }
       }
       if (status.phase !== 'ready') return { tone: 'error', text: t('stateUnknown') }
-      // Quota could not be read: access may be fine, but the page cannot claim
-      // it is showing the whole picture.
-      if (usage.phase === 'failed') return { tone: 'warn', text: t('statePartial') }
       const ready = status.value?.gateway?.ready
       if (ready === false) return { tone: 'error', text: t('stateGateway') }
       if (ready !== true) return { tone: 'idle', text: t('stateUnknown') }
@@ -954,6 +977,15 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     /** Past this, reopening the page re-observes instead of trusting the cache. */
     const STALE_AFTER_MS = 5 * 60 * 1000
 
+    /** A non-2xx body still explains itself; throwing it away leaves only a number. */
+    async function readBody(response) {
+      try {
+        return await response.json()
+      } catch {
+        return undefined
+      }
+    }
+
     function needsRevalidation(value) {
       const providers = value?.ok === true ? value.providers || [] : []
       if (providers.length === 0) return true
@@ -984,10 +1016,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     /** A count that hides the source it could not read would be a claim, not a count. */
-    function providerCount(total, t, agent) {
-      return agent.phase === 'failed'
-        ? `${total} ${t('providerUnit')} ${t('agentNotRead')}`
-        : `${total} ${t('providerUnit')}`
+    function providerCount(total, t, agent, usageFailed) {
+      const parts = [`${total} ${t('providerUnit')}`]
+      if (usageFailed) parts.push(t('tmaxNotRead'))
+      if (agent.phase === 'failed') parts.push(t('agentNotRead'))
+      return parts.join(' · ')
     }
 
     /** One provider: its name, its state, and one bar per window. */
