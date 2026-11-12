@@ -32,7 +32,6 @@ window.__ModuleLoader__.load({
       refreshing: 'Refreshing…',
       access: 'Access',
       target: 'Target',
-      home: 'DSH home',
       gateway: 'Gateway',
       gatewayReady: 'ready',
       gatewayNotReady: 'not ready',
@@ -56,11 +55,17 @@ window.__ModuleLoader__.load({
       left: 'left',
       usedShare: 'used',
       suspended: 'Suspended',
+      quotaSuspended: 'Quota exhausted',
+      reset: 'resets',
       dashboard: 'Provider dashboard',
       windowRolling: 'rolling',
       windowWeekly: 'weekly',
       windowMonthly: 'monthly',
+      windowCredit: 'credit',
+      windowTokens: 'Token quota',
+      windowTime: 'Time quota',
       windowGeneric: 'limit',
+      quotaUnreadable: 'quota format not understood',
       unitMinute: 'min',
       unitHour: 'h',
       blocker: 'Blocker',
@@ -86,7 +91,6 @@ window.__ModuleLoader__.load({
       refreshing: '刷新中…',
       access: '访问',
       target: '目标',
-      home: 'DSH 目录',
       gateway: '网关',
       gatewayReady: '已就绪',
       gatewayNotReady: '未就绪',
@@ -110,11 +114,17 @@ window.__ModuleLoader__.load({
       left: '剩余',
       usedShare: '已用',
       suspended: '已暂停',
+      quotaSuspended: '额度已用尽',
+      reset: '重置',
       dashboard: '供应商后台',
       windowRolling: '滚动',
       windowWeekly: '周',
       windowMonthly: '月',
+      windowCredit: '额度',
+      windowTokens: 'Token 额度',
+      windowTime: '时间额度',
       windowGeneric: '额度',
+      quotaUnreadable: '额度格式无法解析',
       unitMinute: '分钟',
       unitHour: '小时',
       blocker: '阻塞项',
@@ -189,6 +199,8 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 .tmx-windowValue[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-windowReset { font-size: 12px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 .tmx-windowReset[data-empty='true'] { visibility: hidden; }
+.tmx-windowWide { grid-column: 2 / 4; text-align: start; color: var(--dsw-alias-label-secondary); }
+.tmx-suspend { margin: 0; font-size: 12px; line-height: 18px; color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .tmx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) { .tmx-barFill { transition: none; } }
@@ -206,11 +218,14 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 `
 
 
-    const WINDOW_NAMES = {
-      rolling: 'windowRolling',
-      weekly: 'windowWeekly',
-      monthly: 'windowMonthly',
-      weekly_allowance: 'windowWeekly',
+    /** Big counters as the reader's language writes them (7.6B / 75.6亿). */
+    function compact(value) {
+      if (!Number.isFinite(value)) return '?'
+      try {
+        return new Intl.NumberFormat(dateLocale, { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+      } catch {
+        return String(value)
+      }
     }
 
     function formatTimestamp(value) {
@@ -240,17 +255,31 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return Number.isNaN(date.getTime()) ? undefined : date
     }
 
+    const LABEL_TYPES = { TOKENS_LIMIT: 'windowTokens', TIME_LIMIT: 'windowTime' }
+    const LABEL_KEYS = { rolling: 'windowRolling', interval: 'windowRolling', weekly: 'windowWeekly', monthly: 'windowMonthly', weekly_allowance: 'windowWeekly' }
+
+    /**
+     * A window's name comes from whatever the provider actually discriminates by.
+     * Some report a protobuf-ish type and a count, some a bucket name and a
+     * window, some a duration. Inventing a name from an unmapped enum would be a
+     * guess; showing none would make three rows identical.
+     */
     function windowName(label, index, t) {
       if (label !== null && typeof label === 'object') {
-        if (typeof label.key === 'string' && WINDOW_NAMES[label.key] !== undefined) {
-          return t(WINDOW_NAMES[label.key])
+        if (typeof label.type === 'string' && LABEL_TYPES[label.type] !== undefined) {
+          return t(LABEL_TYPES[label.type])
         }
         if (label.key === 'duration') {
           const count = label.duration ?? ''
           const unit = label.unit === 'TIME_UNIT_MINUTE' ? t('unitMinute') : label.unit === 'TIME_UNIT_HOUR' ? t('unitHour') : label.unit ?? ''
           return `${count} ${unit}`.trim()
         }
-        const parts = [label.name, label.window].filter(part => typeof part === 'string' && part !== '')
+        if (typeof label.key === 'string' && LABEL_KEYS[label.key] !== undefined) {
+          return t(LABEL_KEYS[label.key])
+        }
+        if (label.key === 'credit') return t('windowCredit')
+        const parts = [label.name, typeof label.window === 'string' ? t(LABEL_KEYS[label.window] ?? '') : '']
+          .filter(part => typeof part === 'string' && part !== '')
         if (parts.length > 0) return parts.join(' ')
       }
       return `${t('windowGeneric')} ${index + 1}`
@@ -267,6 +296,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      */
     function windowReading(row, index, t) {
       const name = windowName(row.label, index, t)
+      const raw = JSON.stringify(row.label ?? {})
       const reset = resetAt(row.reset)
       if (typeof row.percent === 'number') {
         const consumed = row.basis === 'remaining_percent' ? 100 - row.percent : row.percent
@@ -275,49 +305,87 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           consumed: Math.max(0, Math.min(100, consumed)),
           text: `${Math.round(consumed)}%`,
           spoken: `${t('usedShare')} ${Math.round(consumed)}%`,
+          raw,
           reset,
         }
       }
-      const limit = row.counters?.limit
-      if (limit !== undefined && limit !== null) {
-        const total = Number(limit)
-        const used = Number(row.counters.currentValue ?? row.counters.usage ?? (total - Number(row.counters.remaining)))
-        const consumed = Number.isFinite(total) && total > 0 && Number.isFinite(used) ? (used / total) * 100 : undefined
+      const counters = row.counters ?? {}
+      const hasTotal = counters.limit !== undefined || counters.total !== undefined
+      if (hasTotal) {
+        const total = Number(counters.total ?? counters.limit)
+        const left = Number(counters.remaining)
+        const consumed = Number.isFinite(total) && total > 0 && Number.isFinite(left)
+          ? ((total - left) / total) * 100
+          : undefined
         return {
           name,
           consumed: consumed === undefined ? undefined : Math.max(0, Math.min(100, consumed)),
-          text: `${t('left')} ${row.counters.remaining ?? '?'}/${limit}`,
-          spoken: `${t('left')} ${row.counters.remaining ?? '?'}/${limit}`,
+          text: `${t('left')} ${compact(left)} / ${compact(total)}`,
+          spoken: `${t('left')} ${compact(left)} / ${compact(total)}`,
+          raw,
           reset,
         }
       }
-      return undefined
+      // A row that exists but yields no share still names itself: a text line
+      // with no meter, never a bar standing in for a measurement we cannot make.
+      return { name, consumed: undefined, text: t('quotaUnreadable'), unreadable: true, raw, reset }
     }
 
-    /** Providers ordered by how much attention they need, each with its windows. */
+    /**
+     * Two windows a provider does not name apart would read identically. Number
+     * them only when that happens, so the common single-window case stays clean.
+     */
+    function disambiguate(readings) {
+      const counts = new Map()
+      for (const item of readings) counts.set(item.name, (counts.get(item.name) ?? 0) + 1)
+      const seen = new Map()
+      return readings.map(item => {
+        if ((counts.get(item.name) ?? 0) < 2) return item
+        const index = (seen.get(item.name) ?? 0) + 1
+        seen.set(item.name, index)
+        return { ...item, name: `${item.name} ${index}` }
+      })
+    }
+
+    /**
+     * Every provider tmax reported, ordered by how much attention it needs.
+     * A provider is never dropped: a page that silently omits one is worse than
+     * a page that shows an unreadable row.
+     */
     function providerRows(providers, t) {
       return providers
         .map(provider => {
-          const windows = (provider.billing?.rows || [])
+          const windows = disambiguate((provider.billing?.rows || [])
             .map((row, index) => windowReading(row, index, t))
-            .filter(Boolean)
-          // A suspended provider with no readable window is still the one fact
-          // that matters most; it must not be filtered away as "nothing to say".
+            .filter(Boolean))
           const suspended = provider.quota?.state === 'suspended'
-          if (windows.length === 0 && !suspended) return undefined
           const known = windows.filter(item => item.consumed !== undefined)
           const worst = known.reduce((max, item) => Math.max(max, item.consumed), 0)
           return {
             provider,
             windows,
             suspended,
+            quota: provider.quota,
             worst: known.length === 0 ? 0 : worst,
             tone: suspended || (known.length > 0 && worst >= 100) ? 'error' : worst >= 80 ? 'warn' : 'ok',
           }
         })
-        .filter(Boolean)
         .sort((a, b) => Number(b.suspended) - Number(a.suspended) || b.worst - a.worst
           || (a.provider.name || a.provider.id).localeCompare(b.provider.name || b.provider.id))
+    }
+
+    /** Why a provider is suspended and when it comes back, from tmax's own words. */
+    function suspensionNote(quota, t) {
+      if (quota?.state !== 'suspended') return undefined
+      const parts = [t('quotaSuspended')]
+      if (typeof quota.window === 'string' && LABEL_KEYS[quota.window] !== undefined) {
+        parts.push(t(LABEL_KEYS[quota.window]))
+      }
+      const rawReset = typeof quota.resetAt === 'string' ? new Date(quota.resetAt) : resetAt(quota.resetAt)
+      if (rawReset !== undefined && !Number.isNaN(rawReset.getTime())) {
+        parts.push(`${t('reset')} ${formatDate(rawReset)}`)
+      }
+      return parts.join(' · ')
     }
 
     /**
@@ -443,7 +511,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       })
       const facts = [
         fact(t('target'), status.value?.target?.id),
-        fact(t('home'), status.value?.target?.path, 'tmx-mono'),
         h('div', { className: 'tmx-fact', key: 'gateway' }, [
           h('dt', { key: 'dt' }, t('gateway')),
           h('dd', { key: 'dd' }, h('span', { className: 'tmx-factValue' }, [
@@ -709,25 +776,42 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
               'data-tone': stale ? 'warn' : undefined,
               title: formatTimestamp(observedAt),
             }, stale ? `${t('staleData')} · ${age}` : age)),
-        windows.length === 0 ? null : h('ul', { className: 'tmx-windows' },
-          windows.map((item, index) => {
-            const itemTone = item.consumed === undefined ? 'ok' : toneFor(item.consumed)
-            return h('li', { className: 'tmx-window', key: String(index) },
-              h('span', { className: 'tmx-windowName', title: item.name }, item.name),
-              h('span', {
-                className: 'tmx-bar',
-                role: 'meter',
-                'aria-valuenow': Math.round(item.consumed ?? 0),
-                'aria-valuemin': 0,
-                'aria-valuemax': 100,
-                'aria-label': `${name} ${item.name}`,
-                'aria-valuetext': item.spoken,
-                'data-zero': (item.consumed ?? 0) < 1 ? 'true' : undefined,
-              }, h('span', { className: 'tmx-barFill', 'data-tone': itemTone, style: { width: `${Math.max(item.consumed ?? 0, item.consumed === undefined ? 0 : 1.5)}%` } })),
-              h('span', { className: 'tmx-windowValue', 'data-tone': itemTone }, item.text),
-              h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
-                item.reset === undefined ? '' : formatDate(item.reset)))
-          })))
+        suspensionLine(entry, t),
+        windows.length === 0
+          ? h('p', { className: 'tmx-empty', key: 'no-windows' }, t('usageUnknown'))
+          : h('ul', { className: 'tmx-windows' },
+            windows.map((item, index) => {
+              const itemTone = item.consumed === undefined ? 'ok' : toneFor(item.consumed)
+              // A row with no derivable share gets text, never a bar: a meter is
+              // a claim about proportion, and inventing one would be a lie.
+              if (item.unreadable === true) {
+                return h('li', { className: 'tmx-window tmx-windowText', key: String(index) },
+                  h('span', { className: 'tmx-windowName', title: item.raw ?? item.name }, item.name),
+                  h('span', { className: 'tmx-windowValue tmx-windowWide' }, item.text),
+                  h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
+                    item.reset === undefined ? '' : formatDate(item.reset)))
+              }
+              return h('li', { className: 'tmx-window', key: String(index) },
+                h('span', { className: 'tmx-windowName', title: item.raw ?? item.name }, item.name),
+                h('span', {
+                  className: 'tmx-bar',
+                  role: 'meter',
+                  'aria-valuenow': Math.round(item.consumed ?? 0),
+                  'aria-valuemin': 0,
+                  'aria-valuemax': 100,
+                  'aria-label': `${name} ${item.name}`,
+                  'aria-valuetext': item.spoken,
+                }, h('span', { className: 'tmx-barFill', 'data-tone': itemTone, style: { width: `${Math.max(item.consumed ?? 0, item.consumed === undefined ? 0 : 1.5)}%` } })),
+                h('span', { className: 'tmx-windowValue', 'data-tone': itemTone }, item.text),
+                h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
+                  item.reset === undefined ? '' : formatDate(item.reset)))
+            })))
+    }
+
+    /** The line under a provider's name: why it is suspended and when it returns. */
+    function suspensionLine(entry, t) {
+      const note = suspensionNote(entry.quota, t)
+      return note === undefined ? null : h('p', { className: 'tmx-suspend', key: 'suspended' }, note)
     }
 
     /** The sidebar glyph: a gauge, because "how much is left" is what the page answers. */

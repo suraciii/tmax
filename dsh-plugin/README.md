@@ -40,11 +40,18 @@ full content column instead of competing for room inside a settings section.
   `reason_code` when there is one), the default model, and every route protocol.
 - **Models** — the projected model IDs as chips, marked `unverified` where tmax
   has not verified availability, or the reason there are none.
-- **Usage and limits** — one card per provider that reports a quota, ordered by
-  how much attention it needs. Each window gets a proportional meter capped at a
-  fixed width so every card shares one 100% end, its share consumed, and its
-  reset date in the interface's language. A window at zero keeps a visible mark,
-  and a suspended provider stays on the page even when it reports no windows.
+- **Usage and limits** — one card per provider tmax reports, ordered by how much
+  attention it needs. Each window gets a proportional meter capped at a fixed
+  width so every card shares one 100% end, its share consumed, and its reset
+  date in the interface's language. A window at zero keeps a visible mark.
+  A suspended provider carries its own line: `额度已用尽 · 月 · 重置 …`, taken from
+  tmax's `reason_code`, `window`, and `reset_at`.
+
+No provider is ever dropped. Credit counters (`counters.total`) are read as a
+share, so a balance like `剩余 75.6亿 / 80亿` gets a real meter. A row whose shape
+yields no share is shown as text with no meter at all — a bar is a claim about
+proportion, and drawing one for a value the plugin cannot compute would be a
+different kind of lie from omitting it.
 
 Both tmax window conventions (consumed and remaining) become the same filling
 meter, so a row never needs mental arithmetic. Every colour resolves through a
