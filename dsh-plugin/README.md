@@ -59,10 +59,15 @@ meter, so a row never needs mental arithmetic. Every colour resolves through a
 semantic text tones mix toward the foreground label so they clear 4.5:1 in both
 themes, not only in light.
 
-The header states what the page can stand behind rather than what the plumbing
-happens to be: `可用`, `受限`, `网关未就绪`, `状态未知`, `读取失败`, `未连接`.
-A projection merely existing in DSH is not "ready", and a gateway whose readiness
+The header answers one question — can this page reach tmax and its gateway —
+with `可用`, `网关未就绪`, `状态未知`, `读取失败`, `未连接`, `检查中…`. A
+projection merely existing in DSH is not "ready", and a gateway whose readiness
 was never reported is not "not ready".
+
+It deliberately says nothing about what the subscriptions are doing. A provider
+that used up its quota, or one tmax suspended, is a fact about that card; the
+card carries it, with the reason and the reset time. Repeating it as a page-wide
+state would make a normal, expected situation look like a fault.
 
 A quota reading is a timestamped observation, not a live fact. Opening the page
 reads the cache and shows it; it re-observes the providers

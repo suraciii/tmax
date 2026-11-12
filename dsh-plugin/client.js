@@ -17,10 +17,9 @@ window.__ModuleLoader__.load({
       title: 'tmax',
       subtitle: 'Model access and provider limits managed by tmax.',
       loading: 'Reading model catalog…',
-      stateReady: 'Available',
       statePartial: 'Quota unreadable',
       checking: 'Checking…',
-      stateLimited: 'Limited',
+      stateReady: 'Reachable',
       stateGateway: 'Gateway not ready',
       stateUnknown: 'Status unknown',
       stateUnreadable: 'Read failed',
@@ -94,10 +93,9 @@ window.__ModuleLoader__.load({
       title: 'tmax',
       subtitle: '查看模型访问，以及 tmax 与 agent 各自配置的供应商额度。',
       loading: '正在读取模型目录…',
-      stateReady: '可用',
       statePartial: '额度读取失败',
       checking: '检查中…',
-      stateLimited: '受限',
+      stateReady: '可用',
       stateGateway: '网关未就绪',
       stateUnknown: '状态未知',
       stateUnreadable: '读取失败',
@@ -710,8 +708,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const agentRecords = agent.value?.ok === true ? agent.value.providers || [] : []
       const providers = mergeSources(tmaxProviders, agentRecords).providers
       const updatedAt = newestReading(tmaxProviders, agent.value)
-      const suspended = providers.filter(provider => provider.quota?.state === 'suspended').length
-      const verdict = pageVerdict({ catalog, status, usage, connected, suspended, exhausted: anyExhausted(providers) }, t)
+      const verdict = pageVerdict({ catalog, status, usage, connected }, t)
       const usageFailed = usage.phase === 'failed' || (usage.phase !== 'loading' && usage.value !== undefined && usage.value.ok !== true)
       const rows = providers.length > 0 ? providerRows(providers, t) : []
 
@@ -946,10 +943,31 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     /**
-     * The one word in the header. It must be something the page can actually
-     * stand behind: a projection existing in DSH is not "ready", and a gateway
-     * whose readiness was never reported is not "not ready".
+     * The one word in the header. It answers a single question — can this page
+     * reach tmax and its gateway — and says nothing about what the subscriptions
+     * are doing. A provider that used up its quota is a fact about one card, not
+     * a condition of the page.
      */
+    function pageVerdict({ catalog, status, usage, connected }, t) {
+      if (catalog.phase === 'loading' || status.phase === 'loading' || usage.phase === 'loading') {
+        return { tone: 'idle', text: t('checking') }
+      }
+      if (catalog.phase === 'failed') return { tone: 'error', text: t('stateUnreadable') }
+      if (!connected) {
+        return catalog.phase === 'ready'
+          ? { tone: 'idle', text: t('stateDisconnected') }
+          : { tone: 'idle', text: t('checking') }
+      }
+      if (status.phase !== 'ready') return { tone: 'error', text: t('stateUnknown') }
+      // Quota could not be read: access may be fine, but the page cannot claim
+      // it is showing the whole picture.
+      if (usage.phase === 'failed') return { tone: 'warn', text: t('statePartial') }
+      const ready = status.value?.gateway?.ready
+      if (ready === false) return { tone: 'error', text: t('stateGateway') }
+      if (ready !== true) return { tone: 'idle', text: t('stateUnknown') }
+      return { tone: 'ok', text: t('stateReady') }
+    }
+
     /**
      * A browser network error is not a sentence. Name the condition the reader
      * can act on, and keep an unrecognised message verbatim rather than hiding it.
@@ -973,7 +991,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return verdict.text
     }
 
-    /** Re-observe only when the cached readings are older than the stale mark. */
     /** Past this, reopening the page re-observes instead of trusting the cache. */
     const STALE_AFTER_MS = 5 * 60 * 1000
 
@@ -1013,37 +1030,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         ? `${total} ${t('providerUnit')} ${t('agentNotRead')}`
         : `${total} ${t('providerUnit')}`
       return extra === 0 ? label : `${label} ${t('agentIncluded')} ${extra}`
-    }
-
-    /** A window at 100% is a blocked route even when nothing was formally suspended. */
-    function anyExhausted(providers) {
-      return providers.some(provider => (provider.billing?.rows || []).some(row => {
-        if (typeof row.percent === 'number') {
-          return (row.basis === 'remaining_percent' ? 100 - row.percent : row.percent) >= 100
-        }
-        const total = Number(row.counters?.total ?? row.counters?.limit)
-        const left = Number(row.counters?.remaining)
-        return Number.isFinite(total) && total > 0 && Number.isFinite(left) && left <= 0
-      }))
-    }
-
-    function pageVerdict({ catalog, status, usage, connected, suspended, exhausted }, t) {
-      if (catalog.phase === 'loading' || status.phase === 'loading' || usage.phase === 'loading') {
-        return { tone: 'idle', text: t('checking') }
-      }
-      if (catalog.phase === 'failed') return { tone: 'error', text: t('stateUnreadable') }
-      if (!connected) {
-        return catalog.phase === 'ready' ? { tone: 'idle', text: t('stateDisconnected') } : { tone: 'idle', text: t('checking') }
-      }
-      if (status.phase !== 'ready') return { tone: 'error', text: t('stateUnknown') }
-      // Quota could not be read: access may be fine, but the page cannot claim
-      // the whole picture is.
-      if (usage.phase === 'failed') return { tone: 'warn', text: t('statePartial') }
-      const ready = status.value?.gateway?.ready
-      if (ready === false) return { tone: 'error', text: t('stateGateway') }
-      if (ready !== true) return { tone: 'idle', text: t('stateUnknown') }
-      if (suspended > 0 || exhausted) return { tone: 'warn', text: t('stateLimited') }
-      return { tone: 'ok', text: t('stateReady') }
     }
 
     /** One provider: its name, its state, and one bar per window. */
