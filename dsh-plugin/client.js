@@ -18,6 +18,8 @@ window.__ModuleLoader__.load({
       subtitle: 'Model access and provider limits managed by tmax.',
       loading: 'Reading model catalog…',
       stateReady: 'Available',
+      statePartial: 'Quota unreadable',
+      checking: 'Checking…',
       stateLimited: 'Limited',
       stateGateway: 'Gateway not ready',
       stateUnknown: 'Status unknown',
@@ -44,6 +46,7 @@ window.__ModuleLoader__.load({
       usageFailed: 'Usage is unavailable right now.',
       retryInline: 'Retry',
       unverified: 'unverified',
+      availabilityUnknown: 'Availability unknown: the access read failed.',
       defaultModel: 'Default model',
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
@@ -77,6 +80,8 @@ window.__ModuleLoader__.load({
       subtitle: '查看 tmax 管理的模型访问与供应商额度。',
       loading: '正在读取模型目录…',
       stateReady: '可用',
+      statePartial: '额度读取失败',
+      checking: '检查中…',
       stateLimited: '受限',
       stateGateway: '网关未就绪',
       stateUnknown: '状态未知',
@@ -103,6 +108,7 @@ window.__ModuleLoader__.load({
       usageFailed: '暂时拿不到用量数据。',
       retryInline: '重试',
       unverified: '未验证',
+      availabilityUnknown: '可用性未知：访问信息读取失败。',
       defaultModel: '默认模型',
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
@@ -135,7 +141,6 @@ window.__ModuleLoader__.load({
 .tmx-page { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font-size: 14px; line-height: 1.6; }
 .tmx-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; --dsh-scrollbar-width: 9px; --dsh-scrollbar-thumb-border: 2px; }
 .tmx-content { max-width: 960px; margin: 0 auto; padding: 0 clamp(24px, 4vw, 48px) 48px; }
-:global([data-platform='darwin']) .tmx-heading { padding-top: calc(28px + var(--dsh-frame-top-clearance, 0px)); }
 .tmx-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding-top: 28px; margin-bottom: 8px; }
 .tmx-heading h1 { flex: 0 1 auto; min-width: 0; max-width: 100%; margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; }
 .tmx-headState { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; font-size: 13px; line-height: 20px; font-weight: 400; color: var(--dsw-alias-label-secondary); vertical-align: middle; }
@@ -150,6 +155,7 @@ window.__ModuleLoader__.load({
   .tmx-button[data-kind='primary']:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
 }
 .tmx-button:disabled { opacity: 0.4; cursor: default; }
+.tmx-button[data-busy='true']:disabled { opacity: 1; background: var(--dsw-alias-interactive-bg-hover); }
 .tmx-sub { margin: 0 0 28px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .tmx-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
 .tmx-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
@@ -210,10 +216,15 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
   .tmx-windows { grid-template-columns: 88px minmax(72px, 220px) minmax(46px, auto) minmax(78px, 1fr); }
 }
 @media (max-width: 560px) {
-  /* Only when the row truly runs out does the reset move under it, never away. */
-  .tmx-windows { grid-template-columns: 84px minmax(64px, 1fr) minmax(46px, auto); }
-  .tmx-windowReset { grid-column: 2 / -1; text-align: start; }
+  /* The bar spans the row, so every card keeps one shared 100% end; the number
+     and the reset move beneath it rather than competing for its width. */
+  .tmx-windows { grid-template-columns: minmax(0, 1fr) auto; }
+  .tmx-windowName { grid-column: 1; grid-row: 1; }
+  .tmx-windowValue { grid-column: 2; grid-row: 1; }
+  .tmx-bar { grid-column: 1 / -1; grid-row: 2; }
+  .tmx-windowReset { grid-column: 1 / -1; grid-row: 3; text-align: start; }
   .tmx-windowReset[data-empty='true'] { display: none; }
+  .tmx-windowWide { grid-column: 1 / -1; grid-row: 1; text-align: end; }
 }
 `
 
@@ -421,6 +432,18 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const [catalog, setCatalog] = React.useState({ phase: 'loading' })
       const [busy, setBusy] = React.useState(false)
       const [message, setMessage] = React.useState('')
+      // Ages and staleness are functions of wall-clock time; without a tick they
+      // would freeze at "just now" for as long as the tab stays open.
+      const [, tick] = React.useReducer(value => value + 1, 0)
+      React.useEffect(() => {
+        const timer = setInterval(tick, 30_000)
+        const onVisible = () => { if (document.visibilityState === 'visible') tick() }
+        document.addEventListener('visibilitychange', onVisible)
+        return () => {
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', onVisible)
+        }
+      }, [])
 
       const loadCatalog = React.useCallback(async () => {
         try {
@@ -450,8 +473,14 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           })
           const value = response.ok ? await response.json() : undefined
           if (value?.ok === true) setUsage({ phase: 'ready', value })
-        } catch {
-          // A failed quota pass leaves the cached reading on screen, aged.
+          else throw new Error(value?.error ?? `HTTP ${response.status}`)
+        } catch (error) {
+          // The cached reading stays, and the failure that produced it is named.
+          setUsage(previous => ({
+            ...previous,
+            phase: 'failed',
+            message: error instanceof Error ? error.message : String(error),
+          }))
         } finally {
           setQuotaBusy(false)
         }
@@ -496,7 +525,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const connected = catalog.phase === 'ready' && catalog.group !== undefined
       const providers = usage.value?.ok === true ? usage.value.providers || [] : []
       const suspended = providers.filter(provider => provider.quota?.state === 'suspended').length
-      const verdict = pageVerdict({ catalog, status, connected, suspended }, t)
+      const verdict = pageVerdict({ catalog, status, usage, connected, suspended, exhausted: anyExhausted(providers) }, t)
       const usageFailed = usage.phase === 'failed' || (usage.phase !== 'loading' && usage.value !== undefined && usage.value.ok !== true)
       const rows = providers.length > 0 ? providerRows(providers, t) : []
 
@@ -578,9 +607,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           ]),
         ]),
         h('div', { className: 'tmx-actions', key: 'actions' }, [
-          h('button', { type: 'button', className: 'tmx-button', key: 'refresh', onClick: refresh, disabled: busy || quotaBusy },
+          h('button', { type: 'button', className: 'tmx-button', key: 'refresh', onClick: refresh, disabled: busy || quotaBusy, 'data-busy': busy || quotaBusy },
             busy ? t('refreshing') : t('refresh')),
-          connected
+          connected || catalog.phase !== 'ready'
             ? null
             : h('button', {
               type: 'button',
@@ -600,7 +629,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             h('p', { className: 'tmx-sub', key: 'sub' }, t('subtitle')),
             h('p', { className: 'tmx-sr', key: 'live', role: 'status', 'aria-live': 'polite' },
               quotaBusy ? t('usageRevalidating') : message !== '' ? message : ''),
-            message === '' ? null : h('p', { className: 'tmx-error', key: 'message' }, message),
+            message === '' ? null : h('p', { className: 'tmx-errorText', key: 'message' }, message),
             accessSection,
             modelsSection,
             usageSection,
@@ -646,13 +675,14 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     /** The models section states the reason it has nothing, not just nothing. */
     function modelsBody(catalog, connected, routes, t) {
       if (catalog.phase === 'failed') {
-        return [h('p', { className: 'tmx-empty', key: 'error' }, `${t('hostError')}: ${catalog.message}`)]
+        return [h('div', { className: 'tmx-cardNote', key: 'error' }, [
+          h('span', { className: 'tmx-errorText', key: 'text' }, `${t('hostError')}: ${catalog.message}`),
+        ])]
       }
       if (!connected) {
-        return [
-          h('p', { className: 'tmx-empty', key: 'empty' }, t('empty')),
-          h('p', { className: 'tmx-note', key: 'hint' }, t('hint')),
-        ]
+        return catalog.phase === 'ready'
+          ? [h('p', { className: 'tmx-empty', key: 'empty' }, t('empty')), h('p', { className: 'tmx-note', key: 'hint' }, t('hint'))]
+          : [h('p', { className: 'tmx-empty', key: 'empty' }, t('loading'))]
       }
       if (catalog.group.models.length === 0) {
         return [h('p', { className: 'tmx-empty', key: 'empty' }, t('empty'))]
@@ -663,7 +693,8 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           if (!kinds.has(model.id)) kinds.set(model.id, model)
         }
       }
-      return [h('ul', { className: 'tmx-chips', key: 'chips' },
+      const unknownAvailability = (routes ?? []).length === 0
+      const chips = h('ul', { className: 'tmx-chips', key: 'chips' },
         catalog.group.models.map(model => {
           const meta = kinds.get(model.id) ?? {}
           return h('li', { className: 'tmx-chip', key: model.id },
@@ -672,7 +703,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             meta.availability === 'unverified'
               ? h('span', { className: 'tmx-chipKind', key: 'avail' }, t('unverified'))
               : null)
-        }))]
+        }))
+      return unknownAvailability
+        ? [chips, h('p', { className: 'tmx-note', key: 'unknown' }, t('availabilityUnknown'))]
+        : [chips]
     }
 
     /** A drawn "opens elsewhere" mark, at the size of the text it follows. */
@@ -714,15 +748,34 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      * stand behind: a projection existing in DSH is not "ready", and a gateway
      * whose readiness was never reported is not "not ready".
      */
-    function pageVerdict({ catalog, status, connected, suspended }, t) {
-      if (catalog.phase === 'loading' || status.phase === 'loading') return { tone: 'idle', text: t('loading') }
+    /** A window at 100% is a blocked route even when nothing was formally suspended. */
+    function anyExhausted(providers) {
+      return providers.some(provider => (provider.billing?.rows || []).some(row => {
+        if (typeof row.percent === 'number') {
+          return (row.basis === 'remaining_percent' ? 100 - row.percent : row.percent) >= 100
+        }
+        const total = Number(row.counters?.total ?? row.counters?.limit)
+        const left = Number(row.counters?.remaining)
+        return Number.isFinite(total) && total > 0 && Number.isFinite(left) && left <= 0
+      }))
+    }
+
+    function pageVerdict({ catalog, status, usage, connected, suspended, exhausted }, t) {
+      if (catalog.phase === 'loading' || status.phase === 'loading' || usage.phase === 'loading') {
+        return { tone: 'idle', text: t('checking') }
+      }
       if (catalog.phase === 'failed') return { tone: 'error', text: t('stateUnreadable') }
-      if (!connected) return { tone: 'idle', text: t('stateDisconnected') }
+      if (!connected) {
+        return catalog.phase === 'ready' ? { tone: 'idle', text: t('stateDisconnected') } : { tone: 'idle', text: t('checking') }
+      }
       if (status.phase !== 'ready') return { tone: 'error', text: t('stateUnknown') }
+      // Quota could not be read: access may be fine, but the page cannot claim
+      // the whole picture is.
+      if (usage.phase === 'failed') return { tone: 'warn', text: t('statePartial') }
       const ready = status.value?.gateway?.ready
       if (ready === false) return { tone: 'error', text: t('stateGateway') }
       if (ready !== true) return { tone: 'idle', text: t('stateUnknown') }
-      if (suspended > 0) return { tone: 'warn', text: t('stateLimited') }
+      if (suspended > 0 || exhausted) return { tone: 'warn', text: t('stateLimited') }
       return { tone: 'ok', text: t('stateReady') }
     }
 
@@ -766,7 +819,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
               href: dashboard,
               target: '_blank',
               rel: 'noreferrer',
-              title: t('dashboard'),
+              title: `${name} · ${t('dashboard')}`,
             }, [name, h(ExternalMark, { key: 'mark' })]),
           suspended ? h('span', { className: 'tmx-chip', 'data-tone': 'error' }, t('suspended')) : null,
           age === undefined
@@ -785,7 +838,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
               // A row with no derivable share gets text, never a bar: a meter is
               // a claim about proportion, and inventing one would be a lie.
               if (item.unreadable === true) {
-                return h('li', { className: 'tmx-window tmx-windowText', key: String(index) },
+                return h('li', { className: 'tmx-window', key: String(index) },
                   h('span', { className: 'tmx-windowName', title: item.raw ?? item.name }, item.name),
                   h('span', { className: 'tmx-windowValue tmx-windowWide' }, item.text),
                   h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
@@ -801,7 +854,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
                   'aria-valuemax': 100,
                   'aria-label': `${name} ${item.name}`,
                   'aria-valuetext': item.spoken,
-                }, h('span', { className: 'tmx-barFill', 'data-tone': itemTone, style: { width: `${Math.max(item.consumed ?? 0, item.consumed === undefined ? 0 : 1.5)}%` } })),
+                }, h('span', { className: 'tmx-barFill', 'data-tone': itemTone, style: { width: `${(item.consumed ?? 0) <= 0 ? 0 : Math.max(item.consumed ?? 0, 1.5)}%` } })),
                 h('span', { className: 'tmx-windowValue', 'data-tone': itemTone }, item.text),
                 h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
                   item.reset === undefined ? '' : formatDate(item.reset)))
