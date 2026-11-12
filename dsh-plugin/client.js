@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       retryInline: 'Retry',
       unverified: 'unverified',
       availabilityUnknown: 'Availability unknown: the access read failed.',
+      allUnverified: 'tmax has not verified availability for these models.',
       defaultModel: 'Default model',
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
@@ -112,6 +113,7 @@ window.__ModuleLoader__.load({
       retryInline: '重试',
       unverified: '未验证',
       availabilityUnknown: '可用性未知：访问信息读取失败。',
+      allUnverified: '这些模型的可用性尚未经过 tmax 验证。',
       defaultModel: '默认模型',
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
@@ -734,18 +736,25 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         }
       }
       const unknownAvailability = (routes ?? []).length === 0
+      // Availability is usually one fact for the whole route; marking every chip
+      // with the same word four times says it louder, not clearer.
+      const marks = catalog.group.models.map(model => (kinds.get(model.id) ?? {}).availability)
+      const uniformlyUnverified = marks.length > 0 && marks.every(mark => mark === 'unverified')
       const chips = h('ul', { className: 'tmx-chips', key: 'chips' },
-        catalog.group.models.map(model => {
+        catalog.group.models.map((model, index) => {
           const meta = kinds.get(model.id) ?? {}
           return h('li', { className: 'tmx-chip', key: model.id },
             h('span', null, model.name ?? model.id),
             model.name === model.id ? null : h('span', { className: 'tmx-chipKind' }, model.id),
-            meta.availability === 'unverified'
+            meta.availability === 'unverified' && !uniformlyUnverified
               ? h('span', { className: 'tmx-chipKind', key: 'avail' }, t('unverified'))
               : null)
         }))
-      return unknownAvailability
-        ? [chips, h('p', { className: 'tmx-note', key: 'unknown' }, t('availabilityUnknown'))]
+      if (unknownAvailability) {
+        return [chips, h('p', { className: 'tmx-note', key: 'unknown' }, t('availabilityUnknown'))]
+      }
+      return uniformlyUnverified
+        ? [chips, h('p', { className: 'tmx-note', key: 'unverified' }, t('allUnverified'))]
         : [chips]
     }
 
