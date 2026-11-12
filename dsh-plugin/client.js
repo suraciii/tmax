@@ -17,15 +17,19 @@ window.__ModuleLoader__.load({
       title: 'tmax',
       subtitle: 'Model access and provider limits managed by tmax.',
       loading: 'Reading model catalog…',
-      connected: 'Connected',
-      disconnected: 'Not connected',
-      failed: 'Provider failed',
+      stateReady: 'Available',
+      stateLimited: 'Limited',
+      stateGateway: 'Gateway not ready',
+      stateUnknown: 'Status unknown',
+      stateUnreadable: 'Read failed',
+      stateDisconnected: 'Not connected',
       empty: 'This profile exposes no tmax models yet.',
       hint: 'Connecting writes the DSH credential reference. The key is never copied or shown.',
       connect: 'Connect',
       connecting: 'Connecting…',
       connectFailed: 'Connect failed',
       refresh: 'Refresh',
+      refreshing: 'Refreshing…',
       access: 'Access',
       target: 'Target',
       home: 'DSH home',
@@ -39,7 +43,10 @@ window.__ModuleLoader__.load({
       usage: 'Usage and limits',
       usageUnknown: 'No provider reports a quota yet.',
       usageFailed: 'Usage is unavailable right now.',
-      usageLive: 'Live',
+      retryInline: 'Retry',
+      unverified: 'unverified',
+      defaultModel: 'Default model',
+      unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
       staleData: 'stale',
       minutesAgo: 'min ago',
@@ -47,6 +54,7 @@ window.__ModuleLoader__.load({
       daysAgo: 'd ago',
       justNow: 'just now',
       left: 'left',
+      usedShare: 'used',
       suspended: 'Suspended',
       dashboard: 'Provider dashboard',
       windowRolling: 'rolling',
@@ -57,22 +65,25 @@ window.__ModuleLoader__.load({
       unitHour: 'h',
       blocker: 'Blocker',
       hostError: 'Host error',
-      retry: 'Retry',
     }
     const zh = {
       panel: 'tmax',
       title: 'tmax',
       subtitle: '查看 tmax 管理的模型访问与供应商额度。',
       loading: '正在读取模型目录…',
-      connected: '已连接',
-      disconnected: '未连接',
-      failed: 'provider 加载失败',
+      stateReady: '可用',
+      stateLimited: '受限',
+      stateGateway: '网关未就绪',
+      stateUnknown: '状态未知',
+      stateUnreadable: '读取失败',
+      stateDisconnected: '未连接',
       empty: '当前 profile 还没有暴露 tmax 模型。',
       hint: '连接会写入 DSH 凭据引用，密钥不会被复制或显示。',
       connect: '连接',
       connecting: '连接中…',
       connectFailed: '连接失败',
       refresh: '刷新',
+      refreshing: '刷新中…',
       access: '访问',
       target: '目标',
       home: 'DSH 目录',
@@ -86,7 +97,10 @@ window.__ModuleLoader__.load({
       usage: '用量与额度',
       usageUnknown: '还没有 provider 上报额度。',
       usageFailed: '暂时拿不到用量数据。',
-      usageLive: '实时',
+      retryInline: '重试',
+      unverified: '未验证',
+      defaultModel: '默认模型',
+      unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
       staleData: '数据陈旧',
       minutesAgo: '分钟前',
@@ -94,6 +108,7 @@ window.__ModuleLoader__.load({
       daysAgo: '天前',
       justNow: '刚刚',
       left: '剩余',
+      usedShare: '已用',
       suspended: '已暂停',
       dashboard: '供应商后台',
       windowRolling: '滚动',
@@ -104,78 +119,118 @@ window.__ModuleLoader__.load({
       unitHour: '小时',
       blocker: '阻塞项',
       hostError: 'Host 错误',
-      retry: '重试',
     }
 
     const STYLE = `
 .tmx-page { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font-size: 14px; line-height: 1.6; }
 .tmx-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; --dsh-scrollbar-width: 9px; --dsh-scrollbar-thumb-border: 2px; }
-.tmx-content { max-width: 960px; margin: 0 auto; padding: 0 clamp(24px, 4vw, 48px) 64px; }
+.tmx-content { max-width: 960px; margin: 0 auto; padding: 0 clamp(24px, 4vw, 48px) 48px; }
+:global([data-platform='darwin']) .tmx-heading { padding-top: calc(28px + var(--dsh-frame-top-clearance, 0px)); }
 .tmx-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding-top: 28px; margin-bottom: 8px; }
 .tmx-heading h1 { flex: 0 1 auto; min-width: 0; max-width: 100%; margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; }
 .tmx-headState { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; font-size: 13px; line-height: 20px; font-weight: 400; color: var(--dsw-alias-label-secondary); vertical-align: middle; }
+.tmx-headState[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+.tmx-headState[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
+/* A first-level page's header action is the sibling pages' 32px capsule. */
 .tmx-actions { display: flex; flex: none; align-items: center; gap: 8px; white-space: nowrap; }
-.tmx-sub { margin: 0 0 28px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
-.tmx-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
-.tmx-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
-.tmx-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
-.tmx-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
-.tmx-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 14px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
+.tmx-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 16px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
 .tmx-button[data-kind='primary'] { border-color: transparent; background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
 @media (hover: hover) {
   .tmx-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-solid); }
   .tmx-button[data-kind='primary']:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
 }
 .tmx-button:disabled { opacity: 0.4; cursor: default; }
-.tmx-section { margin-bottom: 32px; }
+.tmx-sub { margin: 0 0 28px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.tmx-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
+.tmx-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
+.tmx-dot[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
+.tmx-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
+.tmx-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
+.tmx-section { margin-bottom: 24px; }
 .tmx-sectionTitle { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 14px; line-height: 22px; font-weight: 500; }
+/* The section's own count is an annotation, never a second title. */
 .tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
-.tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 16px 18px; }
-.tmx-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px 24px; margin: 0; }
+.tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; }
+.tmx-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px 24px; margin: 0; }
 .tmx-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tmx-fact dt { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-fact dd { margin: 0; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
-.tmx-factValue { display: inline-flex; align-items: center; gap: 6px; }
+.tmx-factValue { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tmx-factNote { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
 .tmx-mono { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; }
+.tmx-skeletonBar { display: block; width: 60%; height: 10px; border-radius: 4px; background: var(--dsw-alias-interactive-bg-hover); }
 .tmx-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .tmx-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); font-size: 12px; line-height: 18px; }
+.tmx-chip[data-tone='error'] { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-chipKind { font-size: 11px; color: var(--dsw-alias-label-secondary); }
 .tmx-note { margin: 12px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-.tmx-error { margin: 12px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-error-primary); overflow-wrap: anywhere; }
+.tmx-errorText { font-size: 12px; line-height: 18px; color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); overflow-wrap: anywhere; }
+.tmx-cardNote { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .tmx-providers { display: flex; flex-direction: column; gap: 12px; }
-.tmx-provider { display: flex; flex-direction: column; gap: 12px; }
+.tmx-provider { display: flex; flex-direction: column; gap: 10px; }
 .tmx-providerHead { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.tmx-providerName { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--dsw-alias-label-primary); text-decoration: none; }
+.tmx-providerName { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--dsw-alias-label-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2px; }
 .tmx-external { flex: none; margin-top: 1px; color: var(--dsw-alias-label-secondary); }
+a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); }
 .tmx-age { margin-left: auto; flex: none; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
-.tmx-age[data-tone='warn'] { color: var(--dsw-alias-state-warn-primary); }
-.tmx-providerHead a:hover .tmx-external { color: var(--dsw-alias-label-primary); }
-.tmx-windows { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.tmx-window { display: grid; grid-template-columns: 104px minmax(0, 1fr) minmax(52px, auto) minmax(84px, auto); align-items: center; gap: 12px; font-size: 12px; line-height: 18px; }
-.tmx-windowName { color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tmx-bar { position: relative; height: 6px; border-radius: 99px; background: var(--dsw-alias-border-l1); overflow: hidden; }
+.tmx-age[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+/* One grid per provider card, so every row and every card shares one 100% end. */
+.tmx-windows { display: grid; grid-template-columns: 104px minmax(120px, 300px) minmax(52px, auto) minmax(84px, 1fr); align-items: center; gap: 8px 12px; margin: 0; padding: 0; list-style: none; }
+.tmx-window { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; }
+.tmx-windowName { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
+.tmx-bar[data-zero='true']::after { content: ''; position: absolute; inset-inline-start: 0; top: 0; width: 3px; height: 100%; background: var(--dsw-alias-label-tertiary); }
 .tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-business-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
 .tmx-barFill[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
 .tmx-barFill[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
-.tmx-windowValue { text-align: end; font-variant-numeric: tabular-nums; }
-.tmx-windowValue[data-tone='warn'] { color: var(--dsw-alias-state-warn-primary); }
-.tmx-windowValue[data-tone='error'] { color: var(--dsw-alias-state-error-primary); }
-.tmx-windowReset { text-align: end; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.tmx-windowValue { font-size: 12px; line-height: 18px; text-align: end; font-variant-numeric: tabular-nums; }
+.tmx-windowValue[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+.tmx-windowValue[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
+.tmx-windowReset { font-size: 12px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 .tmx-windowReset[data-empty='true'] { visibility: hidden; }
-.tmx-skeleton .tmx-bar { background: var(--dsw-alias-border-l1); overflow: hidden; }
 .tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
-@media (max-width: 720px) {
-  .tmx-window { grid-template-columns: 88px minmax(0, 1fr) minmax(46px, auto); }
-  .tmx-windowReset { display: none; }
+.tmx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: reduce) { .tmx-barFill { transition: none; } }
+/* Narrow or zoomed: the reset date moves under its row instead of disappearing. */
+@media (max-width: 760px) {
+  /* The bar keeps a fixed cap so every card shares one 100% end. */
+  .tmx-windows { grid-template-columns: 88px minmax(72px, 220px) minmax(46px, auto) minmax(78px, 1fr); }
+}
+@media (max-width: 560px) {
+  /* Only when the row truly runs out does the reset move under it, never away. */
+  .tmx-windows { grid-template-columns: 84px minmax(64px, 1fr) minmax(46px, auto); }
+  .tmx-windowReset { grid-column: 2 / -1; text-align: start; }
+  .tmx-windowReset[data-empty='true'] { display: none; }
 }
 `
+
 
     const WINDOW_NAMES = {
       rolling: 'windowRolling',
       weekly: 'windowWeekly',
       monthly: 'windowMonthly',
       weekly_allowance: 'windowWeekly',
+    }
+
+    function formatTimestamp(value) {
+      const date = new Date(value)
+      return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(dateLocale)
+    }
+
+    /** Dates read in the interface's language, not the browser's. */
+    let dateLocale
+    /** The app publishes the resolved language on <html lang>; follow it. */
+    function syncDateLocale() {
+      const lang = typeof document === 'undefined' ? undefined : document.documentElement.lang
+      if (typeof lang === 'string' && lang !== '') dateLocale = lang
+    }
+    function formatDate(date) {
+      try {
+        return new Intl.DateTimeFormat(dateLocale, { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
+      } catch {
+        return date.toISOString().slice(0, 10)
+      }
     }
 
     function resetAt(reset) {
@@ -219,6 +274,7 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           name,
           consumed: Math.max(0, Math.min(100, consumed)),
           text: `${Math.round(consumed)}%`,
+          spoken: `${t('usedShare')} ${Math.round(consumed)}%`,
           reset,
         }
       }
@@ -231,6 +287,7 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           name,
           consumed: consumed === undefined ? undefined : Math.max(0, Math.min(100, consumed)),
           text: `${t('left')} ${row.counters.remaining ?? '?'}/${limit}`,
+          spoken: `${t('left')} ${row.counters.remaining ?? '?'}/${limit}`,
           reset,
         }
       }
@@ -244,10 +301,12 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           const windows = (provider.billing?.rows || [])
             .map((row, index) => windowReading(row, index, t))
             .filter(Boolean)
-          if (windows.length === 0) return undefined
+          // A suspended provider with no readable window is still the one fact
+          // that matters most; it must not be filtered away as "nothing to say".
+          const suspended = provider.quota?.state === 'suspended'
+          if (windows.length === 0 && !suspended) return undefined
           const known = windows.filter(item => item.consumed !== undefined)
           const worst = known.reduce((max, item) => Math.max(max, item.consumed), 0)
-          const suspended = provider.quota?.state === 'suspended'
           return {
             provider,
             windows,
@@ -275,7 +334,13 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
           setState({ phase: 'ready', value: await response.json() })
         } catch (error) {
-          setState({ phase: 'failed', message: error instanceof Error ? error.message : String(error) })
+          // Keep what already loaded: a failed refresh must not delete a good
+          // reading, it must label it.
+          setState(previous => ({
+            phase: 'failed',
+            message: error instanceof Error ? error.message : String(error),
+            value: previous.value,
+          }))
         }
       }, [path])
       React.useEffect(() => { void load() }, [load])
@@ -358,17 +423,24 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
         }
       }
 
-      const connected = catalog.phase === 'ready' && catalog.group !== undefined
-      const tone = connected ? 'ok' : catalog.phase === 'failed' ? 'error' : 'idle'
-      const statusText = connected ? t('connected') : catalog.phase === 'failed' ? t('failed') : catalog.phase === 'loading' ? t('loading') : t('disconnected')
       const gateway = status.value?.gateway
-      const route = (status.value?.routes || [])[0]
-
+      const protocols = [...new Set((status.value?.routes || []).map(item => item.protocol).filter(Boolean))]
+      const connected = catalog.phase === 'ready' && catalog.group !== undefined
       const providers = usage.value?.ok === true ? usage.value.providers || [] : []
+      const suspended = providers.filter(provider => provider.quota?.state === 'suspended').length
+      const verdict = pageVerdict({ catalog, status, connected, suspended }, t)
       const usageFailed = usage.phase === 'failed' || (usage.phase !== 'loading' && usage.value !== undefined && usage.value.ok !== true)
       const rows = providers.length > 0 ? providerRows(providers, t) : []
 
-      const gatewayDot = h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': gateway?.ready === true ? 'ok' : 'idle' })
+      // `ready` is genuinely three-valued: true, false, and never reported.
+      const gatewayWord = gateway?.ready === true
+        ? t('gatewayReady')
+        : gateway?.ready === false ? t('gatewayNotReady') : t('unknown')
+      const gatewayDot = h('span', {
+        className: 'tmx-dot',
+        key: 'dot',
+        'data-tone': gateway?.ready === true ? 'ok' : gateway?.ready === false ? 'error' : 'idle',
+      })
       const facts = [
         fact(t('target'), status.value?.target?.id),
         fact(t('home'), status.value?.target?.path, 'tmx-mono'),
@@ -377,15 +449,32 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           h('dd', { key: 'dd' }, h('span', { className: 'tmx-factValue' }, [
             gatewayDot,
             h('span', { className: 'tmx-mono', key: 'listen' }, gateway?.listen ?? '—'),
-            h('span', { key: 'state' }, gateway?.ready === true ? t('gatewayReady') : t('gatewayNotReady')),
+            h('span', { key: 'state' }, gatewayWord),
           ])),
+          gateway?.reason_code
+            ? h('span', { className: 'tmx-factNote', key: 'reason' }, gateway.reason_code)
+            : null,
         ]),
-        fact(t('protocol'), route?.protocol),
+        fact(t('defaultModel'), status.value?.target?.default?.id),
+        fact(t('protocol'), protocols.length > 0 ? protocols.join(' · ') : undefined),
       ]
       const accessSection = h('section', { className: 'tmx-section', key: 'access' }, [
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, t('access')),
         h('div', { className: 'tmx-card', key: 'card' }, [
-          h('dl', { className: 'tmx-facts', key: 'facts' }, facts),
+          status.phase === 'loading'
+            ? h('div', { className: 'tmx-facts tmx-skeleton', key: 'loading' }, [0, 1, 2, 3].map(index =>
+              h('div', { className: 'tmx-fact', key: index }, [
+                h('dt', { key: 'dt' }, '—'),
+                h('dd', { key: 'dd' }, h('span', { className: 'tmx-skeletonBar' })),
+              ])))
+            : h('dl', { className: 'tmx-facts', key: 'facts' }, facts),
+          status.phase === 'failed'
+            ? h('div', { className: 'tmx-cardNote', key: 'failure' }, [
+              h('span', { className: 'tmx-errorText', key: 'text' },
+                `${t('hostError')}: ${status.message ?? t('unknown')}`),
+              h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: reloadStatus }, t('retryInline')),
+            ])
+            : null,
           ...blockerNotes(status.value, t),
         ]),
       ])
@@ -395,7 +484,7 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           t('modelsSection'),
           connected ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${catalog.group.models.length} ${t('modelsUnit')}`) : null,
         ]),
-        h('div', { className: 'tmx-card', key: 'card' }, modelsBody(catalog, connected, t)),
+        h('div', { className: 'tmx-card', key: 'card' }, modelsBody(catalog, connected, status.value?.routes, t)),
       ])
 
       const usageSection = h('section', { className: 'tmx-section', key: 'usage' }, [
@@ -404,24 +493,26 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           rows.length > 0 ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${rows.length} ${t('providerUnit')}`) : null,
           quotaBusy ? h('span', { className: 'tmx-sectionNote', key: 'busy' }, t('usageRevalidating')) : null,
         ]),
-        usageBody(usage.phase, usageFailed, rows, t),
-        usageFailed
-          ? h('p', { className: 'tmx-note', key: 'retry' },
-            h('button', { type: 'button', className: 'tmx-button', onClick: reloadUsage }, t('retry')))
+        usage.phase === 'failed' && rows.length > 0
+          ? h('p', { className: 'tmx-cardNote', key: 'stale' }, [
+            h('span', { className: 'tmx-errorText', key: 'text' }, `${t('usageFailed')} ${usage.message ?? ''}`.trim()),
+            h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: refreshQuota }, t('retryInline')),
+          ])
           : null,
+        usageBody(usage.phase, usageFailed, rows, t, refreshQuota),
       ])
 
       const heading = h('div', { className: 'tmx-heading', key: 'heading' }, [
         h('h1', { key: 'title' }, [
           t('title'),
-          h('span', { className: 'tmx-headState', key: 'state' }, [
-            h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': tone }),
-            statusText,
+          h('span', { className: 'tmx-headState', key: 'state', 'data-tone': verdict.tone }, [
+            h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': verdict.tone }),
+            verdict.text,
           ]),
         ]),
         h('div', { className: 'tmx-actions', key: 'actions' }, [
-          h('button', { type: 'button', className: 'tmx-button', key: 'refresh', onClick: refresh, disabled: busy },
-            busy ? t('loading') : t('refresh')),
+          h('button', { type: 'button', className: 'tmx-button', key: 'refresh', onClick: refresh, disabled: busy || quotaBusy },
+            busy ? t('refreshing') : t('refresh')),
           connected
             ? null
             : h('button', {
@@ -440,6 +531,8 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           h('div', { className: 'tmx-content' }, [
             heading,
             h('p', { className: 'tmx-sub', key: 'sub' }, t('subtitle')),
+            h('p', { className: 'tmx-sr', key: 'live', role: 'status', 'aria-live': 'polite' },
+              quotaBusy ? t('usageRevalidating') : message !== '' ? message : ''),
             message === '' ? null : h('p', { className: 'tmx-error', key: 'message' }, message),
             accessSection,
             modelsSection,
@@ -447,33 +540,44 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           ])))
     }
 
+    /** A blocker is a record, not a string: name its message, fall back to its code. */
+    function blockerText(blocker) {
+      if (typeof blocker === 'string') return blocker
+      if (blocker === null || typeof blocker !== 'object') return String(blocker)
+      return blocker.message ?? blocker.reason_code ?? blocker.code ?? ''
+    }
+
     function blockerNotes(status, t) {
       const notes = []
-      const blockers = status?.blockers || []
+      const blockers = (status?.blockers || []).map(blockerText).filter(text => text !== '')
       if (blockers.length > 0) {
-        notes.push(h('p', { className: 'tmx-error', key: 'blockers' },
-          `${t('blocker')}: ${blockers.map(blocker => typeof blocker === 'string' ? blocker : JSON.stringify(blocker)).join('; ')}`))
+        notes.push(h('p', { className: 'tmx-errorText', key: 'blockers' },
+          `${t('blocker')}: ${blockers.join('; ')}`))
       }
       if (status?.lastError) {
-        notes.push(h('p', { className: 'tmx-error', key: 'error' }, `${t('hostError')}: ${status.lastError}`))
+        notes.push(h('p', { className: 'tmx-errorText', key: 'error' }, `${t('hostError')}: ${status.lastError}`))
       }
       return notes
     }
 
-    function usageBody(phase, failed, rows, t) {
-      if (failed) {
-        return h('div', { className: 'tmx-card' },
-          h('p', { className: 'tmx-empty' }, t('usageFailed')))
-      }
+    function usageBody(phase, failed, rows, t, onRetry) {
       if (phase === 'loading') return h('div', { className: 'tmx-card tmx-skeleton' }, skeleton(t))
       if (rows.length === 0) {
-        return h('div', { className: 'tmx-card' }, h('p', { className: 'tmx-empty' }, t('usageUnknown')))
+        return h('div', { className: 'tmx-card' }, [
+          failed
+            ? h('div', { className: 'tmx-cardNote', key: 'note' }, [
+              h('span', { className: 'tmx-errorText', key: 'text' }, t('usageFailed')),
+              h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: onRetry }, t('retryInline')),
+            ])
+            : h('p', { className: 'tmx-empty', key: 'empty' }, t('usageUnknown')),
+        ])
       }
-      return h('div', { className: 'tmx-providers' }, rows.map(entry => providerCard(entry, t)))
+      return h('div', { className: 'tmx-providers' },
+        rows.map(entry => providerCard(entry, t)))
     }
 
     /** The models section states the reason it has nothing, not just nothing. */
-    function modelsBody(catalog, connected, t) {
+    function modelsBody(catalog, connected, routes, t) {
       if (catalog.phase === 'failed') {
         return [h('p', { className: 'tmx-empty', key: 'error' }, `${t('hostError')}: ${catalog.message}`)]
       }
@@ -486,10 +590,22 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
       if (catalog.group.models.length === 0) {
         return [h('p', { className: 'tmx-empty', key: 'empty' }, t('empty'))]
       }
+      const kinds = new Map()
+      for (const route of routes ?? []) {
+        for (const model of route.models ?? []) {
+          if (!kinds.has(model.id)) kinds.set(model.id, model)
+        }
+      }
       return [h('ul', { className: 'tmx-chips', key: 'chips' },
-        catalog.group.models.map(model => h('li', { className: 'tmx-chip', key: model.id },
-          h('span', null, model.name ?? model.id),
-          model.name === model.id ? null : h('span', { className: 'tmx-chipKind' }, model.id))))]
+        catalog.group.models.map(model => {
+          const meta = kinds.get(model.id) ?? {}
+          return h('li', { className: 'tmx-chip', key: model.id },
+            h('span', null, model.name ?? model.id),
+            model.name === model.id ? null : h('span', { className: 'tmx-chipKind' }, model.id),
+            meta.availability === 'unverified'
+              ? h('span', { className: 'tmx-chipKind', key: 'avail' }, t('unverified'))
+              : null)
+        }))]
     }
 
     /** A drawn "opens elsewhere" mark, at the size of the text it follows. */
@@ -523,7 +639,24 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
           h('span', { className: 'tmx-windowName' }, '—'),
           h('span', { className: 'tmx-bar' }),
           h('span', { className: 'tmx-windowValue' }, '—'),
-          h('span', { className: 'tmx-windowReset' }, t('loading')))))
+          h('span', { className: 'tmx-windowReset' }, ''))))
+    }
+
+    /**
+     * The one word in the header. It must be something the page can actually
+     * stand behind: a projection existing in DSH is not "ready", and a gateway
+     * whose readiness was never reported is not "not ready".
+     */
+    function pageVerdict({ catalog, status, connected, suspended }, t) {
+      if (catalog.phase === 'loading' || status.phase === 'loading') return { tone: 'idle', text: t('loading') }
+      if (catalog.phase === 'failed') return { tone: 'error', text: t('stateUnreadable') }
+      if (!connected) return { tone: 'idle', text: t('stateDisconnected') }
+      if (status.phase !== 'ready') return { tone: 'error', text: t('stateUnknown') }
+      const ready = status.value?.gateway?.ready
+      if (ready === false) return { tone: 'error', text: t('stateGateway') }
+      if (ready !== true) return { tone: 'idle', text: t('stateUnknown') }
+      if (suspended > 0) return { tone: 'warn', text: t('stateLimited') }
+      return { tone: 'ok', text: t('stateReady') }
     }
 
     /** How long ago a quota reading was taken, in the reader's own units. */
@@ -574,18 +707,26 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
             : h('span', {
               className: 'tmx-age',
               'data-tone': stale ? 'warn' : undefined,
-              title: observedAt,
+              title: formatTimestamp(observedAt),
             }, stale ? `${t('staleData')} · ${age}` : age)),
-        h('ul', { className: 'tmx-windows' },
+        windows.length === 0 ? null : h('ul', { className: 'tmx-windows' },
           windows.map((item, index) => {
             const itemTone = item.consumed === undefined ? 'ok' : toneFor(item.consumed)
             return h('li', { className: 'tmx-window', key: String(index) },
               h('span', { className: 'tmx-windowName', title: item.name }, item.name),
-              h('span', { className: 'tmx-bar', role: 'meter', 'aria-valuenow': Math.round(item.consumed ?? 0), 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': `${name} ${item.name}` },
-                h('span', { className: 'tmx-barFill', 'data-tone': itemTone, style: { width: `${item.consumed ?? 0}%` } })),
+              h('span', {
+                className: 'tmx-bar',
+                role: 'meter',
+                'aria-valuenow': Math.round(item.consumed ?? 0),
+                'aria-valuemin': 0,
+                'aria-valuemax': 100,
+                'aria-label': `${name} ${item.name}`,
+                'aria-valuetext': item.spoken,
+                'data-zero': (item.consumed ?? 0) < 1 ? 'true' : undefined,
+              }, h('span', { className: 'tmx-barFill', 'data-tone': itemTone, style: { width: `${Math.max(item.consumed ?? 0, item.consumed === undefined ? 0 : 1.5)}%` } })),
               h('span', { className: 'tmx-windowValue', 'data-tone': itemTone }, item.text),
               h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
-                item.reset === undefined ? '' : `${item.reset.toLocaleDateString()}`))
+                item.reset === undefined ? '' : formatDate(item.reset)))
           })))
     }
 
@@ -620,6 +761,8 @@ a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2p
       }, 'tmax: page styles')
       context.effect(() => context.locale.register(NS, { en, zh }), 'tmax: page locale')
       const t = context.locale.bind(NS)
+      syncDateLocale()
+      context.effect(() => context.locale.subscribe?.(syncDateLocale), 'tmax: date locale')
       context.effect(() => context.slots.inject('sidebar.panellist', () => context.slots.register({
         name: 'sidebar.panellist',
         id: 'tmax',

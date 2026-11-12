@@ -35,23 +35,35 @@ The plugin claims a first-level page: `sidebar.panellist` adds the **tmax** row
 beside Plugins and Schedules, and `main` renders the page itself, so it owns a
 full content column instead of competing for room inside a settings section.
 
-- **Access** — the DSH target, its home, the gateway address and readiness, and
-  the route protocol, plus any blocker or Host error.
-- **Models** — the projected model IDs as chips, or the reason there are none.
+- **Access** — the DSH target, its home, the gateway address and a genuinely
+  three-valued readiness (ready / not ready / never reported, with tmax's
+  `reason_code` when there is one), the default model, and every route protocol.
+- **Models** — the projected model IDs as chips, marked `unverified` where tmax
+  has not verified availability, or the reason there are none.
 - **Usage and limits** — one card per provider that reports a quota, ordered by
-  how much attention it needs. Each window gets a meter, its share consumed, and
-  its reset date; the provider name opens that provider's own dashboard.
+  how much attention it needs. Each window gets a proportional meter capped at a
+  fixed width so every card shares one 100% end, its share consumed, and its
+  reset date in the interface's language. A window at zero keeps a visible mark,
+  and a suspended provider stays on the page even when it reports no windows.
 
 Both tmax window conventions (consumed and remaining) become the same filling
-meter, so a row never needs mental arithmetic. Providers that report nothing
-readable are omitted rather than shown as blank rows. Every colour resolves
-through a `--dsw-alias-*` token, so the page follows the light and dark themes.
+meter, so a row never needs mental arithmetic. Every colour resolves through a
+`--dsw-alias-*` token, so the page follows the light and dark themes; the two
+semantic text tones mix toward the foreground label so they clear 4.5:1 in both
+themes, not only in light.
+
+The header states what the page can stand behind rather than what the plumbing
+happens to be: `可用`, `受限`, `网关未就绪`, `状态未知`, `读取失败`, `未连接`.
+A projection merely existing in DSH is not "ready", and a gateway whose readiness
+was never reported is not "not ready".
 
 A quota reading is a timestamped observation, not a live fact. Opening the page
 paints the cached reading and then asks tmax to re-observe each provider
 (`tmax provider refresh <id> --scope quota`), so the numbers shown are today's;
 each provider carries the age of its own reading, and a reading older than five
-minutes is labelled rather than presented as current.
+minutes is labelled rather than presented as current. A failed refresh keeps the
+last good table and names the failure beside it — an outage must not erase a
+reading.
 
 ## HTTP routes
 

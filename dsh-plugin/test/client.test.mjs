@@ -24,6 +24,7 @@ test('client bundle registers the tmax page and its sidebar entry', async () => 
     locale: {
       register() { return () => {} },
       bind() { return key => key },
+      subscribe() { return () => {} },
     },
     slots: {
       inject(name, fn) { effects.push(name); fn() },
