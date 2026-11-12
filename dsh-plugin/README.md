@@ -38,8 +38,9 @@ full content column instead of competing for room inside a settings section.
 - **Access** — the DSH target, its home, the gateway address and a genuinely
   three-valued readiness (ready / not ready / never reported, with tmax's
   `reason_code` when there is one), the default model, and every route protocol.
-- **Models** — the projected model IDs as chips, marked `unverified` where tmax
-  has not verified availability, or the reason there are none.
+- **Models** — the projected model IDs as chips, or the reason there are none.
+  Whether tmax has runtime-verified a model is tmax's own evidence about itself;
+  it is not something this page can show or act on, so it is left out.
 - **Usage and limits** — one card per provider tmax reports, ordered by how much
   attention it needs. Each window gets a proportional meter capped at a fixed
   width so every card shares one 100% end, its share consumed, and its reset

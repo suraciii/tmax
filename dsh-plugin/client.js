@@ -44,8 +44,6 @@ window.__ModuleLoader__.load({
       usageUnknown: 'No provider reports a quota yet.',
       usageFailed: 'Usage is unavailable right now.',
       retryInline: 'Retry',
-      unverified: 'unverified',
-      availabilityUnknown: 'Availability unknown: the access read failed.',
       reasonCredential: 'no credential for',
       reasonUpstream: 'the vendor refused the quota read',
       reasonFormat: 'the vendor answered in a shape this page does not understand',
@@ -56,7 +54,6 @@ window.__ModuleLoader__.load({
       agentUnreadable: 'agent-configured providers could not be read',
       agentSettingsUnavailable: 'agent settings are unavailable, so only tmax providers are shown',
       agentNotRead: '(agent config not read)',
-      allUnverified: 'tmax has not verified availability for these models.',
       defaultModel: 'Default model',
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
@@ -115,8 +112,6 @@ window.__ModuleLoader__.load({
       usageUnknown: '还没有 provider 上报额度。',
       usageFailed: '暂时拿不到用量数据。',
       retryInline: '重试',
-      unverified: '未验证',
-      availabilityUnknown: '可用性未知：访问信息读取失败。',
       reasonCredential: '没有可用的凭据：',
       reasonUpstream: '厂商拒绝了这次额度读取',
       reasonFormat: '厂商返回的格式无法解析',
@@ -127,7 +122,6 @@ window.__ModuleLoader__.load({
       agentUnreadable: '无法读取 agent 中配置的供应商',
       agentSettingsUnavailable: '读不到 agent 设置，只显示 tmax 的供应商',
       agentNotRead: '（agent 配置未读取）',
-      allUnverified: '这些模型的可用性尚未经过 tmax 验证。',
       defaultModel: '默认模型',
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
@@ -751,7 +745,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           t('modelsSection'),
           connected ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${catalog.group.models.length} ${t('modelsUnit')}`) : null,
         ]),
-        h('div', { className: 'tmx-card', key: 'card' }, modelsBody(catalog, connected, status.value?.routes, t)),
+        h('div', { className: 'tmx-card', key: 'card' }, modelsBody(catalog, connected, t)),
       ])
 
       const usageSection = h('section', { className: 'tmx-section', key: 'usage' }, [
@@ -853,7 +847,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     /** The models section states the reason it has nothing, not just nothing. */
-    function modelsBody(catalog, connected, routes, t) {
+    function modelsBody(catalog, connected, t) {
       if (catalog.phase === 'failed') {
         return [h('div', { className: 'tmx-cardNote', key: 'error' }, [
           h('span', { className: 'tmx-errorText', key: 'text' }, `${t('hostError')}: ${describeError(catalog.message, t)}`),
@@ -867,33 +861,12 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (catalog.group.models.length === 0) {
         return [h('p', { className: 'tmx-empty', key: 'empty' }, t('empty'))]
       }
-      const kinds = new Map()
-      for (const route of routes ?? []) {
-        for (const model of route.models ?? []) {
-          if (!kinds.has(model.id)) kinds.set(model.id, model)
-        }
-      }
-      const unknownAvailability = (routes ?? []).length === 0
-      // Availability is usually one fact for the whole route; marking every chip
-      // with the same word four times says it louder, not clearer.
-      const marks = catalog.group.models.map(model => (kinds.get(model.id) ?? {}).availability)
-      const uniformlyUnverified = marks.length > 0 && marks.every(mark => mark === 'unverified')
-      const chips = h('ul', { className: 'tmx-chips', key: 'chips' },
-        catalog.group.models.map((model, index) => {
-          const meta = kinds.get(model.id) ?? {}
-          return h('li', { className: 'tmx-chip', key: model.id },
-            h('span', null, model.name ?? model.id),
-            model.name === model.id ? null : h('span', { className: 'tmx-chipKind' }, model.id),
-            meta.availability === 'unverified' && !uniformlyUnverified
-              ? h('span', { className: 'tmx-chipKind', key: 'avail' }, t('unverified'))
-              : null)
-        }))
-      if (unknownAvailability) {
-        return [chips, h('p', { className: 'tmx-note', key: 'unknown' }, t('availabilityUnknown'))]
-      }
-      return uniformlyUnverified
-        ? [chips, h('p', { className: 'tmx-note', key: 'unverified' }, t('allUnverified'))]
-        : [chips]
+      // The models, named. Availability is an attribute of tmax's own evidence,
+      // not something this page can show or act on, so it stays out of the way.
+      return [h('ul', { className: 'tmx-chips', key: 'chips' },
+        catalog.group.models.map(model => h('li', { className: 'tmx-chip', key: model.id },
+          h('span', null, model.name ?? model.id),
+          model.name === model.id ? null : h('span', { className: 'tmx-chipKind' }, model.id))))]
     }
 
     /** A drawn "opens elsewhere" mark, at the size of the text it follows. */
