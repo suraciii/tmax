@@ -51,6 +51,7 @@ window.__ModuleLoader__.load({
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
       staleData: 'stale',
+      freshReading: 'readings are current',
       minutesAgo: 'min ago',
       hoursAgo: 'h ago',
       daysAgo: 'd ago',
@@ -73,6 +74,8 @@ window.__ModuleLoader__.load({
       unitHour: 'h',
       blocker: 'Blocker',
       hostError: 'Host error',
+      hostUnreachable: 'cannot reach the tmax Host',
+      hostStatus: 'the tmax Host answered',
     }
     const zh = {
       panel: 'tmax',
@@ -113,6 +116,7 @@ window.__ModuleLoader__.load({
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
       staleData: '数据陈旧',
+      freshReading: '读数为最新',
       minutesAgo: '分钟前',
       hoursAgo: '小时前',
       daysAgo: '天前',
@@ -135,6 +139,8 @@ window.__ModuleLoader__.load({
       unitHour: '小时',
       blocker: '阻塞项',
       hostError: 'Host 错误',
+      hostUnreachable: '无法连接到 tmax Host',
+      hostStatus: 'tmax Host 返回',
     }
 
     const STYLE = `
@@ -163,7 +169,7 @@ window.__ModuleLoader__.load({
 .tmx-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
 .tmx-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
 .tmx-section { margin-bottom: 24px; }
-.tmx-sectionTitle { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 14px; line-height: 22px; font-weight: 500; }
+.tmx-sectionTitle { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
 /* The section's own count is an annotation, never a second title. */
 .tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
 .tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; }
@@ -252,10 +258,18 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (typeof lang === 'string' && lang !== '') dateLocale = lang
     }
     function formatDate(date) {
+      // Within a day and a half, the clock time is the fact that matters: a
+      // 300-minute window resets twice today, and a bare date hides that.
+      const near = Math.abs(date.getTime() - Date.now()) < 36 * 60 * 60 * 1000
       try {
-        return new Intl.DateTimeFormat(dateLocale, { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
+        return new Intl.DateTimeFormat(
+          dateLocale,
+          near
+            ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+            : { year: 'numeric', month: 'short', day: 'numeric' },
+        ).format(date)
       } catch {
-        return date.toISOString().slice(0, 10)
+        return date.toISOString().slice(0, 16).replace('T', ' ')
       }
     }
 
@@ -428,7 +442,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 
     function TmaxPage({ t }) {
       const [status, reloadStatus] = useEndpoint('/_tmax/status')
-      const [usage, reloadUsage, setUsage] = useEndpoint('/_tmax/usage')
+      const [usage, setUsage] = React.useState({ phase: 'loading' })
       const [catalog, setCatalog] = React.useState({ phase: 'loading' })
       const [busy, setBusy] = React.useState(false)
       const [message, setMessage] = React.useState('')
@@ -462,6 +476,24 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       React.useEffect(() => { void loadCatalog() }, [loadCatalog])
 
       const [quotaBusy, setQuotaBusy] = React.useState(false)
+
+      const loadUsage = React.useCallback(async () => {
+        try {
+          const response = await fetch(new URL('/_tmax/usage', document.baseURI), { credentials: 'same-origin' })
+          const value = response.ok ? await response.json() : undefined
+          if (value?.ok !== true) throw new Error(value?.error ?? `HTTP ${response.status}`)
+          setUsage({ phase: 'ready', value })
+          return value
+        } catch (error) {
+          setUsage(previous => ({
+            ...previous,
+            phase: 'failed',
+            message: error instanceof Error ? error.message : String(error),
+          }))
+          return undefined
+        }
+      }, [])
+
       const refreshQuota = React.useCallback(async () => {
         setQuotaBusy(true)
         try {
@@ -472,8 +504,8 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             body: '{}',
           })
           const value = response.ok ? await response.json() : undefined
-          if (value?.ok === true) setUsage({ phase: 'ready', value })
-          else throw new Error(value?.error ?? `HTTP ${response.status}`)
+          if (value?.ok !== true) throw new Error(value?.error ?? `HTTP ${response.status}`)
+          setUsage({ phase: 'ready', value })
         } catch (error) {
           // The cached reading stays, and the failure that produced it is named.
           setUsage(previous => ({
@@ -484,11 +516,17 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         } finally {
           setQuotaBusy(false)
         }
-      }, [setUsage])
+      }, [])
 
-      // A quota page opened on purpose should show today's numbers: paint the
-      // cached read, then re-observe without blocking that first paint.
-      React.useEffect(() => { void refreshQuota() }, [refreshQuota])
+      // Reaching the providers costs a live request each, so opening the page
+      // reads the cache first and only re-observes when that cache has expired.
+      // A deliberate Refresh always re-observes.
+      React.useEffect(() => {
+        void (async () => {
+          const value = await loadUsage()
+          if (needsRevalidation(value)) await refreshQuota()
+        })()
+      }, [loadUsage, refreshQuota])
 
       const refresh = async () => {
         setBusy(true)
@@ -512,7 +550,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
             return
           }
-          await Promise.all([reloadStatus(), reloadUsage(), loadCatalog()])
+          await Promise.all([reloadStatus(), loadUsage(), loadCatalog()])
         } catch (error) {
           setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
         } finally {
@@ -567,7 +605,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           status.phase === 'failed'
             ? h('div', { className: 'tmx-cardNote', key: 'failure' }, [
               h('span', { className: 'tmx-errorText', key: 'text' },
-                `${t('hostError')}: ${status.message ?? t('unknown')}`),
+                `${t('hostError')}: ${describeError(status.message, t)}`),
               h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: reloadStatus }, t('retryInline')),
             ])
             : null,
@@ -587,11 +625,13 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
           t('usage'),
           rows.length > 0 ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${rows.length} ${t('providerUnit')}`) : null,
-          quotaBusy ? h('span', { className: 'tmx-sectionNote', key: 'busy' }, t('usageRevalidating')) : null,
+          quotaBusy
+            ? h('span', { className: 'tmx-sectionNote', key: 'busy' }, t('usageRevalidating'))
+            : freshNote(rows, t),
         ]),
         usage.phase === 'failed' && rows.length > 0
           ? h('p', { className: 'tmx-cardNote', key: 'stale' }, [
-            h('span', { className: 'tmx-errorText', key: 'text' }, `${t('usageFailed')} ${usage.message ?? ''}`.trim()),
+            h('span', { className: 'tmx-errorText', key: 'text' }, `${t('usageFailed')} ${usage.message === undefined ? '' : describeError(usage.message, t)}`.trim()),
             h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: refreshQuota }, t('retryInline')),
           ])
           : null,
@@ -628,7 +668,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             heading,
             h('p', { className: 'tmx-sub', key: 'sub' }, t('subtitle')),
             h('p', { className: 'tmx-sr', key: 'live', role: 'status', 'aria-live': 'polite' },
-              quotaBusy ? t('usageRevalidating') : message !== '' ? message : ''),
+              announce({ quotaBusy, message, status, usage, catalog, verdict }, t)),
             message === '' ? null : h('p', { className: 'tmx-errorText', key: 'message' }, message),
             accessSection,
             modelsSection,
@@ -676,7 +716,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     function modelsBody(catalog, connected, routes, t) {
       if (catalog.phase === 'failed') {
         return [h('div', { className: 'tmx-cardNote', key: 'error' }, [
-          h('span', { className: 'tmx-errorText', key: 'text' }, `${t('hostError')}: ${catalog.message}`),
+          h('span', { className: 'tmx-errorText', key: 'text' }, `${t('hostError')}: ${describeError(catalog.message, t)}`),
         ])]
       }
       if (!connected) {
@@ -748,6 +788,48 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      * stand behind: a projection existing in DSH is not "ready", and a gateway
      * whose readiness was never reported is not "not ready".
      */
+    /**
+     * A browser network error is not a sentence. Name the condition the reader
+     * can act on, and keep an unrecognised message verbatim rather than hiding it.
+     */
+    function describeError(message, t) {
+      if (typeof message !== 'string' || message === '') return t('hostUnreachable')
+      if (/failed to fetch|networkerror|load failed|network error/i.test(message)) return t('hostUnreachable')
+      const status = /^HTTP (\d{3})$/.exec(message)
+      if (status !== null) return `${t('hostStatus')} ${status[1]}`
+      return message
+    }
+
+    /** One sentence for the live region: what is happening, or what failed. */
+    function announce({ quotaBusy, message, status, usage, catalog, verdict }, t) {
+      if (message !== '') return message
+      if (quotaBusy) return t('usageRevalidating')
+      if (catalog.phase === 'failed') return `${t('hostError')}: ${describeError(catalog.message, t)}`
+      if (status.phase === 'failed') return `${t('hostError')}: ${describeError(status.message, t)}`
+      if (usage.phase === 'failed') return `${t('usageFailed')} ${usage.message === undefined ? '' : describeError(usage.message, t)}`.trim()
+      return verdict.text
+    }
+
+    /** Re-observe only when the cached readings are older than the stale mark. */
+    function needsRevalidation(value) {
+      const providers = value?.ok === true ? value.providers || [] : []
+      if (providers.length === 0) return true
+      return providers.some(provider => {
+        if (typeof provider.observedAt !== 'string') return true
+        const at = new Date(provider.observedAt).getTime()
+        return Number.isNaN(at) ? true : Date.now() - at > STALE_AFTER_MS
+      })
+    }
+
+    /** Freshness is said once for the section; only stale cards repeat it. */
+    function freshNote(rows, t) {
+      if (rows.length === 0) return null
+      const stale = rows.filter(entry => isStale(entry.provider.observedAt))
+      return stale.length === 0
+        ? h('span', { className: 'tmx-sectionNote', key: 'fresh' }, t('freshReading'))
+        : null
+    }
+
     /** A window at 100% is a blocked route even when nothing was formally suspended. */
     function anyExhausted(providers) {
       return providers.some(provider => (provider.billing?.rows || []).some(row => {
@@ -822,13 +904,13 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
               title: `${name} · ${t('dashboard')}`,
             }, [name, h(ExternalMark, { key: 'mark' })]),
           suspended ? h('span', { className: 'tmx-chip', 'data-tone': 'error' }, t('suspended')) : null,
-          age === undefined
+          age === undefined || !stale
             ? null
             : h('span', {
               className: 'tmx-age',
               'data-tone': stale ? 'warn' : undefined,
               title: formatTimestamp(observedAt),
-            }, stale ? `${t('staleData')} · ${age}` : age)),
+            }, `${t('staleData')} · ${age}`)),
         suspensionLine(entry, t),
         windows.length === 0
           ? h('p', { className: 'tmx-empty', key: 'no-windows' }, t('usageUnknown'))

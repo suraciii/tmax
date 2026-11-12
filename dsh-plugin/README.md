@@ -65,12 +65,15 @@ A projection merely existing in DSH is not "ready", and a gateway whose readines
 was never reported is not "not ready".
 
 A quota reading is a timestamped observation, not a live fact. Opening the page
-paints the cached reading and then asks tmax to re-observe each provider
-(`tmax provider refresh <id> --scope quota`), so the numbers shown are today's;
-each provider carries the age of its own reading, and a reading older than five
-minutes is labelled rather than presented as current. A failed refresh keeps the
+reads the cache and shows it; it re-observes the providers
+(`tmax provider refresh <id> --scope quota`) only when that cache has expired —
+older than five minutes, or never read. Reaching a provider costs a live request
+each, so a fresh open costs none. A deliberate **Refresh** always re-observes.
+
+Freshness is stated once for the section ("readings are current"); a card repeats
+it only when its own reading has gone stale. A failed read or refresh keeps the
 last good table and names the failure beside it — an outage must not erase a
-reading.
+reading, and a refresh that fails must not look like a no-op.
 
 ## HTTP routes
 
