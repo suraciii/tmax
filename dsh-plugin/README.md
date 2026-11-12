@@ -86,7 +86,7 @@ Both are served on the DSH web server and guarded by the composition's
 | `GET /_tmax/usage` | Provider quota rows as last observed, with their observation time. |
 | `POST /_tmax/usage/refresh` | Re-observes quotas through tmax, then returns the same payload. |
 | `POST /_tmax/connect` | Runs `tmax dsh connect` for the configured target, then refreshes. |
-| `GET /_tmax/dsh-usage` | Quota reads for providers the agent is configured with, taken without tmax. |
+| `GET /_tmax/dsh-usage` | Quota reads for providers the agent is configured with, taken without tmax. Cached for the same five minutes, `?force=1` to re-read. |
 
 It also registers the `tmax_status` tool and the `tmax` skill for agents.
 
@@ -124,6 +124,10 @@ request time, and only the vendor's JSON ever crosses back to the page.
   implements; a vendor without one is reported as nothing rather than as zero.
 - A provider the agent configures is observed on page load, not tracked: its
   reading carries no observation history.
+- The vendor quota reads are implemented twice — once in tmax (Rust) and once in
+  this plugin — because the two read different credential stores: tmax can only
+  reach keys in its own secret file, and the agent's keys live in DSH's. They
+  share a contract, not code, so a vendor change must be made in both places.
 - Install/uninstall stays with DSH; tmax does not manage DSH profiles.
 
 ## License

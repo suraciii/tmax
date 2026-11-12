@@ -391,7 +391,15 @@ export async function apply(ctx, config = {}) {
     return { providers, credentials }
   }
 
-  const readAgentQuota = async () => {
+  // Reading a provider the agent configures costs the same live request it
+  // costs tmax, so it obeys the same rule: serve the cache until it is older
+  // than the stale mark, and let a deliberate Refresh bypass it.
+  const AGENT_CACHE_MS = 5 * 60 * 1000
+  let agentCache = { at: 0, value: undefined }
+  const readAgentQuota = async ({ force = false } = {}) => {
+    if (!force && agentCache.value !== undefined && Date.now() - agentCache.at < AGENT_CACHE_MS) {
+      return { ...agentCache.value, cached: true }
+    }
     const discovered = discoverAgentProviders()
     if (discovered === undefined) return { ok: true, providers: [], reason: 'agent-settings-unavailable' }
     const { providers, credentials } = discovered
@@ -401,7 +409,7 @@ export async function apply(ctx, config = {}) {
       apiKeyEnv: provider.apiKeyEnv,
       resolveKey: async ref => (await credentials.resolve(ref))?.value,
     })))
-    return {
+    const value = {
       ok: true,
       generatedAt: new Date().toISOString(),
       providers: records.map((record, index) => ({
@@ -410,6 +418,8 @@ export async function apply(ctx, config = {}) {
         models: providers[index].models,
       })),
     }
+    agentCache = { at: Date.now(), value }
+    return value
   }
 
   ctx.effect(() => webServer.register({
@@ -418,7 +428,8 @@ export async function apply(ctx, config = {}) {
     handler: async (req, res) => {
       if (rejected(req, res)) return
       if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
-      try { send(res, 200, await readAgentQuota()) }
+      const force = req.url !== undefined && /[?&]force=1(&|$)/.test(req.url)
+      try { send(res, 200, await readAgentQuota({ force })) }
       catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
     },
   }), 'tmax: GET /_tmax/dsh-usage')

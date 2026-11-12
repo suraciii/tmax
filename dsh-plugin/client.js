@@ -595,9 +595,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         }
       }, [])
 
-      const loadAgent = React.useCallback(async () => {
+      const loadAgent = React.useCallback(async (force = false) => {
         try {
-          const response = await fetch(new URL('/_tmax/dsh-usage', document.baseURI), { credentials: 'same-origin' })
+          const path = force ? '/_tmax/dsh-usage?force=1' : '/_tmax/dsh-usage'
+          const response = await fetch(new URL(path, document.baseURI), { credentials: 'same-origin' })
           const value = response.ok ? await response.json() : undefined
           if (value?.ok !== true) throw new Error(value?.error ?? `HTTP ${response.status}`)
           setAgent({ phase: 'ready', value })
@@ -639,7 +640,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
             return
           }
-          await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), loadAgent()])
+          await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), loadAgent(true)])
         } catch (error) {
           setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
         } finally {
