@@ -86,8 +86,32 @@ Both are served on the DSH web server and guarded by the composition's
 | `GET /_tmax/usage` | Provider quota rows as last observed, with their observation time. |
 | `POST /_tmax/usage/refresh` | Re-observes quotas through tmax, then returns the same payload. |
 | `POST /_tmax/connect` | Runs `tmax dsh connect` for the configured target, then refreshes. |
+| `GET /_tmax/dsh-usage` | Quota reads for providers the agent is configured with, taken without tmax. |
 
 It also registers the `tmax_status` tool and the `tmax` skill for agents.
+
+## Providers the agent configures itself
+
+The page is not limited to providers tmax manages. It also reads the model
+configuration of the running DSH profile — through `settings` and
+`credentials`, never by parsing the profile file — and, for the vendors tmax
+already implements, queries that vendor's quota endpoint directly.
+
+Each vendor is implemented separately, because a subscription quota is not a
+protocol: every vendor has its own endpoint, its own auth style (GLM wants the
+key raw, the rest want a bearer token), and its own idea of a window. A provider
+whose vendor has no implementation is not guessed at — it simply is not a row
+this page draws.
+
+Two records become one card when they report the same reading, which is what
+makes them the same account. Two providers on one vendor with different keys
+answer differently and stay apart; a provider configured in both places answers
+alike and is drawn once, marked `agent 中也有同一账号`. The merge is decided by
+the numbers, not by the vendor name, so a suspended instance is never silently
+folded into a healthy sibling.
+
+No credential value leaves the host: `apiKeyEnv` is a reference, resolved at
+request time, and only the vendor's JSON ever crosses back to the page.
 
 ## Limitations
 
@@ -96,6 +120,10 @@ It also registers the `tmax_status` tool and the `tmax` skill for agents.
 - Models with unknown context capacity are hidden rather than given a guessed
   value; unknown input modalities are advertised as text-only.
 - No quota editor, provider manager, or write tool. Those stay in the tmax CLI.
+- Agent-configured providers are read-only and cover only vendors tmax already
+  implements; a vendor without one is reported as nothing rather than as zero.
+- A provider the agent configures is observed on page load, not tracked: its
+  reading carries no observation history.
 - Install/uninstall stays with DSH; tmax does not manage DSH profiles.
 
 ## License

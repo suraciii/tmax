@@ -47,6 +47,14 @@ window.__ModuleLoader__.load({
       retryInline: 'Retry',
       unverified: 'unverified',
       availabilityUnknown: 'Availability unknown: the access read failed.',
+      sourceDsh: 'agent config',
+      sourceBoth: 'also configured in the agent',
+      reasonCredential: 'no credential for',
+      reasonUpstream: 'the vendor refused the quota read',
+      reasonFormat: 'the vendor answered in a shape this page does not understand',
+      reasonTransport: 'the vendor is unreachable',
+      reasonDeadline: 'the vendor did not answer in time',
+      reasonFailed: 'the vendor reports this plan as unusable',
       allUnverified: 'tmax has not verified availability for these models.',
       defaultModel: 'Default model',
       unknown: 'unknown',
@@ -113,6 +121,14 @@ window.__ModuleLoader__.load({
       retryInline: '重试',
       unverified: '未验证',
       availabilityUnknown: '可用性未知：访问信息读取失败。',
+      sourceDsh: '来自 agent 配置',
+      sourceBoth: 'agent 中也有同一账号',
+      reasonCredential: '没有可用的凭据：',
+      reasonUpstream: '厂商拒绝了这次额度读取',
+      reasonFormat: '厂商返回的格式无法解析',
+      reasonTransport: '无法连接到厂商',
+      reasonDeadline: '厂商未在时限内响应',
+      reasonFailed: '厂商报告该套餐当前不可用',
       allUnverified: '这些模型的可用性尚未经过 tmax 验证。',
       defaultModel: '默认模型',
       unknown: '未知',
@@ -375,6 +391,60 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     /**
+     * What makes two records one account: the same vendor reporting the same
+     * reading. Two providers on one vendor with different keys answer
+     * differently, and two entries naming one account answer alike — so the
+     * numbers, not the vendor name, decide.
+     */
+    function readingSignature(rows) {
+      return JSON.stringify((rows || []).map(row => [
+        row.label?.key ?? '',
+        row.percent ?? null,
+        row.counters?.remaining ?? null,
+        row.counters?.total ?? null,
+        row.counters?.limit ?? null,
+      ]))
+    }
+
+    /**
+     * The page's provider list: tmax's own facts first, then whatever the agent
+     * is configured with that tmax does not already describe. A record the two
+     * sources agree on becomes one card carrying both.
+     */
+    function mergeSources(providers, agentRecords) {
+      const byReading = new Map()
+      for (const provider of providers) {
+        const signature = readingSignature(provider.billing?.rows)
+        if (signature !== '[]' && !byReading.has(signature)) byReading.set(signature, provider)
+      }
+      const extra = []
+      for (const record of agentRecords) {
+        // A provider whose vendor no quota source describes is not a row this
+        // page can draw; saying nothing is honest, inventing a zero is not.
+        if (record.vendor === undefined) continue
+        const signature = readingSignature(record.rows)
+        const matched = byReading.get(signature)
+        if (matched !== undefined) {
+          matched.alsoInAgent = true
+          continue
+        }
+        extra.push({
+          id: record.id,
+          name: record.displayName ?? record.name,
+          observedAt: record.observedAt,
+          source: 'dsh',
+          vendor: record.vendor,
+          vendorName: record.vendorName,
+          reasonCode: record.reasonCode,
+          credentialRef: record.credentialRef,
+          billing: { rows: record.rows || [] },
+          quota: undefined,
+        })
+      }
+      return { providers: [...providers, ...extra], extra: extra.length }
+    }
+
+    /**
      * Every provider tmax reported, ordered by how much attention it needs.
      * A provider is never dropped: a page that silently omits one is worse than
      * a page that shows an unreadable row.
@@ -393,6 +463,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             windows,
             suspended,
             quota: provider.quota,
+            source: provider.source,
+            alsoInAgent: provider.alsoInAgent === true,
+            reasonCode: provider.reasonCode,
+            credentialRef: provider.credentialRef,
             worst: known.length === 0 ? 0 : worst,
             tone: suspended || (known.length > 0 && worst >= 100) ? 'error' : worst >= 80 ? 'warn' : 'ok',
           }
@@ -445,6 +519,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     function TmaxPage({ t }) {
       const [status, reloadStatus] = useEndpoint('/_tmax/status')
       const [usage, setUsage] = React.useState({ phase: 'loading' })
+      const [agent, setAgent] = React.useState({ phase: 'loading' })
       const [catalog, setCatalog] = React.useState({ phase: 'loading' })
       const [busy, setBusy] = React.useState(false)
       const [message, setMessage] = React.useState('')
@@ -520,15 +595,27 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         }
       }, [])
 
+      const loadAgent = React.useCallback(async () => {
+        try {
+          const response = await fetch(new URL('/_tmax/dsh-usage', document.baseURI), { credentials: 'same-origin' })
+          const value = response.ok ? await response.json() : undefined
+          if (value?.ok !== true) throw new Error(value?.error ?? `HTTP ${response.status}`)
+          setAgent({ phase: 'ready', value })
+        } catch (error) {
+          setAgent({ phase: 'failed', message: error instanceof Error ? error.message : String(error) })
+        }
+      }, [])
+
       // Reaching the providers costs a live request each, so opening the page
       // reads the cache first and only re-observes when that cache has expired.
       // A deliberate Refresh always re-observes.
       React.useEffect(() => {
         void (async () => {
           const value = await loadUsage()
+          await loadAgent()
           if (needsRevalidation(value)) await refreshQuota()
         })()
-      }, [loadUsage, refreshQuota])
+      }, [loadUsage, loadAgent, refreshQuota])
 
       const refresh = async () => {
         setBusy(true)
@@ -552,7 +639,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
             return
           }
-          await Promise.all([reloadStatus(), loadUsage(), loadCatalog()])
+          await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), loadAgent()])
         } catch (error) {
           setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
         } finally {
@@ -563,7 +650,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const gateway = status.value?.gateway
       const protocols = [...new Set((status.value?.routes || []).map(item => item.protocol).filter(Boolean))]
       const connected = catalog.phase === 'ready' && catalog.group !== undefined
-      const providers = usage.value?.ok === true ? usage.value.providers || [] : []
+      const tmaxProviders = usage.value?.ok === true ? usage.value.providers || [] : []
+      const agentRecords = agent.value?.ok === true ? agent.value.providers || [] : []
+      const providers = mergeSources(tmaxProviders, agentRecords).providers
       const suspended = providers.filter(provider => provider.quota?.state === 'suspended').length
       const verdict = pageVerdict({ catalog, status, usage, connected, suspended, exhausted: anyExhausted(providers) }, t)
       const usageFailed = usage.phase === 'failed' || (usage.phase !== 'loading' && usage.value !== undefined && usage.value.ok !== true)
@@ -913,6 +1002,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
               title: `${name} · ${t('dashboard')}`,
             }, [name, h(ExternalMark, { key: 'mark' })]),
           suspended ? h('span', { className: 'tmx-chip', 'data-tone': 'error' }, t('suspended')) : null,
+          entry.source === 'dsh' && !entry.alsoInAgent
+            ? h('span', { className: 'tmx-chip', key: 'source' }, t('sourceDsh'))
+            : null,
+          entry.alsoInAgent ? h('span', { className: 'tmx-chip', key: 'both' }, t('sourceBoth')) : null,
           age === undefined || !stale
             ? null
             : h('span', {
@@ -921,8 +1014,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
               title: formatTimestamp(observedAt),
             }, `${t('staleData')} · ${age}`)),
         suspensionLine(entry, t),
+        agentNote(entry, t),
         windows.length === 0
-          ? h('p', { className: 'tmx-empty', key: 'no-windows' }, t('usageUnknown'))
+          ? (entry.reasonCode === undefined ? h('p', { className: 'tmx-empty', key: 'no-windows' }, t('usageUnknown')) : null)
           : h('ul', { className: 'tmx-windows' },
             windows.map((item, index) => {
               const itemTone = item.consumed === undefined ? 'ok' : toneFor(item.consumed)
@@ -950,6 +1044,28 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
                 h('span', { className: 'tmx-windowReset', 'data-empty': item.reset === undefined ? 'true' : undefined },
                   item.reset === undefined ? '' : formatDate(item.reset)))
             })))
+    }
+
+    /**
+     * A provider the agent configures but whose quota could not be read says why.
+     * The reference name is shown; the credential never is.
+     */
+    const AGENT_REASONS = {
+      credential_unavailable: 'reasonCredential',
+      upstream_rejection: 'reasonUpstream',
+      source_format_error: 'reasonFormat',
+      transport_error: 'reasonTransport',
+      observation_deadline: 'reasonDeadline',
+      observation_failed: 'reasonFailed',
+    }
+
+    function agentNote(entry, t) {
+      const key = AGENT_REASONS[entry.reasonCode]
+      if (key === undefined) return null
+      const text = entry.reasonCode === 'credential_unavailable' && entry.credentialRef !== undefined
+        ? `${t(key)} ${entry.credentialRef}`
+        : t(key)
+      return h('p', { className: 'tmx-suspend', key: 'agent' }, text)
     }
 
     /** The line under a provider's name: why it is suspended and when it returns. */

@@ -8,8 +8,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
+import { observeProvider, vendorFor, vendorForKey } from './quota.js'
+
 export const name = 'tmax'
-export const inject = ['llm']
+export const inject = ['llm', 'settings', 'credentials']
 
 const execFileAsync = promisify(execFile)
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -342,7 +344,85 @@ export async function apply(ctx, config = {}) {
       blockers: lastProjection?.blockers || [],
       lastError,
     })
-    ctx.effect(() => webServer.register({
+    /**
+   * The providers the agent itself is configured with, read through the live
+   * settings and credential services. `apiKeyEnv` is a reference; the value
+   * never leaves the resolver below.
+   */
+  const discoverAgentProviders = () => {
+    const settings = ctx.get('settings')
+    const credentials = ctx.get('credentials')
+    if (settings === undefined || credentials === undefined) return undefined
+    let descriptors
+    try {
+      descriptors = settings.describe({ redactSecrets: true })
+    } catch {
+      return undefined
+    }
+    const byNs = new Map()
+    for (const descriptor of descriptors ?? []) byNs.set(String(descriptor.ns), descriptor.value)
+    const providers = []
+    for (const entry of ctx.llm.listConfigurableProviders()) {
+      let node = byNs.get(String(entry.settingsNs))
+      for (const key of entry.settingsPath) {
+        node = node !== null && typeof node === 'object' ? Reflect.get(node, key) : undefined
+      }
+      const profile = node !== null && typeof node === 'object' ? node : {}
+      // The directory lists every route the adapter *could* activate, including
+      // vendor presets nobody configured. Only a provider this profile names is
+      // the user's business.
+      const declared = entry.declared === true
+        || typeof profile.apiKeyEnv === 'string'
+        || typeof profile.baseURL === 'string'
+        || (Array.isArray(profile.models) && profile.models.length > 0)
+      if (!declared) continue
+      const baseURL = typeof profile.baseURL === 'string' ? profile.baseURL : entry.defaultBaseURL
+      providers.push({
+        provider: entry.provider,
+        displayName: entry.displayName ?? entry.provider,
+        vendor: (vendorFor(baseURL) ?? vendorForKey(entry.provider))?.id,
+        baseURL,
+        providerKey: entry.provider,
+        apiKeyEnv: typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : undefined,
+        models: Array.isArray(profile.models) ? profile.models.map(model => model?.id).filter(Boolean) : [],
+        defaultBaseURL: entry.defaultBaseURL,
+      })
+    }
+    return { providers, credentials }
+  }
+
+  const readAgentQuota = async () => {
+    const discovered = discoverAgentProviders()
+    if (discovered === undefined) return { ok: true, providers: [], reason: 'agent-settings-unavailable' }
+    const { providers, credentials } = discovered
+    const records = await Promise.all(providers.map(provider => observeProvider({
+      provider: provider.provider,
+      baseURL: provider.baseURL,
+      apiKeyEnv: provider.apiKeyEnv,
+      resolveKey: async ref => (await credentials.resolve(ref))?.value,
+    })))
+    return {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      providers: records.map((record, index) => ({
+        ...record,
+        displayName: providers[index].displayName,
+        models: providers[index].models,
+      })),
+    }
+  }
+
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: '/_tmax/dsh-usage',
+    handler: async (req, res) => {
+      if (rejected(req, res)) return
+      if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
+      try { send(res, 200, await readAgentQuota()) }
+      catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
+    },
+  }), 'tmax: GET /_tmax/dsh-usage')
+  ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/_tmax/status',
       handler: (req, res) => {

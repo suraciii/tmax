@@ -142,7 +142,7 @@ test('registers one dynamic route, a status tool, and a skill without exposing m
   assert.equal(profile.requestImageMaxBytes, 1024 * 1024)
   assert.equal(state.tools[0].name, 'tmax_status')
   assert.equal(state.skills[0].name, 'tmax')
-  assert.deepEqual(state.httpRoutes.map(route => route.path), ['/_tmax/status', '/_tmax/usage', '/_tmax/usage/refresh', '/_tmax/connect'])
+  assert.deepEqual(state.httpRoutes.map(route => route.path), ['/_tmax/dsh-usage', '/_tmax/status', '/_tmax/usage', '/_tmax/usage/refresh', '/_tmax/connect'])
   const status = await state.tools[0].execute()
   assert.equal(status.target, 'dsh-main')
   assert.deepEqual(status.routes, [{ name: 'tmax', protocol: 'responses', models: ['public-model', 'text-only', 'no-context'] }])
