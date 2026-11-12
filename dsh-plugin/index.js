@@ -102,6 +102,9 @@ async function readUsage(config) {
         window: data.quota_suspension?.window,
       },
       observedAt: data.observations?.billing?.observation?.observed_at,
+      // The vendor an account belongs to is a stable identity; the readings are
+      // not, because the two sources observe at different moments.
+      integration: data.provider?.integration,
       billing: billing === undefined ? undefined : {
         kind: billing.kind,
         state: billing.state,

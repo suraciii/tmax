@@ -48,7 +48,8 @@ window.__ModuleLoader__.load({
       unverified: 'unverified',
       availabilityUnknown: 'Availability unknown: the access read failed.',
       sourceDsh: 'agent config',
-      sourceBoth: 'also configured in the agent',
+      sourceBoth: 'also in the agent config',
+      sourceBothByReading: 'matched by an identical reading',
       reasonCredential: 'no credential for',
       reasonUpstream: 'the vendor refused the quota read',
       reasonFormat: 'the vendor answered in a shape this page does not understand',
@@ -57,8 +58,9 @@ window.__ModuleLoader__.load({
       reasonFailed: 'the vendor reports this plan as unusable',
       reasonUnknown: 'the quota read failed',
       agentReading: 'agent config read',
-      agentIncluded: 'including',
+      agentIncluded: 'of which only in the agent:',
       agentUnreadable: 'agent-configured providers could not be read',
+      agentSettingsUnavailable: 'agent settings are unavailable, so only tmax providers are shown',
       allUnverified: 'tmax has not verified availability for these models.',
       defaultModel: 'Default model',
       unknown: 'unknown',
@@ -93,7 +95,7 @@ window.__ModuleLoader__.load({
     const zh = {
       panel: 'tmax',
       title: 'tmax',
-      subtitle: '查看 tmax 管理的模型访问与供应商额度。',
+      subtitle: '查看模型访问，以及 tmax 与 agent 各自配置的供应商额度。',
       loading: '正在读取模型目录…',
       stateReady: '可用',
       statePartial: '额度读取失败',
@@ -126,7 +128,8 @@ window.__ModuleLoader__.load({
       unverified: '未验证',
       availabilityUnknown: '可用性未知：访问信息读取失败。',
       sourceDsh: '来自 agent 配置',
-      sourceBoth: 'agent 中也有同一账号',
+      sourceBoth: 'agent 中也配置了',
+      sourceBothByReading: '按读数一致匹配',
       reasonCredential: '没有可用的凭据：',
       reasonUpstream: '厂商拒绝了这次额度读取',
       reasonFormat: '厂商返回的格式无法解析',
@@ -135,8 +138,9 @@ window.__ModuleLoader__.load({
       reasonFailed: '厂商报告该套餐当前不可用',
       reasonUnknown: '额度读取失败',
       agentReading: 'agent 配置读取于',
-      agentIncluded: '其中来自 agent 配置',
+      agentIncluded: '其中仅在 agent 中配置：',
       agentUnreadable: '无法读取 agent 中配置的供应商',
+      agentSettingsUnavailable: '读不到 agent 设置，只显示 tmax 的供应商',
       allUnverified: '这些模型的可用性尚未经过 tmax 验证。',
       defaultModel: '默认模型',
       unknown: '未知',
@@ -195,7 +199,7 @@ window.__ModuleLoader__.load({
 .tmx-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
 .tmx-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
 .tmx-section { margin-bottom: 24px; }
-.tmx-sectionTitle { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
+.tmx-sectionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
 /* The section's own count is an annotation, never a second title. */
 .tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
 .tmx-sectionNote[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
@@ -423,6 +427,14 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      */
     function mergeSources(providers, agentRecords) {
       const merged = providers.map(provider => ({ ...provider }))
+      // A vendor with exactly one provider in tmax identifies that account, and
+      // does not change while the readings tick. Only a vendor with several
+      // providers needs the readings to say which one the agent entry matches.
+      const byVendor = new Map()
+      for (const provider of merged) {
+        if (provider.integration === undefined) continue
+        byVendor.set(provider.integration, [...(byVendor.get(provider.integration) ?? []), provider])
+      }
       const byReading = new Map()
       for (const provider of merged) {
         const signature = readingSignature(provider.billing?.rows)
@@ -433,10 +445,13 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         // A provider whose vendor no quota source describes is not a row this
         // page can draw; saying nothing is honest, inventing a zero is not.
         if (record.vendor === undefined) continue
-        const signature = readingSignature(record.rows)
-        const matched = byReading.get(signature)
-        if (matched !== undefined) {
-          matched.alsoInAgent = true
+        const sameVendor = byVendor.get(record.vendor) ?? []
+        const matcher = sameVendor.length === 1
+          ? sameVendor[0]
+          : byReading.get(readingSignature(record.rows))
+        if (matcher !== undefined) {
+          matcher.alsoInAgent = true
+          matcher.matchedByReading = sameVendor.length !== 1
           continue
         }
         extra.push({
@@ -632,7 +647,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const refresh = async () => {
         setBusy(true)
         setMessage('')
-        await Promise.all([reloadStatus(), loadCatalog(), refreshQuota()])
+        await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), refreshQuota(), loadAgent(true)])
         setBusy(false)
       }
 
@@ -651,7 +666,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             setMessage(`${t('connectFailed')}: ${result.message || result.code || response.status}`)
             return
           }
-          await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), loadAgent(true)])
+          await Promise.all([reloadStatus(), loadUsage(), loadCatalog(), refreshQuota(), loadAgent(true)])
         } catch (error) {
           setMessage(`${t('connectFailed')}: ${error instanceof Error ? error.message : String(error)}`)
         } finally {
@@ -773,7 +788,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             heading,
             h('p', { className: 'tmx-sub', key: 'sub' }, t('subtitle')),
             h('p', { className: 'tmx-sr', key: 'live', role: 'status', 'aria-live': 'polite' },
-              announce({ quotaBusy, message, status, usage, catalog, verdict }, t)),
+              announce({ quotaBusy, message, status, usage, catalog, verdict, agent }, t)),
             message === '' ? null : h('p', { className: 'tmx-errorText', key: 'message' }, message),
             accessSection,
             modelsSection,
@@ -913,9 +928,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     /** One sentence for the live region: what is happening, or what failed. */
-    function announce({ quotaBusy, message, status, usage, catalog, verdict }, t) {
+    function announce({ quotaBusy, message, status, usage, catalog, verdict, agent }, t) {
       if (message !== '') return message
       if (quotaBusy) return t('usageRevalidating')
+      if (agent?.phase === 'failed') return t('agentUnreadable')
       if (catalog.phase === 'failed') return `${t('hostError')}: ${describeError(catalog.message, t)}`
       if (status.phase === 'failed') return `${t('hostError')}: ${describeError(status.message, t)}`
       if (usage.phase === 'failed') return `${t('usageFailed')} ${usage.message === undefined ? '' : describeError(usage.message, t)}`.trim()
@@ -943,6 +959,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (agent.phase === 'failed') {
         return h('span', { className: 'tmx-sectionNote', key: 'agentFailed', 'data-tone': 'error', title: agent.message },
           t('agentUnreadable'))
+      }
+      if (agent.value?.ok === true && agent.value.reason === 'agent-settings-unavailable') {
+        return h('span', { className: 'tmx-sectionNote', key: 'agentUnavailable', 'data-tone': 'warn' },
+          t('agentSettingsUnavailable'))
       }
       if (!fromAgent || agent.value?.ok !== true || agent.value.cached !== true) return null
       const age = ageText(agent.value.generatedAt, t)
@@ -1047,7 +1067,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           entry.source === 'dsh' && !entry.alsoInAgent
             ? h('span', { className: 'tmx-chip', key: 'source' }, t('sourceDsh'))
             : null,
-          entry.alsoInAgent ? h('span', { className: 'tmx-chip', key: 'both' }, t('sourceBoth')) : null,
+          entry.alsoInAgent ? h('span', { className: 'tmx-chip', key: 'both', title: entry.matchedByReading ? t('sourceBothByReading') : undefined }, t('sourceBoth')) : null,
           age === undefined || !stale
             ? null
             : h('span', {
@@ -1099,9 +1119,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       transport_error: 'reasonTransport',
       observation_deadline: 'reasonDeadline',
       observation_failed: 'reasonFailed',
+      unsupported_source: 'reasonUnknown',
     }
 
     function agentNote(entry, t) {
+      if (entry.source !== 'dsh' || entry.reasonCode === undefined) return null
       const key = AGENT_REASONS[entry.reasonCode] ?? 'reasonUnknown'
       const text = entry.reasonCode === 'credential_unavailable' && entry.credentialRef !== undefined
         ? `${t(key)} ${entry.credentialRef}`
