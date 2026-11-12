@@ -200,7 +200,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 .tmx-age { margin-left: auto; flex: none; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 .tmx-age[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 /* One grid per provider card, so every row and every card shares one 100% end. */
-.tmx-windows { display: grid; grid-template-columns: 104px minmax(120px, 300px) minmax(52px, auto) minmax(84px, 1fr); align-items: center; gap: 8px 12px; margin: 0; padding: 0; list-style: none; }
+.tmx-windows { display: grid; grid-template-columns: 104px minmax(120px, 1fr) 118px 104px; align-items: center; gap: 8px 12px; margin: 0; padding: 0; list-style: none; }
 .tmx-window { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; }
 .tmx-windowName { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
@@ -221,7 +221,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 /* Narrow or zoomed: the reset date moves under its row instead of disappearing. */
 @media (max-width: 760px) {
   /* The bar keeps a fixed cap so every card shares one 100% end. */
-  .tmx-windows { grid-template-columns: 88px minmax(72px, 220px) minmax(46px, auto) minmax(78px, 1fr); }
+  .tmx-windows { grid-template-columns: 84px minmax(72px, 1fr) 96px 96px; }
 }
 @media (max-width: 560px) {
   /* The bar spans the row, so every card keeps one shared 100% end; the number
