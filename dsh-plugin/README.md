@@ -113,12 +113,15 @@ key raw, the rest want a bearer token), and its own idea of a window. A provider
 whose vendor has no implementation is not guessed at — it simply is not a row
 this page draws.
 
-Two records become one card when they report the same reading, which is what
-makes them the same account. Two providers on one vendor with different keys
-answer differently and stay apart; a provider configured in both places answers
-alike and is drawn once, marked `agent 中也有同一账号`. The merge is decided by
-the numbers, not by the vendor name, so a suspended instance is never silently
-folded into a healthy sibling.
+Two records become one card when they describe one account: a vendor tmax knows
+only one provider for identifies it outright, and a vendor with several uses the
+reading to say which. Two providers on one vendor with different keys answer
+differently and stay apart, so a suspended instance is never silently folded
+into a healthy sibling.
+
+The card carries no provenance label. One account is one card — that is the
+whole statement, and a caption explaining the page's own bookkeeping would be
+the page talking about itself.
 
 No credential value leaves the host: `apiKeyEnv` is a reference, resolved at
 request time, and only the vendor's JSON ever crosses back to the page.

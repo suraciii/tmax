@@ -46,9 +46,6 @@ window.__ModuleLoader__.load({
       retryInline: 'Retry',
       unverified: 'unverified',
       availabilityUnknown: 'Availability unknown: the access read failed.',
-      sourceDsh: 'agent config',
-      sourceBoth: 'also in the agent config',
-      sourceBothByReading: 'matched by an identical reading',
       reasonCredential: 'no credential for',
       reasonUpstream: 'the vendor refused the quota read',
       reasonFormat: 'the vendor answered in a shape this page does not understand',
@@ -56,7 +53,6 @@ window.__ModuleLoader__.load({
       reasonDeadline: 'the vendor did not answer in time',
       reasonFailed: 'the vendor reports this plan as unusable',
       reasonUnknown: 'the quota read failed',
-      agentIncluded: 'of which only in the agent:',
       agentUnreadable: 'agent-configured providers could not be read',
       agentSettingsUnavailable: 'agent settings are unavailable, so only tmax providers are shown',
       agentNotRead: '(agent config not read)',
@@ -64,7 +60,6 @@ window.__ModuleLoader__.load({
       defaultModel: 'Default model',
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
-      snapshot: 'snapshot',
       updatedAt: 'updated',
       refreshing: 'Refreshing…',
       left: 'left',
@@ -91,7 +86,7 @@ window.__ModuleLoader__.load({
     const zh = {
       panel: 'tmax',
       title: 'tmax',
-      subtitle: '查看模型访问，以及 tmax 与 agent 各自配置的供应商额度。',
+      subtitle: '模型访问与供应商额度。',
       loading: '正在读取模型目录…',
       statePartial: '额度读取失败',
       checking: '检查中…',
@@ -122,9 +117,6 @@ window.__ModuleLoader__.load({
       retryInline: '重试',
       unverified: '未验证',
       availabilityUnknown: '可用性未知：访问信息读取失败。',
-      sourceDsh: '来自 agent 配置',
-      sourceBoth: 'agent 中也配置了',
-      sourceBothByReading: '按读数一致匹配',
       reasonCredential: '没有可用的凭据：',
       reasonUpstream: '厂商拒绝了这次额度读取',
       reasonFormat: '厂商返回的格式无法解析',
@@ -132,7 +124,6 @@ window.__ModuleLoader__.load({
       reasonDeadline: '厂商未在时限内响应',
       reasonFailed: '厂商报告该套餐当前不可用',
       reasonUnknown: '额度读取失败',
-      agentIncluded: '其中仅在 agent 中配置：',
       agentUnreadable: '无法读取 agent 中配置的供应商',
       agentSettingsUnavailable: '读不到 agent 设置，只显示 tmax 的供应商',
       agentNotRead: '（agent 配置未读取）',
@@ -140,7 +131,6 @@ window.__ModuleLoader__.load({
       defaultModel: '默认模型',
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
-      snapshot: '快照',
       updatedAt: '更新于',
       refreshing: '刷新中…',
       left: '剩余',
@@ -237,7 +227,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 .tmx-windowReset { font-size: 12px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 .tmx-windowReset[data-empty='true'] { visibility: hidden; }
 .tmx-windowWide { grid-column: 2 / 4; text-align: start; color: var(--dsw-alias-label-secondary); }
-.tmx-provenance { margin-inline-start: auto; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-suspend { margin: 0; font-size: 12px; line-height: 18px; color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .tmx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
@@ -474,7 +463,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           : byReading.get(readingSignature(record.rows))
         if (matcher !== undefined) {
           matcher.alsoInAgent = true
-          matcher.matchedByReading = sameVendor.length !== 1
           continue
         }
         extra.push({
@@ -772,7 +760,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, [
           t('usage'),
           rows.length > 0
-            ? h('span', { className: 'tmx-sectionNote', key: 'note' }, agentOnly(providers, rows.length, t, agent))
+            ? h('span', { className: 'tmx-sectionNote', key: 'note' }, providerCount(rows.length, t, agent))
             : null,
         ]),
         quotaBusy
@@ -1023,13 +1011,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return null
     }
 
-    /** A count that silently mixes two sources, or hides a source that failed, is unverifiable. */
-    function agentOnly(providers, total, t, agent) {
-      const extra = providers.filter(provider => provider.source === 'dsh' && provider.alsoInAgent !== true).length
-      const label = agent.phase === 'failed'
+    /** A count that hides the source it could not read would be a claim, not a count. */
+    function providerCount(total, t, agent) {
+      return agent.phase === 'failed'
         ? `${total} ${t('providerUnit')} ${t('agentNotRead')}`
         : `${total} ${t('providerUnit')}`
-      return extra === 0 ? label : `${label} ${t('agentIncluded')} ${extra}`
     }
 
     /** One provider: its name, its state, and one bar per window. */
@@ -1049,13 +1035,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
               title: `${name} · ${t('dashboard')}`,
             }, [name, h(ExternalMark, { key: 'mark' })]),
           suspended ? h('span', { className: 'tmx-chip', 'data-tone': 'error' }, t('suspended')) : null,
-          entry.source === 'dsh' && !entry.alsoInAgent
-            ? h('span', { className: 'tmx-chip', key: 'source' }, t('sourceDsh'))
-            : null,
-          entry.alsoInAgent ? h('span', { className: 'tmx-chip', key: 'both', title: entry.matchedByReading ? t('sourceBothByReading') : undefined }, t('sourceBoth')) : null,
-          entry.source === 'dsh'
-            ? h('span', { className: 'tmx-provenance', key: 'snapshot' }, t('snapshot'))
-            : null),
+        ),
         suspensionLine(entry, t),
         agentNote(entry, t),
         windows.length === 0
