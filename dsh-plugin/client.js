@@ -211,7 +211,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 .tmx-window { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; }
 .tmx-windowName { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
-.tmx-bar[data-zero='true']::after { content: ''; position: absolute; inset-inline-start: 0; top: 0; width: 3px; height: 100%; background: var(--dsw-alias-label-tertiary); }
 .tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-business-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
 .tmx-barFill[data-tone='warn'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 65%, var(--dsw-alias-label-primary)); }
 .tmx-barFill[data-tone='error'] { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 82%, var(--dsw-alias-label-primary)); }
