@@ -57,7 +57,6 @@ window.__ModuleLoader__.load({
       reasonDeadline: 'the vendor did not answer in time',
       reasonFailed: 'the vendor reports this plan as unusable',
       reasonUnknown: 'the quota read failed',
-      agentReading: 'agent config read',
       agentIncluded: 'of which only in the agent:',
       agentUnreadable: 'agent-configured providers could not be read',
       agentSettingsUnavailable: 'agent settings are unavailable, so only tmax providers are shown',
@@ -66,14 +65,9 @@ window.__ModuleLoader__.load({
       defaultModel: 'Default model',
       unknown: 'unknown',
       usageRevalidating: 'Checking provider quotas…',
-      staleData: 'stale',
       snapshot: 'snapshot',
+      updatedAt: 'updated',
       refreshing: 'Refreshing…',
-      freshReading: 'readings are current',
-      minutesAgo: 'min ago',
-      hoursAgo: 'h ago',
-      daysAgo: 'd ago',
-      justNow: 'just now',
       left: 'left',
       usedShare: 'used',
       suspended: 'Suspended',
@@ -140,7 +134,6 @@ window.__ModuleLoader__.load({
       reasonDeadline: '厂商未在时限内响应',
       reasonFailed: '厂商报告该套餐当前不可用',
       reasonUnknown: '额度读取失败',
-      agentReading: 'agent 配置读取于',
       agentIncluded: '其中仅在 agent 中配置：',
       agentUnreadable: '无法读取 agent 中配置的供应商',
       agentSettingsUnavailable: '读不到 agent 设置，只显示 tmax 的供应商',
@@ -149,14 +142,9 @@ window.__ModuleLoader__.load({
       defaultModel: '默认模型',
       unknown: '未知',
       usageRevalidating: '正在刷新供应商额度…',
-      staleData: '数据陈旧',
       snapshot: '快照',
+      updatedAt: '更新于',
       refreshing: '刷新中…',
-      freshReading: '读数为最新',
-      minutesAgo: '分钟前',
-      hoursAgo: '小时前',
-      daysAgo: '天前',
-      justNow: '刚刚',
       left: '剩余',
       usedShare: '已用',
       suspended: '已暂停',
@@ -235,8 +223,6 @@ window.__ModuleLoader__.load({
 a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2px; }
 .tmx-external { flex: none; margin-top: 1px; color: var(--dsw-alias-label-secondary); }
 a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); }
-.tmx-age { margin-left: auto; flex: none; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
-.tmx-age[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 /* One grid per provider card, so every row and every card shares one 100% end. */
 .tmx-windows { display: grid; grid-template-columns: 104px minmax(120px, 1fr) 118px 104px; align-items: center; gap: 8px 12px; margin: 0; padding: 0; list-style: none; }
 .tmx-window { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; }
@@ -275,6 +261,35 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 }
 `
 
+
+    /**
+     * The page says when its data was taken, so the number is the data's own
+     * timestamp — never the moment this component happened to read a cache.
+     */
+    function newestReading(providers, agent) {
+      const candidates = [
+        ...providers.map(provider => provider.observedAt),
+        agent?.ok === true ? agent.generatedAt : undefined,
+      ].filter(value => typeof value === 'string')
+      let newest
+      for (const value of candidates) {
+        const at = new Date(value).getTime()
+        if (Number.isNaN(at)) continue
+        if (newest === undefined || at > newest) newest = at
+      }
+      return newest === undefined ? undefined : new Date(newest).toISOString()
+    }
+
+    /** Wall-clock time, in the reader's language and without a date. */
+    function clockOf(iso) {
+      const date = new Date(iso)
+      if (Number.isNaN(date.getTime())) return ''
+      try {
+        return new Intl.DateTimeFormat(dateLocale, { hour: '2-digit', minute: '2-digit' }).format(date)
+      } catch {
+        return date.toISOString().slice(11, 16)
+      }
+    }
 
     /** Big counters as the reader's language writes them (7.6B / 75.6亿). */
     function compact(value) {
@@ -689,6 +704,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const tmaxProviders = usage.value?.ok === true ? usage.value.providers || [] : []
       const agentRecords = agent.value?.ok === true ? agent.value.providers || [] : []
       const providers = mergeSources(tmaxProviders, agentRecords).providers
+      const updatedAt = newestReading(tmaxProviders, agent.value)
       const suspended = providers.filter(provider => provider.quota?.state === 'suspended').length
       const verdict = pageVerdict({ catalog, status, usage, connected, suspended, exhausted: anyExhausted(providers) }, t)
       const usageFailed = usage.phase === 'failed' || (usage.phase !== 'loading' && usage.value !== undefined && usage.value.ok !== true)
@@ -759,7 +775,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         ]),
         quotaBusy
           ? h('p', { className: 'tmx-status', key: 'busy' }, t('usageRevalidating'))
-          : agentSectionNote(agent, providers, t, loadAgent) ?? freshNote(rows, t),
+          : agentSectionNote(agent, providers, t, loadAgent),
         usage.phase === 'failed' && rows.length > 0
           ? h('p', { className: 'tmx-cardNote', key: 'stale' }, [
             h('span', { className: 'tmx-errorText', key: 'text' }, `${t('usageFailed')} ${usage.message === undefined ? '' : describeError(usage.message, t)}`.trim()),
@@ -778,6 +794,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           ]),
         ]),
         h('div', { className: 'tmx-actions', key: 'actions' }, [
+          updatedAt === undefined
+            ? null
+            : h('span', { className: 'tmx-updated', key: 'updated' }, `${t('updatedAt')} ${clockOf(updatedAt)}`),
           h('button', { type: 'button', className: 'tmx-button', key: 'refresh', onClick: refresh, disabled: busy || quotaBusy, 'data-busy': busy || quotaBusy },
             busy ? t('refreshing') : t('refresh')),
           connected || catalog.phase !== 'ready'
@@ -966,7 +985,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      * that failed says so rather than leaving the source looking absent.
      */
     function agentSectionNote(agent, providers, t, retry) {
-      const fromAgent = providers.some(provider => provider.source === 'dsh' || provider.alsoInAgent === true)
       if (agent.phase === 'failed') {
         return h('p', { className: 'tmx-cardNote', key: 'agentFailed' }, [
           h('span', { className: 'tmx-errorText', key: 'text', title: agent.message },
@@ -977,14 +995,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (agent.value?.ok === true && agent.value.reason === 'agent-settings-unavailable') {
         return h('p', { className: 'tmx-status', key: 'agentUnavailable', 'data-tone': 'warn' }, t('agentSettingsUnavailable'))
       }
-      if (!fromAgent || agent.value?.ok !== true) return null
-      const age = ageText(agent.value.generatedAt, t)
-      if (age === undefined) return null
-      return h('p', {
-        className: 'tmx-status',
-        key: 'agentAge',
-        'data-tone': isStale(agent.value.generatedAt) ? 'warn' : undefined,
-      }, `${t('agentReading')} ${age}`)
+      return null
     }
 
     /** A count that silently mixes two sources, or hides a source that failed, is unverifiable. */
@@ -994,15 +1005,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         ? `${total} ${t('providerUnit')} ${t('agentNotRead')}`
         : `${total} ${t('providerUnit')}`
       return extra === 0 ? label : `${label} ${t('agentIncluded')} ${extra}`
-    }
-
-    /** Freshness is said once for the section; only stale cards repeat it. */
-    function freshNote(rows, t) {
-      if (rows.length === 0) return null
-      const stale = rows.filter(entry => isStale(entry.provider.observedAt))
-      return stale.length === 0
-        ? h('p', { className: 'tmx-status', key: 'fresh' }, t('freshReading'))
-        : null
     }
 
     /** A window at 100% is a blocked route even when nothing was formally suspended. */
@@ -1036,37 +1038,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return { tone: 'ok', text: t('stateReady') }
     }
 
-    /** How long ago a quota reading was taken, in the reader's own units. */
-    function ageText(observedAt, t) {
-      if (typeof observedAt !== 'string') return undefined
-      const at = new Date(observedAt)
-      if (Number.isNaN(at.getTime())) return undefined
-      const seconds = Math.max(0, Math.round((Date.now() - at.getTime()) / 1000))
-      if (seconds < 45) return t('justNow')
-      const minutes = Math.round(seconds / 60)
-      if (minutes < 60) return `${minutes} ${t('minutesAgo')}`
-      const hours = Math.round(minutes / 60)
-      if (hours < 24) return `${hours} ${t('hoursAgo')}`
-      return `${Math.round(hours / 24)} ${t('daysAgo')}`
-    }
-
-    /** A reading older than this is not worth presenting as a current fact. */
-    const STALE_AFTER_MS = 5 * 60 * 1000
-
-    function isStale(observedAt) {
-      if (typeof observedAt !== 'string') return false
-      const at = new Date(observedAt).getTime()
-      return Number.isNaN(at) ? false : Date.now() - at > STALE_AFTER_MS
-    }
-
     /** One provider: its name, its state, and one bar per window. */
     function providerCard(entry, t) {
       const { provider, windows, suspended, tone } = entry
       const name = provider.name || provider.id
       const dashboard = provider.billing?.dashboard
-      const observedAt = provider.observedAt
-      const age = ageText(observedAt, t)
-      const stale = isStale(observedAt)
       return h('div', { className: 'tmx-card tmx-provider', key: provider.id },
         h('div', { className: 'tmx-providerHead' },
           dashboard === undefined
@@ -1084,15 +1060,8 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             : null,
           entry.alsoInAgent ? h('span', { className: 'tmx-chip', key: 'both', title: entry.matchedByReading ? t('sourceBothByReading') : undefined }, t('sourceBoth')) : null,
           entry.source === 'dsh'
-            ? h('span', { className: 'tmx-provenance', key: 'snapshot' }, `${t('snapshot')} · ${ageText(entry.provider.observedAt, t) ?? t('unknown')}`)
-            : null,
-          age === undefined || !stale || quotaBusy
-            ? null
-            : h('span', {
-              className: 'tmx-age',
-              'data-tone': stale ? 'warn' : undefined,
-              title: formatTimestamp(observedAt),
-            }, `${t('staleData')} · ${age}`)),
+            ? h('span', { className: 'tmx-provenance', key: 'snapshot' }, t('snapshot'))
+            : null),
         suspensionLine(entry, t),
         agentNote(entry, t),
         windows.length === 0

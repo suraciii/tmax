@@ -70,10 +70,15 @@ reads the cache and shows it; it re-observes the providers
 older than five minutes, or never read. Reaching a provider costs a live request
 each, so a fresh open costs none. A deliberate **Refresh** always re-observes.
 
-Freshness is stated once for the section ("readings are current"); a card repeats
-it only when its own reading has gone stale. A failed read or refresh keeps the
-last good table and names the failure beside it — an outage must not erase a
-reading, and a refresh that fails must not look like a no-op.
+The page states one thing about time: `更新于 HH:mm`, taken from the data's own
+observation time rather than from the moment the page read its cache. Providers
+are not annotated individually and no reading is branded stale — either the
+number is what tmax last observed, and the header says when, or the read failed
+and the failure is named. A failed read or refresh keeps the last good table and
+shows its reason beside it: an outage must not erase a reading, and a refresh
+that fails must not look like a no-op.
+
+**Refresh** re-observes everything on demand.
 
 ## HTTP routes
 
