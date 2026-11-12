@@ -177,7 +177,8 @@ window.__ModuleLoader__.load({
 .tmx-headState[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 .tmx-headState[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 /* A first-level page's header action is the sibling pages' 32px capsule. */
-.tmx-actions { display: flex; flex: none; align-items: center; gap: 8px; white-space: nowrap; }
+.tmx-actions { display: flex; flex: none; align-items: center; gap: 12px; white-space: nowrap; }
+.tmx-updated { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 .tmx-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 16px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
 .tmx-button[data-kind='primary'] { border-color: transparent; background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
 @media (hover: hover) {
@@ -662,9 +663,13 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       // A deliberate Refresh always re-observes.
       React.useEffect(() => {
         void (async () => {
-          const value = await loadUsage()
-          await loadAgent()
-          if (needsRevalidation(value)) await refreshQuota()
+          try {
+            const value = await loadUsage()
+            await loadAgent()
+            if (needsRevalidation(value)) await refreshQuota()
+          } catch (error) {
+            setMessage(error instanceof Error ? error.message : String(error))
+          }
         })()
       }, [loadUsage, loadAgent, refreshQuota])
 
@@ -739,7 +744,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         h('h2', { className: 'tmx-sectionTitle', key: 'title' }, t('access')),
         h('div', { className: 'tmx-card', key: 'card' }, [
           status.phase === 'loading'
-            ? h('div', { className: 'tmx-facts tmx-skeleton', key: 'loading' }, [0, 1, 2, 3].map(index =>
+            ? h('div', { className: 'tmx-facts', key: 'loading' }, [0, 1, 2, 3].map(index =>
               h('div', { className: 'tmx-fact', key: index }, [
                 h('dt', { key: 'dt' }, '—'),
                 h('dd', { key: 'dd' }, h('span', { className: 'tmx-skeletonBar' })),
@@ -847,7 +852,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     function usageBody(phase, failed, rows, t, onRetry) {
-      if (phase === 'loading') return h('div', { className: 'tmx-card tmx-skeleton' }, skeleton(t))
+      if (phase === 'loading') return h('div', { className: 'tmx-card' }, skeleton(t))
       if (rows.length === 0) {
         return h('div', { className: 'tmx-card' }, [
           failed
@@ -969,6 +974,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     /** Re-observe only when the cached readings are older than the stale mark. */
+    /** Past this, reopening the page re-observes instead of trusting the cache. */
+    const STALE_AFTER_MS = 5 * 60 * 1000
+
     function needsRevalidation(value) {
       const providers = value?.ok === true ? value.providers || [] : []
       if (providers.length === 0) return true
@@ -1040,7 +1048,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 
     /** One provider: its name, its state, and one bar per window. */
     function providerCard(entry, t) {
-      const { provider, windows, suspended, tone } = entry
+      const { provider, windows, suspended } = entry
       const name = provider.name || provider.id
       const dashboard = provider.billing?.dashboard
       return h('div', { className: 'tmx-card tmx-provider', key: provider.id },
