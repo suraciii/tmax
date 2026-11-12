@@ -55,6 +55,9 @@ window.__ModuleLoader__.load({
       reasonTransport: 'the vendor is unreachable',
       reasonDeadline: 'the vendor did not answer in time',
       reasonFailed: 'the vendor reports this plan as unusable',
+      reasonUnknown: 'the quota read failed',
+      agentReading: 'agent config read',
+      agentUnreadable: 'agent-configured providers could not be read',
       allUnverified: 'tmax has not verified availability for these models.',
       defaultModel: 'Default model',
       unknown: 'unknown',
@@ -129,6 +132,9 @@ window.__ModuleLoader__.load({
       reasonTransport: '无法连接到厂商',
       reasonDeadline: '厂商未在时限内响应',
       reasonFailed: '厂商报告该套餐当前不可用',
+      reasonUnknown: '额度读取失败',
+      agentReading: 'agent 配置读取于',
+      agentUnreadable: '无法读取 agent 中配置的供应商',
       allUnverified: '这些模型的可用性尚未经过 tmax 验证。',
       defaultModel: '默认模型',
       unknown: '未知',
@@ -190,6 +196,8 @@ window.__ModuleLoader__.load({
 .tmx-sectionTitle { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
 /* The section's own count is an annotation, never a second title. */
 .tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
+.tmx-sectionNote[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+.tmx-sectionNote[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; }
 .tmx-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px 24px; margin: 0; }
 .tmx-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -412,8 +420,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      * sources agree on becomes one card carrying both.
      */
     function mergeSources(providers, agentRecords) {
+      const merged = providers.map(provider => ({ ...provider }))
       const byReading = new Map()
-      for (const provider of providers) {
+      for (const provider of merged) {
         const signature = readingSignature(provider.billing?.rows)
         if (signature !== '[]' && !byReading.has(signature)) byReading.set(signature, provider)
       }
@@ -441,7 +450,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           quota: undefined,
         })
       }
-      return { providers: [...providers, ...extra], extra: extra.length }
+      return { providers: [...merged, ...extra], extra: extra.length }
     }
 
     /**
@@ -719,7 +728,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           rows.length > 0 ? h('span', { className: 'tmx-sectionNote', key: 'note' }, `${rows.length} ${t('providerUnit')}`) : null,
           quotaBusy
             ? h('span', { className: 'tmx-sectionNote', key: 'busy' }, t('usageRevalidating'))
-            : freshNote(rows, t),
+            : agentSectionNote(agent, providers, t) ?? freshNote(rows, t),
         ]),
         usage.phase === 'failed' && rows.length > 0
           ? h('p', { className: 'tmx-cardNote', key: 'stale' }, [
@@ -920,6 +929,27 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       })
     }
 
+    /**
+     * The agent's own readings are a snapshot, not a tracked observation, so the
+     * section says how old the snapshot is — once, not on every card. A read
+     * that failed says so rather than leaving the source looking absent.
+     */
+    function agentSectionNote(agent, providers, t) {
+      const fromAgent = providers.some(provider => provider.source === 'dsh' || provider.alsoInAgent === true)
+      if (agent.phase === 'failed') {
+        return h('span', { className: 'tmx-sectionNote', key: 'agentFailed', 'data-tone': 'error', title: agent.message },
+          t('agentUnreadable'))
+      }
+      if (!fromAgent || agent.value?.ok !== true || agent.value.cached !== true) return null
+      const age = ageText(agent.value.generatedAt, t)
+      if (age === undefined) return null
+      return h('span', {
+        className: 'tmx-sectionNote',
+        key: 'agentAge',
+        'data-tone': isStale(agent.value.generatedAt) ? 'warn' : undefined,
+      }, `${t('agentReading')} ${age}`)
+    }
+
     /** Freshness is said once for the section; only stale cards repeat it. */
     function freshNote(rows, t) {
       if (rows.length === 0) return null
@@ -1061,8 +1091,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     function agentNote(entry, t) {
-      const key = AGENT_REASONS[entry.reasonCode]
-      if (key === undefined) return null
+      const key = AGENT_REASONS[entry.reasonCode] ?? 'reasonUnknown'
       const text = entry.reasonCode === 'credential_unavailable' && entry.credentialRef !== undefined
         ? `${t(key)} ${entry.credentialRef}`
         : t(key)
