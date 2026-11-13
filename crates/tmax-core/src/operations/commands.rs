@@ -842,6 +842,20 @@ const COMMANDS: &[Command] = &[
         mutation: true,
     },
     Command {
+        path: "session list",
+        min: 0,
+        max: 0,
+        options: "target agent path cwd since until limit",
+        mutation: false,
+    },
+    Command {
+        path: "session import",
+        min: 2,
+        max: 2,
+        options: "to title cwd tail allow-over-budget again",
+        mutation: true,
+    },
+    Command {
         path: "history list",
         min: 0,
         max: 0,
@@ -984,6 +998,7 @@ fn operand_labels(path: &str) -> &'static [&'static str] {
         p if p.starts_with("catalog ") => &["Catalog provider ID"],
         "network proxy" => &["Outbound proxy URL"],
         "history inspect" => &["Request handle"],
+        "session import" => &["Source target", "Native session ID"],
         "secret cleanup" => &["Secret reference"],
         _ => &[],
     }

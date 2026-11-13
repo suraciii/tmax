@@ -50,6 +50,12 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     if path == "skill install" {
         return crate::skill::install(store, r);
     }
+    if path == "session list" {
+        return crate::sessions::list(store, r);
+    }
+    if path == "session import" {
+        return crate::sessions::import(store, r);
+    }
     if path == "integration list" {
         return Ok(json!({"integrations":crate::provider_integration::registry()}));
     }

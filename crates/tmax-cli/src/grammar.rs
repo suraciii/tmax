@@ -168,6 +168,7 @@ pub fn command() -> Command {
         .subcommand(gateway_commands())
         .subcommand(web_commands())
         .subcommand(history_commands())
+        .subcommand(session_commands())
 }
 
 fn help_command() -> Command {
@@ -1167,6 +1168,41 @@ fn web_commands() -> Command {
             .arg(flag("no-browser", "Do not launch the system browser.")), true, false))
         .subcommand(mutation(leaf("stop", "Stop the management Web listener only in its identified compatible daemon.", "Does not stop inference or alter native configuration. If both inference and Web are explicitly stopped, the daemon cancels its owned work and releases ownership.\n\nDry-run does not stop listeners.\nExit: 0 when stopped; 3 for incompatible/unidentified owner; 4 for failed lifecycle.\nExample: tmax web stop"), true, false))
         .subcommand_required(true)
+}
+
+fn session_commands() -> Command {
+    let list = leaf(
+        "list",
+        "List native Agent sessions across declared targets or one explicit scope.",
+        "Read-only inventory of native session stores. It scans the resolved store rather than only a native picker's current cwd/project. Archived, hidden, and unnamed native-readable sessions are included with flags. Rows contain bounded metadata and at most a bounded title label, never message bodies, tool arguments, or tool output. A target that is absent, unreadable, unresolved, or unsupported is reported explicitly and does not suppress readable rows from another target.\n\nExit: 0 when the inventory read completes, including partial target coverage; 2 for an invalid selector or unknown declared target.\nExample: tmax session list --target pi-main --cwd /home/user/project --limit 20",
+    )
+    .arg(value("target", "TARGET", "Restrict the scan to one declared target.").conflicts_with_all(["agent", "path"]))
+    .arg(agent_value("agent", "Explicit native scope agent; requires --path.").requires("path").conflicts_with("target"))
+    .arg(value("path", "PATH", "Explicit native scope path; list-only and requires --agent.").requires("agent").conflicts_with("target"))
+    .arg(value("cwd", "PATH", "Match the primary recorded working directory exactly after host lexical normalization."))
+    .arg(value("since", "INSTANT", "Inclusive updated-time lower bound (RFC 3339 with explicit offset)."))
+    .arg(value("until", "INSTANT", "Inclusive updated-time upper bound (RFC 3339 with explicit offset)."))
+    .arg(value("limit", "N", "Positive result limit, default 50, maximum 500."));
+    let import = leaf(
+        "import",
+        "Create one new native session in another declared target from a selected source session.",
+        "The source is read-only. tmax copies one visible branch, excludes hidden reasoning and non-portable runtime state, binds the new session to the source's primary cwd or an explicit existing --cwd, and requires destination readback. It never imports provider, model, credential, default, role, or gateway configuration. A completed import is recorded under tmax runtime storage; repeat detection fails unless --again is supplied. Hermes and DSH destinations are not qualified and fail closed.\n\nExit: 0 when the destination session is created and verified; 2 for invalid values or unknown/unsupported source schema; 3 for a source, cwd, store, qualification, repeat, lock, model, or budget blocker; 4 for a native write, registration, verification, or record failure after native effects; 5 for cancellation before effects.\nExample: tmax session import pi-main 01a16890-6e16-7390-b54e-47c0b6639a49 --to omp-main --dry-run",
+    )
+    .arg(required_pos(1, "SOURCE_TARGET", "Declared source Agent target."))
+    .arg(required_pos(2, "SESSION_ID", "Exact native session ID returned by session list."))
+    .arg(value("to", "TARGET", "Declared destination Agent target.").required(true))
+    .arg(value("title", "TITLE", "Nonempty title override, without control characters."))
+    .arg(value("cwd", "PATH", "Absolute existing destination working directory."))
+    .arg(value("tail", "TURNS", "Import only the most recent N turns while retaining the first prompt."))
+    .arg(flag("allow-over-budget", "Import the full visible branch despite a known budget overflow.").conflicts_with("tail"))
+    .arg(flag("again", "Create another destination copy after a completed import."));
+    family(
+        "session",
+        "List native Agent sessions and create one new native session in another target.",
+        Command::new("session")
+            .subcommand(list)
+            .subcommand(mutation(import, true, false)),
+    )
 }
 
 fn history_commands() -> Command {

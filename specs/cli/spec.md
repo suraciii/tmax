@@ -17,6 +17,7 @@ The command surface is a target contract; see [Implementation status](#implement
 | Model aliases and candidates | [Model aliases](models/aliases/spec.md) |
 | Calendar and signal rules | [Rules](models/rules/spec.md) |
 | Agent targets, native provider bindings, application, and recovery | [Agents](agents/spec.md) |
+| Native Agent session listing and one-way import | [Agent sessions](../sessions/spec.md) |
 | DSH plugin projection and connection | [DSH integration](dsh/spec.md) |
 | Calling-agent entry skill | [Skill installation](skill/spec.md) |
 | Network, gateway, and Web | [Service](service/spec.md) |
@@ -64,6 +65,8 @@ Uppercase words are operands; brackets mark optional syntax; `...` permits repet
 | `AGENT` | `codex`, `pi`, `omp`, `opencode`, `hermes`, or `dsh` for native-agent management; skill installation accepts only `hermes`, with omission selecting shared `.agents` skills. This is not a restriction on calling agents. |
 | `TARGET` | Exact named native installation/profile/configuration scope; context selectors use `--target`. |
 | `P` | `chat-completions`, `responses`, or `messages`. |
+| `SESSION_ID` | Exact native Agent session identifier returned by `session list`; it is scoped by its target or explicit scope. Import requires a declared source target. |
+| `TURNS` | Positive integer count of recent conversation turns. |
 | `STATE` | `file` or `loaded`; default `file`. |
 | `INSTANT` | RFC 3339 with an explicit offset. |
 | `DATE` | `YYYY-MM-DD`. |

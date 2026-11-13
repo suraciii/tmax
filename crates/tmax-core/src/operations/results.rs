@@ -79,6 +79,25 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             | "unsupported_protected_input"
             | "unsupported_protected_output"
             | "target_incomplete"
+            | "source_incomplete"
+            | "source_oversized"
+            | "source_unreadable"
+            | "unsafe_native_file"
+            | "source_cwd_missing"
+            | "source_ambiguous_branch"
+            | "same_session_store"
+            | "session_store_unresolved"
+            | "destination_cwd_missing"
+            | "destination_cwd_unrepresentable"
+            | "destination_store_unwritable"
+            | "destination_locked"
+            | "context_budget_exceeded"
+            | "unsupported_destination"
+            | "title_collision"
+            | "model_unknown"
+            | "already_imported"
+            | "native_store_unreadable"
+            | "native_reader_unavailable"
             | "daemon_incompatible"
             | "daemon_stopping"
             | "daemon_identity_unavailable"
@@ -101,7 +120,12 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
     } else if code.starts_with("invalid")
         || matches!(
             code,
-            "unresolved_reference" | "unknown_resource" | "unsupported_operation"
+            "unresolved_reference"
+                | "unknown_resource"
+                | "unsupported_operation"
+                | "unsupported_source"
+                | "native_schema_unsupported"
+                | "unsupported_agent"
         )
         || (error.field.as_deref().is_some_and(|field| {
             (field.starts_with("model_aliases.") && field.contains(".candidate_reasoning_effort."))
@@ -183,6 +207,47 @@ mod tests {
             let runtime =
                 error_response("gateway probe", Error::new(code, "Runtime mismatch"), false);
             assert_eq!(runtime.exit_code, 4);
+        }
+    }
+    #[test]
+    fn session_import_preconditions_are_blocked_and_native_failures_are_runtime_errors() {
+        for code in [
+            "source_incomplete",
+            "source_oversized",
+            "source_unreadable",
+            "source_cwd_missing",
+            "source_ambiguous_branch",
+            "same_session_store",
+            "session_store_unresolved",
+            "destination_cwd_missing",
+            "destination_cwd_unrepresentable",
+            "destination_store_unwritable",
+            "destination_locked",
+            "context_budget_exceeded",
+            "unsupported_destination",
+            "title_collision",
+            "model_unknown",
+            "already_imported",
+        ] {
+            let response = error_response("session import", Error::new(code, "blocked"), false);
+            assert_eq!(response.exit_code, 3, "{code}");
+            assert_eq!(response.body["status"], "blocked");
+        }
+        for code in [
+            "unsupported_source",
+            "native_schema_unsupported",
+            "unsupported_agent",
+        ] {
+            let response = error_response("session import", Error::new(code, "invalid"), false);
+            assert_eq!(response.exit_code, 2, "{code}");
+        }
+        for code in [
+            "committed_unverified",
+            "native_write_failed",
+            "record_failed",
+        ] {
+            let response = error_response("session import", Error::new(code, "runtime"), false);
+            assert_eq!(response.exit_code, 4, "{code}");
         }
     }
     #[test]

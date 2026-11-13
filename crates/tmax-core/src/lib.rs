@@ -16,6 +16,7 @@ mod retained_integration;
 pub mod routing;
 pub mod secrets;
 pub mod service;
+pub mod sessions;
 mod skill;
 pub mod storage;
 

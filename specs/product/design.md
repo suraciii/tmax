@@ -31,6 +31,19 @@ an assistant or an approval/workflow system.
 | Clients and providers speak different APIs | Normalize all traffic through a universal message format | Forward native protocols without translation, as selected by the user; reject incompatible agent configurations |
 | Metadata resembles inference controls | Convert capability fields into request defaults | Metadata never chooses request values; only explicit gateway model effort maps or alias-candidate fixed effort resolve the native effort under the [routing contract](../model-routing/spec.md#request-parameters), without changing the selected backend |
 | Native login sessions are already maintained | Copy native refresh tokens into a central vault | Keep native sessions with their refresh owner and use only qualified sign-in/forwarding paths; no agent credential import |
+| Agent sessions are trapped in each native store | Build a central transcript store or continuously synchronize Agent stores | List native sessions read-only; import creates one new native session, leaves the source unchanged, and keeps only bounded provenance. No central copy or synchronization. |
+| Session formats and tool vocabularies differ | Pairwise converters or structured tool-call replay | One canonical visible history with version-qualified readers and writers; tool activity stays non-replayable text. Pairwise conversion would multiply drift, and structured replay would fabricate native history. |
+| A written transcript may not be visible or resumable | Treat file creation as a completed import | Require the destination Agent's own registration and readback verification; block unsafe, shared, or unqualified stores. Resume remains a native behavior, not an import guarantee. |
+| Imported history can exceed the target context | Silent truncation or a generated handoff summary | Deterministic recent-turn selection or an explicit failure; tmax never generates conversation content. |
+| Repeating an import creates duplicates | Overwrite by source ID or derive deterministic destination IDs | Keep a bounded Import record and require explicit `--again` for another copy; never overwrite an existing Agent session. |
+| Targets can resolve to the same native store | Key repeat detection and provenance by target ID | Key Import records by source/destination store and source native ID; target IDs and paths stay metadata. Never treat a shared store as a new source. |
+| Session working directory may outlive its directory | Reuse the destination target's default or process cwd | Use the source's recorded primary cwd, or an explicit existing absolute `--cwd`; fail when neither exists. Never silently substitute another directory. |
+| Destination project context is not conversation history | Copy source project settings, instructions, or trust state | Bind the destination cwd and let the destination Agent load its own project context; copy no project files, instructions, settings, or permissions. |
+| A native session may have extra workspace roots | Flatten them into the primary cwd or omit them silently | Preserve the primary cwd only and report additional roots as not imported; the caller can inspect that retention loss before running. |
+| Native session schemas drift across Agent versions | Pin one implementation or write a generic table/file parser | Keep native layout in a versioned adapter capability matrix; list safe metadata for recognized shapes, fail unqualified writers closed, and never infer the current schema from a legacy file or table. |
+| A store exposes index, file, or cache views of the same session | Union every view and deduplicate downstream | Select one authoritative representation per qualified adapter and deduplicate by native ID; never merge conflicting metadata. |
+| Session text may contain secrets the source recorded | Scan and redact arbitrary message text, or upload a copy for rewriting | Read the native session store but not native credential stores; copy visible text locally as recorded, with no secret-detection guarantee. List and preview return metadata only. |
+| Imported text can contain instructions or prompt injection | Sanitize or rewrite the conversation | Treat imported text as untrusted source content; the destination Agent's own system context remains authoritative. tmax does not sanitize instructions or tool output. |
 | Usage sources have different coverage | One synthesized balance across all accounts | Keep provider observations and local observations separate; incomplete evidence must remain visible |
 | A cheap alias suggests an absolute price promise | Infer one cheapest model from incomparable prices | Let users encode preferences; retain provider pricing evidence without claiming global cost optimality |
 | Users want to use existing subscriptions more fully | Infer a consumption strategy or generate work to exhaust quota | Execute user-defined dynamic-priority rules under the [vision](spec.md#vision); users and their calling agents decide the strategy |
@@ -93,6 +106,13 @@ flowchart TB
 Alias candidates are model references with optional alias-local settings, not
 independently managed objects. Account and subscription facts belong to providers;
 session bindings and observations are runtime state, not desired resources.
+
+Agent session portability adds no principal object. It reads native sessions from
+AgentTarget stores and creates a native-owned session in another target; an Import
+record is bounded provenance, not a managed session or a second configuration
+authority. Each imported session is bound to one primary working directory; the
+destination Agent loads its own project context, and additional workspace roots
+are not copied. The [session contract](../sessions/spec.md) owns that capability.
 
 An agent's native provider entries and model choices are its configuration,
 not upstream accounts or permission grants. Preview, apply, conflict detection,

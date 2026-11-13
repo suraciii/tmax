@@ -72,6 +72,22 @@ assistant may call tmax. The initial provider scope includes
 [Kimi Coding Plan](../integrations/kimi-coding-plan/spec.md), and the
 [official DeepSeek API](../integrations/deepseek/spec.md).
 
+Agent session portability is a separate local capability: tmax must be able to
+list native Agent sessions and create a new native session in another declared
+Agent target from a selected source session. The source is read-only; the
+destination session is native-owned; no provider configuration, credential, model
+default, role, or routing state is imported. Each imported session is bound to an
+existing primary working directory: the source session's recorded working
+directory by default, or an explicit absolute `--cwd`. A missing or unrecorded
+source directory fails unless `--cwd` supplies an existing directory; tmax never
+falls back to the target. The destination directory selects the destination
+Agent's own project context, and tmax copies no project files, instructions, or
+settings. Additional native workspace roots are not imported. The capability
+does not extract, store, or manage credentials; it does not guarantee redaction
+of secrets already present in recorded message text or tool output. This is not
+synchronization, backup, or a central conversation store. The
+[session contract](../sessions/spec.md) owns its behavior.
+
 The user must be able to answer four questions: which access do I have, which
 agent uses it, what will a change affect, and what quota or renewal information
 is actually known?
@@ -146,8 +162,13 @@ configuration. Neither runtime state nor a models.dev refresh may rewrite user i
 
 Native agent configuration is a managed target, not a second authority. tmax must
 not provide agent-to-tmax import of providers, models, settings, or credentials.
-Inspection is read-only and limited to configuration scope, compatibility, safe
-change previews, and conflict detection; native edits must not flow back into tmax.
+Native configuration inspection is read-only and limited to configuration scope,
+compatibility, safe change previews, and conflict detection; native edits must
+not flow back into tmax. Session discovery is a separate capability that reads
+Agent session stores and returns bounded metadata; it does not import
+configuration, credentials, or routing state. Copying a selected Agent session to
+another native target under the [session contract](../sessions/spec.md) is
+likewise a native session copy, not configuration import.
 
 Executed CLI/Web configuration changes save desired settings and activate the
 entire current valid file when the service is running. This includes earlier
@@ -157,7 +178,8 @@ The operation and its optional dry run must disclose the full change from loaded
 state, not only fields named by that command. Invalid activation retains the
 prior active snapshot and reports the file as not active. Cold startup must reject
 invalid current configuration. Native agent application remains separate;
-saving or reloading tmax configuration must not silently rewrite agent files.
+saving or reloading tmax configuration must not silently rewrite agent
+configuration files. An explicit session import is a separate native operation.
 
 An invalid saved configuration must have an explicit CLI recovery path that does
 not require authoring a replacement document. Reset is a last-resort operation
@@ -1115,6 +1137,26 @@ credentials; do not claim readiness or add a fallback.
 34. Coordinate tmax-owned refresh across consumers with a finite deadline and
     guarded publication; cancellation and authorization replacement must not
     allow an old result to overwrite the current authorization or replay inference.
+35. List native sessions for each supported Agent target without writing native
+    stores, and import one selected visible conversation into another declared
+    target as a new native session. Preserve the source, exclude hidden reasoning
+    and provider-owned state, require native visibility and readback verification,
+    detect repeats, and reject unqualified versions, same-store destinations, or
+    unsafe live writes. Do not import structured configuration, credential state,
+    or routing state.
+36. Exercise session working-directory boundaries: list a null, missing, or
+    ambiguous recorded cwd, filter by cwd without matching additional roots, fail
+    default import when the source cwd is absent or ambiguous, succeed with an
+    explicit existing absolute `--cwd`, report the effective destination cwd, and
+    report omitted additional workspace roots. Confirm destination project files,
+    instructions, settings, and permissions are not copied, and that a
+    cwd/project-filtered native picker is not treated as proof that a session is
+    absent.
+37. Exercise an unrecognized newer or older native schema and unknown native
+    fields: a recognized readable target remains listable within bounds, an
+    unqualified writer fails closed, another target remains unaffected, and no
+    core rule depends on a fixed table, file, field, or path-encoder name. Confirm
+    a legacy schema is not silently treated as current.
 
 An agent's native mode may remain the only supported path for a particular
 subscription. Such a limitation must be named, not described as complete
@@ -1125,8 +1167,10 @@ owns its provider-specific acceptance boundary and external evidence.
 ## Implementation status
 
 The workspace includes shared management, configuration, routing/input,
-protected-storage, native-adapter, Web, and gateway implementations. Runtime
-qualification is scoped to actual versions, native scopes, credentials,
-operations, and transports. Local tests or parser checks do not establish
-provider entitlement or a verified hosted-provider tool-call conversation.
-This specification remains a design and acceptance contract, not a release claim.
+protected-storage, native-adapter, Web, and gateway implementations. Agent session
+listing and one-way native import are implemented in the workspace; runtime
+qualification remains scoped to actual versions, native scopes, credentials,
+operations, and transports.
+Local tests or parser checks do not establish provider entitlement or a verified
+hosted-provider tool-call conversation. This specification remains a design and
+acceptance contract, not a release claim.

@@ -937,6 +937,68 @@ For the complete contract, see [CLI specs](../specs/cli/spec.md),
 [model routing](../specs/model-routing/spec.md), and
 [Pi/agent target specs](../specs/cli/agents/spec.md).
 
+## Native session listing and import
+
+`session list` reads the session stores of the declared Agent targets without
+changing native files, credentials, or configuration. It lists Codex, pi, omp,
+OpenCode, Hermes, and DSH sessions, including archived, hidden, and unnamed
+native-readable rows. A row contains bounded metadata and a bounded title, not
+message bodies or tool output. With no selector it scans every declared target;
+use `--target` for one target, or `--agent` plus `--path` for an undeclared,
+list-only scope.
+
+```sh
+tmax session list
+tmax session list --target pi-main --cwd "$PWD"
+tmax session list --agent omp --path "$HOME/.omp/agent" --since 2026-11-01T00:00:00Z
+```
+
+`--cwd` matches only the primary recorded working directory after lexical
+normalization; it does not match additional workspace roots. `--since` and
+`--until` are inclusive RFC 3339 bounds on updated time. The default limit is 50;
+the maximum is 500. A target that is absent, unresolved, unreadable, or
+unsupported is reported in `targets` and `warnings` without suppressing rows from
+other targets. Rows are ordered newest first and deduplicated by native store and
+session ID.
+
+`session import` creates one new native session in a declared destination target
+from an exact source session ID. The source is read-only. tmax selects one visible
+branch, omits hidden reasoning, system/developer context, attachments, additional
+workspace roots, and other non-portable state, and preserves tool activity as
+non-replayable text. It does not copy providers, models, credentials, settings,
+defaults, roles, or gateway state.
+
+```sh
+tmax session import pi-main SESSION_ID --to omp-main --dry-run
+tmax session import pi-main SESSION_ID --to omp-main
+tmax session import pi-main SESSION_ID --to codex-main --tail 8
+```
+
+The destination must be a declared target with a qualified writer: pi, omp,
+OpenCode, or Codex. Hermes and DSH are read-only session sources in this version.
+The destination working directory defaults to the source's recorded primary cwd;
+supply `--cwd` with an absolute existing directory to override it. A missing,
+null, or ambiguous source cwd fails rather than falling back to the destination
+target or process cwd. The writer binds the effective cwd, and tmax verifies the
+new session through the destination's own reader before reporting success.
+
+`--tail N` keeps the first prompt and the most recent N turns, adds an explicit
+omission marker, and reports dropped turn and byte counts. `--title` supplies a
+bounded, control-free destination title. `--allow-over-budget` conflicts with
+`--tail` and applies only when a known destination budget would otherwise block
+the import. `--again` creates a new copy after an earlier completed import;
+without it, an existing matching import is a conflict. `--dry-run` reports the
+plan and qualification without writing native files or creating a provenance
+record. Completed imports are recorded under tmax runtime storage as bounded
+provenance (counts, paths, schemas, title, and source revision), never as a
+transcript copy. A missing or corrupt record store is reported as
+`record_unavailable` and does not block the native import.
+
+Exit `0` means the requested list or verified import completed. Invalid
+selectors or source schemas exit `2`; a precondition that prevents native effects
+exits `3`; a native write, registration, readback, or post-commit record failure
+exits `4`. A partial target scan still exits `0` and reports `coverage: partial`.
+
 ## DSH target: home-wide native application
 
 DeepSeek Harness uses the same target/provider/model operations as the Pi example,

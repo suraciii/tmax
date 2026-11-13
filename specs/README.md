@@ -37,6 +37,9 @@ and the invariants it protects.
   - [Agents](cli/agents/spec.md) — targets, model choices, native application, and restoration.
   - [Service](cli/service/spec.md) — outbound network, gateway, Web, and nested request diagnostics.
   - [Results](cli/results/spec.md) — compact JSON and exit codes shared by all commands.
+- [Agent session portability](sessions/spec.md) — read-only native session
+  discovery and one-way native session import; [design](sessions/design.md)
+  owns canonical mapping, fidelity, and native visibility boundaries.
 - [Diagnostics](diagnostics/spec.md) — scoped status evidence, historical selection
   reasons, bounded in-memory request history, and persistent gateway error logs.
 

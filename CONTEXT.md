@@ -182,6 +182,49 @@ can be managed independently. It identifies which Agent and which native scope
 are being configured. DSH uses one home-wide scope, not separate profile targets.
 _Avoid_: Agent type, provider account, calling agent
 
+**Agent session**:
+A persisted native conversation owned by one Agent target, including its visible
+messages, tool activity, and native metadata. It is not a Session binding, a
+login session, or a tmax-managed resource.
+_Avoid_: Session binding, conversation route, transcript configuration
+
+**Agent session store**:
+The version-qualified native location or database that contains Agent sessions
+for one Agent target. It is resolved from native home/profile and session-root
+selectors, not inferred from the target ID or a configuration filename, and
+remains native-owned.
+_Avoid_: Configuration scope, tmax session database
+
+**Session working directory**:
+The primary native directory a session records as its working directory. It is
+session metadata, not the target's configuration path, the session store path,
+or necessarily an existing directory now.
+_Avoid_: Target path, session store path, project root
+
+**Additional workspace root**:
+A native directory beyond the session working directory that a multi-root Agent
+session may access. It is native workspace state, not canonical visible history.
+_Avoid_: Secondary cwd, imported project
+
+**Session reference**:
+The exact pair of an Agent target identifier or explicitly inspected native scope
+and a native session identifier identifying one Agent session. A scope-based
+reference is list-only. It is a reference value, not a session ID shared across
+Agents or a resumable conversation identity.
+_Avoid_: Bare session ID, slash-joined session name, cross-agent session ID, gateway session
+
+**Session import**:
+Creation of a new native Agent session in a destination Agent target from one
+source Agent session, without modifying the source. It is not synchronization,
+backup, migration, or resumption of the source.
+_Avoid_: Session sync, session migration, conversation backup
+
+**Import record**:
+A bounded tmax-owned provenance record for one completed Session import, used to
+detect repeats and show origin. It does not copy the transcript or own the
+imported Agent session.
+_Avoid_: Transcript copy, managed session, backup
+
 **Calling agent**:
 The user's assistant acting through tmax on the user's behalf. It need not be
 an agent target or use an Agent whose native configuration tmax manages.
@@ -217,8 +260,9 @@ _Avoid_: Candidate model entity, provider pool, shared model default
 
 **Session binding**:
 Runtime state retaining a conversation's selected provider, model, destination,
-and authorization continuity. It is not a user-managed configuration resource.
-_Avoid_: Shared account session, model selection configuration
+and authorization continuity. It is not a user-managed configuration resource or
+an Agent session.
+_Avoid_: Shared account session, model selection configuration, Agent session
 
 **Observed usage**:
 Usage measured from requests that passed through tmax. It is not a provider's
