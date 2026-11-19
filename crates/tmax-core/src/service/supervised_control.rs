@@ -1,6 +1,6 @@
 //! Serialized lifecycle operations through one native process owner.
 use super::{
-    control::{rpc, status},
+    control::{rpc, status, status_snapshot},
     daemon::absent,
     failure, supervisor,
 };
@@ -115,6 +115,29 @@ pub(super) fn readiness(
             "The supervised service could not establish requested listener readiness; inspect gateway status",
         ));
     }
+    if let Some((manager, observed)) = manager
+        && manager.activation == record.activation
+        && observed.registration == "owned"
+        && observed.pid.is_none()
+        && matches!(observed.state, "blocked" | "failed")
+    {
+        let message = match observed.last_exit_code {
+            Some(code) => format!(
+                "The native service exited with status {code} before listener readiness; inspect the service journal"
+            ),
+            None => {
+                "The native service failed before listener readiness; inspect the service journal"
+                    .into()
+            }
+        };
+        return Err(failure(
+            observed
+                .reason_code
+                .as_deref()
+                .unwrap_or("service_readiness_failed"),
+            &message,
+        ));
+    }
     Ok(false)
 }
 
@@ -127,11 +150,8 @@ async fn ready(
     let result = tokio::time::timeout(Duration::from_secs(supervisor::READINESS_SECONDS), async {
         loop {
             let value = qualified_before(store).await?;
-            let observation = if value.is_some() {
-                Some((
-                    supervisor::probe(store).await?,
-                    supervisor::inspect(store).await?,
-                ))
+            let observation = if value.is_some() || cfg!(target_os = "linux") {
+                Some(supervisor::observe(store).await?)
             } else {
                 None
             };
@@ -141,7 +161,7 @@ async fn ready(
                 value.as_ref(),
                 observation
                     .as_ref()
-                    .map(|(manager, observed)| (manager, observed)),
+                    .map(|snapshot| (&snapshot.manager, &snapshot.observed)),
                 inference,
                 web,
             )? {
@@ -231,7 +251,7 @@ pub(super) async fn control(store: &Store, _config: &Config, operation: &Request
         value["supervision"] = supervisor::view(store, &value["daemon"]).await;
         return Ok(value);
     }
-    let observed = status(store).await?;
+    let (observed, snapshot) = status_snapshot(store).await;
     let supervised = observed["supervision"]["process_owned"] == true;
     // A compatible existing owner remains usable until an explicit process replacement.
     if before.is_some() && !supervised && action != "restart" && supervisor::read(store).is_ok() {
@@ -247,7 +267,7 @@ pub(super) async fn control(store: &Store, _config: &Config, operation: &Request
         value["supervision"] = supervisor::view(store, &value["daemon"]).await;
         return Ok(value);
     }
-    let manager = supervisor::probe(store).await?;
+    let manager = snapshot?.manager;
     let inference_listen = if group == "gateway" && matches!(action, "start" | "restart") {
         Some(startup_address(store)?)
     } else {

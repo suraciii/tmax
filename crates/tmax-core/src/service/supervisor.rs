@@ -22,6 +22,8 @@ pub(super) const RESTART_WINDOW_SECONDS: u64 = 60;
 pub(super) const READINESS_SECONDS: u64 = 15;
 const RECORD: &str = "service-activation.json";
 const RECORD_VERSION: u32 = 1;
+// Linux has a start rate limit and a retry state in the native manager.
+const NATIVE_RETRY_BUDGET: bool = cfg!(target_os = "linux");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Preparation {
@@ -43,6 +45,11 @@ pub(super) struct Observation {
     pub last_exit_code: Option<i32>,
     pub reason_code: Option<String>,
     pub retry_delay_seconds: u64,
+}
+
+pub(super) struct Snapshot {
+    pub manager: Manager,
+    pub observed: Observation,
 }
 
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
@@ -152,11 +159,21 @@ pub(super) fn save(store: &Store, record: &Activation) -> Result<()> {
     store.write_json(RECORD, record)
 }
 
-pub(super) async fn probe(store: &Store) -> Result<Manager> {
-    platform::probe(store).await
+pub(super) async fn observe(store: &Store) -> Result<Snapshot> {
+    #[cfg(target_os = "linux")]
+    return platform::observe(store).await;
+    #[cfg(not(target_os = "linux"))]
+    Ok(Snapshot {
+        manager: platform::probe(store).await?,
+        observed: platform::inspect(store).await?,
+    })
 }
-pub(super) async fn inspect(store: &Store) -> Result<Observation> {
-    platform::inspect(store).await
+
+pub(super) async fn observe_status(store: &Store) -> (Result<Snapshot>, Result<Value>) {
+    #[cfg(target_os = "linux")]
+    return platform::observe_status(store).await;
+    #[cfg(not(target_os = "linux"))]
+    (observe(store).await, platform::login_status(store))
 }
 pub(super) async fn prepare(store: &Store, preparation: Preparation) -> Result<()> {
     platform::prepare(store, preparation).await
@@ -170,7 +187,10 @@ pub(super) async fn stop(store: &Store) -> Result<()> {
 pub(super) async fn login(store: &Store, enabled: bool) -> Result<()> {
     platform::login(store, enabled).await
 }
-pub(super) fn login_status(store: &Store) -> Result<Value> {
+pub(super) async fn login_status(store: &Store) -> Result<Value> {
+    #[cfg(target_os = "linux")]
+    return platform::observe_status(store).await.1;
+    #[cfg(not(target_os = "linux"))]
     platform::login_status(store)
 }
 
@@ -273,8 +293,10 @@ fn request_inner(
         record.reason_code = None;
         record.reason_surface = None;
     }
-    record.attempts = 0;
-    record.attempt_window = Utc::now();
+    if !NATIVE_RETRY_BUDGET {
+        record.attempts = 0;
+        record.attempt_window = Utc::now();
+    }
     save(store, &record)?;
     Ok(record)
 }
@@ -362,8 +384,7 @@ pub(super) fn repair(store: &Store, manager: &Manager, current: Option<&Value>) 
 
 /// Foreground entrypoint: a fresh manager activation follows login intent once.
 pub(super) async fn enter(store: &Store) -> Result<Option<Activation>> {
-    let manager = probe(store).await?;
-    let observed = platform::inspect(store).await?;
+    let Snapshot { manager, observed } = observe(store).await?;
     if observed.registration != "owned" || observed.pid != Some(std::process::id()) {
         return Err(failure(
             "service_manager_unavailable",
@@ -396,30 +417,32 @@ pub(super) async fn enter(store: &Store) -> Result<Option<Activation>> {
         save(store, &record)?;
         return Ok(None);
     }
-    let now = Utc::now();
-    if now
-        .signed_duration_since(record.attempt_window)
-        .num_seconds()
-        >= RESTART_WINDOW_SECONDS.max(
-            observed
-                .retry_delay_seconds
-                .saturating_mul(u64::from(RESTART_LIMIT)),
-        ) as i64
-    {
-        record.attempt_window = now;
-        record.attempts = 0;
+    if !NATIVE_RETRY_BUDGET {
+        let now = Utc::now();
+        if now
+            .signed_duration_since(record.attempt_window)
+            .num_seconds()
+            >= RESTART_WINDOW_SECONDS.max(
+                observed
+                    .retry_delay_seconds
+                    .saturating_mul(u64::from(RESTART_LIMIT)),
+            ) as i64
+        {
+            record.attempt_window = now;
+            record.attempts = 0;
+        }
+        if record.attempts >= RESTART_LIMIT {
+            record.state = "failed".into();
+            record.reason_code = Some("service_recovery_exhausted".into());
+            record.last_exit_code = Some(78);
+            save(store, &record)?;
+            return Err(failure(
+                "service_recovery_exhausted",
+                "Native service recovery reached its finite attempt limit; explicitly start or restart after inspecting the cause",
+            ));
+        }
+        record.attempts += 1;
     }
-    if record.attempts >= RESTART_LIMIT {
-        record.state = "failed".into();
-        record.reason_code = Some("service_recovery_exhausted".into());
-        record.last_exit_code = Some(78);
-        save(store, &record)?;
-        return Err(failure(
-            "service_recovery_exhausted",
-            "Native service recovery reached its finite attempt limit; explicitly start or restart after inspecting the cause",
-        ));
-    }
-    record.attempts += 1;
     record.process = None;
     record.state = "starting".into();
     save(store, &record)?;
@@ -525,7 +548,7 @@ pub(super) fn local_view(store: &Store, process: &str) -> Value {
         Ok(Some(record)) if record.process.as_deref() == Some(process) => json!({
             "state":if record.state=="blocked"{"blocked"}else{"supervised"},
             "requested":record.requested,"reason_code":record.reason_code,
-            "recovery":{"attempts":record.attempts,"limit":RESTART_LIMIT,"retry_delay_seconds":RESTART_DELAY_SECONDS,"last_exit_code":record.last_exit_code}
+            "recovery":{"attempts":(!NATIVE_RETRY_BUDGET).then_some(record.attempts),"limit":RESTART_LIMIT,"retry_delay_seconds":RESTART_DELAY_SECONDS,"last_exit_code":record.last_exit_code}
         }),
         Ok(_) => {
             json!({"state":"unsupervised","requested":{"inference":null,"web":null},"reason_code":"service_not_supervised"})
@@ -535,8 +558,12 @@ pub(super) fn local_view(store: &Store, process: &str) -> Value {
 }
 
 pub(super) async fn view(store: &Store, daemon: &Value) -> Value {
-    let manager = probe(store).await;
-    let observation = platform::inspect(store).await;
+    snapshot_view(store, daemon, &observe(store).await)
+}
+
+pub(super) fn snapshot_view(store: &Store, daemon: &Value, snapshot: &Result<Snapshot>) -> Value {
+    let manager = snapshot.as_ref().map(|s| &s.manager);
+    let observation = snapshot.as_ref().map(|s| &s.observed);
     let record = read(store);
     let live_pid = daemon.pointer("/identity/pid").and_then(Value::as_u64);
     let identity_known = matches!(
@@ -581,12 +608,17 @@ pub(super) async fn view(store: &Store, daemon: &Value) -> Value {
                 .is_ok_and(|m| m.activation == record.activation) =>
         {
             value["requested"] = json!(record.requested);
-            value["recovery"]["attempts"] = json!(record.attempts);
-            if record.last_exit_code.is_some() {
-                value["recovery"]["last_exit_code"] = json!(record.last_exit_code);
+            if !NATIVE_RETRY_BUDGET {
+                value["recovery"]["attempts"] = json!(record.attempts);
+                if record.last_exit_code.is_some() {
+                    value["recovery"]["last_exit_code"] = json!(record.last_exit_code);
+                }
             }
             if matches!(record.state.as_str(), "blocked" | "failed")
                 && identity_known
+                && value["reason_code"] != "retry_limit_exhausted"
+                && (!NATIVE_RETRY_BUDGET
+                    || !matches!(value["state"].as_str(), Some("starting" | "recovering")))
                 && (live_pid.is_none()
                     && observation
                         .as_ref()
@@ -607,10 +639,10 @@ pub(super) async fn view(store: &Store, daemon: &Value) -> Value {
         }
         _ => {}
     }
-    if let Err(error) = manager {
-        value["reason_code"] = json!(error.code);
-    }
-    if let Err(error) = observation {
+    if let Err(error) = snapshot {
+        if error.code == "service_registration_conflict" {
+            value["registration"] = json!("conflict");
+        }
         value["reason_code"] = json!(error.code);
     }
     value

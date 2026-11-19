@@ -54,6 +54,13 @@ Daemon control uses Unix local sockets or local-only Windows named pipes with
 an explicit OS-user ACL and peer identity checks. New processes require a native
 user supervisor: reachable systemd user manager on Linux, a launchd GUI user
 domain on macOS, or current-user Task Scheduler on Windows.
+On Linux, tmax uses `libsystemd.so.0` to read the loaded unit and process state
+through the user manager's authenticated private socket. The user message bus
+does not need to be active. Service changes use `systemctl`. Offline commands
+do not require `libsystemd`.
+Before changing the service, tmax checks that the loaded `ExecStart` executable
+and arguments match the owned definition. A matching unit filename is not
+sufficient.
 Ordinary lifecycle commands prepare tmax's owned definition and start through
 that manager; there is no separate install command or detached fallback.
 Login triggers remain independent of current execution and crash recovery.

@@ -2,42 +2,42 @@
 //!
 //! The manager's own unit search path, rather than the invoking shell's XDG
 //! environment, determines both the definition and the login activation link.
+#[path = "systemd_peer.rs"]
+mod systemd_peer;
+
+use self::systemd_peer::{Peer, Unit};
 use super::super::failure;
 use super::{
-    Manager, Observation, Preparation, RESTART_DELAY_SECONDS, RESTART_LIMIT, RESTART_WINDOW_SECONDS,
+    Manager, Observation, Preparation, RESTART_DELAY_SECONDS, RESTART_LIMIT,
+    RESTART_WINDOW_SECONDS, Snapshot,
 };
 use crate::{Result, storage::Store};
 use serde_json::{Value, json};
 use std::{
     borrow::Cow,
-    collections::HashMap,
-    ffi::CString,
+    ffi::{CStr, CString},
     fs,
     io::{self, Read},
     os::unix::{
         ffi::OsStrExt,
         fs::{MetadataExt, symlink},
-        io::AsRawFd,
     },
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
-    time::{Duration, Instant},
 };
 
-const UNIT: &str = "tmax.service";
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-const OUTPUT_LIMIT: usize = 256 * 1024;
+const UNIT_NAME: &CStr = c"tmax.service";
+const UNIT: &str = match std::str::from_utf8(UNIT_NAME.to_bytes()) {
+    Ok(name) => name,
+    Err(_) => panic!("the tmax unit name is not UTF-8"),
+};
 
-fn unavailable() -> crate::Error {
-    failure(
-        "service_manager_unavailable",
-        "The current user's systemd manager is unavailable or its identity and unit search path cannot be established",
-    )
+fn unavailable(message: &str) -> crate::Error {
+    failure("service_manager_unavailable", message)
 }
 fn conflict() -> crate::Error {
     failure(
         "service_registration_conflict",
-        "The systemd registration or login link belongs to another authority; no unrelated entry was changed",
+        "The systemd unit, loaded command, or login link does not match the tmax-owned registration",
     )
 }
 fn control_failed() -> crate::Error {
@@ -45,146 +45,6 @@ fn control_failed() -> crate::Error {
         "service_control_failed",
         "The systemd user manager could not complete the requested operation; inspect its state before retrying",
     )
-}
-
-// Read a bounded amount without waiting on a pipe held by a descendant. All
-// manager calls have a deadline, no shell, no stdin, and no diagnostic output.
-fn command(binary: &str, args: &[&str], operation: bool) -> Result<String> {
-    let error = || {
-        if operation {
-            control_failed()
-        } else {
-            unavailable()
-        }
-    };
-    let executable = [format!("/usr/bin/{binary}"), format!("/bin/{binary}")]
-        .into_iter()
-        .find(|p| Path::new(p).is_file())
-        .ok_or_else(error)?;
-    let mut child = Command::new(executable)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env("LC_ALL", "C")
-        .env("SYSTEMD_PAGER", "cat")
-        .spawn()
-        .map_err(|_| error())?;
-    let mut output = child.stdout.take().ok_or_else(error)?;
-    let fd = output.as_raw_fd();
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(error());
-    }
-    let deadline = Instant::now() + COMMAND_TIMEOUT;
-    let mut bytes = Vec::new();
-    let mut buffer = [0u8; 4096];
-    let mut finished: Option<std::process::ExitStatus> = None;
-    loop {
-        loop {
-            match output.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) if bytes.len() + n <= OUTPUT_LIMIT => bytes.extend_from_slice(&buffer[..n]),
-                Ok(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(error());
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(error());
-                }
-            }
-        }
-        if let Some(status) = finished {
-            if !status.success() {
-                return Err(error());
-            }
-            return String::from_utf8(bytes).map_err(|_| error());
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => finished = Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error());
-            }
-        }
-    }
-}
-
-fn systemctl(args: &[&str], operation: bool) -> Result<String> {
-    let mut all = vec!["--user", "--no-pager", "--no-ask-password"];
-    all.extend_from_slice(args);
-    command("systemctl", &all, operation)
-}
-
-fn manager_pid() -> Result<u32> {
-    let reply = command(
-        "busctl",
-        &[
-            "--user",
-            "--no-pager",
-            "call",
-            "org.freedesktop.DBus",
-            "/org/freedesktop/DBus",
-            "org.freedesktop.DBus",
-            "GetConnectionUnixProcessID",
-            "s",
-            "org.freedesktop.systemd1",
-        ],
-        false,
-    )?;
-    let mut parts = reply.split_whitespace();
-    if parts.next() != Some("u") {
-        return Err(unavailable());
-    }
-    let pid = parts
-        .next()
-        .and_then(|v| v.parse::<u32>().ok())
-        .filter(|p| *p > 0)
-        .ok_or_else(unavailable)?;
-    if parts.next().is_some() {
-        return Err(unavailable());
-    }
-    Ok(pid)
-}
-
-fn manager_identity() -> Result<String> {
-    let pid = manager_pid()?;
-    let proc = PathBuf::from(format!("/proc/{pid}"));
-    if fs::metadata(&proc).map_err(|_| unavailable())?.uid() != unsafe { libc::geteuid() } {
-        return Err(unavailable());
-    }
-    let stat = fs::read_to_string(proc.join("stat")).map_err(|_| unavailable())?;
-    // The parenthesized command may itself contain spaces or parentheses.
-    let mut fields = stat
-        .rsplit_once(')')
-        .ok_or_else(unavailable)?
-        .1
-        .split_whitespace();
-    let start = fields
-        .nth(19)
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|v| *v > 0)
-        .ok_or_else(unavailable)?;
-    let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|_| unavailable())?;
-    let boot = boot.trim();
-    if boot.len() != 36
-        || !boot.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
-        || manager_pid()? != pid
-    {
-        return Err(unavailable());
-    }
-    Ok(format!("systemd:{}:{boot}:{pid}:{start}", unsafe {
-        libc::geteuid()
-    }))
 }
 
 fn nearest_owner(path: &Path) -> Option<u32> {
@@ -204,52 +64,14 @@ struct Paths {
     legacy: PathBuf,
     search: Vec<PathBuf>,
 }
-// systemctl renders the D-Bus string array using double-quoted shell words.
-// Interpret only that representation; reject control escapes rather than
-// guessing at paths whose bytes cannot be safely represented.
-fn parse_unit_paths(raw: &str) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    let mut word = String::new();
-    let mut quoted = false;
-    let mut escaped = false;
-    for ch in raw.chars() {
-        if escaped {
-            if !matches!(ch, '\\' | '"' | '$' | '`') {
-                return Err(unavailable());
-            }
-            word.push(ch);
-            escaped = false;
-        } else if ch == '\\' && quoted {
-            escaped = true;
-        } else if ch == '"' {
-            quoted = !quoted;
-        } else if ch.is_whitespace() && !quoted {
-            if !word.is_empty() {
-                paths.push(PathBuf::from(std::mem::take(&mut word)));
-            }
-        } else if ch.is_control() {
-            return Err(unavailable());
-        } else {
-            word.push(ch);
-        }
-    }
-    if quoted || escaped {
-        return Err(unavailable());
-    }
-    if !word.is_empty() {
-        paths.push(PathBuf::from(word));
-    }
-    Ok(paths)
-}
-fn paths(store: &Store) -> Result<Paths> {
-    let raw = systemctl(&["show", "--property=UnitPath", "--value"], false)?;
-    let search = parse_unit_paths(&raw)?;
+fn paths(store: &Store, search: Vec<String>) -> Result<Paths> {
+    let search: Vec<_> = search.into_iter().map(PathBuf::from).collect();
     if search.is_empty()
         || search
             .iter()
             .any(|p| !p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)))
     {
-        return Err(unavailable());
+        return Err(unavailable("The systemd unit search path is invalid"));
     }
     // UnitPath is ordered by the manager itself. Select its first persistent,
     // user-owned configuration directory, not a runtime or vendor directory.
@@ -263,7 +85,9 @@ fn paths(store: &Store) -> Result<Paths> {
                 && !p.starts_with("/etc")
                 && nearest_owner(p) == Some(uid)
         })
-        .ok_or_else(unavailable)?;
+        .ok_or_else(|| {
+            unavailable("The systemd manager has no owned persistent user unit directory")
+        })?;
     Ok(Paths {
         unit: directory.join(UNIT),
         legacy: store.home.join(".config/systemd/user").join(UNIT),
@@ -272,16 +96,25 @@ fn paths(store: &Store) -> Result<Paths> {
 }
 
 fn marker(store: &Store) -> Result<Vec<u8>> {
-    let root = store.root.to_str().ok_or_else(unavailable)?;
+    let root = store
+        .root
+        .to_str()
+        .ok_or_else(|| unavailable("The tmax authority cannot be registered with systemd"))?;
     if root.contains(['\n', '\r']) {
-        return Err(unavailable());
+        return Err(unavailable(
+            "The tmax authority cannot be registered with systemd",
+        ));
     }
     Ok(format!("# tmax-owned authority={root}\n").into_bytes())
 }
 fn unit_data_for(store: &Store, exe: &Path) -> Result<Vec<u8>> {
-    let exe = exe.to_str().ok_or_else(unavailable)?;
+    let exe = exe
+        .to_str()
+        .ok_or_else(|| unavailable("The tmax executable path cannot be registered with systemd"))?;
     if exe.contains(['\n', '\r', '%', '"', '\\']) {
-        return Err(unavailable());
+        return Err(unavailable(
+            "The tmax executable path cannot be registered with systemd",
+        ));
     }
     let mut data = marker(store)?;
     data.extend_from_slice(format!("[Unit]\nDescription=tmax personal model gateway\nStartLimitIntervalSec={RESTART_WINDOW_SECONDS}\nStartLimitBurst={RESTART_LIMIT}\n[Service]\nType=simple\nExecStart=\"{exe}\" __service\nRestart=on-failure\nRestartSec={RESTART_DELAY_SECONDS}\nRestartPreventExitStatus=78\n[Install]\nWantedBy=default.target\n").as_bytes());
@@ -289,7 +122,7 @@ fn unit_data_for(store: &Store, exe: &Path) -> Result<Vec<u8>> {
 }
 
 fn unit_data(store: &Store) -> Result<Vec<u8>> {
-    let exe = std::env::current_exe().map_err(|_| unavailable())?;
+    let exe = std::env::current_exe().map_err(|_| executable_unavailable())?;
     unit_data_for(store, &exe)
 }
 
@@ -325,7 +158,7 @@ fn select_executable(
     store: &Store,
     current: &Path,
     running: &fs::Metadata,
-    definitions: &[Option<Vec<u8>>],
+    definitions: &[Option<&[u8]>],
 ) -> Result<PathBuf> {
     if fs::metadata(current).is_ok_and(|m| m.dev() == running.dev() && m.ino() == running.ino()) {
         return Ok(current.to_path_buf());
@@ -343,14 +176,17 @@ fn select_executable(
     Err(executable_unavailable())
 }
 
-fn prepare_executable(store: &Store, p: &Paths) -> Result<PathBuf> {
+fn prepare_executable(store: &Store, registration: &Registration) -> Result<PathBuf> {
     let current = std::env::current_exe().map_err(|_| executable_unavailable())?;
     let running = fs::metadata("/proc/self/exe").map_err(|_| executable_unavailable())?;
     let path = select_executable(
         store,
         &current,
         &running,
-        &[read_unit(&p.unit, store)?, legacy_unit(store, p)?],
+        &[
+            registration.current.as_deref(),
+            registration.legacy.as_deref(),
+        ],
     )?;
     validate_executable(&path)?;
     Ok(path)
@@ -456,21 +292,32 @@ fn link_owned(link: &Path, unit: &Path) -> Result<bool> {
     }
 }
 
+struct Registration {
+    current: Option<Vec<u8>>,
+    legacy: Option<Vec<u8>>,
+    current_link: bool,
+    legacy_link: bool,
+}
+impl Registration {
+    fn installed(&self) -> bool {
+        self.current.is_some() || self.legacy.is_some()
+    }
+
+    fn enabled(&self) -> bool {
+        self.current_link || self.legacy_link
+    }
+}
+
 // Detect competing definitions or activation links throughout the manager's
 // search path. Only the former adapter's exact marker proves legacy ownership.
-fn preflight(store: &Store, p: &Paths) -> Result<()> {
-    let _ = marker(store)?;
-    let own = read_unit(&p.unit, store)?;
+fn preflight(store: &Store, p: &Paths) -> Result<Registration> {
+    let current = read_unit(&p.unit, store)?;
     let legacy = legacy_unit(store, p)?;
-    if link_owned(&link_path(&p.unit), &p.unit)? && own.is_none() {
-        return Err(conflict());
-    }
-    if legacy.is_some() {
-        let _ = link_owned(&link_path(&p.legacy), &p.legacy)?;
-    } else if p.legacy != p.unit
-        && p.search.iter().any(|dir| dir.join(UNIT) == p.legacy)
-        && link_owned(&link_path(&p.legacy), &p.legacy)?
-    {
+    let current_link = link_owned(&link_path(&p.unit), &p.unit)?;
+    let legacy_link = (legacy.is_some()
+        || p.legacy != p.unit && p.search.iter().any(|dir| dir.join(UNIT) == p.legacy))
+        && link_owned(&link_path(&p.legacy), &p.legacy)?;
+    if current_link && current.is_none() || legacy_link && legacy.is_none() {
         return Err(conflict());
     }
     // Drop-ins added since the last daemon-reload are not in DropInPaths yet.
@@ -508,348 +355,326 @@ fn preflight(store: &Store, p: &Paths) -> Result<()> {
             _ => return Err(conflict()),
         }
     }
-    Ok(())
+    Ok(Registration {
+        current,
+        legacy,
+        current_link,
+        legacy_link,
+    })
 }
-fn set_link(unit: &Path, enabled: bool) -> Result<()> {
+fn set_link(unit: &Path, enabled: bool) -> Result<bool> {
     let link = link_path(unit);
-    let present = link_owned(&link, unit)?;
-    if enabled && !present {
+    if link_owned(&link, unit)? == enabled {
+        return Ok(false);
+    }
+    if enabled {
         crate::storage::ensure_directory(link.parent().expect("link has parent"))?;
         symlink(unit, &link).map_err(|_| control_failed())?;
-    } else if !enabled && present {
+    } else {
         fs::remove_file(link).map_err(|_| control_failed())?;
     }
-    Ok(())
+    Ok(true)
 }
-fn property_map(output: &str) -> HashMap<&str, &str> {
-    output
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .collect()
-}
-fn unit_properties() -> Result<String> {
-    systemctl(
-        &[
-            "show",
-            UNIT,
-            "--property=LoadState,FragmentPath,DropInPaths,ActiveState,SubState,MainPID,NRestarts,ExecMainCode,ExecMainStatus,Result,Job",
-            "--all",
-        ],
-        false,
-    )
-}
-fn check_loaded(store: &Store, p: &Paths, props: &HashMap<&str, &str>) -> Result<()> {
-    match props.get("DropInPaths") {
-        Some(paths) if paths.trim().is_empty() => {}
-        Some(_) => return Err(conflict()),
-        None => return Err(unavailable()),
-    }
-    if let Some(fragment) = props.get("FragmentPath").filter(|s| !s.is_empty()) {
-        let fragment = Path::new(fragment);
-        if fragment != p.unit && fragment != p.legacy {
-            return Err(conflict());
-        }
-        if read_unit(fragment, store)?.is_none() {
-            return Err(conflict());
-        }
-    } else if props
-        .get("LoadState")
-        .is_some_and(|state| *state != "not-found")
-    {
+
+fn check_loaded(
+    store: &Store,
+    p: &Paths,
+    registration: &Registration,
+    unit: &Unit,
+) -> Result<Option<PathBuf>> {
+    if !unit.drop_in_paths.is_empty() {
         return Err(conflict());
     }
+    if unit.load_state == "not-found"
+        && unit.fragment_path.is_empty()
+        && unit.exec_start.is_empty()
+        && unit.idle()
+    {
+        return Ok(None);
+    }
+    if unit.load_state != "loaded" {
+        return Err(conflict());
+    }
+    let fragment = Path::new(&unit.fragment_path);
+    let definition = if fragment == p.unit {
+        registration.current.as_deref()
+    } else if fragment == p.legacy {
+        registration.legacy.as_deref()
+    } else {
+        None
+    }
+    .ok_or_else(conflict)?;
+    let executable = definition_executable(store, definition)?;
+    let [command] = unit.exec_start.as_slice() else {
+        return Err(conflict());
+    };
+    let expected = executable.to_str().ok_or_else(conflict)?;
+    if command.0 != expected || command.1 != [expected, "__service"] || command.2 {
+        return Err(conflict());
+    }
+    Ok(Some(executable))
+}
+
+struct QualifiedUnit {
+    paths: Paths,
+    registration: Registration,
+    unit: Unit,
+    executable: Option<PathBuf>,
+}
+impl QualifiedUnit {
+    fn read(store: &Store, peer: &Peer) -> Result<Self> {
+        let paths = paths(store, peer.unit_paths()?)?;
+        let registration = preflight(store, &paths)?;
+        let unit = peer.unit()?;
+        let executable = check_loaded(store, &paths, &registration, &unit)?;
+        Ok(Self {
+            paths,
+            registration,
+            unit,
+            executable,
+        })
+    }
+
+    fn observation(&self) -> Observation {
+        let unit = &self.unit;
+        let installed = self.registration.installed();
+        let observed = self.executable.is_some();
+        let active = unit.active_state.as_str();
+        let pid = (observed && unit.main_pid != 0 && matches!(active, "active" | "activating"))
+            .then_some(unit.main_pid);
+        let exit =
+            (observed && unit.exec_main_code == libc::CLD_EXITED).then_some(unit.exec_main_status);
+        let (state, reason) = match (active, unit.sub_state.as_str()) {
+            ("active", _) if pid.is_some() => ("running", None),
+            ("activating", "auto-restart" | "auto-restart-queued") => ("recovering", None),
+            ("activating", _) => ("starting", None),
+            (_, _) if unit.has_job() => ("starting", None),
+            ("failed", _) if unit.result == "start-limit-hit" => {
+                ("failed", Some("retry_limit_exhausted"))
+            }
+            ("failed", _) if exit == Some(78) => ("blocked", Some("permanent_startup_failure")),
+            ("failed", _) => ("failed", Some("service_process_failed")),
+            ("inactive", _) => ("stopped", None),
+            _ => ("unavailable", None),
+        };
+        Observation {
+            registration: if installed { "owned" } else { "absent" },
+            state,
+            pid,
+            attempts: observed.then_some(unit.n_restarts),
+            last_exit_code: exit,
+            reason_code: reason.map(str::to_owned),
+            retry_delay_seconds: RESTART_DELAY_SECONDS,
+        }
+    }
+
+    fn login_status(&self, store: &Store) -> Result<Value> {
+        let current = self.registration.current.as_ref();
+        let matches = current == Some(&unit_data(store)?);
+        let registration = if !self.registration.installed() {
+            "absent"
+        } else if matches && self.registration.legacy.is_none() {
+            "present"
+        } else {
+            "drifted"
+        };
+        let enabled = self.registration.enabled();
+        Ok(
+            json!({"registration":registration,"unit_matches":matches,"login_enabled":enabled,"login_link":if enabled {"owned"} else {"absent"}}),
+        )
+    }
+}
+
+fn desired_definition<'a>(
+    store: &Store,
+    registration: &'a Registration,
+    preparation: Preparation,
+) -> Result<Cow<'a, [u8]>> {
+    if preparation == Preparation::Preserve
+        && let Some(data) = registration
+            .current
+            .as_deref()
+            .or(registration.legacy.as_deref())
+    {
+        validate_executable(&definition_executable(store, data)?)?;
+        return Ok(Cow::Borrowed(data));
+    }
+    unit_data_for(store, &prepare_executable(store, registration)?).map(Cow::Owned)
+}
+
+fn reconcile_files<'a>(
+    store: &Store,
+    snapshot: &'a QualifiedUnit,
+    preparation: Preparation,
+    login: Option<bool>,
+) -> Result<(Option<&'a Path>, bool)> {
+    let QualifiedUnit {
+        paths: p,
+        registration,
+        unit,
+        ..
+    } = snapshot;
+    let mut changed = false;
+    let mut migrate = false;
+    let fragment = Path::new(&unit.fragment_path);
+    let target = if login == Some(false) {
+        None
+    } else if unit.idle() {
+        let expected = desired_definition(store, registration, preparation)?;
+        if registration.current.as_deref() != Some(expected.as_ref()) {
+            crate::storage::atomic_write(&p.unit, &expected)?;
+            changed = true;
+        }
+        migrate = registration.legacy.is_some();
+        Some(p.unit.as_path())
+    } else {
+        let executable = snapshot.executable.as_deref().ok_or_else(conflict)?;
+        if preparation == Preparation::Replace {
+            prepare_executable(store, registration)?;
+        } else {
+            validate_executable(executable)?;
+        }
+        if login.is_none() {
+            return Ok((Some(fragment), false));
+        }
+        Some(fragment)
+    };
+
+    let enabled = login.unwrap_or_else(|| registration.enabled());
+    if target == Some(p.unit.as_path()) || registration.current.is_some() {
+        changed |= set_link(&p.unit, enabled && target == Some(p.unit.as_path()))?;
+    }
+    if registration.legacy.is_some() {
+        changed |= set_link(
+            &p.legacy,
+            enabled && !migrate && target == Some(p.legacy.as_path()),
+        )?;
+        if migrate {
+            // Never remove a replaced definition or an unrelated legacy file.
+            if let Some(data) = read_unit(&p.legacy, store)? {
+                definition_executable(store, &data)?;
+                fs::remove_file(&p.legacy).map_err(|_| control_failed())?;
+                changed = true;
+            }
+        }
+    }
+    let needs_reload = changed
+        || unit.need_daemon_reload && (target.is_some() || registration.installed())
+        || target.is_some_and(|path| fragment != path || snapshot.executable.is_none());
+    Ok((target, needs_reload))
+}
+
+fn reconcile(store: &Store, preparation: Preparation, login: Option<bool>) -> Result<()> {
+    let (peer, before) = snapshot(store)?;
+    let (target, needs_reload) = reconcile_files(store, &before, preparation, login)?;
+    if needs_reload {
+        peer.control(&["daemon-reload"])?;
+        let after = QualifiedUnit::read(store, &peer)?;
+        if target.is_some_and(|target| {
+            after.executable.is_none() || Path::new(&after.unit.fragment_path) != target
+        }) || login.is_some_and(|enabled| after.registration.enabled() != enabled)
+        {
+            return Err(control_failed());
+        }
+    }
     Ok(())
 }
-fn manager(store: &Store) -> Result<(Manager, Paths)> {
-    let activation = manager_identity()?;
-    let p = paths(store)?;
-    preflight(store, &p)?;
-    let raw = unit_properties()?;
-    check_loaded(store, &p, &property_map(&raw))?;
-    Ok((
-        Manager {
+
+fn snapshot(store: &Store) -> Result<(Peer, QualifiedUnit)> {
+    let peer = Peer::connect()?;
+    let unit = QualifiedUnit::read(store, &peer)?;
+    Ok((peer, unit))
+}
+
+fn observation(peer: Peer, unit: &QualifiedUnit) -> Snapshot {
+    Snapshot {
+        manager: Manager {
             name: "systemd_user",
-            activation,
+            activation: peer.activation,
             survives_logout: None,
             session_scope: "user_manager",
         },
-        p,
-    ))
+        observed: unit.observation(),
+    }
 }
 
-// A live unit must keep its definition until the manager has stopped it.
-// Preserve also retains an existing definition when the unit is inactive.
-fn selected_definition<'a>(
-    store: &Store,
-    existing: Option<&'a [u8]>,
-    desired: Option<&Path>,
-    preparation: Preparation,
-    live: bool,
-) -> Result<Cow<'a, [u8]>> {
-    if let Some(data) = existing.filter(|_| preparation == Preparation::Preserve || live) {
-        let executable = definition_executable(store, data)?;
-        if preparation == Preparation::Preserve {
-            validate_executable(&executable)?;
-        }
-        return Ok(Cow::Borrowed(data));
-    }
-    if live {
-        return Err(conflict());
-    }
-    unit_data_for(store, desired.ok_or_else(control_failed)?).map(Cow::Owned)
-}
-
-fn prepare_sync(store: &Store, preparation: Preparation) -> Result<()> {
-    let (_, p) = manager(store)?;
-    let raw = unit_properties()?;
-    let props = property_map(&raw);
-    check_loaded(store, &p, &props)?;
-    let live = !matches!(props.get("ActiveState"), Some(&"inactive" | &"failed"));
-    let current_data = read_unit(&p.unit, store)?;
-    let legacy_data = legacy_unit(store, &p)?;
-    let existing = if live {
-        match props.get("FragmentPath").copied() {
-            Some(path) if Some(path) == p.unit.to_str() => current_data.as_deref(),
-            Some(path) if Some(path) == p.legacy.to_str() => legacy_data.as_deref(),
-            _ => None,
-        }
-    } else {
-        current_data.as_deref().or(legacy_data.as_deref())
-    };
-    let desired = if preparation == Preparation::Replace || existing.is_none() {
-        Some(prepare_executable(store, &p)?)
-    } else {
-        None
-    };
-    let expected = selected_definition(store, existing, desired.as_deref(), preparation, live)?;
-    if live {
-        return Ok(());
-    }
-    let legacy_enabled = legacy_data.is_some() && link_owned(&link_path(&p.legacy), &p.legacy)?;
-    if read_unit(&p.unit, store)?.as_deref() != Some(expected.as_ref()) {
-        crate::storage::atomic_write(&p.unit, expected.as_ref())?;
-    }
-    if legacy_enabled {
-        set_link(&p.unit, true)?;
-    }
-    if legacy_data.is_some() {
-        set_link(&p.legacy, false)?;
-        // Recheck the ownership marker immediately before removing the old path.
-        if read_unit(&p.legacy, store)?.is_some() {
-            fs::remove_file(&p.legacy).map_err(|_| control_failed())?;
-        }
-    }
-    systemctl(&["daemon-reload"], true)?;
-    let raw = unit_properties()?;
-    let props = property_map(&raw);
-    check_loaded(store, &p, &props)?;
-    if props.get("LoadState") != Some(&"loaded")
-        || props.get("FragmentPath").copied() != p.unit.to_str()
-    {
-        return Err(control_failed());
-    }
-    Ok(())
-}
-
-fn inspect_sync(store: &Store) -> Result<Observation> {
-    let (_, p) = manager(store)?;
-    let raw = unit_properties()?;
-    let props = property_map(&raw);
-    check_loaded(store, &p, &props)?;
-    let owned = read_unit(&p.unit, store)?.is_some() || legacy_unit(store, &p)?.is_some();
-    if !owned {
-        return Ok(Observation {
-            registration: "absent",
-            state: "stopped",
-            pid: None,
-            attempts: None,
-            last_exit_code: None,
-            reason_code: None,
-            retry_delay_seconds: RESTART_DELAY_SECONDS,
-        });
-    }
-    let active = props.get("ActiveState").copied().unwrap_or("");
-    let sub = props.get("SubState").copied().unwrap_or("");
-    let result = props.get("Result").copied().unwrap_or("");
-    let pid = props
-        .get("MainPID")
-        .and_then(|v| v.parse::<u32>().ok())
-        .filter(|p| *p > 0 && matches!(active, "active" | "activating"));
-    let code = props
-        .get("ExecMainCode")
-        .and_then(|v| v.parse::<i32>().ok());
-    let status = props
-        .get("ExecMainStatus")
-        .and_then(|v| v.parse::<i32>().ok());
-    let exit = if code == Some(1) { status } else { None };
-    let (state, reason) = if result == "start-limit-hit" {
-        ("failed", Some("retry_limit_exhausted"))
-    } else if active == "failed" && exit == Some(78) {
-        ("blocked", Some("permanent_startup_failure"))
-    } else {
-        match (active, sub) {
-            ("active", _) if pid.is_some() => ("running", None),
-            ("activating", "auto-restart") | ("activating", "auto-restart-queued") => {
-                ("recovering", None)
-            }
-            ("activating", _) => ("starting", None),
-            ("inactive", _) => ("stopped", None),
-            ("failed", _) => ("failed", Some("service_process_failed")),
-            _ => ("unavailable", None),
-        }
-    };
-    Ok(Observation {
-        registration: "owned",
-        state,
-        pid,
-        attempts: props.get("NRestarts").and_then(|v| v.parse().ok()),
-        last_exit_code: exit,
-        reason_code: reason.map(str::to_owned),
-        retry_delay_seconds: RESTART_DELAY_SECONDS,
-    })
-}
-
+// A native bus handle and all of its replies remain on this worker.
 async fn blocking<T: Send + 'static>(
     store: &Store,
-    f: impl FnOnce(&Store) -> Result<T> + Send + 'static,
+    operation: impl FnOnce(&Store) -> Result<T> + Send + 'static,
 ) -> Result<T> {
     let store = store.clone();
-    tokio::task::spawn_blocking(move || f(&store))
+    tokio::task::spawn_blocking(move || operation(&store))
         .await
         .map_err(|_| control_failed())?
 }
 
-pub(super) async fn probe(store: &Store) -> Result<Manager> {
-    blocking(store, |s| manager(s).map(|(m, _)| m)).await
+pub(super) async fn observe(store: &Store) -> Result<Snapshot> {
+    blocking(store, |store| {
+        let (peer, unit) = snapshot(store)?;
+        Ok(observation(peer, &unit))
+    })
+    .await
 }
-pub(super) async fn inspect(store: &Store) -> Result<Observation> {
-    match blocking(store, inspect_sync).await {
-        Ok(observation) => Ok(observation),
-        Err(e)
-            if e.code == "service_registration_conflict"
-                || e.code == "service_manager_unavailable" =>
-        {
-            Ok(Observation {
-                registration: if e.code == "service_registration_conflict" {
-                    "conflict"
-                } else {
-                    "unavailable"
-                },
-                state: "unavailable",
-                pid: None,
-                attempts: None,
-                last_exit_code: None,
-                reason_code: Some(e.code),
-                retry_delay_seconds: RESTART_DELAY_SECONDS,
-            })
+
+pub(super) async fn observe_status(store: &Store) -> (Result<Snapshot>, Result<Value>) {
+    let observed = blocking(store, |store| {
+        let (peer, unit) = snapshot(store)?;
+        Ok((observation(peer, &unit), unit.login_status(store)))
+    })
+    .await;
+    match observed {
+        Ok((snapshot, registration)) => (Ok(snapshot), registration),
+        Err(error) => {
+            let registration = if error.code == "service_registration_conflict" {
+                "conflict"
+            } else {
+                "unavailable"
+            };
+            (
+                Err(error),
+                Ok(json!({"registration":registration,"unit_matches":false,"login_enabled":null})),
+            )
         }
-        Err(e) => Err(e),
     }
 }
+
 pub(super) async fn prepare(store: &Store, preparation: Preparation) -> Result<()> {
-    blocking(store, move |s| prepare_sync(s, preparation)).await
+    blocking(store, move |store| reconcile(store, preparation, None)).await
 }
+
 pub(super) async fn start(store: &Store) -> Result<()> {
-    blocking(store, |s| {
-        let (_, p) = manager(s)?;
-        let raw = unit_properties()?;
-        let props = property_map(&raw);
-        check_loaded(s, &p, &props)?;
-        if props.get("LoadState") != Some(&"loaded") {
-            return Err(control_failed());
+    blocking(store, |store| {
+        let (peer, observed) = snapshot(store)?;
+        validate_executable(observed.executable.as_deref().ok_or_else(control_failed)?)?;
+        if observed.unit.active_state == "failed" || observed.unit.result == "start-limit-hit" {
+            peer.control(&["reset-failed", UNIT])?;
         }
-        let fragment = props
-            .get("FragmentPath")
-            .filter(|path| !path.is_empty())
-            .ok_or_else(control_failed)?;
-        let definition = read_unit(Path::new(fragment), s)?.ok_or_else(control_failed)?;
-        validate_executable(&definition_executable(s, &definition)?)?;
-        if props.get("ActiveState") == Some(&"failed")
-            || props.get("Result") == Some(&"start-limit-hit")
-        {
-            systemctl(&["reset-failed", UNIT], true)?;
-        }
-        systemctl(&["start", UNIT], true)?;
-        Ok(())
+        peer.control(&["start", UNIT])
     })
     .await
 }
+
 pub(super) async fn stop(store: &Store) -> Result<()> {
-    blocking(store, |s| {
-        let (_, p) = manager(s)?;
-        if read_unit(&p.unit, s)?.is_none() && legacy_unit(s, &p)?.is_none() {
+    blocking(store, |store| {
+        let (peer, observed) = snapshot(store)?;
+        if !observed.registration.installed() {
             return Ok(());
         }
-        systemctl(&["stop", UNIT], true)?;
-        let raw = unit_properties()?;
-        let props = property_map(&raw);
-        check_loaded(s, &p, &props)?;
-        let active = props.get("ActiveState").copied().unwrap_or("");
-        let pid = props.get("MainPID").and_then(|v| v.parse::<u32>().ok());
-        let job = props.get("Job").copied().unwrap_or("");
-        if !matches!(active, "inactive" | "failed")
-            || pid != Some(0)
-            || (!job.is_empty() && job != "0")
-        {
+        peer.control(&["stop", UNIT])?;
+        if !QualifiedUnit::read(store, &peer)?.unit.idle() {
             return Err(control_failed());
         }
         Ok(())
     })
     .await
 }
+
 pub(super) async fn login(store: &Store, enabled: bool) -> Result<()> {
-    blocking(store, move |s| {
-        if enabled {
-            prepare_sync(s, Preparation::Preserve)?;
-        }
-        let (_, p) = manager(s)?;
-        let raw = unit_properties()?;
-        let props = property_map(&raw);
-        check_loaded(s, &p, &props)?;
-        let use_legacy =
-            props.get("FragmentPath").copied() == p.legacy.to_str() && p.legacy != p.unit;
-        if read_unit(&p.unit, s)?.is_some() {
-            set_link(&p.unit, enabled && !use_legacy)?;
-        }
-        if legacy_unit(s, &p)?.is_some() {
-            set_link(&p.legacy, enabled && use_legacy)?;
-        }
-        systemctl(&["daemon-reload"], true)?;
-        let raw = unit_properties()?;
-        check_loaded(s, &p, &property_map(&raw))?;
-        Ok(())
+    blocking(store, move |store| {
+        reconcile(store, Preparation::Preserve, Some(enabled))
     })
     .await
-}
-pub(super) fn login_status(store: &Store) -> Result<Value> {
-    let (_, p) = match manager(store) {
-        Ok(v) => v,
-        Err(e) if e.code == "service_registration_conflict" => {
-            return Ok(
-                json!({"registration":"conflict", "unit_matches":false, "login_enabled":null}),
-            );
-        }
-        Err(_) => {
-            return Ok(
-                json!({"registration":"unavailable", "unit_matches":false, "login_enabled":null}),
-            );
-        }
-    };
-    let current = read_unit(&p.unit, store)?;
-    let legacy = legacy_unit(store, &p)?;
-    let enabled = link_owned(&link_path(&p.unit), &p.unit)?
-        || (legacy.is_some() && link_owned(&link_path(&p.legacy), &p.legacy)?);
-    let matches = current.as_ref() == Some(&unit_data(store)?);
-    let registration = if current.is_none() && legacy.is_none() {
-        "absent"
-    } else if matches && legacy.is_none() {
-        "present"
-    } else {
-        "drifted"
-    };
-    Ok(
-        json!({"registration":registration, "unit_matches":matches, "login_enabled":enabled, "login_link":if enabled {"owned"} else {"absent"}}),
-    )
 }
 
 #[cfg(test)]
@@ -857,41 +682,170 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loaded_and_pending_drop_ins_are_registration_conflicts() {
-        let home = tempfile::tempdir().unwrap();
-        let store = Store::at(home.path().to_path_buf());
-        let unit = home.path().join(UNIT);
-        fs::write(
-            &unit,
-            unit_data_for(&store, Path::new("/usr/bin/tmax")).unwrap(),
-        )
-        .unwrap();
-        let p = Paths {
-            unit: unit.clone(),
-            legacy: unit.clone(),
-            search: vec![home.path().to_path_buf()],
+    fn activation_uses_the_private_manager_socket() {
+        use std::os::{
+            fd::AsRawFd,
+            unix::net::{UnixListener, UnixStream},
         };
-        let raw = format!(
-            "LoadState=loaded\nFragmentPath={}\nDropInPaths=\n",
-            unit.display()
-        );
-        assert!(check_loaded(&store, &p, &property_map(&raw)).is_ok());
-        let raw = format!(
-            "LoadState=loaded\nFragmentPath={}\nDropInPaths=/home/user/.config/systemd/user/tmax.service.d/override.conf\n",
-            unit.display()
+
+        let runtime = tempfile::tempdir().unwrap();
+        let path = runtime.path().join("private");
+        let _listener = UnixListener::bind(&path).unwrap();
+        let socket = UnixStream::connect(&path).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        assert_eq!(
+            systemd_peer::peer_pid(socket.as_raw_fd(), uid).unwrap(),
+            std::process::id()
         );
         assert_eq!(
-            check_loaded(&store, &p, &property_map(&raw))
-                .unwrap_err()
-                .code,
-            "service_registration_conflict"
-        );
-        let missing = format!("LoadState=loaded\nFragmentPath={}\n", unit.display());
-        assert_eq!(
-            check_loaded(&store, &p, &property_map(&missing))
+            systemd_peer::peer_pid(socket.as_raw_fd(), uid.wrapping_add(1))
                 .unwrap_err()
                 .code,
             "service_manager_unavailable"
+        );
+    }
+
+    fn loaded_unit(fragment: &Path, executable: &Path) -> Unit {
+        let exe = executable.to_str().unwrap();
+        Unit {
+            load_state: "loaded".into(),
+            fragment_path: fragment.to_str().unwrap().into(),
+            drop_in_paths: vec![],
+            need_daemon_reload: false,
+            active_state: "inactive".into(),
+            sub_state: "dead".into(),
+            main_pid: 0,
+            n_restarts: 0,
+            exec_main_code: 0,
+            exec_main_status: 0,
+            result: "success".into(),
+            job_pending: false,
+            exec_start: vec![(exe.into(), vec![exe.into(), "__service".into()], false)],
+        }
+    }
+
+    fn fixture(store: &Store, executable: &Path) -> QualifiedUnit {
+        let fragment = store.home.join(UNIT);
+        fs::write(&fragment, unit_data_for(store, executable).unwrap()).unwrap();
+        let paths = Paths {
+            unit: fragment.clone(),
+            legacy: fragment.clone(),
+            search: vec![store.home.clone()],
+        };
+        let registration = preflight(store, &paths).unwrap();
+        let unit = loaded_unit(&fragment, executable);
+        let executable = check_loaded(store, &paths, &registration, &unit).unwrap();
+        QualifiedUnit {
+            paths,
+            registration,
+            unit,
+            executable,
+        }
+    }
+
+    #[test]
+    fn loaded_command_must_match_the_exact_owned_argv() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_path_buf());
+        let executable = Path::new("/home/a user/bin/tmax");
+        let mut snapshot = fixture(&store, executable);
+        let expected = check_loaded(
+            &store,
+            &snapshot.paths,
+            &snapshot.registration,
+            &snapshot.unit,
+        )
+        .unwrap();
+        assert_eq!(expected.as_deref(), Some(executable));
+
+        // An argv with one argument can render exactly like two arguments in systemctl show.
+        snapshot.unit.exec_start[0].1 = vec![format!("{} __service", executable.display())];
+        assert_eq!(
+            check_loaded(
+                &store,
+                &snapshot.paths,
+                &snapshot.registration,
+                &snapshot.unit
+            )
+            .unwrap_err()
+            .code,
+            "service_registration_conflict"
+        );
+        snapshot.unit = loaded_unit(&snapshot.paths.unit, Path::new("/unrelated/tmax"));
+        assert_eq!(
+            check_loaded(
+                &store,
+                &snapshot.paths,
+                &snapshot.registration,
+                &snapshot.unit
+            )
+            .unwrap_err()
+            .code,
+            "service_registration_conflict"
+        );
+    }
+
+    #[test]
+    fn retry_wait_is_not_a_terminal_failure() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_path_buf());
+        let mut observed = fixture(&store, Path::new("/proc/self/exe"));
+        observed.unit.active_state = "failed".into();
+        observed.unit.result = "exit-code".into();
+        observed.unit.exec_main_code = libc::CLD_EXITED;
+        observed.unit.exec_main_status = 78;
+        assert_eq!(observed.observation().state, "blocked");
+        observed.unit.job_pending = true;
+        assert_eq!(observed.observation().state, "starting");
+        observed.unit.active_state = "activating".into();
+        observed.unit.sub_state = "auto-restart".into();
+        assert_eq!(observed.observation().state, "recovering");
+    }
+
+    #[test]
+    fn login_link_reconciliation_requests_reload_only_when_needed() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_path_buf());
+        let mut snapshot = fixture(&store, Path::new("/proc/self/exe"));
+        let enabled = |snapshot: &QualifiedUnit, enable| {
+            reconcile_files(&store, snapshot, Preparation::Preserve, Some(enable))
+                .unwrap()
+                .1
+        };
+        assert!(enabled(&snapshot, true));
+        snapshot.registration = preflight(&store, &snapshot.paths).unwrap();
+        assert!(snapshot.registration.enabled());
+        assert!(!enabled(&snapshot, true));
+
+        snapshot.unit.need_daemon_reload = true;
+        assert!(enabled(&snapshot, true));
+        snapshot.unit.need_daemon_reload = false;
+        assert!(enabled(&snapshot, false));
+        snapshot.registration = preflight(&store, &snapshot.paths).unwrap();
+        assert!(!snapshot.registration.enabled());
+        assert!(!enabled(&snapshot, false));
+        assert!(snapshot.paths.unit.is_file());
+    }
+
+    #[test]
+    fn loaded_and_pending_drop_ins_are_registration_conflicts() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_path_buf());
+        let mut snapshot = fixture(&store, Path::new("/proc/self/exe"));
+        snapshot
+            .unit
+            .drop_in_paths
+            .push("/home/user/.config/systemd/user/tmax.service.d/override.conf".into());
+        assert_eq!(
+            check_loaded(
+                &store,
+                &snapshot.paths,
+                &snapshot.registration,
+                &snapshot.unit
+            )
+            .unwrap_err()
+            .code,
+            "service_registration_conflict"
         );
 
         let drop_ins = home.path().join("tmax.service.d");
@@ -902,7 +856,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            preflight(&store, &p).unwrap_err().code,
+            preflight(&store, &snapshot.paths).err().unwrap().code,
             "service_registration_conflict"
         );
     }
@@ -912,72 +866,35 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let store = Store::at(home.path().to_path_buf());
         let first = home.path().join("first");
-        let second = home.path().join("second");
-        fs::copy("/proc/self/exe", &first).unwrap();
-        fs::copy("/proc/self/exe", &second).unwrap();
-        let original = unit_data_for(&store, &first).unwrap();
-        let replacement = unit_data_for(&store, &second).unwrap();
-        assert_eq!(
-            selected_definition(
-                &store,
-                Some(&original),
-                Some(&second),
-                Preparation::Preserve,
-                true
-            )
-            .unwrap()
-            .as_ref(),
-            original.as_slice()
+        symlink("/proc/self/exe", &first).unwrap();
+        let mut snapshot = fixture(&store, &first);
+        let original = fs::read(&snapshot.paths.unit).unwrap();
+        snapshot.unit.active_state = "active".into();
+        snapshot.unit.main_pid = std::process::id();
+        assert!(
+            !reconcile_files(&store, &snapshot, Preparation::Replace, None)
+                .unwrap()
+                .1
+        );
+        assert_eq!(fs::read(&snapshot.paths.unit).unwrap(), original);
+
+        snapshot.unit.active_state = "inactive".into();
+        snapshot.unit.main_pid = 0;
+        assert!(
+            !reconcile_files(&store, &snapshot, Preparation::Preserve, None)
+                .unwrap()
+                .1
+        );
+        assert_eq!(fs::read(&snapshot.paths.unit).unwrap(), original);
+
+        assert!(
+            reconcile_files(&store, &snapshot, Preparation::Replace, None)
+                .unwrap()
+                .1
         );
         assert_eq!(
-            selected_definition(
-                &store,
-                Some(&original),
-                Some(&second),
-                Preparation::Preserve,
-                false
-            )
-            .unwrap()
-            .as_ref(),
-            original.as_slice()
-        );
-        assert_eq!(
-            selected_definition(
-                &store,
-                Some(&original),
-                Some(&second),
-                Preparation::Replace,
-                true
-            )
-            .unwrap()
-            .as_ref(),
-            original.as_slice()
-        );
-        assert_eq!(
-            selected_definition(
-                &store,
-                Some(&original),
-                Some(&second),
-                Preparation::Replace,
-                false
-            )
-            .unwrap()
-            .as_ref(),
-            replacement.as_slice()
-        );
-        let mut altered = original.clone();
-        altered.extend_from_slice(b"ExecStartPre=/unrelated\n");
-        assert_eq!(
-            selected_definition(
-                &store,
-                Some(&altered),
-                Some(&second),
-                Preparation::Preserve,
-                true
-            )
-            .unwrap_err()
-            .code,
-            "service_registration_conflict"
+            fs::read(&snapshot.paths.unit).unwrap(),
+            unit_data(&store).unwrap()
         );
     }
     #[test]
@@ -994,8 +911,7 @@ mod tests {
         let mut deleted = executable.as_os_str().to_os_string();
         deleted.push(" (deleted)");
         let deleted = PathBuf::from(deleted);
-        let selected =
-            select_executable(&store, &deleted, &running, &[Some(definition.clone())]).unwrap();
+        let selected = select_executable(&store, &deleted, &running, &[Some(&definition)]).unwrap();
         assert_eq!(selected, executable);
         assert_eq!(
             validate_executable(&selected).unwrap_err().code,
@@ -1006,18 +922,16 @@ mod tests {
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(validate_executable(&selected).is_err());
         let other = Store::at(home.path().join("other"));
-        assert!(
-            select_executable(&other, &deleted, &running, &[Some(definition.clone())]).is_err()
-        );
+        assert!(select_executable(&other, &deleted, &running, &[Some(&definition)]).is_err());
         let mut altered = definition;
         altered.extend_from_slice(b"ExecStart=/unrelated\n");
-        assert!(select_executable(&store, &deleted, &running, &[Some(altered)]).is_err());
+        assert!(select_executable(&store, &deleted, &running, &[Some(&altered)]).is_err());
         assert!(
             select_executable(
                 &store,
                 Path::new("/unrelated (deleted)"),
                 &running,
-                &[Some(unit_data_for(&store, &executable).unwrap())]
+                &[Some(&unit_data_for(&store, &executable).unwrap())]
             )
             .is_err()
         );
@@ -1052,10 +966,17 @@ mod tests {
         );
     }
     #[test]
-    fn manager_unit_paths_support_quoted_user_directories() {
-        let paths = parse_unit_paths("/run/user/1000/systemd/user \"/home/a user/.config/systemd/user\" /usr/lib/systemd/user\n").unwrap();
-        assert_eq!(paths[1], Path::new("/home/a user/.config/systemd/user"));
-        assert!(parse_unit_paths("\"/unfinished").is_err());
+    fn manager_unit_paths_preserve_spaces_and_reject_relative_paths() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::at(home.path().to_path_buf());
+        let directory = home.path().join("a user/systemd/user");
+        fs::create_dir_all(&directory).unwrap();
+        let search = vec![
+            "/run/user/1000/systemd/user".into(),
+            directory.to_str().unwrap().into(),
+        ];
+        assert_eq!(paths(&store, search).unwrap().unit, directory.join(UNIT));
+        assert!(paths(&store, vec!["relative/systemd/user".into()]).is_err());
     }
     #[test]
     fn unrelated_legacy_outside_manager_path_is_ignored() {
