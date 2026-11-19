@@ -7,7 +7,7 @@ use super::{
     address, control_transport,
     daemon::{Shared, absent, daemon_control},
     failure,
-    startup::autostart_status,
+    startup::autostart_view,
 };
 use crate::{Request, Result, config::Config, gateway::Runtime, storage::Store};
 use serde::{Deserialize, Serialize};
@@ -215,6 +215,10 @@ pub(super) async fn rpc(
 }
 
 pub async fn status(store: &Store) -> Result<Value> {
+    Ok(status_snapshot(store).await.0)
+}
+
+pub(super) async fn status_snapshot(store: &Store) -> (Value, Result<super::supervisor::Snapshot>) {
     let mut value = match rpc(store, "status", None, None).await {
         Ok(Some(v)) => v,
         Ok(None) => absent(),
@@ -229,8 +233,9 @@ pub async fn status(store: &Store) -> Result<Value> {
             value
         }
     };
-    value["autostart"]=autostart_status(store).unwrap_or_else(|error|json!({"snapshot_state":"unavailable","reason_code":error.code,"reconciliation":"not_requested","repair":"gateway configure --set autostart true|false"}));
-    value["supervision"] = super::supervisor::view(store, &value["daemon"]).await;
+    let (snapshot, registration) = super::supervisor::observe_status(store).await;
+    value["autostart"]=autostart_view(store, registration).unwrap_or_else(|error|json!({"snapshot_state":"unavailable","reason_code":error.code,"reconciliation":"not_requested","repair":"gateway configure --set autostart true|false"}));
+    value["supervision"] = super::supervisor::snapshot_view(store, &value["daemon"], &snapshot);
     match crate::config::load(store) {
         Ok(file) => {
             value["shared_key"]["file_reference"] =
@@ -248,7 +253,7 @@ pub async fn status(store: &Store) -> Result<Value> {
     if value["network"]["loaded"].is_null() {
         value["network"]["loaded"] = json!({"snapshot_state":"absent","configuration_revision":null,"configured":null,"effective":null,"reason_code":"no_loaded_snapshot"});
     }
-    Ok(value)
+    (value, snapshot)
 }
 pub(crate) struct LoadedSnapshot {
     pub file: crate::config::LoadedFile,
@@ -386,7 +391,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
         return Ok(rpc(store,"control",Some(request.clone()),None).await?.unwrap_or_else(||json!({"dry_run":true,"snapshot_count":0,"retained_in_progress":0,"coverage":"no_daemon_history"})));
     }
     if request.dry_run {
-        let before = status(store).await?;
+        let (before, snapshot) = status_snapshot(store).await;
         let mut blockers = Vec::new();
         let discovery = before["daemon"]["discovery_state"]
             .as_str()
@@ -432,7 +437,7 @@ pub async fn control(store: &Store, config: &Config, request: &Request) -> Resul
             (group, action),
             ("gateway", "start" | "restart") | ("web", "open")
         ) && (discovery == "absent" || action == "restart")
-            && let Err(error) = super::supervisor::probe(store).await
+            && let Err(error) = snapshot
         {
             blockers.push(json!(error));
         }

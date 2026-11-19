@@ -14,9 +14,9 @@ struct Startup {
     retained: std::collections::BTreeMap<String, Value>,
 }
 
-pub(super) fn autostart_status(store: &Store) -> Result<Value> {
+pub(super) fn autostart_view(store: &Store, registration: Result<Value>) -> Result<Value> {
     let state: Startup = store.read_json("autostart.json")?;
-    let mut value = supervisor::login_status(store)?;
+    let mut value = registration?;
     value["saved_intent"] = json!(
         crate::config::load(store)
             .ok()
@@ -28,6 +28,10 @@ pub(super) fn autostart_status(store: &Store) -> Result<Value> {
     value["reconciliation"] = json!("not_requested");
     value["repair"] = json!("gateway configure --set autostart true|false");
     Ok(value)
+}
+
+async fn autostart_status(store: &Store) -> Result<Value> {
+    autostart_view(store, supervisor::login_status(store).await)
 }
 
 pub async fn reconcile_autostart(store: &Store, config: &Config, dry_run: bool) -> Result<Value> {
@@ -49,10 +53,10 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool) -> Result<Value>
         state.acknowledged == Some(enabled) || state.acknowledged.is_none() && !enabled
     };
     if unchanged(&state) {
-        return autostart_status(store);
+        return autostart_status(store).await;
     }
     if dry_run {
-        let prerequisite = supervisor::probe(store).await.err();
+        let prerequisite = supervisor::observe(store).await.err();
         return Ok(
             json!({"dry_run":true,"enabled":enabled,"registration":"planned","supervision":"unchanged","starts_inference":false,"blockers":prerequisite.into_iter().collect::<Vec<_>>()}),
         );
@@ -60,14 +64,14 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool) -> Result<Value>
     let _guard = supervisor::lifecycle_lock(store).await?;
     let mut state: Startup = store.read_json("autostart.json")?;
     if unchanged(&state) {
-        return autostart_status(store);
+        return autostart_status(store).await;
     }
     state.acknowledged = Some(enabled);
     state.last_attempt = Some(chrono::Utc::now());
     state.last_outcome = Some("pending".into());
     store.write_json("autostart.json", &state)?;
     let result = async {
-        let manager = supervisor::probe(store).await?;
+        let manager = supervisor::observe(store).await?.manager;
         supervisor::initialize(store, &manager)?;
         supervisor::login(store, enabled).await
     }
@@ -81,7 +85,8 @@ async fn reconcile(store: &Store, enabled: bool, dry_run: bool) -> Result<Value>
         .into(),
     );
     let metadata = store.write_json("autostart.json", &state);
+    let status = autostart_status(store).await.ok();
     Ok(
-        json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"error":result.err(),"outcome_recording_error":metadata.err(),"status":autostart_status(store).ok(),"repair":"gateway configure --set autostart true|false","current_listeners":"unchanged"}),
+        json!({"_code":if result.is_err()||metadata.is_err(){json!("saved_not_active")}else{Value::Null},"reconciliation":if result.is_ok(){"reconciled"}else{"failed"},"acknowledged_intent":enabled,"error":result.err(),"outcome_recording_error":metadata.err(),"status":status,"repair":"gateway configure --set autostart true|false","current_listeners":"unchanged"}),
     )
 }

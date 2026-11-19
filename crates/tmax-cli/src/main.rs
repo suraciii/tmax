@@ -34,7 +34,19 @@ async fn run_service(argv: &[OsString]) -> ExitCode {
     match service::run_service().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("The supervised service could not start: {}.", error.code);
+            if matches!(
+                error.code.as_str(),
+                "service_manager_unavailable"
+                    | "service_registration_conflict"
+                    | "service_control_failed"
+            ) {
+                eprintln!(
+                    "The supervised service could not start: {}. {}",
+                    error.code, error.message
+                );
+            } else {
+                eprintln!("The supervised service could not start: {}.", error.code);
+            }
             ExitCode::from(service::service_exit_code(&error))
         }
     }

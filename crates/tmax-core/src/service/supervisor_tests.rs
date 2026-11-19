@@ -737,3 +737,105 @@ async fn readiness_requires_owned_acknowledged_process_and_restart_cannot_revive
         "inputs_changed"
     );
 }
+
+#[test]
+fn native_terminal_exit_is_reported_before_rpc_without_using_an_old_activation() {
+    use super::super::supervised_control::readiness;
+
+    let home = tempfile::tempdir().unwrap();
+    let store = Store::at(home.path().to_path_buf());
+    let active = manager("current-manager");
+    let attempt = request(
+        &store,
+        &active,
+        Some(true),
+        None,
+        Some(addr("127.0.0.1:41001")),
+        None,
+    )
+    .unwrap();
+    let mut observed = Observation {
+        registration: "owned",
+        state: "blocked",
+        pid: None,
+        attempts: Some(0),
+        last_exit_code: Some(78),
+        reason_code: Some("permanent_startup_failure".into()),
+        retry_delay_seconds: RESTART_DELAY_SECONDS,
+    };
+    let error = readiness(
+        &store,
+        &attempt,
+        None,
+        Some((&active, &observed)),
+        true,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "permanent_startup_failure");
+    assert!(error.message.contains("78"));
+    assert!(
+        !readiness(
+            &store,
+            &attempt,
+            None,
+            Some((&manager("old-manager"), &observed)),
+            true,
+            false
+        )
+        .unwrap()
+    );
+
+    observed.state = "recovering";
+    assert!(
+        !readiness(
+            &store,
+            &attempt,
+            None,
+            Some((&active, &observed)),
+            true,
+            false
+        )
+        .unwrap()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_recovery_status_is_not_overwritten_by_the_old_app_budget() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Store::at(home.path().to_path_buf());
+    let manager = manager("systemd-manager");
+    let mut record = request(
+        &store,
+        &manager,
+        Some(true),
+        None,
+        Some(addr("127.0.0.1:41001")),
+        None,
+    )
+    .unwrap();
+    record.attempts = RESTART_LIMIT;
+    record.last_exit_code = Some(78);
+    record.state = "failed".into();
+    record.reason_code = Some("service_recovery_exhausted".into());
+    save(&store, &record).unwrap();
+
+    let snapshot = Ok(Snapshot {
+        manager,
+        observed: Observation {
+            registration: "owned",
+            state: "recovering",
+            pid: None,
+            attempts: Some(1),
+            last_exit_code: Some(75),
+            reason_code: None,
+            retry_delay_seconds: RESTART_DELAY_SECONDS,
+        },
+    });
+    let status = snapshot_view(&store, &json!({"discovery_state":"absent"}), &snapshot);
+    assert_eq!(status["state"], "recovering");
+    assert_eq!(status["recovery"]["attempts"], 1);
+    assert_eq!(status["recovery"]["last_exit_code"], 75);
+    assert_eq!(status["requested"]["inference"], true);
+}

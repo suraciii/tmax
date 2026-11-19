@@ -682,6 +682,11 @@ The manager can recover an unexpected process exit without a connected client.
 Recovery restores only still-requested listeners at their acknowledged addresses.
 It never replays interrupted inference.
 
+On Linux, systemd applies the process restart limit. The recovery attempt count
+in `tmax gateway status` reports automatic restarts, not the initial start.
+If the process exits before it can report listener readiness, use
+`journalctl --user -u tmax.service -b` to see the foreground diagnostic.
+
 A configured gateway starts at future user-manager/login activation by default;
 no declaration is required. `tmax gateway configure --set autostart false` is
 the explicit opt-out; `--clear autostart` (or `--set autostart true`) restores
