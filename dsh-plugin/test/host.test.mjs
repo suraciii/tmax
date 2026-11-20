@@ -103,7 +103,6 @@ function fakeContext({ credential = 'test-key' } = {}) {
       if (name === 'attachments') return undefined
       if (name === 'fs') return undefined
       if (name === 'webServer') return { register(route) { state.httpRoutes.push(route); return () => {} } }
-      if (name === 'connection') return { requestRejection: () => undefined }
       return undefined
     },
     llm: {

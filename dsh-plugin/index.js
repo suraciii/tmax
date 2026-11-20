@@ -280,20 +280,12 @@ export async function apply(ctx, config = {}) {
   }, 'tmax: adapter and refresh')
 
   const webServer = ctx.get('webServer')
-  const connection = ctx.get('connection')
-  if (webServer !== undefined && connection !== undefined) {
+  if (webServer !== undefined) {
     const send = (res, status, payload) => {
       res.statusCode = status
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.setHeader('cache-control', 'no-store')
       res.end(JSON.stringify(payload))
-    }
-    const rejected = (req, res) => {
-      const rejection = connection.requestRejection(req)
-      if (rejection === undefined) return false
-      res.statusCode = rejection
-      res.end()
-      return true
     }
     const summary = () => ({
       target: lastProjection?.target,
@@ -403,7 +395,6 @@ export async function apply(ctx, config = {}) {
     kind: 'exact',
     path: '/_tmax/dsh-usage',
     handler: async (req, res) => {
-      if (rejected(req, res)) return
       if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
       const force = req.url !== undefined && /[?&]force=1(&|$)/.test(req.url)
       try { send(res, 200, await readAgentQuota({ force })) }
@@ -414,7 +405,6 @@ export async function apply(ctx, config = {}) {
       kind: 'exact',
       path: '/_tmax/status',
       handler: (req, res) => {
-        if (rejected(req, res)) return
         if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
         send(res, 200, summary())
       },
@@ -423,7 +413,6 @@ export async function apply(ctx, config = {}) {
       kind: 'exact',
       path: '/_tmax/usage',
       handler: async (req, res) => {
-        if (rejected(req, res)) return
         if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
         try { send(res, 200, { ok: true, ...(await readUsage(config)) }) }
         catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
@@ -433,7 +422,6 @@ export async function apply(ctx, config = {}) {
       kind: 'exact',
       path: '/_tmax/usage/refresh',
       handler: async (req, res) => {
-        if (rejected(req, res)) return
         if (req.method !== 'POST') { send(res, 405, { code: 'method-not-allowed' }); return }
         try {
           const before = await readUsage(config)
@@ -455,7 +443,6 @@ export async function apply(ctx, config = {}) {
       kind: 'exact',
       path: '/_tmax/connect',
       handler: async (req, res) => {
-        if (rejected(req, res)) return
         if (req.method !== 'POST') { send(res, 405, { code: 'method-not-allowed' }); return }
         try {
           const envelope = await runTmax(config, ['dsh', 'connect', ...targetArgs(config)])
