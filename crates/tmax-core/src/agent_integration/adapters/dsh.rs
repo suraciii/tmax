@@ -145,7 +145,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
         scope,
         "tmax-dsh.mjs",
         Format::Text,
-        json!({"$text":include_str!("dsh_plugin.mjs")}),
+        json!({"$text":include_str!("../../../../../dsh-plugin/adapter.js")}),
     ));
     files.push(file(scope, "cordis.patch.yml", Format::DshPatch, patch));
     Ok(files)

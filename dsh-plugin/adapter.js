@@ -1,10 +1,30 @@
-// Loaded from DSH_HOME, not a profile package. Resolve dependencies through
-// the owning Loader tree so the active profile's existing runtime resolver
-// selects the same public DSH packages as its other adapters.
+// The one DSH adapter implementation.
+//
+// This file has two consumers. The profile plugin imports `createAdapter`,
+// `THINKING_LEVELS`, and the resolved-profile defaults; tmax embeds the whole
+// file as DSH_HOME/tmax-dsh.mjs, where the top-level `name`, `inject`, and
+// `apply` make it the independent home plugin. Keep it self-contained: the
+// installed copy has no sibling modules to import.
+//
+// Home mode resolves dependencies through the owning Loader tree so the active
+// profile's runtime selects the same public DSH packages as its other adapters.
 export const name = 'llm-tmax'
 export const inject = ['llm']
 
-const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+// `PiAiAdapter` reads these resolved scalars on every stream; `llm-pi-ai` does
+// not export its defaults, so the profile plugin mirrors them. Values match
+// `@deepseek-ai/dsh-llm-pi-ai` 0.2.2-rc.5 (src/config.ts): a missing
+// `streamIdleTimeoutMs` reaches `idleWatchdog` and fails the stream.
+export const RESOLVED_PROFILE_DEFAULTS = {
+  streamIdleTimeoutMs: 300_000,
+  maxRequestImageBytes: 20 * 1024 * 1024,
+  maxRequestImages: 50,
+  imageOffloadCountQuantum: 10,
+  requestImagePixelBudget: 2048 * 2048,
+  requestImageMaxBytes: 1024 * 1024,
+}
 
 // The native schema materializes absent template argument dictionaries as {}.
 // Empty dictionaries declare no override, just as in DSH's catalog resolver.
@@ -14,6 +34,53 @@ function configuredCompat(compat) {
   ))
 }
 
+/**
+ * Build the adapter over already-resolved profiles.
+ * @param {object} dependencies - native modules and the live context.
+ * @param {string} label - diagnostic prefix, `tmax` or `llm-tmax`.
+ * @param {(message: string) => void} log - warning sink.
+ */
+export function createAdapter({ native, llm, credentials, pi, ctx, profiles, label, log }) {
+  return new native.PiAiAdapter({
+    profiles,
+    resolveApiKey: async (provider, profile) => {
+      const hit = await ctx.get('credentials')?.resolve(profile.apiKeyEnv)
+      if (hit?.value?.length) {
+        const checked = credentials.normalizeApiKey(hit.value)
+        if (checked.ok) return checked.value
+        throw new llm.LlmError(
+          `${label}: credential ${profile.apiKeyEnv} for route "${provider}" is unusable (${checked.reason})`,
+          'INVALID_CREDENTIAL',
+        )
+      }
+      throw new llm.LlmError(
+        `${label}: no credential for route "${provider}"; resolve ${profile.apiKeyEnv} through the DSH credentials service`,
+        'MISSING_CREDENTIAL',
+      )
+    },
+    // Routes use only explicit reference credentials, never provider login
+    // records. A real in-memory store satisfies the native collection contract
+    // without reading another plugin's grants or any credential files.
+    auth: {
+      credentials: new pi.InMemoryCredentialStore(),
+      authContext: {
+        env: async ref => (await ctx.get('credentials')?.resolve(ref))?.value,
+        fileExists: async () => { throw new Error(`${label} does not use credential files`) },
+      },
+    },
+    resolveAttachments: () => ctx.get('attachments'),
+    resolveImageAccess: (attachments, ref) => llm.resolveImageAttachmentAccess(
+      attachments,
+      hostPath => ctx.get('fs')?.processPathFromHostPath(hostPath),
+      ref,
+    ),
+    onReplayDegrade: ({ provider, model, reason }) => log(
+      `unusable replay state for route "${provider}/${model}"; sending provider-neutral content (${reason})`,
+    ),
+  })
+}
+
+/** Home-mode entry: build profiles from the managed `llm-tmax` configuration. */
 export async function apply(ctx, options) {
   const tree = ctx.fiber.entry?.parent.tree
   if (tree === undefined) throw new Error('llm-tmax requires a DSH Loader entry')
@@ -37,6 +104,7 @@ export async function apply(ctx, options) {
   // remount this fiber and dispose its registrations through native ctx.effect.
   const config = native.Config(structuredClone(options ?? {}))
   const profiles = new Map()
+  const log = message => ctx.logger?.warn?.(`llm-tmax: ${message}`)
   const invalid = message => { throw new llm.LlmError(`llm-tmax: ${message}`, 'INVALID_CONFIG') }
   for (const [provider, source] of Object.entries(config.providers.get())) {
     if (provider.length === 0) invalid('provider route names must be non-empty')
@@ -60,7 +128,7 @@ export async function apply(ctx, options) {
           invalid(`route "${provider}" model "${entry.id}" must declare a thinking effort beyond off`)
         }
         thinkingLevelMap = {}
-        for (const level of thinkingLevels) {
+        for (const level of THINKING_LEVELS) {
           const wire = efforts[level]
           if (wire === null && level === 'off') continue
           if (wire !== undefined && (typeof wire !== 'string' || wire.length === 0)) {
@@ -111,35 +179,8 @@ export async function apply(ctx, options) {
       retryPolicy: llm.resolveRetryPolicy(source.retryPolicy, `llm-tmax: route "${provider}" retryPolicy`),
     })
   }
-  const adapter = new native.PiAiAdapter({
-    profiles: () => profiles,
-    resolveApiKey: async (provider, profile) => {
-      const hit = await ctx.get('credentials')?.resolve(profile.apiKeyEnv)
-      if (hit?.value?.length) return llm.assertUsableApiKey(hit.value, name, profile.apiKeyEnv)
-      throw new llm.LlmError(
-        `llm-tmax: no credential for route "${provider}"; resolve ${profile.apiKeyEnv} through the DSH credentials service`,
-        'MISSING_CREDENTIAL',
-      )
-    },
-    // Routes use only explicit reference credentials, never provider login
-    // records. A real in-memory store satisfies the native collection contract
-    // without reading another plugin's grants or any credential files.
-    auth: {
-      credentials: new pi.InMemoryCredentialStore(),
-      authContext: {
-        env: async ref => (await ctx.get('credentials')?.resolve(ref))?.value,
-        fileExists: async () => { throw new Error('llm-tmax does not use credential files') },
-      },
-    },
-    resolveAttachments: () => ctx.get('attachments'),
-    resolveImageAccess: (attachments, ref) => llm.resolveImageAttachmentAccess(
-      attachments,
-      hostPath => ctx.get('fs')?.processPathFromHostPath(hostPath),
-      ref,
-    ),
-    onReplayDegrade: ({ provider, model, reason }) => ctx.logger.warn(
-      `llm-tmax: unusable replay state for route "${provider}/${model}"; sending provider-neutral content (${reason})`,
-    ),
+  const adapter = createAdapter({
+    native, llm, credentials, pi, ctx, profiles: () => profiles, label: 'llm-tmax', log,
   })
   // Do not apply the llm-pi-ai plugin: it declares the entire builtin provider
   // directory and login flows. The shared registry must retain user adapters.

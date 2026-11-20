@@ -55,7 +55,7 @@ async function fakeTmax(body) {
   return path
 }
 
-function fakeContext() {
+function fakeContext({ credential = 'test-key' } = {}) {
   const state = { routes: [], tools: [], skills: [], events: [], effects: [], adapterOptions: undefined, httpRoutes: [] }
   const modules = {
     '@deepseek-ai/dsh-llm-pi-ai': {
@@ -65,12 +65,25 @@ function fakeContext() {
       },
     },
     '@deepseek-ai/dsh-llm': {
-      LlmError: class extends Error {},
-      assertUsableApiKey: value => value,
+      LlmError: class extends Error {
+        constructor(message, code) {
+          super(message)
+          this.code = code
+        }
+      },
       resolveRetryPolicy: () => ({ mode: 'normal', maxRetries: 0 }),
       resolveImageAttachmentAccess: () => undefined,
     },
-    '@deepseek-ai/dsh-credentials': { credentialRef: ref => ref },
+    '@deepseek-ai/dsh-credentials': {
+      credentialRef: ref => ref,
+      normalizeApiKey: raw => {
+        const value = raw.trim()
+        if (value.length === 0) return { ok: false, reason: 'empty' }
+        return /^[\x21-\x7E]+$/.test(value)
+          ? { ok: true, value }
+          : { ok: false, reason: 'illegalCharacters' }
+      },
+    },
     '@earendil-works/pi-ai': { InMemoryCredentialStore: class {} },
     '@earendil-works/pi-ai/api/openai-completions.lazy': { openAICompletionsApi: () => ({ stream() {}, streamSimple() {} }) },
     '@earendil-works/pi-ai/api/openai-responses.lazy': { openAIResponsesApi: () => ({ stream() {}, streamSimple() {} }) },
@@ -81,7 +94,10 @@ function fakeContext() {
     fiber: { entry: { parent: { tree: { import: async specifier => modules[specifier] } } } },
     logger: { info() {}, warn() {} },
     get(name) {
-      if (name === 'credentials') return { credentialRef: ref => ref, resolve: async () => ({ value: 'test-key' }) }
+      if (name === 'credentials') return {
+        credentialRef: ref => ref,
+        resolve: async () => credential == null ? undefined : { value: credential },
+      }
       if (name === 'tools') return { register(definition) { state.tools.push(definition); return () => {} } }
       if (name === 'skills') return { register(definition) { state.skills.push(definition); return () => {} } }
       if (name === 'attachments') return undefined
@@ -146,6 +162,29 @@ test('registers one dynamic route, a status tool, and a skill without exposing m
   const status = await state.tools[0].execute()
   assert.equal(status.target, 'dsh-main')
   assert.deepEqual(status.routes, [{ name: 'tmax', protocol: 'responses', models: ['public-model', 'text-only', 'no-context'] }])
+})
+
+test('resolveApiKey trims a usable credential and rejects unusable or absent ones', async () => {
+  const tmaxPath = await fakeTmax({ code: 'ok', status: 'success', data: projection })
+
+  const usable = fakeContext({ credential: '  test-key\n' })
+  await apply(usable.ctx, { tmaxPath, refreshSeconds: 3600 })
+  const profile = usable.state.adapterOptions.profiles().get('tmax')
+  assert.equal(await usable.state.adapterOptions.resolveApiKey('tmax', profile), 'test-key')
+
+  const unusable = fakeContext({ credential: 'bad\u0000key' })
+  await apply(unusable.ctx, { tmaxPath, refreshSeconds: 3600 })
+  await assert.rejects(
+    unusable.state.adapterOptions.resolveApiKey('tmax', profile),
+    error => error.code === 'INVALID_CREDENTIAL' && /illegalCharacters/.test(error.message),
+  )
+
+  const absent = fakeContext({ credential: null })
+  await apply(absent.ctx, { tmaxPath, refreshSeconds: 3600 })
+  await assert.rejects(
+    absent.state.adapterOptions.resolveApiKey('tmax', profile),
+    error => error.code === 'MISSING_CREDENTIAL',
+  )
 })
 
 test('a missing tmax does not fail activation and the status tool reports the blocker', async () => {

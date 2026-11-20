@@ -9,29 +9,16 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { observeProvider, vendorFor, vendorForKey } from './quota.js'
+import { createAdapter, RESOLVED_PROFILE_DEFAULTS, THINKING_LEVELS } from './adapter.js'
 
 export const name = 'tmax'
 export const inject = ['llm', 'settings', 'credentials']
 
 const execFileAsync = promisify(execFile)
-const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const API_NAMES = {
   'chat-completions': 'openai-completions',
   'responses': 'openai-responses',
   'messages': 'anthropic-messages',
-}
-
-// `PiAiAdapter` reads these resolved scalars on every stream; `llm-pi-ai` does
-// not export its defaults, so this plugin mirrors them. Values match
-// `@deepseek-ai/dsh-llm-pi-ai` 0.2.2-rc.1 (src/config.ts): a missing
-// `streamIdleTimeoutMs` reaches `idleWatchdog` and fails the stream.
-const RESOLVED_PROFILE_DEFAULTS = {
-  streamIdleTimeoutMs: 300_000,
-  maxRequestImageBytes: 20 * 1024 * 1024,
-  maxRequestImages: 50,
-  imageOffloadCountQuantum: 10,
-  requestImagePixelBudget: 2048 * 2048,
-  requestImageMaxBytes: 1024 * 1024,
 }
 
 /** Read one tmax CLI envelope, or fail with its code and message. */
@@ -235,32 +222,8 @@ export async function apply(ctx, config = {}) {
     return next
   }
 
-  const adapter = new native.PiAiAdapter({
-    profiles: () => profiles,
-    resolveApiKey: async (provider, profile) => {
-      const hit = await ctx.get('credentials')?.resolve(profile.apiKeyEnv)
-      if (hit?.value?.length) return llm.assertUsableApiKey(hit.value, name, profile.apiKeyEnv)
-      throw new llm.LlmError(
-        `tmax: no credential for route "${provider}"; resolve ${profile.apiKeyEnv} through the DSH credentials service`,
-        'MISSING_CREDENTIAL',
-      )
-    },
-    auth: {
-      credentials: new pi.InMemoryCredentialStore(),
-      authContext: {
-        env: async ref => (await ctx.get('credentials')?.resolve(ref))?.value,
-        fileExists: async () => { throw new Error('tmax does not use credential files') },
-      },
-    },
-    resolveAttachments: () => ctx.get('attachments'),
-    resolveImageAccess: (attachments, ref) => llm.resolveImageAttachmentAccess(
-      attachments,
-      hostPath => ctx.get('fs')?.processPathFromHostPath(hostPath),
-      ref,
-    ),
-    onReplayDegrade: ({ provider, model, reason }) => log(
-      `unusable replay state for route "${provider}/${model}"; sending provider-neutral content (${reason})`,
-    ),
+  const adapter = createAdapter({
+    native, llm, credentials, pi, ctx, profiles: () => profiles, label: 'tmax', log,
   })
 
   async function refresh() {
