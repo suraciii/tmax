@@ -164,6 +164,16 @@ test('registers one dynamic route, a status tool, and a skill without exposing m
   assert.deepEqual(status.routes, [{ name: 'tmax', protocol: 'responses', models: ['public-model', 'text-only', 'no-context'] }])
 })
 
+test('manageRoutes false leaves model routes to the home plugin', async () => {
+  const tmaxPath = await fakeTmax({ code: 'ok', status: 'success', data: projection })
+  const { ctx, state } = fakeContext()
+  await apply(ctx, { tmaxPath, refreshSeconds: 3600, manageRoutes: false })
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.adapterOptions, undefined)
+  const status = await state.tools[0].execute()
+  assert.deepEqual(status.routes, [{ name: 'tmax', protocol: 'responses', models: ['public-model', 'text-only', 'no-context'] }])
+})
+
 test('resolveApiKey trims a usable credential and rejects unusable or absent ones', async () => {
   const tmaxPath = await fakeTmax({ code: 'ok', status: 'success', data: projection })
 

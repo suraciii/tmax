@@ -17,6 +17,24 @@ Restart or refresh DSH Web, then open **tmax** in the sidebar panel list, beside
 Plugins and Schedules. To update, pull and re-run `just dsh-install`; uninstall
 with `just dsh-remove`.
 
+## Home-owned routes
+
+`tmax agent apply` can install the independent `llm-tmax` home plugin, which
+owns the tmax provider routes for that DSH home. When both plugins are active in
+one home, set `manageRoutes: false` on this plugin's entry so the page does not
+register a second copy of the same route names:
+
+```yaml
+- id: tmax
+  config:
+    home: /home/you/.dsh
+    target: dsh-main
+    manageRoutes: false
+```
+
+The page still reads projection, status, and quota data. If the home plugin is
+removed, drop the key or set it to `true` to restore route registration.
+
 ## Connect
 
 On the **tmax** page, select **Connect**. This writes only the DSH credential

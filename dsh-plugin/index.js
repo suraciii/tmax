@@ -170,6 +170,7 @@ export async function apply(ctx, config = {}) {
   let lastProjection
   let lastError
 
+  const manageRoutes = config.manageRoutes !== false
   const log = message => ctx.logger?.warn?.(`tmax: ${message}`)
 
   function rebuild(projection) {
@@ -222,9 +223,9 @@ export async function apply(ctx, config = {}) {
     return next
   }
 
-  const adapter = createAdapter({
-    native, llm, credentials, pi, ctx, profiles: () => profiles, label: 'tmax', log,
-  })
+  const adapter = manageRoutes
+    ? createAdapter({ native, llm, credentials, pi, ctx, profiles: () => profiles, label: 'tmax', log })
+    : undefined
 
   async function refresh() {
     if (refreshing) return refreshing
@@ -232,10 +233,10 @@ export async function apply(ctx, config = {}) {
       const projection = await readProjection(config)
       lastProjection = projection
       lastError = undefined
-      const next = rebuild(projection)
+      const next = manageRoutes ? rebuild(projection) : new Map()
       profiles = next
       const routes = [...next.keys()]
-      if (routes.length === 0) {
+      if (!manageRoutes || routes.length === 0) {
         if (registration) {
           registration()
           registration = undefined
