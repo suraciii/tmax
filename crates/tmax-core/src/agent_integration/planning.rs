@@ -109,7 +109,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"pending_native_changes":pending,"blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"providers":target.providers.iter().map(|(name,p)|json!({"name":name,"source":if let Some(p)=&p.provider{json!({"provider":p})}else{json!({"gateway":true})},"models":p.models})).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view(&target.agent,&path),"pending_native_changes":pending,"blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -131,11 +131,16 @@ pub(super) fn projection_view(target: &AgentTarget, entries: &[Entry]) -> Vec<Va
             json!({
                 "name":entry.name,
                 "source":source,
-                "models":entry.models.iter().map(|id|json!({
-                    "id":id,
-                    "protocol":entry.model_routes.get(id).map(|(protocol,_)|protocol.as_str()).unwrap_or(entry.protocol.as_str()),
-                    "projection":entry.model_projection.get(id).cloned().unwrap_or_else(||json!({"state":"unavailable","reason_code":"native_projection_unavailable","fields":{},"omitted":[]}))
-                })).collect::<Vec<_>>()
+                "models":entry.models.iter().map(|id|{
+                    let projection=entry.model_projection.get(id).cloned().unwrap_or_else(||json!({"state":"unavailable","reason_code":"native_projection_unavailable","fields":{},"omitted":[]}));
+                    let efforts=adapters::representable_efforts(&target.agent,&projection).unwrap_or_default();
+                    json!({
+                        "id":id,
+                        "protocol":entry.model_routes.get(id).map(|(protocol,_)|protocol.as_str()).unwrap_or(entry.protocol.as_str()),
+                        "efforts":efforts,
+                        "projection":projection
+                    })
+                }).collect::<Vec<_>>()
             })
         })
         .collect()
@@ -730,10 +735,12 @@ mod tests {
                         .collect(),
                 },
             )]),
-            default: Some(config::ModelReference {
+            default: Some(config::DefaultReference {
                 provider: "local".into(),
                 id: "m".into(),
                 protocol: "chat-completions".into(),
+                effort: None,
+                native_effort: None,
             }),
             roles: BTreeMap::new(),
         };

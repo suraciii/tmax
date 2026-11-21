@@ -853,6 +853,45 @@ returns exit 3 / `inputs_changed` before changing the indexed entry; an interven
 successful write means the old revision is no longer valid. Input-data guards are
 separate: use `--if-input-revision` with `provider input record|clear`.
 
+## Default model and reasoning effort
+
+A target default may also declare one reasoning effort. For DSH, pi, OMP, and
+OpenCode the value is a caller-facing effort name that the selected model
+declares and the tool can represent; Codex and Hermes take a verbatim native
+value instead:
+
+```sh
+tmax agent default set dsh-main tmax deepseek-v4.1-flash \
+  --protocol responses --effort max
+tmax agent apply dsh-main
+```
+
+Only explicitly configured fields are written. A default that omits the effort
+preserves whatever effort the tool currently has, including inside the same
+native entry or settings object. A configured effort the model or tool cannot
+represent blocks application before any native write and lists the available
+names. Use `--native-effort` only for Codex or Hermes; it is written without
+selector validation.
+
+Removing the effort from the default (run `agent default set` without
+`--effort`) stops managing it; the next apply restores that field's captured
+baseline and still refuses to overwrite an external edit. OpenCode is the
+exception because its model and variant are one native reference: removing only
+the effort keeps the current variant, while `agent default clear` or a model
+change rewrites the reference and the whole field is managed as one unit.
+
+If the tool's own settings changed a tmax-owned default after apply, the next
+apply stops with a conflict instead of overwriting it. Resolve it explicitly:
+`tmax agent inspect TARGET` lists the conflicting fields and the tool's current
+native default;
+`tmax agent recovery accept TARGET` records the tool's current native values as
+the new recovery baseline (then set the tmax default to the same model and
+effort and apply, which writes nothing); `tmax agent restore TARGET` returns the
+captured pre-tmax baseline; and `tmax agent recovery discard TARGET` followed by
+`tmax agent apply TARGET` makes tmax's configured default win at the cost of the
+original restore baseline. The tool must reload or restart before new sessions
+use the updated default; running sessions keep their selection.
+
 ## Pi target: apply, reload, restore
 
 Native configuration is explicit and separate from gateway startup. Use an existing
@@ -1033,8 +1072,9 @@ tmax agent restore dsh-main --dry-run
 ```
 
 Model-only application requires no default and writes no `agent-default-model`
-entry or thinking preferences. An explicit default changes provider/model only,
-preserving existing HOME-level effort settings rather than importing profile
+entry or thinking preferences. An explicit default writes provider/model and,
+only when the default declares `--effort`, one validated effort; an absent
+effort preserves the existing HOME-level setting rather than importing profile
 defaults. Native route APIs support all three protocols; incompatible
 protocol/base selections cannot share one provider entry. Executed apply hands
 the key to the target home's private native `.credentials.yaml` `refs` map and

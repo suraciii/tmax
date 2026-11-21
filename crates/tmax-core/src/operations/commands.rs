@@ -649,7 +649,7 @@ const COMMANDS: &[Command] = &[
         path: "agent default set",
         min: 3,
         max: 3,
-        options: "protocol",
+        options: "protocol effort native-effort",
         mutation: true,
     },
     Command {

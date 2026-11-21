@@ -103,7 +103,9 @@ an explicitly configured model. It does not have one universal default model.
 A metadata maximum is not a generation preference; existing
 `model_reasoning_effort`, summary, verbosity, and request-budget settings remain
 native/user-owned under the
-[routing contract](../../specs/model-routing/spec.md#request-parameters).
+[routing contract](../../specs/model-routing/spec.md#request-parameters). tmax
+writes `model_reasoning_effort` only when the target default declares an explicit
+`native_effort`; otherwise the native setting is preserved untouched.
 
 Gateway aliases follow the shared
 [alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)

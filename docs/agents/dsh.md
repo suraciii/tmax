@@ -184,9 +184,11 @@ application. `reasoning = true` without declared effort values invents no levels
 explicit `reasoning = false` maps to native `reasoningEfforts: false`. The map is
 not a chosen effort. tmax does not set route `reasoning`, `thinkingBudgets`, or
 `agent-default-model.reasoningEffort` as a side effect of model configuration.
-An explicit default selection changes provider/model only, preserving existing
-HOME-level `agent-default-model` fields, including reasoning effort. Its home
-`config` shadows the complete lower-layer entry rather than merging profile defaults.
+An explicit default selection writes provider/model and, only when the default
+declares `effort`, `agent-default-model.reasoningEffort` validated against the
+model's `reasoningEfforts` keys; an absent effort preserves existing HOME-level
+`agent-default-model` fields. Its home `config` shadows the complete lower-layer
+entry rather than merging profile defaults.
 
 Gateway aliases also project [common input modalities](../../specs/integrations/spec.md#common-input-modalities).
 All configured candidates must declare image input before the alias advertises

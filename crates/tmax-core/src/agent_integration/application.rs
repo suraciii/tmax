@@ -1217,4 +1217,207 @@ mod tests {
             !diagnostics.contains("synthetic-inline-key") && !diagnostics.contains("user-edit")
         );
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pi_default_effort_is_field_scoped_and_detects_external_edits() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let path = directory.path().join("native");
+        fs::create_dir(&path).unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "pi".into();
+        fs::write(
+            path.join("settings.json"),
+            "{\"defaultProvider\":\"local\",\"defaultModel\":\"first\",\"defaultThinkingLevel\":\"low\",\"unrelated\":{\"keep\":true}}",
+        )
+        .unwrap();
+        let reference = secrets::put(&store, "provider:p", b"synthetic-pi-effort-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([(
+                    "first".into(),
+                    config::Model {
+                        overrides: config::ModelOverrides {
+                            limit: Some(config::Limits {
+                                context: Some(128000),
+                                input: None,
+                                output: Some(8192),
+                            }),
+                            reasoning_options: Some(vec![config::ReasoningOption {
+                                r#type: "effort".into(),
+                                values: Some(vec!["low".into(), "high".into()]),
+                            }]),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+
+        // An unconfigured effort must not be written or removed.
+        apply(&store, &config, "managed", false).await.unwrap();
+        let settings = fs::read_to_string(path.join("settings.json")).unwrap();
+        assert!(
+            settings.contains("\"defaultThinkingLevel\": \"low\"")
+                || settings.contains("\"defaultThinkingLevel\":\"low\"")
+        );
+        assert!(settings.contains("unrelated"));
+
+        // An explicit effort is written and owned.
+        let mut managed = config.clone();
+        managed
+            .agents
+            .get_mut("managed")
+            .unwrap()
+            .default
+            .as_mut()
+            .unwrap()
+            .effort = Some("high".into());
+        store
+            .write_raw("tmax.toml", toml::to_string(&managed).unwrap().as_bytes())
+            .unwrap();
+        apply(&store, &managed, "managed", false).await.unwrap();
+        let settings = fs::read_to_string(path.join("settings.json")).unwrap();
+        assert!(
+            settings.contains("\"defaultThinkingLevel\": \"high\"")
+                || settings.contains("\"defaultThinkingLevel\":\"high\"")
+        );
+        assert!(settings.contains("unrelated"));
+
+        // Removing the effort from desired configuration restores its baseline.
+        let mut unmanaged = managed.clone();
+        unmanaged
+            .agents
+            .get_mut("managed")
+            .unwrap()
+            .default
+            .as_mut()
+            .unwrap()
+            .effort = None;
+        store
+            .write_raw("tmax.toml", toml::to_string(&unmanaged).unwrap().as_bytes())
+            .unwrap();
+        apply(&store, &unmanaged, "managed", false).await.unwrap();
+        let settings = fs::read_to_string(path.join("settings.json")).unwrap();
+        assert!(
+            settings.contains("\"defaultThinkingLevel\": \"low\"")
+                || settings.contains("\"defaultThinkingLevel\":\"low\"")
+        );
+
+        // Re-manage it, then verify an external edit is a conflict, not a silent overwrite.
+        store
+            .write_raw("tmax.toml", toml::to_string(&managed).unwrap().as_bytes())
+            .unwrap();
+        apply(&store, &managed, "managed", false).await.unwrap();
+        let settings = fs::read_to_string(path.join("settings.json")).unwrap();
+        let edited = settings.replace("\"high\"", "\"low\"");
+        fs::write(path.join("settings.json"), edited).unwrap();
+        let error = apply(&store, &managed, "managed", false).await.unwrap_err();
+        assert_eq!(error.code, "native_conflict");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn opencode_default_effort_is_a_composite_field_with_baseline_restore() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_owned());
+        let path = directory.path().join("native");
+        fs::create_dir(&path).unwrap();
+        let native_path = path.join("opencode.jsonc");
+        fs::write(
+            &native_path,
+            "// native comment\n{\"model\":\"local/first\",\"unrelated\":{\"keep\":true}}\n",
+        )
+        .unwrap();
+        let mut target = inspection_target(path.clone());
+        target.agent = "opencode".into();
+        target.default.as_mut().unwrap().effort = Some("high".into());
+        let reference =
+            secrets::put(&store, "provider:p", b"synthetic-opencode-effort-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([(
+                    "first".into(),
+                    config::Model {
+                        overrides: config::ModelOverrides {
+                            limit: Some(config::Limits {
+                                context: Some(128000),
+                                input: None,
+                                output: Some(8192),
+                            }),
+                            reasoning_options: Some(vec![config::ReasoningOption {
+                                r#type: "effort".into(),
+                                values: Some(vec!["low".into(), "high".into()]),
+                            }]),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        apply(&store, &config, "managed", false).await.unwrap();
+        let applied = fs::read_to_string(&native_path).unwrap();
+        assert!(applied.contains("\"local/first#high\""), "{applied}");
+        assert!(applied.contains("native comment"), "{applied}");
+        assert!(applied.contains("unrelated"), "{applied}");
+
+        // Removing only the effort leaves the current composite value in place.
+        let mut unmanaged = config.clone();
+        unmanaged
+            .agents
+            .get_mut("managed")
+            .unwrap()
+            .default
+            .as_mut()
+            .unwrap()
+            .effort = None;
+        store
+            .write_raw("tmax.toml", toml::to_string(&unmanaged).unwrap().as_bytes())
+            .unwrap();
+        apply(&store, &unmanaged, "managed", false).await.unwrap();
+        let settings = fs::read_to_string(&native_path).unwrap();
+        assert!(settings.contains("\"local/first#high\""), "{settings}");
+
+        // Clearing the default releases the whole composite field to its baseline.
+        let mut cleared = unmanaged.clone();
+        cleared.agents.get_mut("managed").unwrap().default = None;
+        store
+            .write_raw("tmax.toml", toml::to_string(&cleared).unwrap().as_bytes())
+            .unwrap();
+        apply(&store, &cleared, "managed", false).await.unwrap();
+        let restored = fs::read_to_string(&native_path).unwrap();
+        assert!(restored.contains("\"local/first\""), "{restored}");
+        assert!(!restored.contains("#high"), "{restored}");
+        assert!(restored.contains("native comment"), "{restored}");
+        assert!(restored.contains("unrelated"), "{restored}");
+    }
 }

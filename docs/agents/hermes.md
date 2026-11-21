@@ -139,8 +139,10 @@ arbitrary key. Old `web_extract`/`session_search` auxiliary blocks are ignored.
 See [`config_defaults.py`](https://github.com/NousResearch/hermes-agent/blob/848fc0a/hermes_cli/config_defaults.py#L726-L828).
 
 Native `agent.reasoning_effort`, `reasoning_overrides`, service tier, and output
-request settings are not metadata fields to synchronize. Context capacity does
-not impose a new generation cap. The
+request settings are not metadata fields to synchronize. tmax writes
+`agent.reasoning_effort` only when the target default declares an explicit
+`native_effort`; otherwise the native setting is preserved untouched. Context
+capacity does not impose a new generation cap. The
 [shared integration](../../specs/integrations/spec.md#agent-boundaries) and
 [routing request-parameter](../../specs/model-routing/spec.md#request-parameters)
 contracts remain authoritative; user defaults, model roles, and subagents are not

@@ -281,7 +281,7 @@ function renderModelList() {
   $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'接入'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):state.config.model_aliases.find(a=>a.id===m.id&&a.protocol===m.protocol);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${(m.published_protocols || []).map(p=>badge(protocolNames[p] || p)).join('') || badge('未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td><div class="actions">${m.kind==='alias'?button('管理','alias-edit',JSON.stringify([m.id,m.protocol]),'small'):button('管理','model-edit',m.id,'small')+button('详情','model-detail',m.id,'small soft')}</div></td></tr>`;}).join('')}</tbody></table></div>`;
 }
 function renderAgents() {
-  $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',state.config.agents[t.target]?.default?.id || (id==='codex'?'尚未选择':'沿用工具当前选择'))}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
+  $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',defaultLabel(state.config.agents[t.target]?.default,id))}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
 }
 function clearReveal() { revealGeneration++;const output=$('revealed'); if(output){output.textContent='';output.hidden=true;} }
 function renderGateway() {
@@ -777,7 +777,7 @@ function projectionBlock(projection) {
   return `<div class="projection-state"><h4>推理档位</h4>${badge(label,tone)}${reason?`<p class="muted">${escapeHtml(reason)}</p>`:''}${p.message?`<p class="muted">${escapeHtml(p.message)}</p>`:''}${projectionLevels(p.fields)}${Array.isArray(p.omitted)&&p.omitted.length?`<p class="label-note">未映射的声明值：${escapeHtml(p.omitted.join('、'))}</p>`:''}${inputProjectionBlock(p.input)}${nested}${detail(p,'查看投影原始字段')}</div>`;
 }
 function nativeProjectionSection(data) {
-  const intro=notice('以下是应用后将写入的期望能力声明，不代表已应用或工具当前状态。别名输入取全部配置候选的共同能力；默认档位由工具自身管理。');
+  const intro=notice('以下是应用后将写入的期望能力声明，不代表已应用或工具当前状态。别名输入取全部配置候选的共同能力；目标默认档位只在显式配置时写入，否则沿用工具当前档位。');
   if(!Array.isArray(data.native_projection))return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${notice('未能生成期望能力映射。请以阻塞原因与检查结果为准。','warning')}`;
   const entries=data.native_projection.map(entry=>{
     const source=entry.source?.gateway?'tmax 本地网关':entry.source?.provider?providerName(entry.source.provider):'来源未知';
@@ -785,6 +785,17 @@ function nativeProjectionSection(data) {
     return `<div class="list-row split"><div><h3>${escapeHtml(entry.name)}</h3><small class="label-note">${escapeHtml(source)}</small></div></div>${models||'<p class="muted">尚未配置模型。</p>'}`;
   }).join('');
   return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${entries||'<p class="muted">尚未生成映射。</p>'}`;
+}
+function conflictSection(data, target) {
+  const blockers = Array.isArray(data.blockers) ? data.blockers : [];
+  const conflicts = data.recovery?.conflicts;
+  const conflicted = blockers.some(blocker => blocker.code === 'native_conflict') || (Array.isArray(conflicts) && conflicts.length > 0);
+  if (!conflicted) return '';
+  const fields = Array.isArray(conflicts) ? conflicts.map(item => Array.isArray(item.field) ? item.field.join('.') : (item.field || item.code)).filter(Boolean) : [];
+  return `<h3 class="subheading">解决冲突</h3>`+
+    notice('工具里由 tmax 管理的默认设置已被修改。tmax 不会静默覆盖：可以接受工具当前状态（把当前原生值记为新的恢复基线），或恢复 tmax 接管前的配置。若要让 tmax 配置覆盖工具值，请在 CLI 执行 agent recovery discard 后重新应用（会丢弃原恢复基线）。未受管的字段始终保持工具当前值。','warning')+
+    (fields.length?`<div class="list-row"><small class="label-note mono">${escapeHtml(fields.join('、'))}</small></div>`:'')+
+    `<div class="actions">${button('接受工具当前状态','agent-accept',target,'soft')}${button('恢复原生配置','agent-restore',target)}</div>`;
 }
 function blockersSection(blockers) {
   const list=Array.isArray(blockers)?blockers:[];
@@ -815,7 +826,7 @@ async function modelDetail(id,protocol) {
     const declared=meta.overrides;
     const displayName=declared&&Object.hasOwn(declared,'name')?(declared.name===''?'（显式空名称）':declared.name):effective.name ?? '未声明';
     const matrix=data.native_projection&&typeof data.native_projection==='object'&&!Array.isArray(data.native_projection)?agentTypes.map(([agent,name])=>({name,projection:data.native_projection[agent]})).filter(entry=>entry.projection):[];
-    $('dialog-content').innerHTML=notice('此处只显示已保存的能力声明与期望映射，不代表工具当前生效状态。推理档位的默认值由工具自身管理，tmax 不选择默认档位。')+
+    $('dialog-content').innerHTML=notice('此处只显示已保存的能力声明与期望映射，不代表工具当前生效状态。推理档位的默认值只在 Agent 目标默认显式配置时由 tmax 写入；未配置时沿用工具当前档位。')+
       `<div class="detail-facts">${fact('模型引用',data.qualified_model)}${fact('显示名称',displayName)}${fact('模型状态',data.configuration?(data.configuration.enabled===false?'已停用':'已启用'):'未知')}${fact('基础优先级',data.configuration?String(data.configuration.priority ?? 0):'未知')}${fact('原生协议',(data.protocols||[]).map(p=>protocolNames[p]||p).join('、')||'未发布')}${fact('上下文上限',effective.limit?.context)}${fact('输出上限',effective.limit?.output)}${fact('目录状态',catalogState)}${fact('目录来源',meta.source)}${fact('目录修订',meta.metadata_revision)}${fact('目录引用',meta.catalog_reference)}</div>`+
       `<h3 class="subheading">推理能力（有效值）</h3><div class="detail-facts">${fact('推理支持',reasoning===true?'声明支持':reasoning===false?'声明不支持':'未声明')}${fact('推理声明来源',layer('reasoning'))}${fact('推理档位来源',layer('reasoning_options'))}${fact('effort 档位声明',efforts.join('、')||'无')}</div>`+
       (reasoning===false?notice('模型显式声明关闭推理（reasoning 为 false）。即使存在档位声明，也不会投影到编程工具。','warning'):'')+
@@ -832,7 +843,7 @@ async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
   try {const data=await read('agent inspect',[target]);if(generation!==state.dialogGeneration)return;
     const config=state.config.agents[target];
-    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',config.default?.id || (config.agent==='codex'?'未选择':'沿用工具当前选择'))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
+    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',defaultLabel(config.default,config.agent))}${fact('工具当前默认',nativeDefaultLabel(data.native_default))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}${conflictSection(data,target)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
 function agentSource(target) {
@@ -843,10 +854,75 @@ function agentModel(encoded) {
   const candidates=Object.keys(protocolNames).flatMap(p=>(state.models || []).filter(m=>(source.gateway || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/')))&&m.published_protocols?.includes(p)).map(m=>[JSON.stringify([source.gateway?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p]}`]));
   formDialog('添加可选模型',state.config.agents[target].agent==='codex'?'添加到此来源的模型列表后，可选择为默认模型。':'应用后可在工具中选择这些模型，保留当前默认模型。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates],help:'仅列出上游已声明的协议，Responses 优先。选择后由工具使用该协议请求；网关不转换协议，已有设置不会自动更改。'}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
 }
-function agentDefault(target) {
-  const config=state.config.agents[target];
-  const choices=Object.entries(config.providers).flatMap(([name,p])=>p.models.map(m=>[JSON.stringify([name,m.id,m.protocol]),`${name} / ${m.id} · ${protocolNames[m.protocol] || m.protocol}`]));
-  formDialog('选择默认模型','默认模型单独设置。保存后，点击“应用到工具”才会写入。',field('selection','默认模型',config.default?JSON.stringify([config.default.provider,config.default.id,config.default.protocol]):config.agent==='codex'?'':'@native',{required:true,options:[...(config.agent==='codex'?[['','请选择']]:[['@native','沿用工具原有默认模型']]),...choices]}),()=>{if(value('selection')==='@native')return {operation:'agent default clear',operands:[target]};const [name,id,protocol]=JSON.parse(value('selection'));return {operation:'agent default set',operands:[target,name,id],args:{protocol:[protocol]}};});
+function defaultEffortLabel(defaultRef) {
+  return defaultRef?.effort || defaultRef?.native_effort || '';
+}
+function defaultLabel(defaultRef, agent) {
+  if (!defaultRef) return agent === 'codex' ? '尚未选择' : '沿用工具当前选择';
+  const effort = defaultEffortLabel(defaultRef);
+  return defaultRef.id + (effort ? ' · ' + effort : '');
+}
+function nativeDefaultLabel(native) {
+  if (!native || native.state !== 'available') return '无法读取';
+  const fields = native.fields || {};
+  if (fields.present === false) return '工具未配置';
+  const parts = [fields.provider, fields.model, fields.effort].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '未读取';
+}
+async function agentDefault(target) {
+  const config = state.config.agents[target];
+  const agent = config.agent;
+  const projected = ['dsh','pi','omp','opencode'].includes(agent);
+  let inspect = null;
+  try { inspect = await read('agent inspect',[target]); } catch { inspect = null; }
+  const efforts = new Map();
+  for (const entry of inspect?.native_projection || []) {
+    for (const model of entry.models || []) {
+      efforts.set(JSON.stringify([entry.name,model.id,model.protocol]), Array.isArray(model.efforts) ? model.efforts : []);
+    }
+  }
+  const effortsFor = key => key && key !== '@native' ? (efforts.get(key) || []) : [];
+  const effortOptions = key => {
+    const list = effortsFor(key);
+    const options = [['','沿用工具当前强度'], ...list.map(effort => [effort, effort])];
+    if (key === selected && currentEffort && !list.includes(currentEffort)) {
+      options.push([currentEffort, `${currentEffort}（当前配置）`]);
+    }
+    return options;
+  };
+  const choices = Object.entries(config.providers).flatMap(([name,p]) => p.models.map(m => [JSON.stringify([name,m.id,m.protocol]), `${name} / ${m.id} · ${protocolNames[m.protocol] || m.protocol}`]));
+  const selected = config.default ? JSON.stringify([config.default.provider,config.default.id,config.default.protocol]) : (agent === 'codex' ? '' : '@native');
+  const configuredKey = config.default ? selected : null;
+  const currentEffort = defaultEffortLabel(config.default);
+  const effortField = projected
+    ? field('effort','推理强度',currentEffort,{options: effortOptions(selected),help:'可选值来自该模型在工具中可表示的档位。不选择则保留工具当前值；tmax 不会写未配置的字段。'})
+    : field('native-effort','原生推理档位',currentEffort,{help:'Codex/Hermes 没有可校验的选择器；tmax 按原生值原样写入。留空则保留工具当前值。'});
+  formDialog('默认模型与推理强度',(agent==='opencode'?'OpenCode 的默认模型与 variant 是同一个原生字段；不配置强度时 tmax 会保留同模型现有 variant，更换模型会替换整个默认引用。':'')+'默认选择按字段管理：只写显式配置的字段，未配置的强度保留工具当前值。保存后，点击“应用到工具”才会写入。',field('selection','默认模型',selected,{required:true,options:[...(agent==='codex'?[['','请选择']]:[['@native','沿用工具原有默认模型']]),...choices]})+effortField,()=>{
+    if(value('selection')==='@native')return {operation:'agent default clear',operands:[target]};
+    const [name,id,protocol]=JSON.parse(value('selection'));
+    const args={protocol:[protocol]};
+    if(projected){if(value('effort'))args.effort=[value('effort')];}
+    else if(value('native-effort'))args['native-effort']=[value('native-effort')];
+    return {operation:'agent default set',operands:[target,name,id],args};
+  });
+  const selection=$('f-selection'), effort=$('f-effort');
+  if(selection && effort){
+    const update=()=>{
+      const list=effortsFor(selection.value);
+      const keep=effort.value;
+      let chosen=keep;
+      let options='<option value="">沿用工具当前强度</option>'+list.map(item=>`<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+      if(!list.includes(chosen)){
+        if(selection.value===configuredKey && currentEffort && !list.includes(currentEffort)){
+          options+=`<option value="${escapeHtml(currentEffort)}">${escapeHtml(currentEffort)}（当前配置）</option>`;
+          chosen=currentEffort;
+        } else chosen='';
+      }
+      effort.innerHTML=options;
+      effort.value=chosen;
+    };
+    selection.addEventListener('change',update);
+  }
 }
 function configureGateway() {
   formDialog('网关设置','设置本地监听地址。首次配置会生成共享密钥；保存不会自动启动网关。',field('listen','监听地址',state.config.gateway?.listen || '127.0.0.1:8317',{required:true,help:'仅用于本机连接，例如 127.0.0.1:8317。'}),()=>({operation:'gateway configure',args:{listen:[value('listen').trim()]}}),{stayOpen:true});
@@ -987,6 +1063,7 @@ async function dispatch(action,id) {
     case 'agent-default': agentDefault(id);break;
     case 'agent-apply': formDialog('应用到工具',`将模型配置写入 ${escapeHtml(id)}。完成后重新打开工具即可使用。`,'',()=>({operation:'agent apply',operands:[id]}),{submit:'应用配置',stayOpen:true});break;
     case 'agent-restore': openOperation('agent restore',[id]);break;
+    case 'agent-accept': openOperation('agent recovery accept',[id]);break;
     case 'agent-advanced': openOperation('agent inspect',[id]);break;
     case 'gateway-configure': configureGateway();break;
     case 'autostart': formDialog('登录时启动','登录时启动默认开启：下次登录会按已保存配置自动启动网关。关闭后下次登录不再自动启动；当前运行中的网关不受影响。',field('enabled','登录时启动',String(state.runtime?.autostart?.saved_intent ?? true),{options:[['false','关闭'],['true','启用']]}),()=>({operation:'gateway configure',args:{set:['autostart',value('enabled')]}}),{stayOpen:true});break;

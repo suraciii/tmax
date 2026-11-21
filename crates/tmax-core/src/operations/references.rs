@@ -91,17 +91,19 @@ pub(super) fn guard(config: &Config, request: &Request) -> Result<()> {
         ) && target_id == id
         {
             let entry = operand(request, 1)?;
-            let dependent = |reference: &crate::config::ModelReference| {
-                reference.provider == entry
+            let dependent = |provider: &str, id: &str, protocol: &str| {
+                provider == entry
                     && (path != "agent model remove"
-                        || (request.operands.get(2) == Some(&reference.id)
-                            && arg(request, "protocol") == Some(reference.protocol.as_str())))
+                        || (request.operands.get(2).map(String::as_str) == Some(id)
+                            && arg(request, "protocol") == Some(protocol)))
             };
-            if target.default.as_ref().is_some_and(dependent) {
+            if target.default.as_ref().is_some_and(|reference| {
+                dependent(&reference.provider, &reference.id, &reference.protocol)
+            }) {
                 add("agent_default", target_id.clone(), Some(entry.into()));
             }
             for (role, reference) in &target.roles {
-                if dependent(reference) {
+                if dependent(&reference.provider, &reference.id, &reference.protocol) {
                     add("agent_role", role.clone(), Some(target_id.clone()));
                 }
             }

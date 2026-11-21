@@ -18,7 +18,7 @@ owns saved references. Use [common CLI rules](../spec.md),
 | `agent model add TARGET NAME ID --protocol P` | Add one exact model to the named native provider entry, not its default or role. |
 | `agent model remove TARGET NAME ID --protocol P` | Remove after default/role reference checks. |
 | `agent model clear TARGET NAME` | Empty this entry's selections only after its default/role references are cleared. |
-| `agent default set TARGET NAME ID --protocol P` | Choose an existing selection of that native provider entry as default. |
+| `agent default set TARGET NAME ID --protocol P [--effort EFFORT \| --native-effort EFFORT]` | Choose an existing selection of that native provider entry as default, optionally declaring the reasoning effort tmax writes. Omit both options to stop managing a previously configured effort. |
 | `agent default clear TARGET` | Remove the default, preserving entries/selections/roles. |
 | `agent role set TARGET ROLE NAME ID --protocol P` | Map one qualified native role to an existing selection of that entry. |
 | `agent role remove TARGET ROLE` | Remove exactly that native mapping. |
@@ -29,8 +29,10 @@ owns saved references. Use [common CLI rules](../spec.md),
 | `--agent AGENT` | Select the tool and save `agents.<TARGET>.agent`; supported values follow [Invocation](../spec.md#invocation). |
 | `--path PATH` | Save `scope`; resolve relative paths through [Invocation](../spec.md#invocation). Provider input `--scope` is unchanged. |
 | `NAME` | Exact target-local native provider name, not another tmax upstream provider ID. |
-| Default/role reference | `{provider, id, protocol}`, where `provider` is `NAME`. |
+| Default/role reference | `{provider, id, protocol}`, where `provider` is `NAME`. A default may also carry one `effort` (caller-facing; DSH, pi, OMP, OpenCode) or one `native_effort` (verbatim; Codex, Hermes), never both. A role carries no effort. |
 | `ROLE` | Adapter-supported native model role, not an access role, universal LLM role, or inference setting. Inspection lists supported names; reject unknown names. |
+| `--effort EFFORT` | Caller-facing model effort name for DSH, pi, OMP, or OpenCode. It must be nonempty without whitespace, declared by the selected model's effective reasoning options, and representable by the target's native projection; otherwise application blocks before native writes. For OpenCode it must not contain `#`, which delimits the composite model reference, and saving rejects it. |
+| `--native-effort EFFORT` | Verbatim native reasoning effort for Codex or Hermes. It must be nonempty without whitespace; tmax writes it without validating a selector. Refuse it for Agents that expose a validated selector. |
 
 Every present source/model/default/role/login-source reference must resolve. Empty
 provider tables/model lists and an absent default are valid incremental setup,
@@ -106,7 +108,7 @@ Help uses supported native roles, not invented ones.
 | Command | Result or requested boundary |
 | --- | --- |
 | `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, and `default_configured`. |
-| `agent discover [--agent AGENT]` | Supported installations/paths, versions, and profiles without registration/import. |
+| `agent discover [--agent AGENT]` | Supported installations/paths, versions, profiles, and read-only `native_default`, without registration/import. |
 | `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, native capability projection, desired/applied differences, blockers, and recovery. |
 | `agent inspect --agent AGENT --path PATH` | Inspect an explicit undeclared native path without registration/import. |
 | `agent apply TARGET` | Apply current complete desired configuration; report affected files, applied state, and recovery. |
@@ -126,6 +128,16 @@ non-destructive alternative to restore and discard.
 Apply rejects missing required selections or unavailable credentials and known
 incompatible schemas. Pi, OMP, OpenCode, Hermes, and DSH do not require a default
 selection: applying model entries alone writes no defaults or unselected roles.
+A default's model and effort are independent fields: an absent effort preserves
+the tool's current effort, including inside the same native entry or object, and
+a configured effort is written only for the selected default model. The apply
+projection validates the configured effort against the selected model's native
+projection and blocks on an unrepresentable value instead of dropping,
+translating, or downgrading it; that apply returns
+`native_default_effort_unrepresentable` with exit 3 before native writes. An explicit `native_effort` is passed through
+only for Codex and Hermes. OpenCode encodes model and effort in one composite
+reference: removing only the effort keeps the current composite value, while
+clearing or changing the default rewrites that reference.
 For DSH, preservation applies to HOME-level settings, not automatic import of
 shadowed profile configuration. Separate settings files are not created or edited without selected
 defaults/roles. Codex requires a default because its review model shares the
@@ -157,8 +169,8 @@ settings that keep a newly introduced route in use block before native writes.
 Direct upstream and gateway entries may coexist. Existing HOME-level fields and
 expressions remain preserved under the owning boundary. Model-only application
 writes no `agent-default-model` entry or reasoning preferences; an explicit
-default changes provider/model only, retaining existing HOME-level effort
-settings. Credential handoff enables the native credential service in the HOME
+default writes provider/model and, only when configured, one validated effort,
+while an absent effort retains the existing HOME-level setting. Credential handoff enables the native credential service in the HOME
 patch, including for headless consumption. Recovery covers the artifact, plugin
 insertion, and owned provider and credential fields. `llm-tmax` is the only
 managed adapter entry; no earlier adapter application format is supported or
@@ -188,11 +200,12 @@ restoring native settings never revokes the shared key. Stop management with
 | Agent result data | Shape and meaning |
 | --- | --- |
 | Target/tool identity | `target` is the declared target ID; `agent` is its tool identity, never a target ID. An undeclared native scope has null `target`; resolved `path` identifies the inspected scope. |
-| `NativeModelRef` | `{provider, id, protocol}` with a target-local provider name. |
+| `NativeModelRef` | `{provider, id, protocol}` with a target-local provider name; a default adds optional `effort` or `native_effort`. |
 | `AgentProviderView` | `name`, `source` (`{provider: string}` or `{gateway: true}`), and exact `{id, protocol}` selections. |
 | Provider detail | Qualified requirements, readiness, native precedence/evidence, and desired/applied differences; no mode, target credential, permission list, or target continuity field. |
-| `agent inspect` | `data.providers` contains entries; `data.default` and `data.roles` use `NativeModelRef`, with null default when absent. |
-| `native_projection` | `agent inspect` and `agent apply --dry-run` return one entry per native provider entry: `name`, `source` (`{provider: string}` or `{gateway: true}`), and `models` of `{id, protocol, projection}`. A `projection` has `state`, `reason_code`, `fields`, and `omitted`; a blocked projection adds `message`. `fields` carries only safe capability metadata and never secrets. |
+| `agent inspect` | `data.providers` contains entries; `data.default` uses `NativeModelRef` with optional `effort` or `native_effort`, `data.roles` use model-only `NativeModelRef`, and a null default means unmanaged. |
+| `native_default` | `agent inspect` reports the tool's currently persisted default selection read-only: `state` (`available` or `unavailable` with `reason_code`) and `fields` carrying `present`, `provider`, `model`, and `effort` when the native file exposes them. It is inspection evidence, never desired configuration and never imported automatically. |
+| `native_projection` | `agent inspect` and `agent apply --dry-run` return one entry per native provider entry: `name`, `source` (`{provider: string}` or `{gateway: true}`), and `models` of `{id, protocol, efforts, projection}`; `efforts` lists the effort names representable for that model and target, or is empty. A `projection` has `state`, `reason_code`, `fields`, and `omitted`; a blocked projection adds `message`. `fields` carries only safe capability metadata and never secrets. |
 | Lists | Target/tool identities, counts, and readiness summaries instead of complete entries/evaluations; `default_configured` reports whether the target has a configured default. |
 
 Projection semantics follow the shared

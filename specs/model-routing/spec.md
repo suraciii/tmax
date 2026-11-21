@@ -146,7 +146,8 @@ it with its own error. Capability projection writes the same control declaration
 the native agent's own selector fields under the
 [shared agent boundary](../integrations/spec.md#agent-boundaries). It sets no
 default effort, level, budget, or thinking flag, and the native tool keeps
-ownership of thinking enablement, its defaults, and its request preferences.
+ownership of thinking enablement, its request preferences, and any default the
+user did not explicitly select in tmax.
 
 ### Model effort mapping and resolution
 
@@ -1217,8 +1218,9 @@ response delivery; retained-session errors do not replay on a sibling.
 23. Accept optional `session` or `stateless` continuity on each shared alias
     definition, defaulting to `session`. Reject continuity on native provider
     entries, their model selections, concrete mappings, defaults, or roles.
-    Defaults/roles remain `{ provider, id, protocol }` references to selected
-    native entries. Require actual independent-context qualification for stateless
+    Defaults/roles remain references to selected native entries; a default may
+    additionally carry one effort under the
+    [agent default contract](../cli/agents/spec.md). Require actual independent-context qualification for stateless
     use, and safe conversation identity for session-stable alias forwarding.
 24. Remove a retained candidate through an explicit candidate edit. On activation,
     block only affected bound sessions without reassigning them; unaffected

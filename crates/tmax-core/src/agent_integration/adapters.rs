@@ -3,7 +3,7 @@
 use super::document::{self, Format};
 use crate::{
     Error, Result,
-    config::{AgentTarget, ModelReference},
+    config::{AgentTarget, DefaultReference, ModelReference, NATIVE_EFFORT_AGENTS},
 };
 use serde_json::{Value, json};
 use std::{
@@ -140,16 +140,19 @@ fn file(scope: &Path, name: &str, format: Format, desired: Value) -> File {
     }
 }
 fn reference(r: &ModelReference, entries: &[Entry]) -> Result<String> {
-    let entry = entries
-        .iter()
-        .find(|e| e.name == r.provider)
-        .ok_or_else(|| {
-            Error::new(
-                "unresolved_reference",
-                "Native model selection does not resolve",
-            )
-        })?;
-    Ok(format!("{}/{}", entry.native_name(), r.id))
+    reference_parts(&r.provider, &r.id, entries)
+}
+fn default_reference(r: &DefaultReference, entries: &[Entry]) -> Result<String> {
+    reference_parts(&r.provider, &r.id, entries)
+}
+fn reference_parts(provider: &str, id: &str, entries: &[Entry]) -> Result<String> {
+    let entry = entries.iter().find(|e| e.name == provider).ok_or_else(|| {
+        Error::new(
+            "unresolved_reference",
+            "Native model selection does not resolve",
+        )
+    })?;
+    Ok(format!("{}/{}", entry.native_name(), id))
 }
 
 mod capabilities;
@@ -165,6 +168,7 @@ mod test_support;
 
 pub(super) use capabilities::native_completion;
 pub(super) use capabilities::projection_view;
+pub(super) use capabilities::representable_efforts;
 pub(super) use credentials::resolve_handoff;
 
 // Hermes consumes route context and catalog capability patches separately.
@@ -197,7 +201,56 @@ pub(crate) fn alias_model_metadata(
     Ok(metadata)
 }
 
+/// The default effort is an explicit preference, so tmax validates it against
+/// the same projection that declares the selector. An unrepresentable value
+/// blocks every native write instead of being dropped or downgraded.
+fn validate_default_effort(target: &AgentTarget, entries: &[Entry]) -> Result<()> {
+    let Some(default) = &target.default else {
+        return Ok(());
+    };
+    if let Some(effort) = &default.effort {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == default.provider)
+            .ok_or_else(|| {
+                Error::new(
+                    "unresolved_reference",
+                    "Native default provider does not resolve",
+                )
+            })?;
+        let names = entry
+            .model_projection
+            .get(&default.id)
+            .and_then(|projection| representable_efforts(&target.agent, projection))
+            .unwrap_or_default();
+        if !names.iter().any(|name| name == effort) {
+            let available = if names.is_empty() {
+                "none; the selected model declares no effort this tool can represent".to_owned()
+            } else {
+                names.join(", ")
+            };
+            return Err(Error::new(
+                "native_default_effort_unrepresentable",
+                &format!(
+                    "Reasoning effort \"{effort}\" is not representable by {} for {}/{}; available: {available}",
+                    target.agent, default.provider, default.id
+                ),
+            )
+            .field("default.effort"));
+        }
+    }
+    if default.native_effort.is_some() && !NATIVE_EFFORT_AGENTS.contains(&target.agent.as_str()) {
+        return Err(Error::new(
+            "native_default_effort_unrepresentable",
+            "This native Agent uses caller-facing effort names; declare effort instead of native_effort",
+        )
+        .field("default.native_effort"));
+    }
+    Ok(())
+}
+
 pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Result<Vec<File>> {
+    validate_default_effort(target, entries)?;
     for role in target.roles.keys() {
         if !supported_roles(&target.agent).contains(&role.as_str()) {
             return Err(Error::new(
@@ -249,6 +302,9 @@ pub(super) fn desired_fields(
         .map(|(path, mut value)| {
             if agent == "dsh" {
                 dsh::preserve_models(&path, &mut value, current);
+            }
+            if agent == "opencode" {
+                opencode::preserve_variant(&path, &mut value, current);
             }
             (path, Some(value))
         })

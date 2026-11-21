@@ -112,11 +112,20 @@ pub(super) fn mutate(root: &mut Value, r: &Request, path: &str, info: &mut Json)
             }
         }
         "agent default set" => {
-            put(
-                root,
-                &["agents", operand(r, 0)?, "default"],
-                reference(operand(r, 1)?, operand(r, 2)?, required(r, "protocol")?),
-            )?;
+            if arg(r, "effort").is_some() && arg(r, "native-effort").is_some() {
+                return Err(Error::new(
+                    "invalid_arguments",
+                    "Declare either --effort or --native-effort, not both",
+                ));
+            }
+            let mut default = reference(operand(r, 1)?, operand(r, 2)?, required(r, "protocol")?);
+            if let Some(effort) = arg(r, "effort") {
+                put(&mut default, &["effort"], string(effort))?;
+            }
+            if let Some(effort) = arg(r, "native-effort") {
+                put(&mut default, &["native_effort"], string(effort))?;
+            }
+            put(root, &["agents", operand(r, 0)?, "default"], default)?;
         }
         "agent default clear" => {
             get(root, &["agents", operand(r, 0)?])?;

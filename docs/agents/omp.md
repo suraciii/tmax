@@ -75,7 +75,7 @@ root keys are not rejected, but the registry consumes only `providers`.
 | Model pricing/cache | Optional `cost` with required numeric `input`, `output`, `cacheRead`, `cacheWrite`; `promptCache` with optional numeric `short`, `long`; numeric `premiumMultiplier` |
 | Other model fields | `thinking`, `headers`, `compat`, `imageInputDecoder: "stb"`, positive integer `imageCountBudget`, native `tokenizer` enum, `omitMaxOutputTokens: boolean`, `preferWebsockets: boolean`, nonempty `contextPromotionTarget`, nonempty `compactionModel`, `remoteCompaction` |
 | Override | Sparse model metadata; `cost` rates are individually optional. Override has no new `id` or `baseUrl`. Its API/kind can change an existing row. |
-| Settings, not models file | `modelRoles: Record<string,string>`, `enabledModels`, `enabledProviders`, `disabledProviders`, `modelProviderOrder`, `cycleOrder`; `modelRoleStorage: "global" \| "project"` |
+| Settings, not models file | `modelRoles: Record<string,string>`, `defaultThinkingLevel`, `enabledModels`, `enabledProviders`, `disabledProviders`, `modelProviderOrder`, `cycleOrder`; `modelRoleStorage: "global" \| "project"` |
 
 Provider API enum: `openai-completions`, `openai-responses`,
 `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`,

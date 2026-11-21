@@ -50,6 +50,12 @@ The exact V2 schema is
 Root `providers` maps native provider IDs to entries; root `model` selects a
 `provider/model` reference. A `#variant` suffix selects a native variant.
 The map's model key is the local selection ID; `modelID` is the wire model ID.
+An explicit tmax default effort is written as that `#variant` suffix; without
+one, tmax preserves the current suffix when the base model is unchanged and does
+not silently drop it, and a model change replaces the whole reference. Removing
+only the effort from the tmax default therefore leaves the current suffix in
+place; `agent default clear` returns the whole model field to its captured
+baseline.
 
 | Native location | Exact relevant fields/types |
 | --- | --- |

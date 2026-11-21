@@ -499,13 +499,18 @@ and configuration scope. Detection must be read-only. It must not create tmax
 providers from native settings or collect existing agent credentials.
 
 For each target, the user can configure named native provider entries, their
-model choices, a default model, and any native model roles. An entry refers to
+model choices, a default model with an optional reasoning effort, and any native
+model roles. An entry refers to
 one upstream provider or to the tmax gateway. Upstream entries select that provider's
 concrete models; gateway entries select public concrete model IDs or model aliases.
 Both kinds may coexist in the same target. There is no target-wide operating mode.
 Unsupported native multi-provider configurations must be explained, not silently
 collapsed to one provider. Defaults and native roles identify both the entry and
-its model. tmax must not invent universal role or reasoning-level names.
+its model. A default effort is model-scoped: for DSH, pi, OMP, and OpenCode it is a
+caller-facing name the selected model declares and the tool can represent; for
+Codex and Hermes it is a verbatim native value tmax does not validate. tmax must
+not invent universal role or reasoning-level names, synthesize a default effort,
+or treat a capability declaration as a default.
 These choices control native configuration and model pickers, not gateway permissions.
 Alias continuity belongs to the shared alias definition under
 [Model selection](../model-routing/spec.md#selection-and-continuity).
@@ -519,6 +524,20 @@ the native default unless the user explicitly changes it. An unverified tool
 version is advisory under the [integration contract](../integrations/spec.md#support-contract).
 Model addition, removal, and default selection are distinct requested changes;
 tmax must not infer them from a generic request to switch or optimize access.
+
+The default model and the default effort are independent managed fields. Applying
+a target writes only the fields the user explicitly configured: a missing default
+model produces no default write, and a missing default effort preserves the
+tool's current effort exactly. Settings tmax does not configure remain
+tool-owned even when they live in the same native entry, object, or model
+reference. A configured effort that the selected model cannot represent, or that
+the target tool cannot express, blocks application before any native write and
+reports the available names. Removing an effort from the target stops managing it;
+later apply restores that field's captured baseline and still refuses to overwrite
+an external edit. When a native format encodes the model and its effort in one
+composite value, removing only the effort leaves the current composite value in
+place until the model reference itself becomes unmanaged or changes; clearing the
+default still restores that field's captured baseline.
 
 Direct model selections must resolve to a specific qualified model and therefore
 its provider's authorization. Adding another instance must not switch direct

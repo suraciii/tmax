@@ -13,6 +13,7 @@ mod dsh_connect;
 mod dsh_patch;
 mod dsh_projection;
 mod installation;
+mod native_default;
 mod planning;
 mod recovery;
 mod scope;

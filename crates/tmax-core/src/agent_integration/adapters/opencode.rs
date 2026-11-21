@@ -1,7 +1,7 @@
 use super::super::document::Format;
 use super::capabilities::ReasoningProjection;
 use super::credentials::credential_path;
-use super::{Entry, File, file, reference};
+use super::{Entry, File, default_reference, file, reference};
 use crate::{Error, Result, config::AgentTarget};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
@@ -38,6 +38,30 @@ pub(super) fn project_reasoning(protocol: &str, values: &[String]) -> Result<Rea
         })).collect::<Vec<_>>()}),
         omitted: Vec::new(),
     })
+}
+
+/// OpenCode encodes the default model and its effort variant in one string.
+/// When tmax does not manage the effort, keep the current variant on the same
+/// base model; changing the model is an explicit replacement of that reference.
+pub(super) fn preserve_variant(path: &[String], value: &mut Value, current: &Value) {
+    if path != ["model"] {
+        return;
+    }
+    let Some(desired) = value.as_str() else {
+        return;
+    };
+    if desired.contains('#') {
+        return;
+    }
+    let Some(current) = current.get("model").and_then(Value::as_str) else {
+        return;
+    };
+    let Some((base, _variant)) = current.split_once('#') else {
+        return;
+    };
+    if base == desired {
+        *value = json!(current);
+    }
 }
 
 pub(super) fn model_metadata(effective: &Value) -> Result<Value> {
@@ -86,7 +110,12 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
     }
     let mut config = json!({"providers":providers});
     if let Some(default) = &target.default {
-        config["model"] = json!(reference(default, entries)?);
+        let mut model = default_reference(default, entries)?;
+        if let Some(effort) = &default.effort {
+            model.push('#');
+            model.push_str(effort);
+        }
+        config["model"] = json!(model);
     }
     for (role, r) in &target.roles {
         config["agents"][role]["model"] = json!(reference(r, entries)?);
@@ -134,5 +163,60 @@ mod tests {
         assert!(!key.contains(['/', '\\']));
         assert!(files[0].desired.get("model").is_none());
         assert!(files[0].desired.get("agents").is_none());
+    }
+
+    #[test]
+    fn opencode_default_effort_is_a_variant_suffix() {
+        use super::super::test_support::{effort, entry, project};
+        let scope = Path::new("/explicit/native");
+        let mut model_entry = entry("chat-completions");
+        project(
+            &mut model_entry,
+            json!({"fields":{"variants":[{"id":"high","settings":{"reasoningEffort":"high"}}]}}),
+        );
+        let mut target = target("opencode");
+        effort(&mut target, "high");
+        let files = build(&target, scope, std::slice::from_ref(&model_entry)).unwrap();
+        let config = files
+            .iter()
+            .find(|file| file.path == scope.join("opencode.jsonc"))
+            .unwrap();
+        assert_eq!(config.desired["model"], "local/m#high");
+        target.default.as_mut().unwrap().effort = None;
+        let files = build(&target, scope, &[model_entry]).unwrap();
+        let config = files
+            .iter()
+            .find(|file| file.path == scope.join("opencode.jsonc"))
+            .unwrap();
+        assert_eq!(config.desired["model"], "local/m");
+    }
+
+    #[test]
+    fn opencode_rejects_variant_ids_that_would_break_the_model_reference() {
+        use super::super::test_support::{effort, entry, project};
+        let mut model_entry = entry("chat-completions");
+        project(
+            &mut model_entry,
+            json!({"fields":{"variants":[{"id":"a#b"},{"id":"high"}]}}),
+        );
+        let mut target = target("opencode");
+        effort(&mut target, "a#b");
+        let error = build(&target, Path::new("/explicit/native"), &[model_entry]).unwrap_err();
+        assert_eq!(error.code, "native_default_effort_unrepresentable");
+        assert!(error.message.contains("available: high"));
+    }
+
+    #[test]
+    fn opencode_unmanaged_variant_is_preserved_on_the_same_model() {
+        use super::super::desired_fields;
+        let current = json!({"providers":{},"model":"local/m#high"});
+        assert_eq!(
+            desired_fields("opencode", &json!({"model":"local/m"}), &current),
+            vec![(vec!["model".into()], Some(json!("local/m#high")))]
+        );
+        assert_eq!(
+            desired_fields("opencode", &json!({"model":"local/other"}), &current),
+            vec![(vec!["model".into()], Some(json!("local/other")))]
+        );
     }
 }

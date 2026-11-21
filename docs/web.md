@@ -70,8 +70,9 @@ page makes no external font, image, or script requests.
   does not write native files.
   Apply and restore remain separate explicit actions with optional previews.
   Details also show desired per-model reasoning selectors, omitted names, and
-  blockers. These are not evidence of native reload or inference; default effort
-  remains tool-owned.
+  blockers. These are not evidence of native reload or inference; an effort is
+  written only when the target default explicitly declares one, and the tool's
+  current effort is preserved otherwise.
   DSH requires an existing home directory (`DSH_HOME`, otherwise the OS home's
   `.dsh`); application installs the independent `tmax-dsh.mjs` plugin, declares
   its `llm-tmax` entry in `cordis.patch.yml`, and hands keys to the adjacent native
@@ -79,9 +80,10 @@ page makes no external font, image, or script requests.
   without bundle inspection and preserves user `llm-pi-ai` routes. It does not
   enumerate, select, create, or manage profiles. The managed home entry shadows
   lower entries with the same identity. Model-only application writes no
-  `agent-default-model` entry; an
-  explicit default changes provider/model while preserving existing HOME-level
-  effort. Runtime overlays remain outside tmax's ownership. See the
+  `agent-default-model` entry; an explicit default changes provider/model and,
+  only when configured, one validated effort, while an absent effort preserves
+  the existing HOME-level setting. Runtime overlays remain outside tmax's
+  ownership. See the
   [DSH reference](agents/dsh.md) for evidence limits; historical profile-path
   checks do not establish current home-wide, multi-profile behavior.
 - **Gateway** shows listener readiness, native process supervision, login-start

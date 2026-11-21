@@ -617,3 +617,54 @@ async fn stale_guard_and_dry_run_never_initialize_missing_home() {
     );
     assert!(!store.root.exists());
 }
+
+#[tokio::test]
+async fn agent_default_set_declares_and_clears_one_effort() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    let text = "# personal settings\nversion=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n[agents.local]\nagent='dsh'\nscope='/native'\n[agents.local.providers.local]\nprovider='p'\n[[agents.local.providers.local.models]]\nid='m'\nprotocol='chat-completions'\n";
+    store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+    let request = |options: &[(&str, &str)]| {
+        let mut arguments =
+            BTreeMap::from([("protocol".to_owned(), vec!["chat-completions".to_owned()])]);
+        for (key, value) in options {
+            arguments.insert((*key).to_owned(), vec![(*value).to_owned()]);
+        }
+        Request {
+            command: vec!["agent".into(), "default".into(), "set".into()],
+            operands: vec!["local".into(), "local".into(), "m".into()],
+            arguments,
+            dry_run: false,
+            if_revision: None,
+        }
+    };
+    let with_effort = request(&[("effort", "max")]);
+    crate::operations::commands::validate(&with_effort).unwrap();
+    execute(&store, &with_effort).await.unwrap();
+    let configured = config::load(&store).unwrap();
+    let default = configured.config.agents["local"].default.as_ref().unwrap();
+    assert_eq!(default.effort.as_deref(), Some("max"));
+    assert!(default.native_effort.is_none());
+
+    let without_effort = request(&[]);
+    execute(&store, &without_effort).await.unwrap();
+    let configured = config::load(&store).unwrap();
+    assert!(
+        configured.config.agents["local"]
+            .default
+            .as_ref()
+            .unwrap()
+            .effort
+            .is_none()
+    );
+
+    for (key, value) in [
+        ("native-effort", "max"),
+        ("effort", " has-space"),
+        ("effort", ""),
+    ] {
+        let invalid = request(&[(key, value)]);
+        let error = execute(&store, &invalid).await.unwrap_err();
+        assert_eq!(error.code, "invalid_configuration");
+    }
+}

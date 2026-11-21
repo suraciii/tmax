@@ -83,6 +83,9 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
         if active.login_provider.is_none() {
             config["model"]["base_url"] = json!(active.base);
         }
+        if let Some(effort) = &default.native_effort {
+            config["agent"]["reasoning_effort"] = json!(effort);
+        }
     }
     if !overrides.is_empty() {
         config["model_overrides"] = Value::Object(overrides);
@@ -146,4 +149,31 @@ pub(super) fn resolve_handoff(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::{entry, native_effort, target};
+    use super::build;
+    use std::path::Path;
+    #[test]
+    fn hermes_native_effort_is_written_only_when_configured() {
+        let mut target = target("hermes");
+        native_effort(&mut target, "xhigh");
+        let files = build(
+            &target,
+            Path::new("/explicit/native"),
+            &[entry("chat-completions")],
+        )
+        .unwrap();
+        assert_eq!(files[0].desired["agent"]["reasoning_effort"], "xhigh");
+        target.default.as_mut().unwrap().native_effort = None;
+        let files = build(
+            &target,
+            Path::new("/explicit/native"),
+            &[entry("chat-completions")],
+        )
+        .unwrap();
+        assert!(files[0].desired.get("agent").is_none());
+    }
 }

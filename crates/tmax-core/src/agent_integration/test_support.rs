@@ -17,10 +17,12 @@ pub(super) fn inspection_target(scope: PathBuf) -> AgentTarget {
                 }],
             },
         )]),
-        default: Some(config::ModelReference {
+        default: Some(config::DefaultReference {
             provider: "local".into(),
             id: "first".into(),
             protocol: "chat-completions".into(),
+            effort: None,
+            native_effort: None,
         }),
         roles: BTreeMap::new(),
     }

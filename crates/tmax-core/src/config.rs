@@ -5,6 +5,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 fn yes() -> bool {
     true
 }
+/// Agents whose native default effort is a caller-facing name shaped by the model projection.
+pub(crate) const PROJECTED_EFFORT_AGENTS: &[&str] = &["dsh", "pi", "omp", "opencode"];
+/// Agents whose native default effort is a verbatim native value with no selector validation.
+pub(crate) const NATIVE_EFFORT_AGENTS: &[&str] = &["codex", "hermes"];
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -296,9 +300,31 @@ pub struct AgentTarget {
     pub scope: PathBuf,
     #[serde(default)]
     pub providers: BTreeMap<String, NativeProvider>,
-    pub default: Option<ModelReference>,
+    pub default: Option<DefaultReference>,
     #[serde(default)]
     pub roles: BTreeMap<String, ModelReference>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultReference {
+    pub provider: String,
+    pub id: String,
+    pub protocol: String,
+    /// Caller-facing effort name for Agents with a validated native selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// Verbatim native effort value for Agents without a validated selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_effort: Option<String>,
+}
+impl DefaultReference {
+    pub(crate) fn model(&self) -> ModelReference {
+        ModelReference {
+            provider: self.provider.clone(),
+            id: self.id.clone(),
+            protocol: self.protocol.clone(),
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -779,6 +805,59 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
         }) {
             return Err(invalid(&format!("{base}.roles")));
         }
+        if let Some(default) = &t.default {
+            if default.effort.is_some() && default.native_effort.is_some() {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    "A native default declares either a validated effort or a native effort, not both",
+                )
+                .field(format!("{base}.default")));
+            }
+            for (field, value) in [
+                ("effort", default.effort.as_deref()),
+                ("native_effort", default.native_effort.as_deref()),
+            ] {
+                if value.is_some_and(|value| {
+                    value.is_empty()
+                        || value
+                            .chars()
+                            .any(|character| character.is_control() || character.is_whitespace())
+                }) {
+                    return Err(Error::new(
+                        "invalid_configuration",
+                        "A native default effort must be nonempty without whitespace or control characters",
+                    )
+                    .field(format!("{base}.default.{field}")));
+                }
+            }
+            let projected = PROJECTED_EFFORT_AGENTS.contains(&t.agent.as_str());
+            if t.agent == "opencode"
+                && default
+                    .effort
+                    .as_deref()
+                    .is_some_and(|effort| effort.contains('#'))
+            {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    "An OpenCode model reference uses one # separator; the default effort cannot contain #",
+                )
+                .field(format!("{base}.default.effort")));
+            }
+            if default.effort.is_some() && !projected {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    "This native Agent has no validated reasoning selector; declare native_effort instead",
+                )
+                .field(format!("{base}.default.effort")));
+            }
+            if default.native_effort.is_some() && projected {
+                return Err(Error::new(
+                    "invalid_configuration",
+                    "This native Agent uses caller-facing effort names; declare effort instead of native_effort",
+                )
+                .field(format!("{base}.default.native_effort")));
+            }
+        }
         for (name, entry) in &t.providers {
             if !valid_id(name, true)
                 || (entry.provider.is_some() == entry.gateway.is_some())
@@ -816,7 +895,8 @@ fn validate_inner(config: &Config, allow_empty_aliases: bool) -> Result<()> {
                 return Err(invalid(&base));
             }
         }
-        for reference in t.default.iter().chain(t.roles.values()) {
+        let default = t.default.as_ref().map(DefaultReference::model);
+        for reference in default.iter().chain(t.roles.values()) {
             let entry = t
                 .providers
                 .get(&reference.provider)
@@ -1194,5 +1274,56 @@ mod tests {
                 .max_observation_age_seconds,
             3600
         );
+    }
+
+    #[test]
+    fn default_reference_declares_one_optional_effort() {
+        let base = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n[agents.local]\nagent='dsh'\nscope='/native'\n[agents.local.providers.local]\nprovider='p'\n[[agents.local.providers.local.models]]\nid='m'\nprotocol='chat-completions'\n[agents.local.default]\nprovider='local'\nid='m'\nprotocol='chat-completions'\n";
+        let with_effort = parse(&format!("{base}effort='max'\n")).unwrap();
+        let default = with_effort.agents["local"].default.as_ref().unwrap();
+        assert_eq!(default.effort.as_deref(), Some("max"));
+        assert!(default.native_effort.is_none());
+        assert!(
+            toml::to_string(&with_effort)
+                .unwrap()
+                .contains("effort = \"max\"")
+        );
+
+        let codex = || {
+            base.replace("agent='dsh'", "agent='codex'")
+                .replace(
+                    "chat-completions='http://127.0.0.1:39999'",
+                    "responses='http://127.0.0.1:39999'",
+                )
+                .replace("protocol='chat-completions'", "protocol='responses'")
+        };
+        assert_eq!(
+            parse(&format!("{}native_effort='xhigh'\n", codex()))
+                .unwrap()
+                .agents["local"]
+                .default
+                .as_ref()
+                .unwrap()
+                .native_effort
+                .as_deref(),
+            Some("xhigh")
+        );
+        for invalid in [
+            format!("{base}effort='max'\nnative_effort='max'\n"),
+            format!("{base}native_effort='max'\n"),
+            format!("{base}effort=' max'\n"),
+            format!("{base}effort=''\n"),
+            format!("{}effort='max'\n", codex()),
+            format!(
+                "{}effort='a#b'\n",
+                base.replace("agent='dsh'", "agent='opencode'")
+            ),
+        ] {
+            assert_eq!(
+                parse(&invalid).unwrap_err().code,
+                "invalid_configuration",
+                "{invalid}"
+            );
+        }
     }
 }

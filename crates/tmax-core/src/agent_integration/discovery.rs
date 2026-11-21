@@ -52,7 +52,12 @@ pub async fn discover(store: &Store, agent: Option<&str>, path: Option<&str>) ->
         // Version commands use an existing directory and never select credentials.
         let evidence = version(a, if available { &resolved } else { &store.home }).await;
         let scopes = profile_paths(store, a);
-        installations.push(json!({"target":null,"agent":a,"path":resolved,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(reason)},"installation":evidence,"profiles":scopes,"files":if available{safe_files(a,&resolved)}else{Vec::new()},"credential_scopes":if available{auth_paths(a,&resolved).iter().map(|p|json!({"path":p,"present":p.exists(),"contents":"not_read","owner":a})).collect::<Vec<_>>()}else{Vec::new()},"precedence":adapters::precedence(a),"supported_roles":adapters::supported_roles(a),"imported":false}));
+        let native_default = if available {
+            super::native_default::view(a, &resolved)
+        } else {
+            json!({"state":"unavailable","reason_code":reason})
+        };
+        installations.push(json!({"target":null,"agent":a,"path":resolved,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(reason)},"native_default":native_default,"installation":evidence,"profiles":scopes,"files":if available{safe_files(a,&resolved)}else{Vec::new()},"credential_scopes":if available{auth_paths(a,&resolved).iter().map(|p|json!({"path":p,"present":p.exists(),"contents":"not_read","owner":a})).collect::<Vec<_>>()}else{Vec::new()},"precedence":adapters::precedence(a),"supported_roles":adapters::supported_roles(a),"imported":false}));
     }
     Ok(if path.is_some() {
         installations.remove(0)

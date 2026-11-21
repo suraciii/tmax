@@ -110,6 +110,12 @@ capabilities and effort choices in an Agent's supported configuration vocabulary
 not a native request preference.
 _Avoid_: Model copy, default selection, request transformation
 
+**Native default selection**:
+A target's explicit choice of native default model and, optionally, one reasoning
+effort written into that tool's own default configuration; distinct from a
+capability declaration, a gateway request default, or a session choice.
+_Avoid_: Universal default level, forced thinking, request override
+
 **Candidate eligibility**:
 Whether a configured model candidate may enter selection at an instant,
 determined by configuration, authorization, protocol or client requirements,

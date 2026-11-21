@@ -373,3 +373,106 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
         modified
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dsh_default_effort_is_field_scoped_and_restorable() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::at(directory.path().join("authority"));
+    let home = directory.path().join("dsh");
+    fs::create_dir_all(&home).unwrap();
+    let patch = home.join("cordis.patch.yml");
+    let original = "# native policy\n- id: agent-default-model\n  config:\n    provider: existing\n    model: unchanged\n    reasoningEffort: low\n- id: user-owned\n  config: !!js process.env.NATIVE_POLICY\n";
+    fs::write(&patch, original).unwrap();
+    let reference = secrets::put(&store, "provider:p", b"synthetic-dsh-effort").unwrap();
+    let mut target = inspection_target(home.clone());
+    target.agent = "dsh".into();
+    target.default.as_mut().unwrap().effort = Some("high".into());
+    let mut config = Config::empty();
+    config.providers.insert(
+        "p".into(),
+        config::Provider {
+            integration: Some("custom".into()),
+            auth: Some(Auth::ApiKey { key_ref: reference }),
+            endpoints: BTreeMap::from([(
+                "chat-completions".into(),
+                "https://example.invalid/v1".into(),
+            )]),
+            models: BTreeMap::from([(
+                "first".into(),
+                config::Model {
+                    overrides: config::ModelOverrides {
+                        reasoning_options: Some(vec![config::ReasoningOption {
+                            r#type: "effort".into(),
+                            values: Some(vec!["low".into(), "high".into()]),
+                        }]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    config.agents.insert("managed".into(), target);
+    store
+        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+        .unwrap();
+    apply(&store, &config, "managed", false).await.unwrap();
+    let applied = fs::read_to_string(&patch).unwrap();
+    assert!(applied.starts_with("# native policy"));
+    assert!(applied.contains("process.env.NATIVE_POLICY"));
+    let value = dsh_patch::parse(&applied).unwrap();
+    let default = &value["agent-default-model"]["config"];
+    assert_eq!(default["provider"], "local");
+    assert_eq!(default["model"], "first");
+    assert_eq!(default["reasoningEffort"], "high");
+    assert!(value.get("user-owned").is_some());
+
+    // Removing only the effort restores that field's captured baseline.
+    let mut unmanaged = config.clone();
+    unmanaged
+        .agents
+        .get_mut("managed")
+        .unwrap()
+        .default
+        .as_mut()
+        .unwrap()
+        .effort = None;
+    store
+        .write_raw("tmax.toml", toml::to_string(&unmanaged).unwrap().as_bytes())
+        .unwrap();
+    apply(&store, &unmanaged, "managed", false).await.unwrap();
+    let restored = dsh_patch::parse(&fs::read_to_string(&patch).unwrap()).unwrap();
+    let default = &restored["agent-default-model"]["config"];
+    assert_eq!(default["reasoningEffort"], "low");
+    assert_eq!(default["provider"], "local");
+    assert_eq!(default["model"], "first");
+    assert!(restored.get("user-owned").is_some());
+
+    // A later external edit to the owned effort is a conflict, not a silent overwrite.
+    store
+        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+        .unwrap();
+    apply(&store, &config, "managed", false).await.unwrap();
+    let managed = fs::read_to_string(&patch).unwrap();
+    let edited = dsh_patch::set(
+        &managed,
+        &[
+            "agent-default-model".into(),
+            "config".into(),
+            "reasoningEffort".into(),
+        ],
+        Some(&json!("max")),
+    )
+    .unwrap();
+    assert_ne!(edited, managed);
+    fs::write(&patch, edited).unwrap();
+    assert_eq!(
+        apply(&store, &config, "managed", false)
+            .await
+            .unwrap_err()
+            .code,
+        "native_conflict"
+    );
+}

@@ -47,6 +47,9 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
     // Codex owns its model metadata and instructions. An explicit custom
     // model selection does not require a synthetic model_catalog_json.
     let mut config = json!({"model":default.id,"model_provider":active.native_name(),"model_providers":providers});
+    if let Some(effort) = &default.native_effort {
+        config["model_reasoning_effort"] = json!(effort);
+    }
     for (role, r) in &target.roles {
         if r.provider != default.provider {
             return Err(Error::new(
@@ -122,5 +125,24 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "incompatible");
+    }
+
+    #[test]
+    fn codex_native_effort_is_written_only_when_configured() {
+        use super::super::test_support::{entry, native_effort};
+        let mut target = target("codex");
+        native_effort(&mut target, "xhigh");
+        let config = |target: &crate::config::AgentTarget| {
+            let files =
+                build(target, Path::new("/explicit/native"), &[entry("responses")]).unwrap();
+            files
+                .into_iter()
+                .find(|file| file.path == Path::new("/explicit/native/config.toml"))
+                .unwrap()
+                .desired
+        };
+        assert_eq!(config(&target)["model_reasoning_effort"], "xhigh");
+        target.default.as_mut().unwrap().native_effort = None;
+        assert!(config(&target).get("model_reasoning_effort").is_none());
     }
 }

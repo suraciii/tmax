@@ -619,10 +619,12 @@ mod tests {
             .unwrap()
             .models
             .push(selection);
-        target.default = Some(config::ModelReference {
+        target.default = Some(config::DefaultReference {
             provider: "entry".into(),
             id: "m".into(),
             protocol: "chat-completions".into(),
+            effort: None,
+            native_effort: None,
         });
         store
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())

@@ -2,7 +2,7 @@ use super::super::document::Format;
 use super::super::scope::omp_main_settings;
 use super::capabilities::{ReasoningProjection, api, catalog_model_metadata};
 use super::credentials::{credential_path, key_command};
-use super::{Entry, File, file, reference};
+use super::{Entry, File, default_reference, file, reference};
 use crate::{Error, Result, config::AgentTarget};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -132,18 +132,23 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 .ok_or_else(|| {
                     Error::new("unresolved_reference", "Native default does not resolve")
                 })?;
-            files.push(file(
-                scope,
-                "settings.json",
-                Format::Json,
-                json!({"defaultProvider":d.native_name(),"defaultModel":default.id}),
-            ));
+            let mut settings = json!({
+                "defaultProvider":d.native_name(),
+                "defaultModel":default.id,
+            });
+            if let Some(effort) = &default.effort {
+                settings["defaultThinkingLevel"] = json!(effort);
+            }
+            files.push(file(scope, "settings.json", Format::Json, settings));
         }
         Ok(files)
     } else {
         let mut roles = serde_json::Map::new();
         if let Some(default) = &target.default {
-            roles.insert("default".into(), json!(reference(default, entries)?));
+            roles.insert(
+                "default".into(),
+                json!(default_reference(default, entries)?),
+            );
         }
         for (role, r) in &target.roles {
             roles.insert(role.clone(), json!(reference(r, entries)?));
@@ -160,11 +165,19 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             json!({"providers":providers}),
         )];
         if !roles.is_empty() {
+            let mut settings = json!({"modelRoles":roles});
+            if let Some(effort) = target
+                .default
+                .as_ref()
+                .and_then(|default| default.effort.as_ref())
+            {
+                settings["defaultThinkingLevel"] = json!(effort);
+            }
             files.push(file(
                 scope,
                 omp_main_settings(scope),
                 Format::Yaml,
-                json!({"modelRoles":roles}),
+                settings,
             ));
         }
         Ok(files)
@@ -366,5 +379,52 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn pi_default_effort_writes_default_thinking_level_only_when_configured() {
+        use super::super::test_support::{effort, entry, project};
+        let scope = Path::new("/explicit/native");
+        let mut model_entry = entry("chat-completions");
+        project(
+            &mut model_entry,
+            json!({"fields":{"thinkingLevelMap":{"off":"off","low":"low","high":"high","max":"max"}}}),
+        );
+        let mut target = target("pi");
+        effort(&mut target, "high");
+        let files = build(&target, scope, std::slice::from_ref(&model_entry)).unwrap();
+        let settings = files
+            .iter()
+            .find(|file| file.path == scope.join("settings.json"))
+            .unwrap();
+        assert_eq!(settings.desired["defaultThinkingLevel"], "high");
+        target.default.as_mut().unwrap().effort = None;
+        let files = build(&target, scope, &[model_entry]).unwrap();
+        let settings = files
+            .iter()
+            .find(|file| file.path == scope.join("settings.json"))
+            .unwrap();
+        assert!(settings.desired.get("defaultThinkingLevel").is_none());
+    }
+
+    #[test]
+    fn omp_default_effort_writes_settings_level_with_roles() {
+        use super::super::test_support::{effort, entry, project};
+        let directory = tempfile::tempdir().unwrap();
+        let scope = directory.path();
+        let mut model_entry = entry("chat-completions");
+        project(
+            &mut model_entry,
+            json!({"fields":{"thinking":{"mode":"effort","efforts":["low","high","max"]}}}),
+        );
+        let mut target = target("omp");
+        effort(&mut target, "high");
+        let files = build(&target, scope, std::slice::from_ref(&model_entry)).unwrap();
+        let settings = files
+            .iter()
+            .find(|file| file.path == scope.join("config.yml"))
+            .unwrap();
+        assert_eq!(settings.desired["defaultThinkingLevel"], "high");
+        assert_eq!(settings.desired["modelRoles"]["default"], "local/m");
     }
 }

@@ -28,7 +28,7 @@ The result has `schema_version = 1` and these fields:
 | `tmax_version` | Producing executable version. |
 | `configuration_revision` | Current saved configuration revision. |
 | `generated_at` | RFC 3339 observation time. |
-| `target` | `id`, native `path`, configured `default`, and gateway route `routes` names. |
+| `target` | `id`, native `path`, configured `default` (`{provider, id, protocol}` plus optional `effort`/`native_effort`), and gateway route `routes` names. Consumers that only need identity read the model reference. |
 | `gateway` | `configured`, `ready`, `listen`, `daemon_discovery_state`, and `reason_code`. `ready` is `null` when daemon identity or compatibility is unknown; unknown is not `false`. |
 | `routes` | One object per gateway native provider entry: `name`, `protocol`, `base_url`, `credential_ref`, and `models`. |
 | `blockers` | Declared blockers with stable `code` and `message`; a blocked projection is still a successful read. |

@@ -95,10 +95,21 @@ unrepresentable input visible as omitted. A projection with no usable native
 level is unrepresentable: it blocks that agent's application before native writes
 and stays visible in inspection. These fields declare selector capability only.
 They set no default effort, level, budget, thinking switch, or request value.
-Native capability declarations can affect the tool's model representation;
+A default effort is written only through an explicit target default selection,
+never as a projection side effect. For DSH, pi, OMP, and OpenCode it is a
+caller-facing name validated against that same projection; for Codex and Hermes
+it is a verbatim native value (`model_reasoning_effort` and
+`agent.reasoning_effort` respectively) that tmax does not validate. The default
+model and effort are independent managed fields: an absent model or effort writes
+nothing and preserves the tool's current value, including siblings inside the
+same native entry or object. Where a native format encodes model and effort as one
+composite value, removing only the effort leaves the current composite value in
+place until the model reference itself becomes unmanaged or changes. An
+unrepresentable effort blocks application before native writes, and external edits to an owned default field remain conflicts
+under the common recovery contract. Native capability declarations can affect the tool's model representation;
 the [DSH alias limitation](#alias-reasoning-capability) makes that effect explicit.
-The native tool keeps ownership of thinking enablement, defaults, and request
-preferences under the
+The native tool keeps ownership of thinking enablement, request preferences, and
+any default selection the user did not explicitly configure in tmax, under the
 [request-parameter contract](../model-routing/spec.md#request-parameters).
 
 The [versioned native field references](../../docs/agents/README.md#qualification-and-evidence)
@@ -209,7 +220,7 @@ native representation, and request intent, including this lossy DSH boundary.
 | Layering | Bundle patches → profile patch → home patch → command-line overlays. A home entry `config` replaces the whole lower-layer configuration for that same entry, not a deep merge. The independent `llm-tmax` entry leaves user `llm-pi-ai` routes and settings untouched; it does not copy or merge their configuration. Home tmax routes are common to profiles using that home. An explicitly managed home default may still shadow lower-layer defaults; runtime overlays remain outside tmax's ownership. |
 | Credential handoff | `llm-tmax` uses `apiKeyEnv: TMAX_<stable hash>` in the home patch. Executed apply resolves the referenced tmax key into that home's adjacent current-user-restricted `.credentials.yaml`, `version: 1`, under `refs`; preserve unrelated references and credential records. Accept empty stores and stamp version 1; nonempty stores without version 1 block. Apply and restore executions hold the native sibling `.credentials.yaml.lock` writer lock from initial credential read through commit. An existing lock blocks immediately with `native_credentials_busy`, without changing native files or the external lock; never overwrite or reclaim it. Release owned locks on success and failure. Dry-run/inspect never create locks, resolve secrets, or return values. The native store is shared across profiles, not another tmax authority. |
 | Headless credentials | When handing off a key, explicitly enable the native `credentials` service in the HOME patch, including for headless consumption, without inspecting a bundle. Preserve unrelated HOME-level service settings; do not require a secret-bearing environment or launch wrapper. |
-| Selection | Model-only application writes no `agent-default-model` entry, default reasoning effort, route `reasoning`, or thinking budget. An explicitly selected default changes only its provider/model reference, preserving existing HOME-level fields, including effort. Lower-layer defaults are not automatically imported into a new home entry `config`. No native model roles or native interactive login are qualified. |
+| Selection | Model-only application writes no `agent-default-model` entry, default reasoning effort, route `reasoning`, or thinking budget. An explicitly selected default writes its provider/model reference and, only when explicitly configured, `agent-default-model.reasoningEffort`; an absent effort preserves the existing HOME-level field. Route `reasoning` and thinking budgets are never written. Lower-layer defaults are not automatically imported into a new home entry `config`. No native model roles or native interactive login are qualified. |
 | Output metadata | Leave DSH output capability unprojected: explicit native `maxTokens` also sets a per-request default. Preserve existing HOME-level fields on retained selected models by exact model ID; explicitly projected fields override them, while membership and order remain the explicit selection. Do not import shadowed profile settings. |
 | Protocol | Support all three native protocol mappings without translation. A provider route has one protocol and base; incompatible selections in one route block rather than silently changing transport or dropping models. Existing `modelOverrides` on a selected HOME provider route block before writes rather than emitting incompatible `models` plus `modelOverrides`. |
 | Runtime qualification | Configuration/source qualification is not inference evidence. Unknown DSH gateway context does not establish a reusable conversation identity. Do not fabricate session headers, static IDs, or another client's User-Agent. Direct OpenCode Go access remains unqualified without its required genuine session mechanism. |

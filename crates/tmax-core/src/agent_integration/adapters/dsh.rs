@@ -125,10 +125,14 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             .iter()
             .find(|entry| entry.name == default.provider)
             .ok_or_else(|| Error::new("unresolved_reference", "Native default does not resolve"))?;
-        patch["agent-default-model"] = json!({"config":{
+        let mut config = json!({
             "provider":active.native_name(),
             "model":default.id,
-        }});
+        });
+        if let Some(effort) = &default.effort {
+            config["reasoningEffort"] = json!(effort);
+        }
+        patch["agent-default-model"] = json!({"config":config});
     }
     let mut files = Vec::new();
     if !refs.is_empty() {
@@ -507,5 +511,79 @@ mod tests {
             assert_eq!(row["thinkingBudgets"], json!({"high":512}));
             assert_eq!(after["agent-default-model"], current["agent-default-model"]);
         }
+    }
+
+    #[test]
+    fn dsh_default_effort_writes_reasoning_effort_only_when_configured() {
+        use super::super::test_support::{effort, entry, project};
+        let scope = Path::new("/explicit/dsh");
+        let mut model_entry = entry("chat-completions");
+        project(
+            &mut model_entry,
+            json!({"state":"projected","reason_code":null,"fields":{"reasoningEfforts":{"off":"off","max":"max"}},"omitted":[]}),
+        );
+        let mut target = target("dsh");
+        effort(&mut target, "max");
+        let files = build(&target, scope, std::slice::from_ref(&model_entry)).unwrap();
+        assert_eq!(
+            files[2].desired["agent-default-model"]["config"]["reasoningEffort"],
+            "max"
+        );
+        target.default.as_mut().unwrap().effort = None;
+        let files = build(&target, scope, &[model_entry]).unwrap();
+        assert!(
+            files[2].desired["agent-default-model"]["config"]
+                .get("reasoningEffort")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn dsh_default_effort_must_be_representable() {
+        use super::super::test_support::{effort, entry, project};
+        let mut model_entry = entry("chat-completions");
+        project(
+            &mut model_entry,
+            json!({"state":"projected","reason_code":null,"fields":{"reasoningEfforts":{"max":"max"}},"omitted":[]}),
+        );
+        let mut target = target("dsh");
+        effort(&mut target, "high");
+        let error = build(&target, Path::new("/explicit/dsh"), &[model_entry]).unwrap_err();
+        assert_eq!(error.code, "native_default_effort_unrepresentable");
+        assert!(error.message.contains("available: max"));
+    }
+
+    #[test]
+    fn dsh_default_update_preserves_an_unmanaged_reasoning_effort() {
+        let current = json!({"agent-default-model":{"config":{
+            "provider":"local","model":"m","reasoningEffort":"high"
+        }}});
+        let desired = json!({"agent-default-model":{"config":{
+            "provider":"local","model":"m"
+        }}});
+        let fields = desired_fields("dsh", &desired, &current);
+        assert!(
+            !fields
+                .iter()
+                .any(|(path, _)| path.last().is_some_and(|key| key == "reasoningEffort"))
+        );
+        let mut text = serde_yaml::to_string(&current).unwrap();
+        for (path, value) in fields {
+            text = document::set(&text, Format::Yaml, &path, value.as_ref()).unwrap();
+        }
+        let after = document::parse(&text, Format::Yaml).unwrap();
+        assert_eq!(
+            after["agent-default-model"]["config"]["reasoningEffort"],
+            "high"
+        );
+
+        let desired = json!({"agent-default-model":{"config":{
+            "provider":"local","model":"m","reasoningEffort":"max"
+        }}});
+        let fields = desired_fields("dsh", &desired, &current);
+        assert!(fields.iter().any(|(path, value)| {
+            path.last().is_some_and(|key| key == "reasoningEffort")
+                && value.as_ref() == Some(&json!("max"))
+        }));
     }
 }

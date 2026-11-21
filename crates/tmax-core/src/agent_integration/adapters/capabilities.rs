@@ -82,6 +82,54 @@ pub(in crate::agent_integration) fn projection_view(
     Ok(view)
 }
 
+/// Names the target tool can represent for this model's reasoning selector.
+/// `None` means the Agent has no validated selector (Codex, Hermes, or an
+/// unknown target), or the projection carries no effort list; an empty list
+/// means the projection declared a supported selector with no usable names.
+pub(in crate::agent_integration) fn representable_efforts(
+    agent: &str,
+    projection: &Value,
+) -> Option<Vec<String>> {
+    match agent {
+        "dsh" => projection
+            .pointer("/fields/reasoningEfforts")
+            .and_then(Value::as_object)
+            .map(|efforts| efforts.keys().cloned().collect()),
+        "pi" => projection
+            .pointer("/fields/thinkingLevelMap")
+            .and_then(Value::as_object)
+            .map(|levels| {
+                levels
+                    .iter()
+                    .filter(|(_, value)| !value.is_null())
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            }),
+        "omp" => projection
+            .pointer("/fields/thinking/efforts")
+            .and_then(Value::as_array)
+            .map(|efforts| {
+                efforts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            }),
+        "opencode" => projection
+            .pointer("/fields/variants")
+            .and_then(Value::as_array)
+            .map(|variants| {
+                variants
+                    .iter()
+                    .filter_map(|variant| variant.get("id").and_then(Value::as_str))
+                    .filter(|id| !id.contains('#'))
+                    .map(str::to_owned)
+                    .collect()
+            }),
+        _ => None,
+    }
+}
+
 /// How far the target tool is known to complete unknown model facts itself.
 /// No agent's self-completion is a tmax contract; "none" marks a static
 /// configuration surface that keeps bare entries bare.

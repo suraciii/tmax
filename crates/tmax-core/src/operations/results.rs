@@ -113,6 +113,7 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             | "compatibility_unavailable"
             | "acquisition_in_progress"
             | "recovery_required"
+            | "native_default_effort_unrepresentable"
     ) {
         3
     } else if code == "cancelled" {
@@ -249,6 +250,24 @@ mod tests {
             let response = error_response("session import", Error::new(code, "runtime"), false);
             assert_eq!(response.exit_code, 4, "{code}");
         }
+    }
+    #[test]
+    fn unrepresentable_default_effort_blocks_agent_apply_before_effects() {
+        let response = error_response(
+            "agent apply",
+            Error::new(
+                "native_default_effort_unrepresentable",
+                "Configured default effort is not representable",
+            )
+            .field("default.effort"),
+            false,
+        );
+        assert_eq!(response.exit_code, 3);
+        assert_eq!(response.body["status"], "blocked");
+        assert_eq!(
+            response.body["blockers"][0]["code"],
+            "native_default_effort_unrepresentable"
+        );
     }
     #[test]
     fn completed_native_writes_are_success_with_a_reload_reminder() {

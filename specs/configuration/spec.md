@@ -687,13 +687,19 @@ configuration, not an inference client registration or gateway permission bounda
 | `agent` | Required string `codex`, `pi`, `omp`, `opencode`, `hermes`, or `dsh`; the coding tool identity, not this target's ID |
 | `scope` | Required path to the native configuration directory/scope recognized by the selected Agent adapter; CLI `--path` writes this field |
 | `providers` | Table of agent-local native provider entries, default empty |
-| `default` | Optional `{ provider, id, protocol }` reference to a selected model in the named native provider entry |
+| `default` | Optional `{ provider, id, protocol, effort?, native_effort? }` reference to a selected model in the named native provider entry, optionally declaring the reasoning effort tmax writes |
 | `roles` | Optional table mapping supported native model-role names to `{ provider, id, protocol }` references to selected models in the named native entries |
 
 `provider` in a default or role reference is the native entry name, not a tmax
 upstream provider ID. Every present reference must match a selected `(id,
-protocol)` pair in that entry. These references contain no continuity override.
-Protocol selection is explicit; it does not establish compatibility or conversion.
+protocol)` pair in that entry. A role reference declares only a model; a default
+may additionally declare one effort. `effort` is a nonempty caller-facing name
+for DSH, pi, OMP, and OpenCode, validated at apply time against the model's native
+projection; an OpenCode effort must not contain `#`, which delimits the native
+model reference. `native_effort` is a nonempty verbatim native value for Codex and
+Hermes only. Exactly one may be present, and neither is inferred. These references
+contain no continuity override. Protocol selection is explicit; it does not
+establish compatibility or conversion.
 A scope must resolve unambiguously before application; tmax must not write into
 an arbitrary directory on the assumption that an agent lives there.
 

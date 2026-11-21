@@ -46,7 +46,7 @@ a string. A provider ID is not an API enum or a tmax provider ID.
 | Model | Required nonempty `id`; optional nonempty `name`, `api`, `baseUrl`; `reasoning: boolean`; `input: ("text" \| "image")[]`; `contextWindow`, `maxTokens`: numbers strictly greater than zero |
 | Additional model metadata | `thinkingLevelMap`, `inputLimits`, `cost`, `promptCache`, `headers`, `compat`, `samplingParams`, `samplingParamsByThinkingLevel` |
 | Override | Optional model metadata as above, but no replacement `id`, `api`, or `baseUrl`; `cost` can be partial |
-| Startup settings | `defaultProvider: string`, `defaultModel: string`; `enabledModels: string[]` controls startup/cycling patterns, not authorization |
+| Startup settings | `defaultProvider: string`, `defaultModel: string`, `defaultThinkingLevel: "off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max"`; `enabledModels: string[]` controls startup/cycling patterns, not authorization |
 
 `api` is a nonempty string in the file schema, not an enumerated JSON field. It
 must resolve to an installed native API implementation. The tmax mapping uses
