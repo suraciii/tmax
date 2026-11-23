@@ -274,7 +274,7 @@ async fn effort_maps_reach_upstream_without_fallback_or_omitted_effort_synthesis
         let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
         let (_temporary, runtime, original) = fixture();
         let mut config = original.clone();
-        config.model_aliases[0].protocol = protocol.into();
+        config.model_aliases[0].protocols = vec![protocol.into()];
         for (id, values) in [("p", vec!["low", "high"]), ("q", vec!["max"])] {
             let provider = config.providers.get_mut(id).unwrap();
             provider

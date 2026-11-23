@@ -9,6 +9,8 @@ mod forwarding;
 mod native_context;
 mod opencode_session;
 mod probe;
+mod provider_refresh;
+pub use provider_refresh::provider_refresh;
 mod request_body;
 pub(crate) mod request_facts;
 mod response_observer;

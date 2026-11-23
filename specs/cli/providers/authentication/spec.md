@@ -158,8 +158,23 @@ Action is `provisioned`, `replaced`, or `planned`; references are nonsecret stri
 or null (new reference is null for dry-run, never reserved). Action identifies
 the credential operation, not proof of saved/active state; report those outcomes
 separately. Preserve the actual created reference even after later failure.
-Replace also returns `data.dependencies` as known shared resource references and
-`data.unmanaged_clients = "unknown"`.
+`data.unmanaged_clients = "unknown"` never claims a complete client enumeration.
+
+`gateway key replace` additionally returns `data.rotation`:
+
+| Field | Contract |
+| --- | --- |
+| `affected_targets` | Relayed target IDs with a recorded applied delivery revision, deduplicated in delivery order. |
+| `next_action` | `tmax agent apply` with the first affected target ID, or null when none is affected. |
+| `unmanaged_clients` | `unknown; clients holding the previous shared key must be updated explicitly`. |
+
+Each affected target becomes stale with reason `key_rotated` until it is applied
+again. A saved replacement activates in a running daemon. A daemon whose loaded
+shared-key reference differs from saved configuration is reported by
+`status --brief` as `key_rotated_not_reloaded` with the `tmax gateway restart`
+next action. Replace must never update a native or unmanaged client implicitly.
+Dry-run reports the same rotation plan without provisioning a key.
+
 Show returns `data.reference`, `data.loaded_match` (boolean or null when no loaded
 comparison is available), and `data.delivery = {channel, descriptor, delivered}`.
 Channel is `terminal`/`pipe` or null if unqualified; descriptor is the pipe integer

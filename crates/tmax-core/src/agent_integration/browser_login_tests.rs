@@ -5,7 +5,7 @@ use std::fs;
 fn fixture() -> (tempfile::TempDir, Store, Plan, Arc<Flow>) {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::at(directory.path().to_owned());
-    store.write_raw("tmax.toml", b"# keep this comment\nversion = 1\n[providers.work]\nintegration = \"codex-subscription\"\n").unwrap();
+    store.write_raw("tmax.toml", b"# keep this comment\nversion = 2\n[providers.work]\nintegration = \"codex-subscription\"\n").unwrap();
     let config = config::load(&store).unwrap().config;
     crate::routing::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
     let request = Request {
@@ -78,7 +78,7 @@ fn peer(store: Store, flow: Arc<Flow>, scenario: &'static str) -> Rpc {
                         flow.cancel.send_replace(true);
                     }
                     if scenario == "edit" {
-                        store.write_raw("tmax.toml", b"# concurrent user change\nversion = 1\n[providers.work]\nintegration = \"codex-subscription\"\n").unwrap();
+                        store.write_raw("tmax.toml", b"# concurrent user change\nversion = 2\n[providers.work]\nintegration = \"codex-subscription\"\n").unwrap();
                     }
                     let completion = json!({"method":"account/login/completed","params":{"loginId":"native-id","success":scenario != "refused","error":"sensitive-native-output-must-not-escape"}});
                     writer
@@ -262,7 +262,7 @@ fn browser_login_preview_has_no_process_or_scope_effects() {
     store
         .write_raw(
             "tmax.toml",
-            b"version=1\n[providers.p]\nintegration='codex-subscription'\n",
+            b"version=2\n[providers.p]\nintegration='codex-subscription'\n",
         )
         .unwrap();
     let request = Request {

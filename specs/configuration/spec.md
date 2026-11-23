@@ -11,9 +11,14 @@ illustrates private persistence; it is never required setup input.
 
 ## Format and authority
 
-The canonical model-service table is `[gateway]`; an Agent provider selects it
-with `gateway = true`. Readers accept the historical `proxy` spelling only at
-these two schema locations. Supplying both names at one location is invalid.
+The canonical model-service table is `[gateway]`; a relayed Agent provider entry
+sources it by referencing the derived provider `tmax`. Readers accept one
+historical spelling, the root `proxy` table, and canonicalize it on the next
+explicit save. Supplying both root names is invalid. Version-1 documents used the
+entry selectors `gateway = true` or `proxy = true`; a current document that
+contains either field on a native provider entry is rejected as an unknown field.
+Only [`config migrate`](../cli/configuration/spec.md#format-migration) reads and
+rewrites that version-1 entry source.
 Reads and dry runs never rewrite the authority. An explicit successful save uses
 the canonical names, retains the shared-key reference and unrelated settings,
 and reports `configuration_migration = "gateway_names"` for a resource edit that
@@ -37,20 +42,22 @@ and recovery information stay under `~/.tmax`. Native-agent files and supported
 native credential stores remain at their native locations; OS startup
 registration is the external integration exception. New tmax secret and recovery
 payload records use storage version 2 and are plaintext files restricted to the
-current OS account; file permissions are not encryption. This storage change does
-not change the desired configuration schema version. The [product secret-protection
+current OS account; file permissions are not encryption. Storage version and
+desired-configuration format version are independent. The [product secret-protection
 contract](../product/spec.md#local-access-and-secret-protection) owns that access
 boundary and credential handoff. Ordinary request history remains in memory, not
 in the configuration or a persistent history store. The separate
 [error log](../diagnostics/spec.md#persistent-gateway-error-log) retains failures.
 
-The root requires `version = 1`; this revision does not introduce a new schema
-version. Other root fields are `providers`, `model_aliases`, `agents`, `gateway`,
-and `network`; omitted collections are empty. Unknown fields, duplicate TOML keys,
-unsupported versions, wrong types, and non-finite numbers must be rejected with
-a field path and actionable error. A rejected file must not be partially applied.
-Errors, dry runs, and other results must redact secret values, including values
-accidentally placed in unsupported fields.
+The root requires `version = 2`. Other root fields are `providers`,
+`model_aliases`, `agents`, `gateway`, and `network`; omitted collections are empty.
+A version-1 file must be rejected with "Configuration format version 1 is
+unsupported; run `tmax config migrate`". There is no dual-syntax acceptance.
+Unknown fields, duplicate TOML keys, unsupported versions, wrong types, and
+non-finite numbers must be rejected with a field path and actionable error. A
+rejected file must not be partially applied. Errors, dry runs, and other results
+must redact secret values, including values accidentally placed in unsupported
+fields.
 
 In the desired authority, concrete model and model-alias `tier` fields are
 unsupported and must be rejected as unknown fields with their paths. Loading,
@@ -188,7 +195,7 @@ catalog provider references are never rewritten by this read-time conversion.
 invalid `~/.tmax/tmax.toml`, not a general bulk-removal operation for valid
 configuration. A missing authority uses ordinary resource initialization.
 The caller supplies no replacement document. Reset replaces the entire desired
-configuration with `version = 1` and empty desired collections; omission is
+configuration with `version = 2` and empty desired collections; omission is
 destructive only because this operation explicitly requests that complete reset.
 
 Before replacement, preserve the exact original bytes in a current-user-restricted
@@ -308,7 +315,7 @@ to a valid known-integration selection is invalid.
 
 The integration contract owns
 [endpoint resolution](../integrations/spec.md#endpoint-resolution), shared native
-upstream and gateway consumption, supported operations, and original-destination binding.
+direct and relayed consumption, supported operations, and original-destination binding.
 These fields select bases; they do not add protocol support or regional failover.
 Endpoint edits follow the normal whole-snapshot save and activation boundaries.
 They affect future work without repointing in-flight requests or proving that an
@@ -331,6 +338,14 @@ Credential configuration collection.
 | Native source | The declared target performs supported native sign-in, storage, and refresh; selecting it neither imports credentials nor adopts a discovered session. |
 | Declarative save | Saving login authentication does not sign in or turn an API key into a session. Replacing `via` must not retain a session reference from the old source. |
 | Consumer scope | Selecting a source does not grant other targets access to its native session. |
+
+`tmax` is reserved in two separate namespaces: as the `auth.via` value that
+selects the tmax login source, and as the provider ID of the derived
+[gateway provider](../product/spec.md#gateway-provider). Provider operations must
+not create, rename, or remove provider `tmax`; `gateway configure` must ensure it
+and `gateway remove` must delete it. Provider creation must not offer or assign
+`tmax`. A stored provider definition under `tmax` is not user state; when a
+gateway is configured, tmax must report that definition as adopted.
 
 Fields belonging to the other authentication method are invalid. Qualified
 sources and consumer scopes follow the
@@ -640,35 +655,38 @@ the fixed destination of an existing session.
 
 ## Model aliases
 
-`[[model_aliases]]` is named configuration defining one public request ID within
-a native protocol and referencing already registered provider-owned Models.
-Each candidate is a model reference plus alias-local settings, not an independent
-Model or candidate resource with its own identity or lifecycle. The existing
+`[[model_aliases]]` is named configuration defining one public route name and the
+native protocols it serves. It references already registered provider-owned
+Models. Each candidate is a model reference plus alias-local settings, not an
+independent Model or candidate resource with its own identity or lifecycle. The
 `candidates` array and `candidate_reasoning_effort` map encode that configuration;
-this ownership distinction adds no new syntax.
+this ownership distinction adds no new syntax. The public route name is the
+complete identity; the record has no per-protocol duplicate.
 
 | Field | Type and constraint |
 | --- | --- |
-| `id` | Required exact public model-alias ID |
-| `protocol` | Required `chat-completions`, `responses`, or `messages` |
-| `candidates` | Required nonempty unique array of registered qualified concrete names; bare provider IDs and alias references are invalid |
-| `candidate_reasoning_effort` | Optional map from exact members of `candidates` to nonempty effort strings without whitespace/control characters; omission or an empty map means no overrides. Values require the positive effective capability declaration and supported native protocol in [Request parameters](../model-routing/spec.md#request-parameters). |
+| `id` | Required exact public route name; one record per ID |
+| `protocols` | Required nonempty unique array from `chat-completions`, `responses`, and `messages`, in canonical order (`chat-completions`, `messages`, `responses`); the candidate list and policy apply to every declared protocol |
+| `candidates` | Required nonempty unique array of registered qualified concrete names; each must publish every declared protocol. Bare provider IDs and alias references are invalid |
+| `candidate_reasoning_effort` | Optional map from exact members of `candidates` to nonempty effort strings without whitespace/control characters; omission or an empty map means no overrides. Valid only when at least one declared protocol is `chat-completions` or `responses`; values require the positive effective capability declaration and supported native protocol in [Request parameters](../model-routing/spec.md#request-parameters). |
 | `enabled` | Optional boolean, default true |
-| `continuity` | Optional `session` or `stateless`, default `session`; shared by every caller. Stateless requests still require qualified independent request context. |
+| `continuity` | Optional `session` or `stateless`, default `session`; shared by every caller and every declared protocol. Stateless requests still require qualified independent request context. |
 | `fallback` | Optional failure-conditions table; omission disables request fallback. Requires explicit `continuity = "stateless"`. |
 
-Duplicate `(protocol, id)` pairs and collisions with registered concrete public
-IDs in the same protocol scope are invalid, including disabled entries. Missing,
-empty, duplicate, or unregistered candidates are invalid configuration. Disabled
-or currently unavailable registered candidates remain references, not automatic
-replacements. Selection, priority ownership, continuity evidence, and activation
-blockers follow [Model aliases](../model-routing/spec.md#model-aliases).
+Duplicate route IDs and collisions with registered concrete public IDs in the same
+declared protocol scope are invalid, including disabled entries. Missing, empty,
+duplicate, or unregistered candidates are invalid configuration. A route that
+declares a protocol a candidate does not publish is invalid configuration. Split
+the route or drop the protocol. A candidate may publish protocols the route does
+not declare. Disabled or currently unavailable registered candidates remain
+references, not automatic replacements. Selection, priority ownership, continuity
+evidence, and activation blockers follow [Model aliases](../model-routing/spec.md#model-aliases).
 Removing or replacing candidate membership removes overrides for departed
 candidates. Renaming a provider or concrete model carries its map keys to the new
-qualified name; renaming an alias preserves its candidate settings. Setting or
+qualified name; renaming a route preserves its candidate settings. Setting or
 clearing one candidate's effort preserves other candidates' entries. Explicit
 duplicate/conflicting edits and clearing an absent entry are errors. Unknown map
-members or unsupported values/protocols are invalid choices, not passthrough.
+members or unsupported values are invalid choices, not passthrough.
 
 
 Alias definitions contain no upstream credentials, copied provider metadata,
@@ -738,25 +756,26 @@ adapter's namespace constraints, not additional tmax upstream access instances.
 
 | Field | Type and meaning |
 | --- | --- |
-| `provider` | Exact configured tmax upstream provider ID; mutually exclusive with `gateway` |
-| `gateway` | Literal `true`, selecting the sole configured model gateway; `false` is invalid |
+| `provider` | Required exact configured tmax provider ID; `tmax` names the derived gateway provider and is not a user-managed instance |
 | `models` | Array of `{ id, protocol }` selections, default `[]`; repeated pairs are invalid |
 
-Exactly one source selector is required. It has no fallback. For a `provider`
-source, `id` is the exact registered upstream model ID under that provider,
-without its tmax provider prefix. For a `gateway` source, `id` is a public concrete
-qualified ID or a configured alias ID, without a native display prefix.
-Each selection requires an explicit protocol from the model-alias protocol
-set above; it contains no continuity setting. Disabled or unavailable models
+`provider` is required and has no fallback or alternative selector. For a
+provider other than `tmax`, `id` is the exact registered upstream model ID under
+that provider, without its tmax provider prefix. A relayed entry references
+provider `tmax` and selects a public route name; a concrete qualified model ID is
+not a route selection. Each selection requires an explicit protocol from the
+three values above, and a route selection must use one of that route's declared
+protocols. It contains no continuity setting. Disabled or unavailable models
 remain resolvable references but do not establish usable native configuration.
 
-Upstream and gateway entries may coexist in one target. Native upstream entries
-use their selected provider's resolved endpoints and qualified authentication.
-Gateway entries use the local gateway URL and current shared key; application
-requires the matching ready listener and loaded model definitions. The configured
-native subset controls model pickers and native settings only. It never limits
-gateway discovery or inference, and no default or selected model is required on
-an Agent for an independently configured compatible client to use the gateway.
+Direct and relayed entries may coexist in one target. Direct entries use their
+selected provider's resolved endpoints and qualified authentication. Relayed
+entries reference the derived provider `tmax`, which supplies the local gateway
+URL and current shared key; application requires the matching ready listener and
+loaded model definitions. The configured native subset controls model pickers and
+native settings only. It never limits gateway discovery or inference, and no
+default or selected model is required on an Agent for an independently configured
+compatible client to use the gateway.
 
 Source replacement validates every existing selected ID and protocol against
 the new source and reports affected defaults, roles, and native settings.
@@ -776,8 +795,8 @@ writes, and restoration follow
 ## Model gateway
 
 The optional `[gateway]` table configures the sole model gateway independently of
-Agents. It is required by any native provider entry selecting `gateway = true`,
-but is also valid with no Agent targets:
+Agents. It is required by any relayed native provider entry, but is also valid
+with no Agent targets:
 
 | Field | Type and meaning |
 | --- | --- |
@@ -970,10 +989,10 @@ It requires selected models and a provider-qualified default, usable credentials
 and qualified compatibility for every applied native entry. It writes only
 owned changes, preserves unrelated native settings and precedence, reports partial
 failure and current-user-restricted plaintext recovery state under `~/.tmax`, and
-distinguishes applied from awaiting native reload. Gateway-source entries additionally
+distinguishes applied from awaiting native reload. Relayed entries additionally
 require the matching service snapshot, ready listener, and current shared key
 availability.
-Upstream-source entries use their provider's endpoint/authentication without a
+Direct entries use their provider's endpoint/authentication without a
 tmax inference dependency. File edits and catalog application never rewrite
 agents in the background.
 
@@ -1004,7 +1023,7 @@ one custom provider with two explicit protocol bases, a global outbound proxy
 policy, metadata overrides, optional subscription labels, six concrete models,
 arbitrarily named `L0`–`L3` aliases with explicit candidates, a three-source scenario alias with shared continuity,
 scheduled priority, provider-local manual quota/reset declarations and ordered
-signal rules, and one omp target containing both upstream and gateway native
+signal rules, and one omp target containing both direct and relayed native
 provider entries. It also shows a provider using its fixed map
 without authentication/models. The gateway/provider/alias settings are valid
 without the Agent target; target incompleteness is defined above rather than

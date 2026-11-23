@@ -18,7 +18,7 @@ mod web;
 mod windows_web;
 
 pub(crate) use control::{LoadedSnapshot, browser_login, loaded_snapshot};
-pub use control::{activate, control, loaded, preview_activation, status};
+pub use control::{activate, control, loaded, preview_activation, status, usage};
 pub use daemon::run_service;
 pub use startup::reconcile_autostart;
 pub use supervisor::service_exit_code;

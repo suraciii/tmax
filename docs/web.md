@@ -29,16 +29,21 @@ page makes no external font, image, or script requests.
   routing state from saved policy and expose trigger/expiry and an explicit reset.
   Preview does not change the counter or active override.
 - **Models** separates concrete models from aliases. Concrete forms edit names,
-  enabled state, and base priority. Alias forms select exact concrete candidates
-  and a native protocol, with an optional reasoning-effort input for each
-  candidate. Leave it blank when creating an alias to omit a fixed override;
-  blanking a saved value while editing clears that override. Values must occur
-  in the candidate's effective `reasoning_options` metadata with `type = "effort"`
-  and explicit `values`; `reasoning = true` alone is not enough. A fixed effort
-  overrides caller input and model maps for the selected candidate. Without it,
-  explicit model maps apply, otherwise identity or omission is preserved. Manage
-  model maps with the [CLI effort-map commands](../specs/cli/models/spec.md#model-effort-maps).
-  Chat Completions and Responses support maps and fixed effort; Messages does not.
+  enabled state, and base priority. Alias forms declare one or more native
+  protocols and edit one route; the candidate list applies to every declared
+  protocol, and the model list's alias row shows that declared protocol set.
+  Renaming or removing an alias uses the route ID and takes no protocol. Each
+  candidate has an optional reasoning-effort input; leave it blank when creating
+  an alias to omit a fixed override, and blanking a saved value while editing
+  clears that override. Values must occur in the candidate's effective
+  `reasoning_options` metadata with `type = "effort"` and explicit `values`;
+  `reasoning = true` alone is not enough. A fixed effort overrides caller input
+  and model maps for the selected candidate. Without it, explicit model maps
+  apply, otherwise identity or omission is preserved. Manage model maps with the
+  [CLI effort-map commands](../specs/cli/models/spec.md#model-effort-maps).
+  The effort input appears only when the declared protocol set includes Chat
+  Completions or Responses; those protocols support maps and fixed effort, while
+  a Messages-only route does not.
   Changing only effort retains the otherwise selected backend or rejects before
   binding publication and dispatch; it never chooses another backend. Restore
   name inheritance with the separate clear action; an explicit empty string
@@ -60,11 +65,11 @@ page makes no external font, image, or script requests.
   does not establish that the tool will use the configuration. Applying writes
   the declared target even when the executable is not on `PATH`; discovery
   reports that absence and never blocks the write. Saving opens the configuration details.
-  Add an upstream or gateway provider entry, select its models and native
+  Add a direct or relayed provider entry, select its models and native
   protocols, then optionally choose its default (required for Codex). The model
   choices list only published protocols, grouped Responses first for both concrete
-  models and aliases. A new alias initially prefers Responses when a concrete
-  candidate publishes it; existing selections retain their protocol. The client
+  models and aliases. An alias appears under each of its declared protocols, with
+  Responses listed first; existing selections retain their protocol. The client
   uses the selected protocol;
   the gateway does not translate or choose another one. Saving these declarations
   does not write native files.

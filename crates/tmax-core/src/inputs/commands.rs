@@ -9,7 +9,8 @@ use super::{
     inspection::InputInspection,
     lifecycle::ensure_saved_view,
     lineage::{
-        current_saved_binding, guard_reason, key, project_view, selected_binding, signature, token,
+        config_signature, current_saved_binding, guard_reason, key, project_view, selected_binding,
+        token,
     },
     model::{Channel, InputHead, InputValue, Runtime, revision},
     snapshot::use_projection,
@@ -99,14 +100,14 @@ async fn handle_impl(store: &Store, saved: Option<&Config>, request: &Request) -
                 }),
             ),
         };
-        if !loaded && signature(&runtime.saved.config) != signature(config) {
+        if !loaded && config_signature(&runtime.saved.config) != config_signature(config) {
             runtime.saved = project_view(&runtime.saved, config);
         }
         if loaded
             && runtime
                 .loaded
                 .as_ref()
-                .is_none_or(|v| signature(&v.config) != signature(config))
+                .is_none_or(|v| config_signature(&v.config) != config_signature(config))
         {
             runtime.loaded = Some(project_view(
                 runtime.loaded.as_ref().unwrap_or(&runtime.saved),

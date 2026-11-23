@@ -73,8 +73,8 @@ capabilities. Only these entries declare upstream effort names; other entry
 types and missing `values` declare none. `reasoning = true` declares support
 only and synthesizes no names. An explicit `reasoning = false` stays explicit
 and suppresses the effort projection. Missing effort declarations stay unknown.
-For a concrete gateway entry, derive caller-facing inputs from these identities
-plus explicit protocol-scoped [model maps](../configuration/spec.md#model-effort-maps),
+For a concrete model served by the gateway, derive caller-facing inputs from these
+identities plus explicit protocol-scoped [model maps](../configuration/spec.md#model-effort-maps),
 whose targets must be declared upstream values. An explicit key overrides
 identity for that name. Direct native entries project the actual upstream
 declarations, not gateway maps. Gateway aliases use the intersection below.
@@ -215,7 +215,7 @@ native representation, and request intent, including this lossy DSH boundary.
 | --- | --- |
 | Scope | Existing DSH home directory itself. Discovery uses nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`. An explicit target path selects the home directly; never infer it from a profile path. Do not enumerate, select, create, or manage profiles or inspect their bundles. |
 | Home configuration | Edit the home `cordis.patch.yml` by entry identity and install the embedded plugin as its direct child `tmax-dsh.mjs`. The plugin entry has id `llm-tmax` and its `name` is the artifact's absolute path. Its `config.providers.<native-name>` holds each selected route. Never write profile files, launcher-owned `cordis.yml`, or legacy `settings.yaml`. Preserve unrelated HOME-level rows, comments, provider fields, and opaque expressions; an uneditable owned branch blocks rather than being rewritten. |
-| Independent plugin | `llm-tmax` registers only its configured provider routes and reuses DSH's supported protocol adapter, not duplicated wire implementations or a second mount of `llm-pi-ai`. Provider configurations from every adapter register in the common LLM runtime. Provider route names must be globally unique across active adapters; distinct plugin identities do not isolate names or authorize automatic merging. The tmax-owned plugin configuration does not add a second configurable-provider directory or catalog. Preserve both direct upstream and gateway entries. |
+| Independent plugin | `llm-tmax` registers only its configured provider routes and reuses DSH's supported protocol adapter, not duplicated wire implementations or a second mount of `llm-pi-ai`. Provider configurations from every adapter register in the common LLM runtime. Provider route names must be globally unique across active adapters; distinct plugin identities do not isolate names or authorize automatic merging. The tmax-owned plugin configuration does not add a second configurable-provider directory or catalog. Preserve both direct and relayed entries. |
 | Installation | Apply uses the embedded plugin artifact and DSH's native loader resolution for installed dependencies. It does not run npm installation or change profiles, presets, or bundle composition. |
 | Layering | Bundle patches → profile patch → home patch → command-line overlays. A home entry `config` replaces the whole lower-layer configuration for that same entry, not a deep merge. The independent `llm-tmax` entry leaves user `llm-pi-ai` routes and settings untouched; it does not copy or merge their configuration. Home tmax routes are common to profiles using that home. An explicitly managed home default may still shadow lower-layer defaults; runtime overlays remain outside tmax's ownership. |
 | Credential handoff | `llm-tmax` uses `apiKeyEnv: TMAX_<stable hash>` in the home patch. Executed apply resolves the referenced tmax key into that home's adjacent current-user-restricted `.credentials.yaml`, `version: 1`, under `refs`; preserve unrelated references and credential records. Accept empty stores and stamp version 1; nonempty stores without version 1 block. Apply and restore executions hold the native sibling `.credentials.yaml.lock` writer lock from initial credential read through commit. An existing lock blocks immediately with `native_credentials_busy`, without changing native files or the external lock; never overwrite or reclaim it. Release owned locks on success and failure. Dry-run/inspect never create locks, resolve secrets, or return values. The native store is shared across profiles, not another tmax authority. |
@@ -388,6 +388,19 @@ Endpoint changes remain explicit configuration changes. The operation and its
 optional dry run must report affected credential destinations, routes, native
 agent settings, and retained sessions under the shared activation and
 [continuity rules](../model-routing/spec.md#selection-and-continuity).
+
+### Gateway integration
+
+`tmax-gateway` is the only integration whose destination is derived from local
+configuration, the gateway listen address, rather than a fixed product
+destination map. The [endpoint-resolution contract](#endpoint-resolution)
+otherwise applies to this integration.
+
+The integration must not be user-selectable. It must not declare an upstream
+quota operation, a login source, or an observation destination. Its
+authentication is the shared gateway key. The
+[gateway provider contract](../product/spec.md#gateway-provider) owns its
+provider projection, derived fields, revision, and delivery rules.
 
 ## Supported operations and resource identity
 

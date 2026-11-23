@@ -12,27 +12,29 @@ saved fields. Use [common CLI rules](../spec.md),
 
 | Command | Result |
 | --- | --- |
-| `model list [--provider ID] [--protocol P] [--kind KIND]` | Compact concrete/alias identities, declared protocol support, shared publication, and availability. `KIND` is `concrete` or `alias`; omission includes both. |
+| `model list [--provider ID] [--protocol P] [--kind KIND]` | Compact concrete/alias identities, declared protocol support, shared publication, and availability. `KIND` is `concrete` or `alias`; omission includes both. `--protocol P` filters alias rows to routes that declare `P`. |
 | `model inspect QUALIFIED [--protocol P]` | Concrete model details across all supported protocols; optional protocol filters the details. Include effective metadata/provenance, local overrides, configured protocol-scoped `effort_map`, revision-scoped local array indices, capabilities, priority/rules, and file/loaded differences. |
-| `model inspect ID [--protocol P]` | Inspect a model alias's definition, candidates, shared continuity, and availability. Without protocol, infer only one uniquely configured alias ID. Ambiguous IDs require `--protocol`. |
+| `model inspect ID [--protocol P]` | Inspect one model-alias definition, its declared `protocols`, candidates, shared continuity, and availability. `--protocol` is an optional projection filter and must be a declared protocol. An unknown ID is `unknown_resource`; an undeclared protocol is `invalid_arguments`. |
 
 | Inspection fact | Contract |
 | --- | --- |
 | Concrete identity | A qualified name identifies a model independently of protocol; inspect requires no protocol operand. Filtering cannot manufacture protocol support or upstream access. |
-| Alias identity | `(protocol, id)`; inference, agent model/default/role operations, and explanation still require explicit protocol. |
+| Alias identity | The route ID alone; protocol is not part of alias identity. Inference and agent model/default/role operations still require an explicit protocol. |
 | List `kind` | `concrete` or `alias`. |
-| List `published_protocols` | Derived only from enabled existing provider/model/alias definitions and declared supported protocols, never native Agent selections. Publication is not proof of upstream success. |
+| List `protocols` | For an alias row, the declared protocol list. |
+| List `published_protocols` | For an alias row, equal to `protocols` while enabled and empty while disabled. Derived only from enabled existing provider/model/alias definitions and declared supported protocols, never native Agent selections. Publication is not proof of upstream success. |
+| Inspect alias projection | Without `--protocol`, the report uses the first declared protocol and names it in `protocol`. With `--protocol`, the report uses the declared filter and keeps the full definition under `definition`. |
 | Availability | Disabled/unavailable/unsupported conditions follow the model contract. |
 | Shared publication | Every shared-key holder sees the same list; no gateway-model CRUD, publishing/permission table, or automatic catalog enrollment. |
 | Compact list | Do not repeat metadata, full evaluations, or inspect argv per row. |
 | Detailed concrete read | Expose [priority evaluations](rules/spec.md#priority-evaluation-data) once per model, not per protocol. |
-| Native reasoning projection | Concrete inspection includes upstream `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the model's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). Separate `gateway_projection` is keyed by protocol and describes mapped caller-facing inputs for gateway entries. Direct native entries retain upstream capabilities. These are desired capability projections, not defaults or evidence of native application. |
+| Native reasoning projection | Concrete inspection includes upstream `native_projection` keyed by agent. OpenCode also reports `protocols` keyed by the model's published protocols; each uses the [projection shape and states](../agents/spec.md#agent-result-data). Separate `gateway_projection` is keyed by protocol and describes mapped caller-facing inputs for gateway access. Direct native entries retain upstream capabilities. These are desired capability projections, not defaults or evidence of native application. |
 | Alias input capability | `capabilities.input` contains `state` (`declared` or `unknown`), `common` (array, including empty, or null), and `candidates` of `{model, input}` (qualified reference and effective array or null). `metadata.effective` carries the derived common input and effort declarations; `metadata.source` and `metadata.metadata_revision` identify the accepted catalog basis when available. `native_projection` reports each Agent's expected input and effort representation. These are derived facts, never editable alias settings or proof of entitlement. |
 
 Examples: `tmax model list --kind concrete`, `tmax model list --kind alias`,
 `tmax model inspect deepseek/deepseek-flash`,
-`tmax model inspect deepseek/deepseek-flash --protocol chat-completions`, and
-`tmax model inspect L0 --protocol chat-completions`.
+`tmax model inspect deepseek/deepseek-flash --protocol chat-completions`,
+`tmax model inspect L0`, and `tmax model inspect L0 --protocol responses`.
 
 ## Concrete models, metadata lists, and reasoning options
 
@@ -135,7 +137,7 @@ provider qualification.
 | --- | --- |
 | Public ID without native context | `ID` is a public qualified concrete or alias ID; use gateway requirements. |
 | Declared target without entry | `--target TARGET` assesses the public qualified concrete or alias ID against the target's native requirements. No saved model/default/role selection is required. |
-| Public/native ID with entry context | `--agent-provider ENTRY` requires `--target TARGET` and an existing entry. Upstream-source `ID` is the exact unqualified upstream model ID under its provider; gateway-source `ID` is the public qualified concrete or alias ID. The entry need not have selected the model. |
+| Public/native ID with entry context | `--agent-provider ENTRY` requires `--target TARGET` and an existing entry. A direct entry's `ID` is the exact unqualified upstream model ID under its provider; a relayed entry's `ID` is a public route name. The entry need not have selected the model. |
 | Native entry assessment | Assess native support, supplier restrictions, and credential handoff, not permission or a private model list. Incomplete target selections/default do not block explanation. Never infer context from a shared key or similar entry name. |
 | Undeclared native scope | `--agent AGENT --path PATH` assesses the public qualified concrete or alias ID with the same qualified inspection as `agent inspect --agent AGENT --path PATH`; do not register or import the scope. |
 | Context selectors | Omit all selectors, choose `--target` with optional `--agent-provider`, or choose both `--agent` and `--path`. Reject mixed or incomplete selectors. |
@@ -149,7 +151,7 @@ provider qualification.
 | Candidate effort | Show the alias-local configured choice under [Request parameters](../../model-routing/spec.md#request-parameters), independently of capability declarations. Do not present an omitted override as an upstream default. |
 | Support/access | Distinguish documented, verified, incompatible, and unknown support; missing qualification/credentials remain blocked/unknown, not fabricated access. |
 | Alias continuity | Shared by every caller of the definition; native selections/defaults/roles do not override it. |
-| `--session SESSION` | Inspect an existing gateway handle matching this public ID/protocol, with or without native context. Return its retained destination or blocked continuation, not a new-session winner. Reject upstream-source entries. |
+| `--session SESSION` | Inspect an existing gateway handle matching this public ID/protocol, with or without native context. Return its retained destination or blocked continuation, not a new-session winner. Reject direct entries. |
 | Conversation identity | Shared key/model alone is not identity. Session-stable forwarding requires supported native conversation identity and scope; never invent a session or reconstruct conversation history. |
 | Retained target attribution | Independent evidence when present, not a consequence of the shared key. |
 | Effects | No settings/native writes, secret retrieval, login refresh, inference start/quota use, session reservation, execution handle, or hidden apply step. Reject dry-run. |
@@ -169,7 +171,6 @@ All context fields other than `kind` are strings or null.
 
 | Other model-explanation data | Contract |
 | --- | --- |
-| `data.source` | Present only for `kind = agent_provider`; exactly `{provider: string}` or `{gateway: true}`. |
 | `data.requested` | Exactly `{id, protocol}`; both are required strings. |
 | `data.continuity` | `session` or `stateless` for alias gateway explanations; otherwise null. |
 | `data.selection.model_identity` | Stable local identity of the selected provider-owned Model; independent of provider/model display names and explicit ID renames. |

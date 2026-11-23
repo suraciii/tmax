@@ -9,8 +9,7 @@ pub(super) fn inspection_target(scope: PathBuf) -> AgentTarget {
         providers: BTreeMap::from([(
             "local".into(),
             config::NativeProvider {
-                provider: Some("p".into()),
-                gateway: None,
+                provider: "p".into(),
                 models: vec![config::ModelSelection {
                     id: "first".into(),
                     protocol: "chat-completions".into(),

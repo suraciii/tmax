@@ -336,7 +336,8 @@ fn gateway_is_the_canonical_command_and_source_flag() {
     let source = tmax(&["agent", "provider", "add", "--help"]);
     let help = String::from_utf8(source.stdout).unwrap();
     assert!(source.status.success());
-    assert!(help.contains("--gateway"));
+    assert!(help.contains("--provider <PROVIDER>"));
+    assert!(!help.contains("--gateway"));
     assert!(!help.contains("--proxy"));
     json_error(&tmax(&["proxy", "status"]));
     let network = tmax(&["network", "proxy", "--help"]);
@@ -409,21 +410,31 @@ fn effort_map_binary_surface_requires_supported_protocol_and_finite_operands() {
 }
 
 #[test]
-fn dsh_projection_help_is_offline_and_names_the_schema_boundary() {
-    let output = tmax(&["help", "dsh", "projection"]);
+fn dsh_command_group_is_removed_and_dsh_targets_use_the_inventory() {
+    for removed in [["dsh", "projection"], ["dsh", "connect"]] {
+        let response = json_error(&tmax(&removed));
+        let message = response["message"].as_str().unwrap_or_default();
+        assert!(message.contains("was removed"), "{message}");
+        assert!(message.contains("provider inspect tmax"), "{message}");
+    }
+    let response = json_error(&tmax(&[
+        "agent",
+        "provider",
+        "add",
+        "pi-main",
+        "relay",
+        "--gateway",
+        "1",
+    ]));
+    let message = response["message"].as_str().unwrap_or_default();
+    assert!(message.contains("--provider tmax"), "{message}");
+    // The removed-group text must not hijack an unrelated nested subcommand.
+    let response = json_error(&tmax(&["model", "dsh"]));
+    let message = response["message"].as_str().unwrap_or_default();
+    assert!(message.contains("tmax model"), "{message}");
+    assert!(!message.contains("command group was removed"), "{message}");
+    let output = tmax(&["agent", "provider", "add", "--help"]);
     assert_eq!(output.status.code(), Some(0));
-    assert!(output.stderr.is_empty());
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("DSH"));
-    assert!(text.contains("schema_version"));
-}
-
-#[test]
-fn dsh_connect_help_is_offline_and_mentions_dry_run() {
-    let output = tmax(&["help", "dsh", "connect"]);
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stderr.is_empty());
-    let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("--dry-run"));
-    assert!(text.contains("credentials"));
+    assert!(text.contains("tmax for the derived gateway provider"));
 }

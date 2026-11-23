@@ -18,7 +18,7 @@ The command surface is a target contract; see [Implementation status](#implement
 | Calendar and signal rules | [Rules](models/rules/spec.md) |
 | Agent targets, native provider bindings, application, and recovery | [Agents](agents/spec.md) |
 | Native Agent session listing and one-way import | [Agent sessions](../sessions/spec.md) |
-| DSH plugin projection and connection | [DSH integration](dsh/spec.md) |
+| DSH plugin inventory reads | [Provider inspection](providers/spec.md), [Agent inspection](agents/spec.md), and [gateway status](service/spec.md); the plugin must not compute a second route set, and native DSH files are written by `agent apply` |
 | Calling-agent entry skill | [Skill installation](skill/spec.md) |
 | Network, gateway, and Web | [Service](service/spec.md) |
 | Probes and request history | [Diagnostics commands](service/diagnostics/spec.md) |
@@ -53,7 +53,7 @@ is an external integration. Relative native `--path` operands resolve against
 `~/.tmax`, not cwd. Results show resolved config and native paths.
 
 Absent config is distinct from invalid config. Reads and dry-runs create neither.
-The first successful desired-state edit creates `version = 1` only after checking
+The first successful desired-state edit creates `version = 2` only after checking
 for concurrent creation/change. Never replace invalid content with empty or
 partially accepted settings; [config reset](configuration/spec.md#invalid-file-recovery)
 is the explicit recovery path.

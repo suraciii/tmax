@@ -214,6 +214,18 @@ pub(super) async fn reset(store: &Store, r: &Request) -> Result<Value> {
     }
     if std::str::from_utf8(&bytes)
         .ok()
+        .and_then(|s| s.parse::<toml::Value>().ok())
+        .and_then(|value| value.get("version").and_then(toml::Value::as_integer))
+        == Some(config::LEGACY_CONFIG_VERSION)
+    {
+        return Err(Error::new(
+            "invalid_arguments",
+            "Configuration uses format version 1; run `tmax config migrate` instead of resetting it",
+        )
+        .field("version"));
+    }
+    if std::str::from_utf8(&bytes)
+        .ok()
         .is_some_and(|s| config::parse(s).is_ok())
     {
         return Err(Error::new(
@@ -231,8 +243,8 @@ pub(super) async fn reset(store: &Store, r: &Request) -> Result<Value> {
         preview["stored_secrets"] = json!("retained");
         return Ok(preview);
     }
-    let recovery = crate::secrets::protect_recovery(store, &bytes)?;
-    let document = "version = 1\n".parse().expect("constant TOML");
+    let recovery = crate::secrets::protect_recovery(store, &bytes, "invalid_configuration")?;
+    let document = "version = 2\n".parse().expect("constant TOML");
     let revision = match config::save(store, &expected, &document) {
         Ok(revision) => revision,
         Err(error) => {

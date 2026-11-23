@@ -22,6 +22,29 @@ pub(super) const INDEX: &str = "native/recovery.json";
 pub(super) struct Index {
     pub(super) records: Vec<Record>,
 }
+/// Delivery facts captured when a target was last applied.
+///
+/// Absent for records written before relayed delivery was tracked; such a
+/// record reports an unknown revision rather than a false current one.
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct Delivery {
+    pub(super) revision: String,
+    pub(super) listen: String,
+    pub(super) key_ref: String,
+    pub(super) routes: Vec<String>,
+}
+
+impl From<crate::config::GatewayDelivery> for Delivery {
+    fn from(delivery: crate::config::GatewayDelivery) -> Self {
+        Self {
+            revision: delivery.revision,
+            listen: delivery.listen,
+            key_ref: delivery.key_ref,
+            routes: delivery.routes,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Record {
     pub(super) id: String,
@@ -33,6 +56,8 @@ pub(super) struct Record {
     pub(super) secret_refs: Vec<String>,
     pub(super) state: String,
     pub(super) files: Vec<FileRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) delivery: Option<Delivery>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct FileRecord {
@@ -715,6 +740,7 @@ mod tests {
             secret_refs: vec![],
             state: "applied_reload_pending".into(),
             files: vec![],
+            delivery: None,
         };
         let view = record_view(&store, &record);
         assert_eq!(view["available_actions"], json!([]));
@@ -737,6 +763,7 @@ mod tests {
             secret_refs: vec![],
             state: "applied_reload_pending".into(),
             files: vec![],
+            delivery: None,
         };
         let request = Request {
             command: vec!["agent".into(), "recovery".into(), "discard".into()],
@@ -955,6 +982,7 @@ mod tests {
             secret_refs: vec!["upstream-ref".into()],
             state: "discarded".into(),
             files: vec![],
+            delivery: None,
         };
         store
             .write_json(
@@ -991,6 +1019,7 @@ mod tests {
             secret_refs: vec![],
             state: "write_pending".into(),
             files: vec![],
+            delivery: None,
         };
         store
             .write_json(

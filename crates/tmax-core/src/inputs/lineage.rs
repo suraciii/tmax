@@ -15,6 +15,11 @@ use super::model::{
 pub(super) fn token() -> String {
     uuid::Uuid::new_v4().to_string()
 }
+/// Compare only user-authored desired configuration; the derived provider is
+/// rebuilt from the gateway on every load and never retained.
+pub(crate) fn config_signature(config: &Config) -> String {
+    signature(&config.desired())
+}
 pub(crate) fn signature<T: Serialize>(value: &T) -> String {
     format!(
         "{:x}",
@@ -55,6 +60,7 @@ fn auth_definition(config: &Config, provider: &Provider) -> Value {
 
 // Read-only projections reuse unchanged bindings without reserving identities.
 pub(super) fn project_view(old: &View, config: &Config) -> View {
+    let config = &config.desired();
     let mut providers = BTreeMap::new();
     for (name, p) in &config.providers {
         let mut ids = old.providers.get(name).cloned().unwrap_or_default();
@@ -85,7 +91,7 @@ pub(super) fn project_view(old: &View, config: &Config) -> View {
     View {
         config: config.clone(),
         providers,
-        revision: if signature(&old.config) == signature(config) {
+        revision: if config_signature(&old.config) == config_signature(config) {
             old.revision.clone()
         } else {
             None
@@ -112,6 +118,7 @@ pub(super) fn make_view(
             identity.models.insert(nm.into(), id);
         }
     }
+    let config = &config.desired();
     let mut providers = BTreeMap::new();
     for (name, provider) in &config.providers {
         let mut ids = previous.remove(name).unwrap_or_else(|| ProviderIdentity {
@@ -225,13 +232,13 @@ pub(crate) fn provider_scope_binding(
     config: &Config,
     provider: &str,
 ) -> Option<(String, String)> {
-    let hash = signature(config);
-    if signature(&runtime.saved.config) == hash {
+    let hash = config_signature(config);
+    if config_signature(&runtime.saved.config) == hash {
         provider_scope_binding_in_view(runtime, &runtime.saved, provider)
     } else if let Some(view) = runtime
         .loaded
         .as_ref()
-        .filter(|view| signature(&view.config) == hash)
+        .filter(|view| config_signature(&view.config) == hash)
     {
         provider_scope_binding_in_view(runtime, view, provider)
     } else {
@@ -328,7 +335,7 @@ pub(super) fn selected_binding(
     } else {
         Some(&runtime.saved)
     }
-    .filter(|v| signature(&v.config) == signature(config))
+    .filter(|v| config_signature(&v.config) == config_signature(config))
     .ok_or_else(|| Error::new("inputs_changed", "Configuration binding is not current"))?;
     binding(view, runtime, provider, input)
         .ok_or_else(|| Error::new("unresolved_reference", "Input declaration does not resolve"))

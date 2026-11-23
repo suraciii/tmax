@@ -5,7 +5,7 @@ use crate::{
 };
 
 use super::{
-    lineage::{invalidate_changed, make_view, retain, signature, token},
+    lineage::{config_signature, invalidate_changed, make_view, retain, token},
     scheduler::clear_store_schedule,
     store::{read_runtime, write_runtime},
 };
@@ -64,7 +64,7 @@ pub(crate) fn reconcile(
     let _lock = store.lock("routing")?;
     let mut runtime = read_runtime(store)?;
     let before = runtime.clone();
-    let previous = if signature(&runtime.saved.config) == signature(old) {
+    let previous = if config_signature(&runtime.saved.config) == config_signature(old) {
         runtime.saved.clone()
     } else {
         let prior = runtime.saved.clone();
@@ -73,7 +73,7 @@ pub(crate) fn reconcile(
     runtime.saved = make_view(&mut runtime, &previous, new, renames);
     runtime.saved.revision = config::load(store)
         .ok()
-        .filter(|file| signature(&file.config) == signature(new))
+        .filter(|file| config_signature(&file.config) == config_signature(new))
         .map(|file| file.revision);
     invalidate_changed(&mut runtime, &before);
     retain(&mut runtime);
@@ -87,12 +87,12 @@ pub fn activate(store: &Store, config: &Config, revision: &str) -> Result<()> {
     let _lock = store.lock("routing")?;
     let mut runtime = read_runtime(store)?;
     let before = runtime.clone();
-    let mut view = if signature(&runtime.saved.config) == signature(config) {
+    let mut view = if config_signature(&runtime.saved.config) == config_signature(config) {
         runtime.saved.clone()
     } else if let Some(view) = runtime
         .loaded
         .as_ref()
-        .filter(|v| signature(&v.config) == signature(config))
+        .filter(|v| config_signature(&v.config) == config_signature(config))
     {
         view.clone()
     } else {
@@ -124,14 +124,14 @@ pub fn deactivate(store: &Store) -> Result<()> {
 pub(super) fn ensure_saved_view(store: &Store, captured: &Config) -> Result<()> {
     let _configuration = store.lock("configuration")?;
     let current = config::load(store)?;
-    if signature(&current.config) != signature(captured) {
+    if config_signature(&current.config) != config_signature(captured) {
         return Err(Error::new(
             "inputs_changed",
             "Saved configuration changed before the input operation",
         ));
     }
     let runtime = read_runtime(store)?;
-    if signature(&runtime.saved.config) != signature(captured) {
+    if config_signature(&runtime.saved.config) != config_signature(captured) {
         reconcile(store, &runtime.saved.config, captured, &[])?;
     }
     Ok(())

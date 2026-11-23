@@ -38,6 +38,11 @@ pub(super) async fn secret_inventory(store: &Store) -> Result<Value> {
 fn reference_view(c: &Config, reference: &str) -> Value {
     let mut refs = Vec::new();
     for (id, p) in &c.providers {
+        // The derived provider's key is the gateway key; the gateway entry below
+        // already counts that reference.
+        if c.is_gateway_provider(id) {
+            continue;
+        }
         if matches!(&p.auth,Some(Auth::ApiKey {key_ref})if key_ref==reference) {
             refs.push(json!({"kind":"provider","id":id,"scope":null}));
         }

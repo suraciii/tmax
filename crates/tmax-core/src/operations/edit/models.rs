@@ -7,6 +7,19 @@ use crate::operations::arguments::{arg, args, boolean, duration, operand, requir
 use crate::{Error, Request, Result, config};
 use toml::Value;
 
+/// The derived gateway provider owns its model set; model operations on it are
+/// never user state and would be silently dropped by the derived definition.
+fn guard_derived(root: &Value, provider: &str) -> Result<()> {
+    if root.get("gateway").is_some() && provider == crate::config::GATEWAY_PROVIDER_ID {
+        return Err(Error::new(
+            "reserved_resource",
+            "Provider ID \"tmax\" is reserved for the gateway provider; its models are the gateway's public routes\nRun `tmax gateway remove` to stop managing the gateway provider",
+        )
+        .field("provider"));
+    }
+    Ok(())
+}
+
 pub(super) fn mutate(
     root: &mut Value,
     r: &Request,
@@ -16,6 +29,7 @@ pub(super) fn mutate(
     match path {
         "model add" => {
             let (p, m) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, p)?;
             get(root, &["providers", p])?;
             let mut model = table();
             apply_fields(&mut model, r, "model")?;
@@ -24,10 +38,12 @@ pub(super) fn mutate(
         "model update" => {
             require_change(r)?;
             let (p, m) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, p)?;
             apply_fields(get_mut(root, &["providers", p, "models", m])?, r, "model")?;
         }
         "model remove" => {
             let (p, m) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, p)?;
             if remove(root, &["providers", p, "models", m])?.is_none() {
                 return Err(error());
             }
@@ -35,6 +51,7 @@ pub(super) fn mutate(
         "model rename" => {
             let old = operand(r, 0)?;
             let (p, m) = config::qualified(old)?;
+            guard_derived(root, p)?;
             let new_m = operand(r, 1)?;
             let model = remove(root, &["providers", p, "models", m])?.ok_or_else(error)?;
             new_named(root, &["providers", p, "models"], new_m, model)?;
@@ -58,6 +75,7 @@ pub(super) fn mutate(
         }
         "model override list replace" => {
             let (p, m) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, p)?;
             let field = operand(r, 1)?;
             if !matches!(
                 field,
@@ -74,6 +92,7 @@ pub(super) fn mutate(
         }
         "model effort-map set" | "model effort-map remove" | "model effort-map clear" => {
             let (p, m) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, p)?;
             let protocol = required(r, "protocol")?;
             if !matches!(protocol, "chat-completions" | "responses") {
                 return Err(Error::new(
@@ -120,6 +139,7 @@ pub(super) fn mutate(
         | "model reasoning remove"
         | "model reasoning clear" => {
             let (p, m) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, p)?;
             let model = get_mut(root, &["providers", p, "models", m])?;
             if get(model, &["overrides", "reasoning_options"]).is_err() {
                 put(
@@ -164,6 +184,7 @@ pub(super) fn mutate(
         | "model schedule remove"
         | "model schedule clear" => {
             let (p, m) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, p)?;
             let model = get_mut(root, &["providers", p, "models", m])?;
             if model.get("schedule").is_none() {
                 put(model, &["schedule"], Value::Array(Vec::new()))?;
@@ -195,6 +216,7 @@ pub(super) fn mutate(
         }
         p if p.starts_with("model rule ") => {
             let (provider, model) = config::qualified(operand(r, 0)?)?;
+            guard_derived(root, provider)?;
             let m = get_mut(root, &["providers", provider, "models", model])?;
             if m.get("priority_rules").is_none() {
                 put(m, &["priority_rules"], Value::Array(Vec::new()))?;
@@ -317,7 +339,7 @@ mod tests {
     use std::collections::BTreeMap;
     #[test]
     fn reference_safe_model_rename_updates_native_defaults_and_input_coverage() {
-        let mut root:Value=toml::from_str("version=1\n[providers.p]\nintegration='deepseek'\n[providers.p.models.old]\n[providers.p.inputs.q]\nkind='quota'\nsource='manual'\nscope='weekly'\nmodels=['old']\nmax_age_seconds=60\n[agents.a]\nagent='pi'\nscope='/native'\ndefault={provider='up',id='old',protocol='chat-completions'}\n[agents.a.providers.up]\nprovider='p'\nmodels=[{id='old',protocol='chat-completions'}]\n").unwrap();
+        let mut root:Value=toml::from_str("version=2\n[providers.p]\nintegration='deepseek'\n[providers.p.models.old]\n[providers.p.inputs.q]\nkind='quota'\nsource='manual'\nscope='weekly'\nmodels=['old']\nmax_age_seconds=60\n[agents.a]\nagent='pi'\nscope='/native'\ndefault={provider='up',id='old',protocol='chat-completions'}\n[agents.a.providers.up]\nprovider='p'\nmodels=[{id='old',protocol='chat-completions'}]\n").unwrap();
         let r = Request {
             command: vec!["model".into(), "rename".into()],
             operands: vec!["p/old".into(), "new/with/slash".into()],

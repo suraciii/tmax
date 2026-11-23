@@ -44,8 +44,8 @@ actual saved/loaded outcome. Revision-scoped indices, explicit guards, coherent
 explanations, historical facts, and partial outcomes retain their needed revision
 context. Routine successes do not need full before/after metadata or diffs.
 
-Lists return stable provider IDs, qualified concrete names, `(protocol, id)` alias
-identities, target-local native provider names and `{provider, id, protocol}`
+Lists return stable provider IDs, qualified concrete names, alias route IDs,
+target-local native provider names and `{provider, id, protocol}`
 selections, target IDs, or request/recovery handles as appropriate.
 Useful readiness/count summaries stay compact. Help defines how to inspect those
 identities; do not repeat derivable inspect argv for every item. Explicit inspect,

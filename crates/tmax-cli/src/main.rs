@@ -168,13 +168,25 @@ fn parse_error_message(
         .unwrap_or_else(|| "`tmax`".to_owned());
     let detail = match error.kind() {
         ErrorKind::UnknownArgument => match error.get(ContextKind::InvalidArg) {
+            Some(ContextValue::String(value)) if value.trim_start_matches('-') == "gateway" => {
+                "The `--gateway` option was removed; select the gateway provider explicitly with `--provider tmax`.".to_owned()
+            }
             Some(ContextValue::String(value)) => known_option_name(command, value)
                 .map(|name| format!("Unknown option {name}."))
                 .unwrap_or_else(|| "Unexpected argument or option.".to_owned()),
             _ => "Unexpected argument or option.".to_owned(),
         },
         ErrorKind::InvalidSubcommand | ErrorKind::MissingSubcommand => {
-            format!("Unknown or missing subcommand under {location}.")
+            let removed = operation.is_none()
+                && matches!(
+                    error.get(ContextKind::InvalidSubcommand),
+                    Some(ContextValue::String(value)) if value == "dsh"
+                );
+            if removed {
+                "The `tmax dsh` command group was removed; use `tmax provider inspect tmax` for gateway provider state and `tmax agent apply <target>` to apply it.".to_owned()
+            } else {
+                format!("Unknown or missing subcommand under {location}.")
+            }
         }
         ErrorKind::MissingRequiredArgument
         | ErrorKind::TooFewValues

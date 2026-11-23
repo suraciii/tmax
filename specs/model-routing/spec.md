@@ -446,10 +446,10 @@ rewrite priorities or stop otherwise valid inference.
 ## Concrete model access
 
 A concrete model can be mapped into an agent's native provider configuration
-through an upstream-source entry using its
+through a direct entry using its
 [resolved protocol endpoint](../integrations/spec.md#endpoint-resolution),
 qualified metadata, and supported credential handoff. The entry references one
-tmax upstream provider and selects its exact upstream model ID, without a
+tmax provider and selects its exact upstream model ID, without a
 redundant provider prefix. It does not require a model alias, a separately
 managed single-candidate route, or a tmax inference listener.
 
@@ -457,9 +457,9 @@ A target with no selected models or default remains valid but incomplete for
 native model application. Qualified native authentication may still proceed
 through that target. The
 [agent target contract](../configuration/spec.md#agent-targets) owns incremental
-setup, provider-qualified defaults/roles, source replacement, and application
-prerequisites. One target may contain both upstream-source and gateway-source
-native entries; neither is a target-wide operating mode.
+setup, provider-qualified defaults/roles, provider replacement, and application
+prerequisites. One target may contain both direct and relayed native entries;
+neither is a target-wide operating mode.
 
 The independent model gateway derives concrete mappings from enabled
 provider/model definitions and the provider's resolved protocol endpoints under
@@ -476,14 +476,20 @@ configuration from a request.
 
 | Property | Contract |
 | --- | --- |
-| Public identity | Exact user-defined request model ID within a native protocol; it need not equal a catalog model ID or candidate's upstream model ID. |
+| Public identity | Exact user-defined route name; it need not equal a catalog model ID or candidate's upstream model ID and is not combined with a protocol. |
+| Declared protocols | Required nonempty set from `chat-completions`, `responses`, and `messages`; the candidate list and policy apply to every declared protocol. |
 | Meaning | Named configuration referencing one or more existing provider-owned Models, not a new trained model, proof of identical weights or release versions, or protocol conversion. |
-| Definition | One shared [model-alias declaration](../configuration/spec.md#model-aliases), managed by [`model alias` commands](../cli/models/aliases/spec.md#model-alias-commands); no separate mapping, route, publication, or account-pool resource. |
+| Definition | One shared [model-alias declaration](../configuration/spec.md#model-aliases) per route name, managed by [`model alias` commands](../cli/models/aliases/spec.md#model-alias-commands); no separate mapping, route, publication, or account-pool resource. |
 
-Each alias must explicitly list one or more registered qualified concrete model
-names. The list must be nonempty and unique. Candidates must not be bare provider
-IDs or other model aliases. A one-candidate alias is allowed for a chosen public
-name, but an alias is never required to use a concrete model.
+Each alias must declare one or more native protocols and explicitly list one or
+more registered qualified concrete model names. The list must be nonempty and
+unique. Candidates must not be bare provider IDs or other model aliases. A
+one-candidate alias is allowed for a chosen public name, but an alias is never
+required to use a concrete model. The route name alone is the identity, so one
+name cannot select different candidates for different protocols.
+Every candidate must publish every declared protocol. A route that declares a
+protocol a candidate does not serve is invalid configuration. A candidate may
+publish protocols the route does not declare: capability is not publication.
 Each candidate is a Model reference plus alias-local settings, with no independent
 identity or lifecycle. It may select a fixed reasoning effort under
 [Request parameters](#request-parameters); changing that setting does not create
@@ -501,27 +507,28 @@ must not expand selection to an unconfigured model. Explicit candidate edits
 report affected definitions and bound sessions under the continuity rules.
 
 Priorities, schedules, and ordered priority rules remain user-wide, not
-overridden per Agent, project, or model alias. Model aliases are shared within
-their native-protocol scope. Non-effort compatibility and upstream authorization
-filter candidate eligibility, not preference scores; effort follows
-post-selection validation under [Request parameters](#request-parameters). There
-are no per-client model permissions.
+overridden per Agent, project, or model alias. A route's declared protocols share
+one candidate list, one continuity policy, and one optional fallback.
+Non-effort compatibility and upstream authorization filter candidate eligibility,
+not preference scores; effort follows post-selection validation under
+[Request parameters](#request-parameters). There are no per-client model
+permissions.
 Equal-priority primary/standby behavior and all priority evaluation use the
 existing model settings, not another scenario-specific rule system.
 
 Each alias definition owns optional `continuity = "session" | "stateless"`,
-defaulting to `session`, for all callers. Native provider entries, model
-selections, defaults, and roles cannot override it. Shared policy does not make
-different conversations share a binding; actual client/context qualification
-remains necessary for either policy.
+defaulting to `session`, for all callers and every declared protocol. Native
+provider entries, model selections, defaults, and roles cannot override it. Shared
+policy does not make different conversations share a binding; actual
+client/context qualification remains necessary for either policy.
 
-Model-alias IDs and derived concrete model IDs must be unambiguous within each
-native-protocol scope. Reject a collision when applying configuration, not by
-silently choosing one interpretation at request time. The same public ID on another
-protocol is separately qualified, not evidence of protocol translation. Each
-candidate must expose the incoming protocol; request content never filters
-candidates. After concrete model lookup, resolve its protocol endpoint through
-the
+A route name and a derived concrete model ID must not collide within a declared
+protocol scope. Reject a collision when applying configuration, not by silently
+choosing one interpretation at request time. A request for a protocol the route
+does not declare must fail before candidate selection; it must not be served from
+another record. Each candidate must expose the declared request protocol; request
+content never filters candidates. After concrete model lookup, resolve its
+protocol endpoint through the
 [shared integration authority](../integrations/spec.md#endpoint-resolution) and
 require that endpoint to exist for the incoming protocol.
 
@@ -530,10 +537,11 @@ account selector. A shared catalog entry, model-family name, or similar upstream
 not automatically enroll other instances. Each candidate retains its own exact
 model ID, limits, prices, entitlement, and integration evidence.
 
-Gateway model discovery exposes the same enabled, protocol-qualified concrete and
-alias model list to every holder of the current shared key. Agent registration
-and native configured subsets do not filter it. Report unknown or unavailable
-access honestly; listing is not an inference check or automatic enrollment.
+Gateway model discovery exposes the same enabled concrete models and alias routes
+under their declared protocols to every holder of the current shared key. Agent
+registration and native configured subsets do not filter it. Report unknown or
+unavailable access honestly; listing is not an inference check or automatic
+enrollment.
 A native model picker may show only its configured entry's selected subset.
 A concrete model reports its own effective metadata. Native alias capability
 projection follows the shared
@@ -713,7 +721,7 @@ an independent stale quota check does not.
 
 ### Request fallback and failure priority override
 
-Fallback is opt-in on each protocol-qualified stateless model alias. It uses
+Fallback is opt-in on each stateless model-alias definition. It uses
 only that alias's explicit candidates and preserves the admitted configuration,
 protocol, and request parameters. The gateway is a plain model provider for its
 callers: any authenticated request is routed and forwarded unchanged, whatever
@@ -770,8 +778,9 @@ an earlier attempt is running. A later attempt uses current failure overrides,
 not a reconstruction of its admitted identities from the replacement configuration.
 
 
-Continuity belongs to the shared alias definition: session-stable by default,
-stateless only by explicit configuration and qualified request context. The
+Continuity belongs to the shared alias definition and applies to every declared
+protocol: session-stable by default, stateless only by explicit configuration and
+qualified request context. The
 [configuration contract](../configuration/spec.md#model-aliases) owns its field.
 Concrete mappings always keep their fixed model; they do not rank alias
 candidates.
@@ -899,7 +908,7 @@ not a new upstream provider and need not have the same spelling in every agent.
 Agent adapters must distinguish their display syntax from the transmitted model ID.
 
 The Models view must distinguish concrete models from model aliases.
-Summaries show their qualified identities, explicit candidates, and
+Summaries show their identities, declared protocols, explicit candidates, and
 availability. Explicit detail and explanation reads expose metadata provenance,
 effective capabilities, base/effective priority, calendar fallback, and the
 [rule explanation](#rule-evaluation-and-explanation). Concrete inspection covers
@@ -910,10 +919,10 @@ projection under `native_projection`, keyed by `pi`, `omp`, `opencode`, `codex`,
 actual published protocols, each with the same projection shape, while its top
 level uses the first published protocol. The
 [agent result contract](../cli/agents/spec.md#agent-result-data)
-owns the projection shape and states. Alias inspection must resolve one
-configured protocol-qualified identity; an ambiguous ID requires a protocol.
-Concrete inspection exposes its configured protocol-scoped `effort_map` alongside
-the existing definition and effective upstream declarations. Its separate
+owns the projection shape and states. Alias inspection must resolve one configured
+route by its ID; `--protocol` is an optional projection filter that the route must
+declare. Concrete inspection exposes its configured protocol-scoped `effort_map`
+alongside the existing definition and effective upstream declarations. Its separate
 `gateway_projection`, keyed by protocol, uses caller-facing inputs after maps;
 `native_projection` retains actual upstream capabilities for direct entries.
 Alias inspection exposes its configured candidate-effort map.
@@ -943,7 +952,7 @@ and result fields.
 | --- | --- |
 | No Agent | Public qualified concrete or alias ID; assess gateway requirements. |
 | Declared target without a native entry | Public ID; assess the target's native compatibility without requiring saved selections. |
-| Declared native entry | Upstream-local model ID for an upstream source; public ID for a gateway source. The model need not already be selected there. |
+| Declared native entry | Upstream-local model ID for a direct entry; public route name for a relayed entry. The model need not already be selected there. |
 | Undeclared Agent/path | Public ID and explicitly inspected native scope; do not register or import the target. |
 
 This is configuration/compatibility advice, not permission. Capture
@@ -1019,8 +1028,9 @@ renaming never translates one upstream model ID into another.
 ## Signal and calendar scenarios
 
 These illustrations use explicit user choices, not defaults or provider tariff
-claims. Each model must already be registered, authorized, protocol-qualified,
-and included in the model alias. They do not qualify an otherwise unsupported
+claims. Each model must already be registered, authorized, support the route's
+declared protocols, and be included in the model alias. They do not qualify an
+otherwise unsupported
 subscription integration or assert an upstream model ID.
 
 ### Announced Codex reset
@@ -1086,8 +1096,8 @@ precedence. Existing sessions and explicitly fixed destinations remain fixed.
 ## Multi-source model alias example
 
 An agent displays tmax/deepseek-v4.1-flash when its local gateway provider key is
-tmax and the configured model-alias ID is deepseek-v4.1-flash. Its explicit
-candidates can be:
+tmax and the configured model-alias ID is deepseek-v4.1-flash. The route declares
+`chat-completions`, and its explicit candidates can be:
 
 | Concrete candidate | Metadata source | Exact upstream request model |
 | --- | --- | --- |
@@ -1113,9 +1123,10 @@ response delivery; retained-session errors do not replay on a sibling.
 
 ## Acceptance boundary
 
-1. Publish arbitrary model-alias IDs such as `L0` and `coding` with explicit
-   candidates, preserve those IDs across scheduled selection changes, and forward
-   each candidate's exact upstream model ID. No alias name supplies a preset.
+1. Publish arbitrary model-alias IDs such as `L0` and `coding` with declared
+   protocols and explicit candidates, preserve those IDs across scheduled
+   selection changes, and forward each candidate's exact upstream model ID. No
+   alias name supplies a preset.
 2. With no matching signal rule, prefer a lower-base-priority model during
    its configured calendar override and return to the fallback order at the exact
    exclusive end. Exercise multiple daily windows, weekdays, weekends, date
@@ -1123,8 +1134,10 @@ response delivery; retained-session errors do not replay on a sibling.
    both daylight-saving transitions.
 3. Reject overlapping same-precedence rules and invalid zones. Equal priorities
    must select the same model regardless of catalog iteration order or local-ID rename.
-4. Keep candidate membership stable when priorities change. Reject a missing,
-   empty, duplicate, or unregistered alias candidate list as invalid configuration.
+4. Keep candidate membership stable when priorities change. Reject a missing or
+   empty declared protocol list, a missing, empty, duplicate, or unregistered
+   alias candidate list, and a candidate that does not publish every declared
+   protocol, all as invalid configuration.
    A valid alias with no eligible candidate must fail rather than select an
    unconfigured model or another wire protocol.
 5. Exercise fixed concrete access and one- or multi-candidate model aliases.
@@ -1143,12 +1156,13 @@ response delivery; retained-session errors do not replay on a sibling.
    without an Agent; optional native context is advice, not a model permission.
    Operations and their optional dry runs distinguish new-session effects,
    activation blockers, and in-flight requests retaining their snapshots.
-8. Configure one target with both upstream and gateway native providers. Upstream
-   entries select exact provider-local IDs, gateway entries select public IDs, and
-   defaults/roles identify the native provider. Preserve source-specific endpoint
-   and credential handling without dropping unsupported entries or adding a
-   duplicate route. Time cannot rewrite concrete native selections, and upstream
-   entries do not require a running tmax gateway.
+8. Configure one target with both direct and relayed native entries. Direct
+   entries select exact provider-local IDs, relayed entries reference provider
+   `tmax` and select public route names, and defaults/roles identify the native
+   entry. Preserve provider-specific endpoint and credential handling without
+   dropping unsupported entries or adding a duplicate route. Time cannot rewrite
+   concrete native selections, and direct entries do not require a running tmax
+   gateway.
 9. Resolve duplicate upstream model IDs under different providers independently.
    Preserve a model ID containing `/` by splitting its qualified name only once.
    Reject unknown qualified references without fuzzy lookup or passthrough.
@@ -1190,9 +1204,10 @@ response delivery; retained-session errors do not replay on a sibling.
 18. Resolve deepseek-v4.1-flash to the three explicit models in the multi-source
     example, including DeepSeek's different upstream ID. Preserve instance-specific
     metadata and credentials; an additional matching provider must not join implicitly.
-19. Reject concrete/alias public-ID collisions within a protocol. Distinguish the
-    native agent's tmax prefix from the request ID, and populate model availability
-    before native selection without relying on a runtime selection callback.
+19. Reject concrete/alias public-ID collisions within a declared protocol scope.
+    Distinguish the native agent's tmax prefix from the route ID, and populate
+    model availability before native selection without relying on a runtime
+    selection callback.
 20. Preserve explicit and omitted native request parameters through concrete and
     alias forwarding except explicit model effort maps and fixed candidate effort
     under [Request parameters](#request-parameters). Verify fixed > map > identity

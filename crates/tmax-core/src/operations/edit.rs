@@ -157,6 +157,33 @@ fn mutate(root: &mut Value, r: &Request) -> Result<(Json, Vec<(String, String)>)
     Ok((info, renames))
 }
 
+/// Delivery impact of a shared-key rotation: every applied relayed target must
+/// be re-applied, and unmanaged clients are outside tmax's reach.
+async fn key_rotation_impact(store: &Store, config: &Config) -> Result<Json> {
+    let delivery = crate::agent_integration::delivery(store, config).await?;
+    let mut affected = Vec::new();
+    for target in delivery["targets"].as_array().into_iter().flatten() {
+        let applied = target
+            .get("applied_delivery")
+            .cloned()
+            .unwrap_or(Json::Null);
+        // Records written before delivery facts existed still hold the previous
+        // shared key, so they are affected even though their revision is unknown.
+        let affected_target = applied
+            .get("applied_revision")
+            .is_some_and(|value| !value.is_null())
+            || applied.get("state").and_then(Json::as_str) == Some("unknown");
+        if affected_target && !affected.contains(&target["target"]) {
+            affected.push(target["target"].clone());
+        }
+    }
+    Ok(json!({
+        "affected_targets": affected,
+        "next_action": affected.first().map(|target| format!("tmax agent apply {}", target.as_str().unwrap_or_default())),
+        "unmanaged_clients": "unknown; clients holding the previous shared key must be updated explicitly",
+    }))
+}
+
 pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     let path = store.root.join("tmax.toml");
     let bytes = match std::fs::read(&path) {
@@ -186,7 +213,7 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
                 .map_err(|_| Error::new("invalid_configuration", "Configuration must be UTF-8"))
         })
         .transpose()?
-        .unwrap_or("version = 1\n");
+        .unwrap_or("version = 2\n");
     let mut document: toml_edit::DocumentMut = text.parse().map_err(|_| {
         Error::new(
             "invalid_configuration",
@@ -268,6 +295,9 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     }
     if r.dry_run {
         let mut impact = impact(store, &candidate, &revision, old.as_ref()).await?;
+        if path == "gateway key replace" {
+            impact["rotation"] = key_rotation_impact(store, &candidate).await?;
+        }
         impact["requested"] = data;
         if path == "provider login" || path == "provider logout" {
             let source = if path == "provider login" {
@@ -406,6 +436,9 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
         }
     }
     candidate = config::parse(&toml::to_string(&root).map_err(|_| error())?)?;
+    if path == "gateway key replace" {
+        data["rotation"] = key_rotation_impact(store, &candidate).await?;
+    }
     document::move_renamed(&mut document, &renames)?;
     document::sync_table(document.as_table_mut(), Some(&before), &root)?;
     let saved = match config::save(store, &revision, &document) {

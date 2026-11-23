@@ -14,9 +14,9 @@ own command contracts.
 | --- | --- |
 | `integration list` | Compact stable integration IDs, protocols, endpoint-setup requirements, and authentication summaries. |
 | `integration inspect ID` | Fixed protocol bases/custom-base requirements, finite method/path operations and original-binding requirements, protocols/transports, authentication methods/login sources, supported input source/kind/scope/model coverage and normalized fields, noninteractive acquisition, restrictions, and known/unknown compatibility evidence. |
-| `provider list` | Compact IDs/names, enabled/authentication state, billing/quota freshness, safe file/loaded quota suspension projections, and affected-target counts. |
-| `provider inspect ID` | File/loaded endpoints, configured/inherited/overridden/effective metadata and provenance, authentication `via`/known-or-unknown identity, model access, subscription/balance facts, revision-qualified file/loaded quota guard policy, safe file/loaded quota suspension status, input readiness, retained secret references, and file/loaded differences. |
-| `provider refresh ID --scope SCOPE` | Explicit qualified non-inference checks. `SCOPE` is `auth`, `models`, `quota`, or `all`; return each check/channel separately. Model discovery registers nothing. |
+| `provider list` | Compact IDs/names, `source` (`upstream` or `gateway`), enabled/authentication state, billing/quota freshness, safe file/loaded quota suspension projections, and affected-target counts. |
+| `provider inspect ID` | File/loaded endpoints, configured/inherited/overridden/effective metadata and provenance, `source`, authentication `via`/known-or-unknown identity, model access, subscription/balance facts, revision-qualified file/loaded quota guard policy, safe file/loaded quota suspension status, input readiness, retained secret references, and file/loaded differences. The derived gateway provider additionally reports its route-name children and a `delivery` block whose `targets` array holds one `{target, entry, applied_delivery}` item per declared relayed entry, with the last field shaped by [Agent result data](../agents/spec.md#agent-result-data). |
+| `provider refresh ID --scope SCOPE` | Explicit qualified non-inference checks. `SCOPE` is `auth`, `models`, `quota`, or `all`; return each check/channel separately. Model discovery registers nothing. For the derived gateway provider `tmax`, see [Gateway provider refresh](#gateway-provider-refresh). |
 
 Provider integration discovery reads the built-in qualified registry without catalog,
 network, credentials, providers, targets, or valid config. Returned IDs are the
@@ -38,15 +38,99 @@ routing exclusion. Explicit refresh creates no scheduler or inference replay.
 Outbound work uses [network policy](../service/spec.md#outbound-network-configuration)
 and [transport deadlines](../../product/spec.md#transport-deadlines).
 
-`provider refresh` returns `data.checks`, an array of
+`provider refresh` for an upstream provider returns `data.checks`, an array of
 `{scope, input_name, outcome, reason_code, attempt}`. Input name/attempt are null
 for non-channel checks. Outcome is `completed`, `unavailable`, `failed`, or
 `not_executed`; channel attempt uses the [input result](inputs/spec.md#input-data-results).
 Dry-run reports intended checks without secrets, writes, or upstream calls.
 
+### Gateway provider refresh
+
+`provider refresh tmax --scope SCOPE` checks the derived gateway provider. Without
+a configured gateway that provider ID is not in the inventory, and the request
+fails as an unknown resource. `SCOPE` is required. The result is
+`data = {provider: "tmax", boundary: "reachability_only", checks: [...]}` with one
+check per requested scope in the order `auth`, `models`, `quota` for `all`. Checks
+run independently: a failed check must not prevent another requested scope from
+running, and every requested check appears in `data.checks`.
+
+Each check reports its own `scope`, `outcome`, and `boundary`. A `failed` check
+makes the result `observation_failed` with exit 4. A requested check that could
+not run reports `not_executed` and fails that verification the same way —
+`observation_failed` with exit 4 — never as success; `gateway_not_ready` and
+`no_daemon_history` are examples. A dry run is not a failed verification and
+exits 0.
+
+| Scope | Bound | Completed proof |
+| --- | --- | --- |
+| `auth` | One authenticated `GET /v1/models` with a 5-second deadline. | `proof: shared_key_accepted` |
+| `models` | One bounded inference request per enabled route with a 60-second deadline per route. | Per-route `proof: route_reachable_through_gateway` |
+| `quota` | Read of the identified daemon's observed usage; never an upstream request. | `proof: observed_gateway_usage`, `upstream_contact: false` |
+
+Auth check data:
+
+| Outcome | Fields |
+| --- | --- |
+| `completed` | `proof: shared_key_accepted`, `publication_model_count` (nonnegative integer, or null when the response body is unavailable). |
+| `failed` | `reason_code`, optional `http_status`, optional `repair`. |
+
+| Auth `reason_code` | Condition | `repair` |
+| --- | --- | --- |
+| `gateway_not_ready` | The daemon is not identified as compatible or the listener is not ready. | `tmax gateway start` |
+| `key_rotated_not_reloaded` | The loaded shared-key reference differs from saved configuration. | `tmax gateway restart` |
+| `shared_key_rejected` | The listener answered 401 or 403; `http_status` is present. | `tmax gateway key replace` |
+| `gateway_unreachable` | The loopback request could not be sent. | absent |
+| `gateway_response_invalid` | The listener answered another non-success status; `http_status` is present. | absent |
+| Credential or storage read code | The stored shared key could not be read. | `tmax gateway key replace` |
+
+Models check data:
+
+| Field | Contract |
+| --- | --- |
+| `outcome` | `completed` when every checked route completed; `failed` when a route or the shared key failed; `not_executed` when no request ran. |
+| `routes` | One `{route, protocol, outcome, reason_code?, http_status?}` per enabled route when requests ran; the route-name array for `not_executed`/`gateway_not_ready`; one `{route, protocol, outcome, reason_code}` per enabled route when a shared-key or credential failure stopped the requests. |
+| `summary` | `{routes, completed, failed}` over the checked routes; present whenever route items are reported, including a pre-request failure that lists every route, and absent for `not_executed`/`gateway_not_ready`. |
+| `boundary` | `reachability_only`. |
+
+Each route is checked with the first of `responses`, `chat-completions`, and
+`messages` that the route declares. A completed route reports
+`proof: route_reachable_through_gateway`. A failed route reports the gateway's
+stable reason code from a bounded error body, or `http_<status>` when none is
+available; a transport failure is `unreachable`, and a missing declared protocol is
+`protocol_unavailable`. When the gateway is not ready, every route is listed by
+name with `not_executed`/`gateway_not_ready` and no request is sent. When the
+daemon loaded a different shared-key reference than saved configuration, every
+route reports `key_rotated_not_reloaded` with `repair: tmax gateway restart`. When
+the shared key cannot be read, every route reports that failure and no request is
+sent.
+
+Quota check data:
+
+| Field | Contract |
+| --- | --- |
+| `outcome` | `completed` when observed usage is available; otherwise `not_executed`. |
+| `reason_code` | Null when completed; otherwise the unavailable reason, for example `no_daemon_history` without a daemon. |
+| `usage` | The observed gateway usage projection; unknown and partial usage remain separate. |
+| `proof` | `observed_gateway_usage`. |
+| `upstream_contact` | `false`. |
+| `boundary` | `reachability_only`. |
+
+A dry run reports `outcome: not_executed` and `reason_code: dry_run` for every
+requested scope, with `planned` data instead of a check result. It sends no HTTP
+request, resolves no shared key, and contacts no daemon. `planned` is
+`{listen, method, path}` for `auth`, `{routes: [{route, protocol}]}` for `models`,
+and `{source: observed_gateway_usage, upstream_contact: false}` for `quota`.
+
+A successful refresh proves reachability from tmax only. It must not prove that an
+Agent target loaded or used the configuration, that an untested protocol works, or
+that observed usage is a provider-side balance. The `reachability_only` boundary
+belongs on the top-level result and on every check object, including a dry-run
+check.
+
 Examples: `tmax integration list`, `tmax integration inspect deepseek`,
-`tmax provider list`, `tmax provider inspect deepseek`, and
-`tmax provider refresh deepseek --scope quota`. Registry-based help must use
+`tmax provider list`, `tmax provider inspect deepseek`,
+`tmax provider refresh deepseek --scope quota`, and
+`tmax provider refresh tmax --scope models`. Registry-based help must use
 actual supported IDs instead of promising guessed integrations.
 
 ## Provider operations and subscription fields
@@ -59,6 +143,10 @@ actual supported IDs instead of promising guessed integrations.
 | `provider remove ID` | Remove contained settings after reference checks, with retained-secret/native disclosures. |
 | `provider failure-reset ID` | Explicitly clear this provider's current consecutive failure streak and fixed-priority override; preserve settings, history, bindings, and quota facts. Supports effect-free dry-run. |
 | `provider quota-resume ID` | Clear automatic quota suspension without changing enablement or settings. `--dry-run` is effect-free and `--if-revision` guards the saved configuration. A new confirmed denial may suspend again. |
+
+The derived gateway provider is not a user-managed instance: `provider add`,
+`provider rename`, and `provider remove` refuse its reserved ID, and its lifecycle
+belongs to [Gateway provider](../../product/spec.md#gateway-provider).
 
 Suspension status is separate from the optional quota guard and provider enablement.
 Inspection reports `suspended`, `available`, `manually_resumed`, `unsupported`, or

@@ -107,7 +107,7 @@ Native `thinking.mode` accepts `effort`, `budget`, `google-level`,
 range fields) is required. `defaultLevel`, `effortMap`, `supportsDisplay`, and
 `requiresEffort` describe actual native controls. Do not synthesize a ladder
 from `reasoning: true`. tmax projects actual upstream efforts for direct entries,
-and gateway-facing input names for gateway entries under the
+and gateway-facing input names for relayed entries under the
 [shared mapping and alias rules](../../specs/integrations/spec.md#alias-reasoning-capability),
 as `thinking` with `mode: "effort"` and exact representable `efforts`. Names
 outside the vocabulary stay visible as omitted, not renamed by the native

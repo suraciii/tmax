@@ -62,6 +62,48 @@ fn handoff_key(store: &Store, reference: &str) -> Result<Value> {
     }
     Ok(Value::String(key.to_owned()))
 }
+/// Refresh the recorded delivery facts of an unchanged apply when they are
+/// missing or outdated, so a second `agent apply` repairs `unknown` delivery.
+fn record_unchanged_delivery(
+    store: &Store,
+    config: &Config,
+    target: &crate::config::AgentTarget,
+    previous: Option<&crate::agent_integration::recovery::Record>,
+    index: &mut crate::agent_integration::recovery::Index,
+) -> Result<()> {
+    if !target
+        .providers
+        .values()
+        .any(|entry| entry.is_relayed(config))
+    {
+        return Ok(());
+    }
+    let Some(current) = config::gateway_delivery_for(config, &config.relayed_route_pairs(target))
+    else {
+        return Ok(());
+    };
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let outdated = previous.delivery.as_ref().is_none_or(|applied| {
+        applied.revision != current.revision
+            || applied.listen != current.listen
+            || applied.key_ref != current.key_ref
+    });
+    if !outdated {
+        return Ok(());
+    }
+    if let Some(record) = index
+        .records
+        .iter_mut()
+        .find(|record| record.id == previous.id)
+    {
+        record.delivery = Some(current.into());
+        index.save(store)?;
+    }
+    Ok(())
+}
+
 pub async fn apply_request(store: &Store, config: &Config, request: &Request) -> Result<Value> {
     let id = request
         .operands
@@ -109,7 +151,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     } else {
         None
     };
-    let (mut entries, secret_refs) = entries(store, config, id, target, &path, dry_run).await?;
+    let (mut entries, secret_refs) = entries(store, config, id, target, &path, false).await?;
     let fact_gaps = fact_gap_warnings(target, &entries);
     let files = adapters::build(target, &path, &entries);
     for entry in &mut entries {
@@ -255,6 +297,10 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         }
     }
     if desired_unchanged {
+        // A no-op apply is still the documented repair for missing or outdated
+        // delivery facts (for example after a format migration): record the
+        // current revision even though no native byte changes.
+        record_unchanged_delivery(store, config, target, previous.as_ref(), &mut index)?;
         return Ok(
             json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"fact_gaps":fact_gaps}),
         );
@@ -442,6 +488,12 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 written: false,
             })
             .collect(),
+        delivery: if entries.iter().any(|entry| entry.gateway) {
+            crate::config::gateway_delivery_for(config, &config.relayed_route_pairs(target))
+                .map(Into::into)
+        } else {
+            None
+        },
     };
     if let Some(at) = index.records.iter().position(|r| r.id == recovery_id) {
         index.records[at] = record.clone();
@@ -552,6 +604,95 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
 #[cfg(test)]
 mod tests {
     use super::super::adapters::desired_fields;
+
+    #[test]
+    fn an_unchanged_apply_records_missing_delivery_facts() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("authority"));
+        let path = directory.path().join("native");
+        fs::create_dir_all(&path).unwrap();
+        let mut config = Config::empty();
+        config.gateway = Some(config::Gateway {
+            listen: "127.0.0.1:17840".into(),
+            key_ref: "secret:gw".into(),
+            autostart: false,
+        });
+        config.providers.insert(
+            "up".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                endpoints: BTreeMap::from([("responses".into(), "http://127.0.0.1:39999".into())]),
+                models: BTreeMap::from([("route".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
+            id: "route".into(),
+            protocols: vec!["responses".into()],
+            candidates: vec!["up/route".into()],
+            enabled: true,
+            continuity: Some("stateless".into()),
+            fallback: None,
+        });
+        config.agents.insert(
+            "pi-main".into(),
+            config::AgentTarget {
+                agent: "pi".into(),
+                scope: path.clone(),
+                providers: [(
+                    "relay".into(),
+                    config::NativeProvider {
+                        provider: config::GATEWAY_PROVIDER_ID.into(),
+                        models: vec![config::ModelSelection {
+                            id: "route".into(),
+                            protocol: "responses".into(),
+                        }],
+                    },
+                )]
+                .into(),
+                default: None,
+                roles: Default::default(),
+            },
+        );
+        let target = config.agents["pi-main"].clone();
+        let record = super::super::recovery::Record {
+            id: "r1".into(),
+            owner: "owner".into(),
+            target: "pi-main".into(),
+            agent: "pi".into(),
+            scope: path.clone(),
+            payload_ref: "payload".into(),
+            secret_refs: Vec::new(),
+            state: "applied_reload_pending".into(),
+            files: Vec::new(),
+            delivery: None,
+        };
+        let mut index = super::super::recovery::Index {
+            records: vec![record.clone()],
+        };
+        record_unchanged_delivery(&store, &config, &target, Some(&record), &mut index).unwrap();
+        let saved: super::super::recovery::Index = store.read_json("native/recovery.json").unwrap();
+        let delivery = saved.records[0]
+            .delivery
+            .as_ref()
+            .expect("unchanged apply records delivery facts");
+        assert_eq!(
+            delivery.revision,
+            config::gateway_delivery_for(&config, &config.relayed_route_pairs(&target))
+                .unwrap()
+                .revision
+        );
+        // A second unchanged apply is a no-op.
+        record_unchanged_delivery(&store, &config, &target, Some(&record), &mut index).unwrap();
+        let current =
+            config::gateway_delivery_for(&config, &config.relayed_route_pairs(&target)).unwrap();
+        assert_eq!(
+            index.records[0].delivery.as_ref().unwrap().revision,
+            current.revision
+        );
+    }
+
     use super::super::{planning::pending_native_changes, test_support::inspection_target};
     use super::*;
     use crate::config::Auth;
@@ -1193,6 +1334,7 @@ mod tests {
                 written: true,
                 fields,
             }],
+            delivery: None,
         };
         files[0].desired = preview;
         assert!(

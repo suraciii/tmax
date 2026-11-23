@@ -361,6 +361,11 @@ async fn retained_session_explanation_survives_deleted_candidates_and_never_clea
     let mut removed = config.clone();
     removed.providers.remove("p");
     removed.model_aliases.clear();
+    removed.gateway = Some(crate::config::Gateway {
+        listen: "127.0.0.1:17840".into(),
+        key_ref: "secret:gw".into(),
+        autostart: false,
+    });
     removed.agents.insert(
         "changed-client".into(),
         crate::config::AgentTarget {
@@ -369,8 +374,7 @@ async fn retained_session_explanation_survives_deleted_candidates_and_never_clea
             providers: [(
                 "gateway".into(),
                 crate::config::NativeProvider {
-                    provider: None,
-                    gateway: Some(true),
+                    provider: "tmax".into(),
                     models: vec![],
                 },
             )]

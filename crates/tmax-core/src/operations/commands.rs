@@ -47,7 +47,7 @@ const COMMANDS: &[Command] = &[
         path: "status",
         min: 0,
         max: 0,
-        options: "",
+        options: "brief",
         mutation: false,
     },
     Command {
@@ -77,6 +77,13 @@ const COMMANDS: &[Command] = &[
         max: 0,
         options: "",
         mutation: false,
+    },
+    Command {
+        path: "config migrate",
+        min: 0,
+        max: 0,
+        options: "",
+        mutation: true,
     },
     Command {
         path: "config reload",
@@ -481,35 +488,35 @@ const COMMANDS: &[Command] = &[
         path: "model alias update",
         min: 1,
         max: 1,
-        options: "protocol new-protocol candidate candidate-reasoning-effort clear-candidate-reasoning-effort set clear",
+        options: "protocol candidate candidate-reasoning-effort clear-candidate-reasoning-effort set clear",
         mutation: true,
     },
     Command {
         path: "model alias candidates add",
         min: 1,
         max: 1,
-        options: "protocol candidate",
+        options: "candidate",
         mutation: true,
     },
     Command {
         path: "model alias candidates remove",
         min: 1,
         max: 1,
-        options: "protocol candidate",
+        options: "candidate",
         mutation: true,
     },
     Command {
         path: "model alias rename",
         min: 2,
         max: 2,
-        options: "protocol",
+        options: "",
         mutation: true,
     },
     Command {
         path: "model alias remove",
         min: 1,
         max: 1,
-        options: "protocol",
+        options: "",
         mutation: true,
     },
     Command {
@@ -607,14 +614,14 @@ const COMMANDS: &[Command] = &[
         path: "agent provider add",
         min: 2,
         max: 2,
-        options: "provider gateway",
+        options: "provider",
         mutation: true,
     },
     Command {
         path: "agent provider update",
         min: 2,
         max: 2,
-        options: "provider gateway",
+        options: "provider",
         mutation: true,
     },
     Command {
@@ -828,20 +835,6 @@ const COMMANDS: &[Command] = &[
         mutation: true,
     },
     Command {
-        path: "dsh projection",
-        min: 0,
-        max: 1,
-        options: "home",
-        mutation: false,
-    },
-    Command {
-        path: "dsh connect",
-        min: 0,
-        max: 1,
-        options: "home",
-        mutation: true,
-    },
-    Command {
         path: "session list",
         min: 0,
         max: 0,
@@ -911,7 +904,7 @@ pub fn catalog() -> Value {
             }).collect();
             let choices = match name {
                 "protocol" if c.path.starts_with("model effort-map ") => vec!["chat-completions", "responses"],
-                "protocol" | "new-protocol" => vec!["chat-completions", "responses", "messages"],
+                "protocol" => vec!["chat-completions", "responses", "messages"],
                 "agent" if c.path == "skill install" => vec!["hermes"],
                 "agent" => vec!["codex", "pi", "omp", "opencode", "hermes", "dsh"],
                 "state" => vec!["file", "loaded"],
@@ -930,8 +923,9 @@ pub fn catalog() -> Value {
                 "choices": choices,
                 "fields": fields,
                 "field_types": field_types,
-                "repeatable": matches!(name, "set" | "clear" | "endpoint" | "clear-endpoint" | "value" | "weekday" | "date" | "candidate" | "candidate-reasoning-effort" | "clear-candidate-reasoning-effort" | "model"),
-                "switch": matches!(name, "new-codex" | "last" | "gateway" | "empty-values" | "no-browser" | "key-stdin"),
+                "repeatable": matches!(name, "set" | "clear" | "endpoint" | "clear-endpoint" | "value" | "weekday" | "date" | "candidate" | "candidate-reasoning-effort" | "clear-candidate-reasoning-effort" | "model")
+                    || (name == "protocol" && matches!(c.path, "model alias add" | "model alias update")),
+                "switch": matches!(name, "new-codex" | "last" | "empty-values" | "no-browser" | "key-stdin" | "brief"),
             }))
         }).collect();
         json!({
@@ -1054,7 +1048,9 @@ pub fn validate(r: &Request) -> Result<()> {
                 | "candidate"
                 | "candidate-reasoning-effort"
                 | "clear-candidate-reasoning-effort"
-        ) || (key == "model" && path.starts_with("provider input "));
+        ) || (key == "model" && path.starts_with("provider input "))
+            || (key == "protocol"
+                && matches!(path.as_str(), "model alias add" | "model alias update"));
         if values.is_empty()
             || (!repeated && values.len() != 1)
             || ((key == "set" || key == "endpoint") && values.len() % 2 != 0)
@@ -1069,9 +1065,9 @@ pub fn validate(r: &Request) -> Result<()> {
                 | "new-codex"
                 | "key-stdin"
                 | "last"
-                | "gateway"
                 | "empty-values"
                 | "no-browser"
+                | "brief"
         ) && values.as_slice() != ["true"]
         {
             return Err(Error::new(
@@ -1119,13 +1115,21 @@ pub fn validate(r: &Request) -> Result<()> {
             .field(key));
         }
     }
-    for key in ["state", "protocol", "new-protocol", "agent", "snapshot"] {
+    for key in ["state", "protocol", "agent", "snapshot"] {
         if let Some(values) = r.arguments.get(key) {
+            if values.is_empty() {
+                return Err(Error::new(
+                    "invalid_arguments",
+                    "Option occurrence or arity is invalid",
+                )
+                .field(key));
+            }
             let valid = match key {
                 "state" => ["file", "loaded"].contains(&values[0].as_str()),
-                "protocol" | "new-protocol" => {
-                    crate::config::PROTOCOLS.contains(&values[0].as_str())
-                }
+                // `--protocol` is repeatable: every declared value must be known.
+                "protocol" => values
+                    .iter()
+                    .all(|value| crate::config::PROTOCOLS.contains(&value.as_str())),
                 "agent" => {
                     if path == "skill install" {
                         values[0] == "hermes"
@@ -1216,7 +1220,7 @@ mod tests {
             operands: vec!["x".into()],
             arguments: std::collections::BTreeMap::from([(
                 "document".into(),
-                vec!["version=1".into()],
+                vec!["version=2".into()],
             )]),
             dry_run: false,
             if_revision: None,
@@ -1247,6 +1251,64 @@ mod tests {
                 .unwrap()
                 .contains(&json!("dsh"))
         );
+    }
+
+    #[test]
+    fn config_migrate_is_registered_and_alias_protocol_arity_matches_metadata() {
+        let entries = catalog();
+        let find = |operation: &str| {
+            entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["operation"] == operation)
+                .unwrap()
+        };
+        let migrate = find("config migrate");
+        assert_eq!(migrate["mutation"], true);
+        assert_eq!(migrate["dry_run"], true);
+        assert_eq!(migrate["revision_guard"], true);
+        for operation in ["model alias add", "model alias update"] {
+            assert_eq!(
+                find(operation)["argument_metadata"]["protocol"]["repeatable"],
+                true
+            );
+        }
+        assert!(
+            find("model alias remove")["argument_metadata"]
+                .get("protocol")
+                .is_none()
+        );
+        let mut migrate = Request {
+            command: vec!["config".into(), "migrate".into()],
+            operands: vec![],
+            arguments: std::collections::BTreeMap::new(),
+            dry_run: true,
+            if_revision: Some("absent".into()),
+        };
+        validate(&migrate).unwrap();
+        migrate
+            .arguments
+            .insert("protocol".into(), vec!["responses".into()]);
+        assert!(validate(&migrate).is_err());
+        let mut alias = Request {
+            command: vec!["model".into(), "alias".into(), "add".into()],
+            operands: vec!["L0".into()],
+            arguments: std::collections::BTreeMap::from([
+                (
+                    "protocol".into(),
+                    vec!["responses".into(), "chat-completions".into()],
+                ),
+                ("candidate".into(), vec!["p/m".into()]),
+            ]),
+            dry_run: false,
+            if_revision: None,
+        };
+        validate(&alias).unwrap();
+        alias.command = vec!["model".into(), "inspect".into()];
+        alias.operands = vec!["p/m".into()];
+        alias.arguments.remove("candidate");
+        assert!(validate(&alias).is_err());
     }
 
     #[test]

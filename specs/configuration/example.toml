@@ -1,9 +1,9 @@
-# Illustrative private persistence at ~/.tmax/tmax.toml; schema version stays 1.
+# Illustrative private persistence at ~/.tmax/tmax.toml; schema version 2.
 # Illustrative settings, not onboarding input or a file callers must author.
 # Explicit CLI resource arguments create/update settings; Web is optional.
 # Secret references denote provisioned protected storage under ~/.tmax.
 # No clear secrets belong here; these illustrative references are not usable keys.
-version = 1
+version = 2
 
 # Explicit illustrative outbound proxy choice, not a claim that it is running.
 # Direct policy omits [network]; a present table selects its required proxy URL.
@@ -151,10 +151,11 @@ reasoning_options = [{ type = "effort", values = ["low", "high"] }]
 [providers.custom-gateway.models."example-model".effort_map.chat-completions]
 max = "high"
 
-# Alias IDs are caller-chosen names with no built-in rank or candidate membership.
+# An alias is one caller-chosen name declaring one or more native protocols.
+# Each alias keeps one ordered candidate list and no built-in rank.
 [[model_aliases]]
 id = "L0"
-protocol = "chat-completions"
+protocols = ["chat-completions"]
 candidates = [
   "opencode-go/deepseek-v4.1-flash",
   "opencode-go-2/deepseek-v4.1-flash",
@@ -163,22 +164,22 @@ candidates = [
 
 [[model_aliases]]
 id = "L1"
-protocol = "chat-completions"
+protocols = ["chat-completions"]
 candidates = ["opencode-go/glm-5.3-flash"]
 
 [[model_aliases]]
 id = "L2"
-protocol = "chat-completions"
+protocols = ["chat-completions"]
 candidates = ["opencode-go/kimi-k3"]
 
 [[model_aliases]]
 id = "L3"
-protocol = "chat-completions"
+protocols = ["chat-completions"]
 candidates = ["deepseek/deepseek-v4-pro"]
 
 [[model_aliases]]
 id = "deepseek-v4.1-flash"
-protocol = "chat-completions"
+protocols = ["chat-completions"]
 continuity = "session"
 candidates = [
   "opencode-go/deepseek-v4.1-flash",
@@ -189,7 +190,7 @@ candidates = [
 # The settings above also form a standalone gateway configuration without Agents.
 # Absolute paths illustrate native-owned scopes, not defaults or tmax-owned data.
 # Read-only native discovery must establish an actual qualified path before apply.
-# ONE target can contain both upstream and gateway native provider entries.
+# ONE target can contain both direct and relayed native provider entries.
 [agents.omp]
 agent = "omp"
 scope = "/home/example/omp-profile"
@@ -204,16 +205,17 @@ models = [
 ]
 
 # Native display may be tmax/deepseek-v4.1-flash; wire IDs have no native prefix.
+# A relayed entry selects public route names only; expose a concrete upstream
+# model by defining an alias for it, not by nesting a qualified name here.
 # Alias continuity comes from the shared definition, never this selection.
 # This native subset configures the model picker; it is NOT a gateway access list.
 # Application needs the ready local listener and current shared gateway key.
 [agents.omp.providers.tmax]
-gateway = true
+provider = "tmax"
 models = [
   { id = "deepseek-v4.1-flash", protocol = "chat-completions" },
   { id = "L0", protocol = "chat-completions" },
   { id = "L1", protocol = "chat-completions" },
   { id = "L2", protocol = "chat-completions" },
   { id = "L3", protocol = "chat-completions" },
-  { id = "opencode-go-2/deepseek-v4.1-flash", protocol = "chat-completions" },
 ]

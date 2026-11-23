@@ -22,9 +22,9 @@ an assistant or an approval/workflow system.
 | Configuration must not become a task for the caller | Require a complete TOML proposal for every change | Explicit CLI operations cover every setting; TOML remains an internal persistence format, not required authored input |
 | Saving desired settings differs from changing running agents | Watch every file or maintain per-field pending layers | Reload and executed management edits activate the whole valid file, including pending manual changes; native application remains separate |
 | Provider setup should not reconstruct another tool's state | Import providers and credentials from existing agents | Create providers from selected metadata or explicit custom settings; inspect agents only to configure them safely |
-| Agent configuration and inference forwarding are independent | Give each target a direct/gateway mode | Native provider entries refer to upstream access or the tmax gateway; one target can contain both, and the gateway needs no managed target |
+| Agent configuration and inference forwarding are separate concerns | Give each target a direct/gateway mode | Native entries reference a provider; the gateway derives provider `tmax`; one target can contain direct and relayed entries, and the gateway needs no managed target |
 | Consumers need fixed or multi-model access | Require a route for every concrete model or add a separate account pool | Concrete models map directly; model aliases list explicit qualified models selected with existing priority rules |
-| Multiple agents need predictable model choices | Infer candidate groups from alias names or add per-agent priority overrides | Share model priorities and protocol-qualified model aliases; each user-defined alias explicitly names its candidates |
+| Multiple agents need predictable model choices | Infer candidate groups from alias names or add per-agent priority overrides | Share model priorities and model aliases that declare protocols; each user-defined alias explicitly names its candidates |
 | Equal-priority subscriptions should have predictable use | Rotate or balance every new request | Deterministic primary/standby selection; new sessions may use another eligible candidate without moving established ones |
 | Peak pricing should change future selections | Cron jobs rewrite agent configuration or interrupt sessions | Evaluate schedules when selecting a new destination; retain established conversation selections |
 | Existing configuration belongs to the user | Regenerate whole agent config from tmax state | Track owned changes and compare against inputs captured within execution; unrelated settings and concurrent edits must survive |
@@ -82,7 +82,8 @@ an assistant or an approval/workflow system.
 
 Provider and AgentTarget are the principal independently managed objects. CLI
 and Web share their operations and validation. Agent configuration and gateway
-forwarding work independently or together.
+forwarding work independently or together: a relayed entry selects the derived
+gateway provider through the same provider selection rules as any other entry.
 
 ```mermaid
 flowchart TB
@@ -96,9 +97,9 @@ flowchart TB
     Provider -.->|Metadata defaults| Catalog
     Provider -->|Owns| Model
     Alias -->|Selects from| Model
-    Agent -->|Upstream entry| Provider
-    Agent -->|Gateway entry| Gateway
+    Agent -->|Direct or relayed entry| Provider
     Client -->|Requests| Gateway
+    Gateway -.->|Derives| Provider
     Gateway -->|Fixed destination| Model
     Gateway -->|Selected destination| Alias
 ```
@@ -332,8 +333,8 @@ three-way comparison of prior values, tmax-applied values, and current values.
 An edit to a managed field after application is a conflict, not permission to
 replace the whole file with an old backup.
 
-Before applying any native gateway entry, require an explicitly started and ready
-listener. Upstream entries check prerequisites without starting inference or
+Before applying any relayed native entry, require an explicitly started and ready
+listener. Direct entries check prerequisites without starting inference or
 issuing a paid probe. Saving either kind does not apply native files.
 None of these operations kills a conversation or revokes a native session as an
 incidental step.
@@ -353,7 +354,8 @@ dispatch uses declared operations, not unrestricted path concatenation.
 
 The router derives fixed concrete mappings from enabled models, with no
 client-permission filter or separate publication list. Model aliases supply a
-public ID, protocol, explicit candidate list, and continuity policy.
+public route name, declared protocols, explicit candidate list, and continuity
+policy.
 The [selection contract](../model-routing/spec.md) resolves alias candidates and
 their priorities under one snapshot; concrete access stays fixed. Established
 conversations retain their selection, and in-flight execution never changes at

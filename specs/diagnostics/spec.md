@@ -26,13 +26,13 @@ them; success in one row must not supply success in another.
 | Fact | Required distinction |
 | --- | --- |
 | Configuration | The sole authority `~/.tmax/tmax.toml`'s validation result and revision versus the loaded configuration and accepted metadata revisions. Saved, invalid, and saved-but-not-active settings must not appear active. A target with empty native providers/selections or no default is valid but incomplete for native application, not an invalid login source or a blocker for independent gateway inference. |
-| Native application | Not applied, applied, awaiting native reload, conflicted, blocked, or partially applied/recovery-required, with the affected target and applied revision. Written native settings are not proof of running-agent use. |
+| Native application and relayed delivery | Desired-versus-written native state with the affected target and applied revision, kept distinct from each relayed entry's applied delivery: `state` (`current`, `stale`, `blocked`, `unknown`, `not_applied`, or `not_configured`), `revision`, `applied_revision`, and named `reasons`. Availability, delivery, and use stay separate facts under the [product contract](../product/spec.md#availability-delivery-and-use); a written native setting is not proof of running-agent use. Reasons are not merged: `listen_changed`, `key_rotated`, `route_removed`, and `entry_selection_changed` are drift; `entry_references_missing_route`, `native_edit_conflict`, `gateway_not_ready`, and `apply_incomplete` block. The recorded revision is target-scoped over the target's `route/protocol` pairs, so a changed selection protocol is drift. The [CLI contract](../cli/agents/spec.md#agent-result-data) owns the field shape. |
 | Process and listener | Actual daemon identity, authority, executable/management compatibility, and inference/Web listener states under the [daemon contract](../product/spec.md#daemon-service-identity). Distinguish absent, identified compatible, incompatible, unidentified occupied endpoint, and unavailable evidence. A PID or a running Web interface does not prove inference availability or usable upstream authorization. |
 | Startup registration | Saved autostart intent versus this authority's actual OS registration, ownership, and latest reconciliation outcome. Drift is not a failed unrelated edit; explicit repair follows the [configuration contract](../configuration/spec.md#save-reload-and-apply). |
 | Service supervision | Native manager, owned definition, actual process ownership, current recovery state and cause, restart limits, and user-session boundary under the [service contract](../service/spec.md). Installed or enabled is not supervised or ready; requested listeners are not observed running listeners. |
 | Effective agent state | The latest qualified evidence of the running target's native provider entries, each source and endpoint/model selection, and native configuration precedence. Applied files, a requested reload, or a reachable listener alone must not verify that effective state. Unsupported runtime inspection must remain unknown. |
 | Provider authentication | Configured authentication method and login source `auth.via`, when applicable, and locally known credential availability versus a qualified upstream authentication result. A secret reference, readable local secret file, or configured key must not become a verified upstream login. Unknown upstream account identity must remain unverified. |
-| Shared gateway access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled, protocol-qualified publication list. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a saved reference is not proof of a readable key. |
+| Shared gateway access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled publication list with its protocols. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a saved reference is not proof of a readable key. |
 | Model reachability | The exact provider authorization, model, native protocol, transport, and tested capability scope of a successful or failed request. Catalog presence, model discovery, authentication success, and quota-query success must not verify inference or untested capabilities. |
 | Quota freshness | The latest applicable provider observation, its freshness, and the latest refresh outcome. Unknown, stale, unavailable, and manual information must remain distinct from a fresh authoritative observation. Quota, balance, credential expiry, quota reset, and renewal must remain separate facts. |
 | Quota suspension | Automatic routing exclusion for one provider authorization versus user-configured disablement; source-qualified cause, suspension time, known window/reset, next quota check, latest check failure, and explicit manual-resume outcome. A reset announcement is not confirmed recovery. |
@@ -60,8 +60,8 @@ reservations, secret reads, login, or upstream calls. Execution uses current inp
 
 A request that passes through the gateway can provide evidence for that request's
 scope. It does not verify every model, protocol, target, or continuation path.
-Native upstream-source entries send inference directly to the provider, outside
-gateway observation, while gateway-source entries in the same target may send other
+Native direct entries send inference directly to the provider, outside
+gateway observation, while relayed entries in the same target may send other
 traffic through tmax. No gateway history entry is expected for unobserved upstream
 traffic. Missing records must not prove direct access, bypass, inactivity, or
 success; requests may be outside coverage, unobserved, cleared, or evicted.
@@ -526,6 +526,55 @@ outcome, not a lingering in-progress entry or a fabricated provider failure.
 Clearing or evicting history must not clear provider failure state, change quota
 facts, or move established destinations. Priority rules and current failure state
 are explained separately; no diagnostic summary implicitly creates a policy.
+
+### Failure aggregation
+
+Status summaries must name one condition once. Repeated per-request failures and
+rejections must not be repeated row by row; the explicit
+[history listing](../cli/service/diagnostics/spec.md#paid-inference-probes-and-request-history)
+remains the per-request projection.
+
+The daemon's status projection returns `failures`:
+
+| Field | Contract |
+| --- | --- |
+| `state` | `available` while this daemon process supplies retained history. |
+| `groups` | Retained records with `failed` or `rejected` outcome, grouped by reason code and stage. |
+| `omitted_groups` | Number of distinct groups beyond the projection limit. |
+| `repeated` | Number of retained failed or rejected requests that belong to a group with at least two records, including omitted groups. |
+| `stale_shared_key` | Null, or the shared-key rejection condition named once under the table below. |
+| `coverage` | Retained-history coverage from [Session-only bounded history](#session-only-bounded-history). |
+
+One retained group is `{reason_code, stage, outcome, count, first_at, last_at}`:
+
+| Field | Contract |
+| --- | --- |
+| `reason_code` | Recorded reason code, or `unknown` when absent. |
+| `stage` | Recorded stage, or `unknown` when empty. |
+| `outcome` | Outcome of the most recently retained record in the group. |
+| `count` | Retained record count. |
+| `first_at`, `last_at` | Earliest and latest retained receipt times. |
+
+The projection keeps at most eight groups, ordered by count descending and then
+reason code ascending, and counts the remaining groups in `omitted_groups`.
+Different stages or reason codes must not merge.
+
+`stale_shared_key` is the one aggregated shared-key rejection condition:
+`{count, first_at, last_at, reason_code: "stale_shared_key", message, repair}`.
+It sums every retained group whose stage is `shared_key_authentication`. Its
+`repair` is `tmax gateway key show, then update each client's configured key`. A
+summary must present this condition through `stale_shared_key`, must name its
+total count once, and must not repeat the matching requests.
+
+The daemon returns this projection as `data.failures` in
+[`gateway status`](../cli/service/spec.md#daemon-and-listener-data). Root
+[`status`](../cli/configuration/spec.md#status-and-brief) repeats it as
+`data.failures` and keeps the daemon's copy inside `data.daemon`.
+`status --brief` uses `stale_shared_key` for its aggregated blocker. This is
+bounded process-local history under
+[Session-only bounded history](#session-only-bounded-history), not a durable
+audit log; a restarted or unidentified daemon must not supply earlier failure
+evidence.
 
 ## Observable acceptance
 

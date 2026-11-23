@@ -33,6 +33,7 @@ pub(super) fn apply_fields(value: &mut Value, r: &Request, owner: &str) -> Resul
     }
     for pair in sets.as_chunks::<2>().0 {
         field_kind(owner, &pair[0], false)?;
+        guard_selectable_integration(owner, &pair[0], &pair[1])?;
     }
     for field in clears {
         let path: Vec<_> = field.split('.').collect();
@@ -166,6 +167,23 @@ pub(in crate::operations) fn fields(owner: &str) -> &'static [(&'static str, &'s
         _ => &[],
     }
 }
+/// `tmax-gateway` is derived from the gateway configuration; no provider edit may select it.
+fn guard_selectable_integration(owner: &str, field: &str, value: &str) -> Result<()> {
+    if owner == "provider"
+        && field == "integration"
+        && value == crate::provider_integration::GATEWAY_INTEGRATION
+    {
+        return Err(Error::new(
+            "invalid_arguments",
+            &format!(
+                "Integration \"{}\" is derived from the gateway and is not user-selectable",
+                crate::provider_integration::GATEWAY_INTEGRATION
+            ),
+        )
+        .field("integration"));
+    }
+    Ok(())
+}
 fn field_kind(owner: &str, field: &str, clear: bool) -> Result<&'static str> {
     let kind = fields(owner)
         .iter()
@@ -257,7 +275,7 @@ mod tests {
     async fn quota_guard_edits_persist_and_zero_never_saves() {
         let directory = tempfile::tempdir().unwrap();
         let store = crate::storage::Store::at(directory.path().into());
-        let original = "version=1\n[providers.p]\nintegration='deepseek'\n";
+        let original = "version=2\n[providers.p]\nintegration='deepseek'\n";
         store.write_raw("tmax.toml", original.as_bytes()).unwrap();
         let mut request = Request {
             command: vec!["provider".into(), "update".into()],
@@ -306,7 +324,7 @@ mod tests {
         store
             .write_raw(
                 "tmax.toml",
-                b"version=1\n[providers.p]\nintegration='deepseek'\nquota_guard.max_observation_age_seconds=120\n",
+                b"version=2\n[providers.p]\nintegration='deepseek'\nquota_guard.max_observation_age_seconds=120\n",
             )
             .unwrap();
         let request = Request {
@@ -336,8 +354,8 @@ mod tests {
     #[tokio::test]
     async fn clearing_inline_quota_guard_age_keeps_guard_enabled() {
         for text in [
-            "version=1\nproviders = { p = { integration='deepseek', quota_guard = { max_observation_age_seconds=120 } } }\n",
-            "version=1\nproviders = { p = { integration='deepseek', quota_guard.max_observation_age_seconds=120 } }\n",
+            "version=2\nproviders = { p = { integration='deepseek', quota_guard = { max_observation_age_seconds=120 } } }\n",
+            "version=2\nproviders = { p = { integration='deepseek', quota_guard.max_observation_age_seconds=120 } }\n",
         ] {
             let directory = tempfile::tempdir().unwrap();
             let store = crate::storage::Store::at(directory.path().into());
@@ -365,6 +383,35 @@ mod tests {
             let saved = std::fs::read_to_string(store.root.join("tmax.toml")).unwrap();
             assert!(saved.contains("quota_guard"), "{saved}");
         }
+    }
+
+    #[test]
+    fn derived_gateway_integration_is_not_user_selectable() {
+        let mut request = Request {
+            command: vec!["provider".into(), "update".into()],
+            operands: vec!["p".into()],
+            arguments: BTreeMap::from([(
+                "set".into(),
+                vec!["integration".into(), "tmax-gateway".into()],
+            )]),
+            dry_run: true,
+            if_revision: None,
+        };
+        let error = apply_fields(&mut table(), &request, "provider").unwrap_err();
+        assert_eq!(error.code, "invalid_arguments");
+        assert_eq!(error.field.as_deref(), Some("integration"));
+        assert_eq!(
+            error.message,
+            "Integration \"tmax-gateway\" is derived from the gateway and is not user-selectable"
+        );
+        request.arguments = BTreeMap::from([("clear".into(), vec!["integration".into()])]);
+        let mut value = table();
+        value
+            .as_table_mut()
+            .unwrap()
+            .insert("integration".into(), Value::String("deepseek".into()));
+        apply_fields(&mut value, &request, "provider").unwrap();
+        assert!(value.get("integration").is_none());
     }
 
     #[test]

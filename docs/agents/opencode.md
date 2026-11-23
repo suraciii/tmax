@@ -93,7 +93,7 @@ consumer; this does not establish actual endpoint capabilities.
 The custom-model schema cannot express a reasoning-support boolean. tmax never
 emits that unsupported field, prices, or request-body defaults. Effective
 `reasoning_options` effort values project as `variants` entries instead for direct
-native entries; gateway entries use mapped input names under the shared
+native entries; relayed entries use mapped input names under the shared
 [alias reasoning capability](../../specs/integrations/spec.md#alias-reasoning-capability)
 rule. Each entry's `id` and one settings key carry the exact representable name.
 Chat Completions and Responses use `settings.reasoningEffort`; Messages uses

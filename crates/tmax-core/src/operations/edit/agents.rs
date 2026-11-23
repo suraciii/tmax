@@ -58,21 +58,14 @@ pub(super) fn mutate(root: &mut Value, r: &Request, path: &str, info: &mut Json)
                     return Err(error());
                 }
             } else {
-                if arg(r, "provider").is_some() == arg(r, "gateway").is_some() {
-                    return Err(error());
-                }
+                let provider = arg(r, "provider").ok_or_else(error)?;
                 let mut entry = if path.ends_with("add") {
                     table()
                 } else {
                     get(root, &["agents", target, "providers", name])?.clone()
                 };
                 remove(&mut entry, &["provider"])?;
-                remove(&mut entry, &["gateway"])?;
-                if let Some(provider) = arg(r, "provider") {
-                    put(&mut entry, &["provider"], string(provider))?;
-                } else {
-                    put(&mut entry, &["gateway"], Value::Boolean(true))?;
-                }
+                put(&mut entry, &["provider"], string(provider))?;
                 if path.ends_with("add") {
                     put(&mut entry, &["models"], Value::Array(Vec::new()))?;
                     new_named(root, &["agents", target, "providers"], name, entry)?;

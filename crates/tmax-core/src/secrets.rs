@@ -203,14 +203,15 @@ pub fn inventory(store: &Store) -> Result<Value> {
     list_envelopes(store, "secrets", false)
 }
 
-pub fn protect_recovery(store: &Store, bytes: &[u8]) -> Result<String> {
+/// Retain exact configuration bytes before a destructive or format-changing write.
+pub fn protect_recovery(store: &Store, bytes: &[u8], category: &str) -> Result<String> {
     use sha2::{Digest, Sha256};
     let _lock = store.lock("recovery")?;
     let recovery = Recovery {
         config_file: "tmax.toml".into(),
         original_revision: format!("{:x}", Sha256::digest(bytes)),
         byte_count: bytes.len() as u64,
-        rejection_category: "invalid_configuration".into(),
+        rejection_category: category.into(),
     };
     write_envelope(
         store,
@@ -1083,7 +1084,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let store = Store::at(home.path().to_owned());
         let bytes = b"invalid\xffsecret\0configuration";
-        let reference = protect_recovery(&store, bytes).unwrap();
+        let reference = protect_recovery(&store, bytes, "invalid_configuration").unwrap();
         let envelope = load(&store, "recovery", &reference).unwrap();
         assert_eq!(envelope.bytes, bytes);
         let inspected = recovery_inspect(&store, &reference).unwrap();

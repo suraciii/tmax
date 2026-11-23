@@ -62,7 +62,7 @@ rates. Zero price is valid and is not unknown price. `promptCache.short/long`
 are optional positive seconds. `thinkingLevelMap` keys are `off`, `minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`, with string or null values. It is not permission
 to fabricate effort support from `reasoning: true`. For direct entries, tmax
-projects actual effective `reasoning_options` efforts. Gateway entries instead
+projects actual effective `reasoning_options` efforts. Relayed entries instead
 project caller-facing input names under the [shared mapping and alias rules](../../specs/integrations/spec.md#alias-reasoning-capability):
 every native key is written explicitly, holding the exact input name or null.
 Names outside the keys remain omitted, not renamed by the native adapter. Maps

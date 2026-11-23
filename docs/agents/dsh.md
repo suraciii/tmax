@@ -42,14 +42,16 @@ tmax agent restore "$TARGET" --dry-run
 tmax agent restore "$TARGET"
 ```
 
-For a gateway provider entry, use `agent provider add ... --gateway` and select
-its public concrete or alias ID. Name the native entry `tmax` when that name is
+For a relayed entry, use `agent provider add ... --provider tmax` and select a
+public route name. The version-1 `--gateway` selector is removed; convert stored
+entries with `tmax config migrate`. Name the native entry `tmax` when that name is
 free in DSH's shared provider namespace; an existing user adapter route with that
 name must be explicitly moved or removed first, not silently overwritten. Keep
-the direct upstream entry when adding a gateway entry; both can coexist in one
-target. The gateway must already have the matching loaded configuration,
-listener, and shared key; native apply does not start it. Gateway configuration
-and actual runtime continuity qualification are separate.
+the direct entry when adding a relayed one; both can coexist in one target. The
+gateway must already have the matching loaded configuration, listener, and shared
+key; native apply does not start it. Gateway configuration and actual runtime
+continuity qualification are separate. `agent inspect` reports the entry's
+`relayed` flag, base URL, credential reference, and applied delivery state.
 
 Choose the client's protocol explicitly. Prefer `--protocol responses` when the
 upstream declares Responses and the selected public ID publishes it; the native
@@ -173,7 +175,7 @@ array after application blocks reapply. Route-level `compat` remains native-owne
 and survives reapply; as with other later additions, it can block removal of a
 newly inserted plugin during restore.
 
-For direct entries, tmax projects actual upstream declared efforts; for gateway
+For direct entries, tmax projects actual upstream declared efforts; for relayed
 entries it projects caller-facing input names under the
 [shared mapping and alias rules](../../specs/integrations/spec.md#alias-reasoning-capability).
 The native adapter uses exact names and identical wire strings, with maps resolved

@@ -15,9 +15,10 @@ not proof that nothing is running or that no sessions are affected.
 A provider is an independent upstream access instance; multiple providers can use
 the same service or account without proving separate allowances. Each concrete
 model belongs to one provider and is referenced as `provider-id/model-id`. An
-agent target is an independently managed native scope. A model alias is named
-configuration referencing existing models, with optional alias-local reasoning
-effort per candidate; candidates have no independent identity or lifecycle.
+agent target is an independently managed native scope. A model alias is one named
+route that declares native protocols and references existing models, with optional
+alias-local reasoning effort per candidate; candidates have no independent
+identity or lifecycle.
 Account identity and subscription information are optional facts, authentication
 is provider configuration, and conversation bindings are runtime state. An
 integration selects qualified behavior, not a universal service identity.
@@ -77,6 +78,50 @@ and destinations, without repeating a region field.
 
 Historical routing snapshots are normalized separately without erasing stored
 model identities, authorization generations, or observations.
+
+## Configuration format version 2
+
+The authority is `version = 2`. tmax rejects a version-1 file with
+"Configuration format version 1 is unsupported; run `tmax config migrate`"; it
+does not accept both formats and never migrates the file automatically. A model
+alias is one route record per name that declares `protocols` and keeps one
+ordered `candidates` list for every declared protocol.
+
+`tmax config migrate --dry-run` reports the plan and every refusal without
+writing. Run `tmax config migrate` to convert the file; apply is the default when
+`--dry-run` is absent, and there is no `--apply` flag. The command:
+
+1. Merges version-1 records that share an alias `id` into one record only when
+   their `candidates`, `enabled`, `continuity`, `fallback`, and
+   `candidate_reasoning_effort` are identical.
+2. Rewrites every version-1 native provider entry that uses `gateway = true` or
+   its historical `proxy = true` spelling to `provider = "tmax"` with the same
+   models. A relayed entry selects public route names only; an entry that selects
+   a concrete qualified model ID is refused, so define a route for that model or
+   drop the selection. A version-2 entry that still contains either field is
+   rejected as an unknown field.
+3. Validates the complete converted document, stores the exact pre-migration
+   bytes in the recovery area, then saves atomically.
+
+Refused records are named and left untouched; the command exits nonzero and
+writes nothing. On success the result returns an opaque recovery handle for the
+pre-migration bytes. Review or discard it with
+`tmax config recovery list`, `tmax config recovery inspect RECORD`, and
+`tmax config recovery discard RECORD`. Those records retain the exact bytes for
+manual recovery only: there is no restore operation, so restoring a pre-migration
+copy means copying the retained file back by hand. A version-2 file is refused as
+`invalid_arguments` (exit 2) because the configuration already uses the current
+format; migration is not needed and nothing is written.
+
+Migration does not start the gateway and does not rewrite native files. Start the
+gateway and re-apply each affected target:
+
+```sh
+tmax config migrate --dry-run
+tmax config migrate
+tmax gateway start
+tmax agent apply TARGET
+```
 
 ## Add one provider and model
 
@@ -177,9 +222,12 @@ hosted inference or provider entitlement was exercised.
 
 The current `~/.tmax/tmax.toml` authority strictly rejects the former per-model
 and model-alias `tier` fields; tmax does not automatically convert or rewrite
-that authority. If you choose to update it manually, remove each per-model `tier` field and replace each
-alias's `tier` field with a nonempty `candidates` list of exact, already registered
-`provider-id/model-id` names that you choose. Keep the alias ID and protocol.
+that authority. A file with `tier` fields predates format version 2. If you
+choose to update it manually, remove each per-model `tier` field and replace each
+alias's `tier` field with a nonempty `candidates` list of exact, already
+registered `provider-id/model-id` names that you choose. Keep the version-1 alias
+ID and `protocol` field; `tmax config migrate` merges those records into version 2
+afterwards.
 Names such as `L0`, `L1`, and `coding` have no built-in meaning or membership.
 Keep model priorities, time schedules, and ordered rules unchanged. Distinct
 native/vendor service tiers, pricing/context tiers, and subscription-plan metadata
@@ -313,7 +361,7 @@ a public qualified concrete or alias ID. Add `--target TARGET` to assess it for 
 declared native target, optionally with `--agent-provider ENTRY` for an existing
 entry. For an undeclared native scope, use `--agent AGENT --path PATH` instead;
 this does not register or import the scope. Do not mix the two context forms.
-With an upstream-source entry, use its exact unqualified upstream model ID;
+With a direct entry, use its exact unqualified upstream model ID;
 without an entry, concrete IDs must be qualified. No saved native model, default,
 or role selection is required. For example:
 
@@ -343,8 +391,7 @@ tmax model explain PUBLIC_MODEL --protocol PROTOCOL --session HANDLE
 
 The command reports the retained destination or blocker without fresh ranking;
 it does not reserve a session, migrate a conversation, or unblock continuation.
-The handle must match the public model ID and protocol. Session mode rejects an
-upstream-source entry.
+The handle must match the public model ID and protocol. Session mode rejects a direct entry.
 
 Catalog adoption is also explicit. `catalog apply --revision REVISION` applies a
 validated downloaded snapshot; its preview/result compares accepted and candidate
@@ -358,12 +405,12 @@ change endpoint, enablement, or destination settings.
 
 ## Request fallback and temporary provider priority
 
-Fallback is optional on each protocol-qualified stateless alias. These examples
+Fallback is optional on each stateless alias definition. These examples
 assume `gpt-6.1-terra` already references `cpa-us2/gpt-6.1-terra` and
 `llm-us/gpt-6.1-terra`, with CPA priority 2 and LLM priority 1:
 
 ```sh
-tmax model alias update gpt-6.1-terra --protocol responses \
+tmax model alias update gpt-6.1-terra \
   --set continuity stateless --set fallback.http_statuses 429
 tmax provider update cpa-us2 \
   --set failure_policy.errors.http_statuses 429 \
@@ -376,8 +423,9 @@ tmax model explain gpt-6.1-terra --protocol responses --state loaded
 
 The first two CPA 429 responses fall back to another eligible provider. The third
 also triggers a provider-wide replacement priority of 0 for five hours; later
-new selections prefer LLM. Configure fallback separately for each alias and
-protocol. The provider streak is shared across its models, not copied per alias.
+new selections prefer LLM. Fallback belongs to the route definition and applies
+to every declared protocol. The provider streak is shared across its models, not
+copied per alias.
 No quota API or asserted remaining balance is needed; 429 is a selected failure
 condition, not proof of exhausted allowance. Configuring a policy does not start
 the gateway or change native agent files.
@@ -400,7 +448,7 @@ tmax provider failure-reset cpa-us2
 To remove the policies:
 
 ```sh
-tmax model alias update gpt-6.1-terra --protocol responses --clear fallback
+tmax model alias update gpt-6.1-terra --clear fallback
 tmax provider update cpa-us2 --clear failure_policy
 ```
 
@@ -538,16 +586,23 @@ scope's qualified owner; never copy native tokens into tmax or another agent.
 
 ## Gateway naming upgrade
 
-Use `tmax gateway ...`, `tmax agent provider add ... --gateway`, and the
-`[gateway]` configuration table. Structured operation names, result fields,
-reason codes, Web navigation (`#gateway`), and the explicit key endpoint
-(`/api/gateway-key/reveal`) use the same name. The old model-service command
-and flag spellings are no longer accepted; update scripts and API clients.
+Use `tmax gateway ...` and the `[gateway]` configuration table. Structured
+operation names, result fields, reason codes, Web navigation (`#gateway`), and
+the explicit key endpoint (`/api/gateway-key/reveal`) use the same name. The old
+model-service command and flag spellings are no longer accepted; update scripts
+and API clients.
+
+A managed target reaches the gateway through the derived provider: use
+`tmax agent provider add ... --provider tmax` and select public route names. The
+version-1 `--gateway` entry selector is removed; see
+[Configuration format version 2](#configuration-format-version-2) for conversion.
+A version-2 entry that keeps a removed `gateway` or `proxy` field is rejected as
+an unknown field.
 
 Existing configuration and shared-key records remain readable. Reads and previews
 preserve the saved file; the next explicit configuration save canonicalizes the
-two historical field names while retaining key references and values. Supplying
-old and new names together is rejected. See the
+historical root `[proxy]` name while retaining key references and values.
+Supplying old and new root names together is rejected. See the
 [configuration contract](../specs/configuration/spec.md#format-and-authority).
 The independent outbound-network command remains `tmax network proxy URL`.
 
@@ -556,6 +611,36 @@ The independent outbound-network command remains `tmax network proxy URL`.
 The local gateway is independent of managed Pi/Codex targets. Direct clients do not
 need an `agent` declaration or native apply. A concrete qualified model can be
 used directly; aliases are optional.
+
+### The gateway provider
+
+Configuring the gateway also contributes one derived provider named `tmax`. It is
+not stored configuration: the gateway owns its listen address, shared key
+reference, and route set, and its models are the gateway's public route names.
+A managed target reaches the gateway by referencing that provider.
+
+```sh
+tmax agent provider add dsh-main tmax --provider tmax
+tmax agent model add --protocol responses dsh-main tmax glm-5.4
+tmax agent apply dsh-main
+```
+
+Provider operations cannot create, rename, or remove provider `tmax`, and model
+operations cannot edit its derived model set. `tmax provider inspect tmax` reports
+`source: gateway`, the derived endpoints and route names, and a `delivery` block
+with the current delivery revision and each declared relayed entry's applied
+delivery state and named drift reasons. `tmax gateway remove` is refused while a
+declared target entry still references the provider; remove those entries first.
+The version-1 `--gateway` entry selector is removed; `tmax config migrate`
+rewrites a stored version-1 entry to `provider = "tmax"`.
+
+Consumers such as the DSH plugin read this inventory instead of computing their
+own route set: `agent list` for the declared target that matches a home and its
+path, `agent inspect TARGET` for each entry's `relayed` flag, `base_url`,
+`credential_ref`, and applied delivery state, and `gateway status` for daemon
+discovery state, listener readiness, and listen address. Native application
+remains `tmax agent apply TARGET`; there is no separate projection or connect
+command.
 
 ### Connecting an unmanaged client
 
@@ -571,8 +656,8 @@ provider instead:
   attached terminal with `tmax gateway key show` and paste it into the client; no
   generated or revealed key belongs in examples, argv, environment, or files.
 - **Model** — any ID published for the current key: a concrete
-  `PROVIDER_ID/MODEL_ID` or an enabled alias, restricted to the protocol it
-  publishes. No Agent registration, native selection, client registry, or
+  `PROVIDER_ID/MODEL_ID` or an enabled alias. A route serves only the protocols
+  it declares. No Agent registration, native selection, client registry, or
   allowlist entry is involved.
 
 ```sh
@@ -602,8 +687,8 @@ destination when the upstream rejects a combination.
 The client chooses the protocol in its configuration and request path. Prefer
 Responses when upstream declarations and the client both support it; the gateway
 does not negotiate or switch protocols. Concrete IDs publish the provider's
-resolved protocols, while an alias publishes only its explicitly configured
-protocol. `agent model add ... --protocol responses` selects Responses for a
+resolved protocols, while an alias publishes only the protocols it declares.
+`agent model add ... --protocol responses` selects Responses for a
 native client; it is not a gateway-wide preference or a change to saved Chat
 Completions selections. Use separate DSH provider entries for different protocols.
 
@@ -613,13 +698,31 @@ The default public ID can be the concrete model:
 PUBLIC_ID="$PROVIDER_ID/$MODEL_ID"
 ```
 
-To use a stable alias instead, create it before starting the gateway:
+To use a stable alias instead, create it before starting the gateway. A route
+declares one or more protocols and shares one ordered candidate list across them:
 
 ```sh
 PUBLIC_ID=my-model
-tmax model alias add "$PUBLIC_ID" --protocol chat-completions \
+tmax model alias add "$PUBLIC_ID" --protocol chat-completions --protocol responses \
   --candidate "$PROVIDER_ID/$MODEL_ID"
 ```
+
+A request uses one declared protocol; a candidate that does not expose it cannot
+serve that request, and the gateway does not translate between protocols. To
+replace the declared protocol list later, repeat `--protocol` with the complete
+new list; omit it to keep the current list:
+
+```sh
+tmax model alias update "$PUBLIC_ID" --protocol chat-completions
+```
+
+`tmax model list --kind alias` reports one row per route with `protocols` (the
+declared list), `published_protocols` (empty while disabled), `enabled`, and
+`continuity`; `--protocol P` filters to routes that declare `P`.
+`tmax model inspect ROUTE` reports the full definition and treats `--protocol` as
+an optional projection filter: without it, the report uses the first declared
+protocol and names it in `protocol`, and an undeclared protocol is an
+`invalid_arguments` error. An unknown route ID is `unknown_resource`.
 
 To pin an effort for a particular candidate, update that candidate's alias
 entry. The options are repeatable for distinct candidates; each effort must be
@@ -630,13 +733,15 @@ model map when that candidate is selected. Without a fixed override, an explicit
 model map applies to supplied input, otherwise identity or omission is preserved.
 The candidate advertises only its fixed upstream name; common alias choices are
 intersected after maps and fixed restrictions. Effort never chooses a different
-backend. Chat Completions and Responses support this; Messages does not.
+backend. Chat Completions and Responses support this; Messages does not. The
+route must declare Chat Completions or Responses; a route that declares only
+Messages cannot configure candidate effort.
 
 ```sh
 CANDIDATE="$PROVIDER_ID/$MODEL_ID"
-tmax model alias update "$PUBLIC_ID" --protocol chat-completions \
+tmax model alias update "$PUBLIC_ID" \
   --candidate-reasoning-effort "$CANDIDATE=$SUPPORTED_EFFORT"
-tmax model alias update "$PUBLIC_ID" --protocol chat-completions \
+tmax model alias update "$PUBLIC_ID" \
   --clear-candidate-reasoning-effort "$CANDIDATE"
 ```
 
@@ -761,6 +866,146 @@ expecting upstream completion. Synthetic loopback checks qualify local wiring
 only. The exact hosted scenario and its native request-control qualifications are
 recorded in the owning [Go evidence section](../specs/integrations/opencode-go/spec.md#sources-and-evidence-status);
 they do not establish every client's model access or entitlement.
+
+## Status, failure history, and gateway verification
+
+`tmax status` reads saved configuration and retained daemon facts; it does not
+resolve secrets, refresh providers, sign in, or start a service. Use `--brief` for
+the answer an operator needs first:
+
+```sh
+tmax status --brief
+```
+
+The result is the normal envelope; `data` always contains `brief: true`, `usable`,
+`blocker`, and `next_action`. Read it in that order:
+
+| Field | Meaning |
+| --- | --- |
+| `usable` | `false` when any known blocker exists, `true` when none does, `null` only when an unidentified or unavailable daemon is the remaining uncertainty for a relayed entry. |
+| `blocker` | `null` when usable; otherwise `{code, message, field, next_action}`. `message` names the concrete condition, and `field` is set when an invalid configuration field caused it. |
+| `next_action` | The repair command to run, or `null` when usable. |
+
+Only the first blocker is reported. Common codes and their next actions:
+
+| Blocker code | Meaning | Next action |
+| --- | --- | --- |
+| `configuration_format` | The saved file uses an unsupported format version. | `tmax config migrate` |
+| `configuration_invalid` | The saved file cannot be read or validated. | `tmax config validate` |
+| `nothing_configured` | No configuration file exists or it declares no providers. | `tmax provider add --help` |
+| `daemon_identity_unavailable` | Relayed entries need daemon evidence that is unidentified, incompatible, or unavailable. | `tmax gateway status` |
+| `gateway_not_ready` | The gateway is configured but not ready. | `tmax gateway start` |
+| `key_rotated_not_reloaded` | The identified daemon loaded a different shared-key reference than saved configuration. | `tmax gateway restart` |
+| `delivery_unknown` | Retained delivery state for a relayed entry could not be read. | `tmax agent inspect TARGET` |
+| `delivery_stale` | An applied relayed target is stale. | `tmax agent apply TARGET` |
+| `delivery_blocked` | An applied relayed target is blocked. | `tmax agent apply TARGET` |
+| `stale_shared_key` | Clients are presenting a shared key this gateway rejects. | `tmax gateway key show` |
+
+A direct-only installation stays usable while the daemon is stopped, and the
+daemon-identity and gateway-readiness blockers apply only when a declared relayed
+entry needs the gateway. `daemon_identity_unavailable` applies only when a daemon
+reports `discovery_state` `unidentified`, `incompatible`, or `unavailable`; an
+absent daemon reports `discovery_state: absent`, skips that rung, and reports
+`gateway_not_ready` instead. The `delivery_stale` and `delivery_blocked` messages
+name the affected target and its drift or block reasons, so replace `TARGET` with
+the reported ID. `stale_shared_key` is one aggregated condition;
+`tmax status --brief` does not repeat it per rejected request. Full `tmax status`
+keeps the detailed fields and adds `data.failures`; a null `data.failures` means
+no daemon supplied failure history.
+
+A `delivery_unknown` blocker means the retained delivery state of a relayed entry
+could not be read; run `tmax agent inspect TARGET` for the reason code. Recorded
+delivery facts that are missing or outdated — for example after a format
+migration — are refreshed by an unchanged `tmax agent apply TARGET`, after which
+`agent inspect` and `provider inspect tmax` stop reporting `unknown`.
+
+### Reading failure history
+
+`failures` is the daemon's aggregated projection of retained requests under the
+[failure aggregation contract](../specs/diagnostics/spec.md#failure-aggregation).
+Full `tmax status` and `tmax gateway status` expose it as `data.failures` when a
+compatible daemon supplies retained history:
+
+- `groups` — retained failed and rejected requests grouped by reason code and
+  stage, with `count`, `first_at`, `last_at`, and the latest `outcome`. The largest
+  groups are kept and the rest are counted in `omitted_groups`.
+- `repeated` — failed or rejected requests that belong to a group with at least
+  two records. `repeated: 0` means no condition occurred twice in the retained
+  window; it does not mean requests succeeded.
+- `stale_shared_key` — null, or the shared-key rejection condition named once:
+  `count`, `first_at`, `last_at`, `reason_code`, `message`, and `repair`.
+- `coverage` — the retained-history scope and limits.
+
+This history is bounded in process memory, not a durable audit log. It covers only
+what the current gateway process retained; a restart drops it, and a replacement
+process reports no earlier failure coverage. Use `tmax history list` when
+per-request rows are needed.
+
+### Verifying gateway access
+
+`tmax provider refresh tmax --scope SCOPE` checks the derived gateway provider with
+`SCOPE` equal to `auth`, `models`, `quota`, or `all`:
+
+| Scope | What a successful check proves | Bound |
+| --- | --- | --- |
+| `auth` | The shared key is accepted by the running gateway. | One authenticated `GET /v1/models`, 5 s |
+| `models` | One bounded inference request per enabled route reaches the gateway. | One request per route, 60 s per route |
+| `quota` | Observed usage from the identified gateway process. | No upstream contact |
+
+```sh
+tmax provider refresh tmax --scope auth
+tmax provider refresh tmax --scope models
+tmax provider refresh tmax --scope all --dry-run
+```
+
+Read `data.checks`: each check reports its own `scope`, `outcome`, and
+`boundary: reachability_only`. `outcome: completed` with
+`proof: shared_key_accepted` means the gateway accepted the current key. A failed
+auth check names a reason code and usually a `repair`:
+`gateway_not_ready` (`tmax gateway start`), `key_rotated_not_reloaded`
+(`tmax gateway restart`), or `shared_key_rejected` (`tmax gateway key replace`).
+The `models` check reports one `{route, protocol, outcome, reason_code?}` per
+enabled route plus `summary: {routes, completed, failed}` and
+`boundary: reachability_only`; when the gateway is not ready it reports
+`not_executed` and lists the route names without sending requests, and when the
+daemon loaded a different shared-key reference every route reports
+`key_rotated_not_reloaded` with repair `tmax gateway restart`. The `quota`
+check returns observed usage with `proof: observed_gateway_usage` and
+`upstream_contact: false`; without a daemon it reports
+`not_executed`/`no_daemon_history`.
+
+A failed check does not stop the other requested scopes; the result reports every
+check and reports `observation_failed` with exit 4 when a check failed or could
+not run. A `not_executed` check did not run, so do not read it as success.
+`--dry-run` reports the planned checks without contacting the gateway, reading the
+key, or contacting the daemon.
+
+A successful refresh proves reachability from tmax only. It does not prove that an
+Agent target loaded or used the configuration, that an untested protocol works, or
+that observed usage is a provider-side balance.
+
+### Shared-key rotation
+
+Replacing the shared key affects every applied relayed target and every unmanaged
+client that holds the previous key:
+
+1. Run `tmax gateway key replace`. The result reports `gateway_key` and
+   `rotation.affected_targets`, `rotation.next_action`, and
+   `rotation.unmanaged_clients`.
+2. Make sure the running listener loaded the replacement. A saved replacement
+   activates automatically in a running daemon; after a replacement made while the
+   gateway is stopped, the next `tmax gateway start` loads it. If `tmax status
+   --brief` reports `key_rotated_not_reloaded`, run `tmax gateway restart`.
+3. Run `tmax agent apply TARGET` for every affected target. Each one is stale with
+   reason `key_rotated` until it is applied again; `rotation.next_action` names the
+   first.
+4. Update each unmanaged client with the new key. tmax cannot enumerate them;
+   `rotation.unmanaged_clients` states this explicitly. Deliver the new value with
+   `tmax gateway key show`.
+
+A client that still uses the previous key produces repeated shared-key rejections,
+which `tmax status --brief` reports as one `stale_shared_key` blocker until the
+client is updated.
 
 ## Manual quota inputs and ordered rules
 
@@ -957,11 +1202,11 @@ returned exit 3 / `awaiting_native_reload`; the installed Pi parser recognized
 the selected model. This proves local native configuration parsing, not hosted
 credentials, entitlement, or permission.
 
-For a Pi client that should use the gateway, add an explicit gateway entry, select
-the public model ID, set it as default, then apply the target:
+For a Pi client that should use the gateway, add a relayed entry, select a public
+route name, set it as default, then apply the target:
 
 ```sh
-tmax agent provider add "$TARGET" local --gateway
+tmax agent provider add "$TARGET" local --provider tmax
 tmax agent model add "$TARGET" local "$PUBLIC_ID" --protocol chat-completions
 tmax agent default set "$TARGET" local "$PUBLIC_ID" --protocol chat-completions
 tmax agent apply "$TARGET"
@@ -1055,7 +1300,7 @@ routes remain independent and untouched. tmax preserves unrelated HOME-level
 fields and expressions without enumerating, selecting, creating, or managing
 profiles. Provider configurations from all adapters share DSH's LLM runtime;
 native provider names must be globally unique, not automatically merged. Direct
-upstream and gateway entries may coexist. Runtime overlays remain outside
+and relayed entries may coexist. Runtime overlays remain outside
 tmax's ownership. The [DSH home boundary](../specs/integrations/spec.md#dsh-home-boundary)
 owns the application and recovery rules.
 

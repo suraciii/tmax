@@ -113,6 +113,8 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             | "compatibility_unavailable"
             | "acquisition_in_progress"
             | "recovery_required"
+            | "referenced_resource"
+            | "gateway_not_configured"
             | "native_default_effort_unrepresentable"
     ) {
         3
@@ -123,6 +125,8 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             code,
             "unresolved_reference"
                 | "unknown_resource"
+                | "reserved_resource"
+                | "migration_refused"
                 | "unsupported_operation"
                 | "unsupported_source"
                 | "native_schema_unsupported"
@@ -294,5 +298,33 @@ mod tests {
         assert_eq!(response.exit_code, 3);
         assert_eq!(response.body["status"], "blocked");
         assert!(response.body["data"].get("_status").is_none());
+    }
+
+    #[test]
+    fn migration_refusals_are_actionable_input_errors() {
+        let response = error_response(
+            "config migrate",
+            Error::new("migration_refused", "Migration refused for 1 object").field("version"),
+            true,
+        );
+        assert_eq!(response.exit_code, 2);
+        assert_eq!(response.body["status"], "error");
+        assert_eq!(response.body["blockers"][0]["code"], "migration_refused");
+    }
+
+    #[test]
+    fn reserved_and_prerequisite_codes_use_the_documented_exits() {
+        for (code, exit) in [
+            ("reserved_resource", 2),
+            ("referenced_resource", 3),
+            ("gateway_not_configured", 3),
+        ] {
+            let response = error_response(
+                "agent provider add",
+                Error::new(code, "synthetic").field("provider"),
+                false,
+            );
+            assert_eq!(response.exit_code, exit, "{code}");
+        }
     }
 }

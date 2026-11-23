@@ -1665,7 +1665,7 @@ mod tests {
         config.model_aliases.push(config::ModelAlias {
             candidate_reasoning_effort: Default::default(),
             id: "L0".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: vec!["go/m".into()],
             enabled: true,
             continuity: None,
