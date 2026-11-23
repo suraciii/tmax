@@ -16,13 +16,19 @@ export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhig
 // `PiAiAdapter` reads these resolved scalars on every stream; `llm-pi-ai` does
 // not export its defaults, so the profile plugin mirrors them. Values match
 // `@deepseek-ai/dsh-llm-pi-ai` 0.2.2-rc.5 (src/config.ts): a missing
-// `streamIdleTimeoutMs` reaches `idleWatchdog` and fails the stream.
+// `streamIdleTimeoutMs` reaches `idleWatchdog` and fails the stream, and a
+// missing `requestImageBudgetCount` makes the per-image allocation
+// `Math.floor(maxRequestImageBytes / undefined / 4) * 3` (NaN).
 export const RESOLVED_PROFILE_DEFAULTS = {
   streamIdleTimeoutMs: 300_000,
   maxRequestImageBytes: 20 * 1024 * 1024,
   maxRequestImages: 50,
   imageOffloadCountQuantum: 10,
+  requestImageBudgetCount: 20,
   requestImagePixelBudget: 2048 * 2048,
+  // `maxImageBytes` is the resolved field the image policy reads; the
+  // `requestImageMaxBytes` alias mirrors the configuration input name.
+  maxImageBytes: 1024 * 1024,
   requestImageMaxBytes: 1024 * 1024,
 }
 

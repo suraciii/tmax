@@ -1,106 +1,532 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+
 import { apply } from '../index.js'
+import { CONNECT_TIMEOUT_MS, INVENTORY_TIMEOUT_MS, REFRESH_TIMEOUT_MS, resolveHome } from '../host/cli.js'
+import { composeInventory, readInventory } from '../host/inventory.js'
+import { hasHomeEntry, normalizeManageRoutes, providerIds } from '../host/ownership.js'
+import { normalizeDaemonDiscovery, normalizeSharedKeyState } from '../host/snapshot.js'
 
-const HOME = '/tmp/dsh-home'
+// ---------------------------------------------------------------------------
+// Fixtures: the reviewed state contract and the latest CLI envelopes behind it.
 
-const ok = data => ({ code: 'ok', status: 'success', data })
+const fixture = JSON.parse(await readFile(new URL('./fixtures/state.json', import.meta.url), 'utf8'))
+const fixtureCase = fixture.cases.connectedHomeOwned
 
-const inspect = {
-  target: 'dsh-main',
-  agent: 'dsh',
-  path: HOME,
-  configuration_revision: 'rev-1',
-  providers: [{
-    name: 'tmax',
-    source: { provider: 'tmax' },
-    relayed: true,
-    base_url: 'http://127.0.0.1:17840',
-    credential_ref: 'TMAX_TEST',
-    models: [
-      { id: 'public-model', protocol: 'responses' },
-      { id: 'text-only', protocol: 'responses' },
-      { id: 'no-context', protocol: 'responses' },
-    ],
-  }],
-  default: { provider: 'tmax', id: 'public-model', protocol: 'responses' },
-  native_projection: [{
-    name: 'tmax',
-    source: { provider: 'tmax' },
-    models: [{
-      id: 'public-model',
-      protocol: 'responses',
-      capabilities: { contextWindow: 200000, input: ['text', 'image'], reasoningEfforts: { low: 'low', high: 'high' } },
-      efforts: ['low', 'high'],
-      projection: { state: 'projected', fields: {} },
-    }, {
-      id: 'text-only',
-      protocol: 'responses',
-      capabilities: { contextWindow: 1000 },
-      efforts: [],
-      projection: { state: 'projected', fields: {} },
-    }, {
-      id: 'no-context',
-      protocol: 'responses',
-      capabilities: {},
-      efforts: [],
-      projection: { state: 'projected', fields: {} },
-    }],
-  }],
-  applied_state: 'applied_reload_pending',
-  blockers: [],
-}
-
-const gateway = {
-  daemon: { discovery_state: 'compatible', reason_code: null },
-  gateway: { ready: true, listen: '127.0.0.1:17840', key_ref: 'secret:gateway', config_revision: 'rev-1' },
-}
-
-const stopped = {
-  daemon: { discovery_state: 'absent', reason_code: null },
-  gateway: { ready: false, listen: null, key_ref: null, config_revision: null },
-}
-
-/**
- * Write a fake `tmax` executable. `commands` maps a command path ("agent list")
- * to one envelope, or to `{envelope, exitCode}` for a rejection that exits
- * nonzero. Every invocation appends its arguments to a log file.
- */
-async function fakeTmax(commands) {
-  const directory = await mkdtemp(join(tmpdir(), 'tmax-test-'))
-  const path = join(directory, 'tmax')
-  const callLog = join(directory, 'calls.log')
-  const arms = Object.entries(commands).map(([command, result]) => {
-    const envelope = result.envelope ?? result
-    const exitCode = result.exitCode ?? 0
-    const json = JSON.stringify(envelope).replaceAll("'", "'\\''")
-    return `    "${command}") printf '%s\\n' '${json}'; exit ${exitCode} ;;`
-  })
-  await writeFile(path, [
-    '#!/bin/sh',
-    `printf '%s\\n' "$*" >> '${callLog}'`,
-    'case "$1 $2" in',
-    ...arms,
-    `    *) printf '%s\\n' '{"code":"invalid_arguments","status":"error"}'; exit 2 ;;`,
-    'esac',
-    '',
-  ].join('\n'))
-  await chmod(path, 0o755)
+/** The one target this DSH home declares. `__HOME__` is substituted per test. */
+function agentList() {
   return {
-    path,
-    calls: async () => (await readFile(callLog, 'utf8')).split('\n').filter(Boolean),
+    code: 'ok',
+    status: 'success',
+    data: {
+      agents: [{
+        target: 'dsh-main',
+        agent: 'dsh',
+        path: '__HOME__',
+        provider_count: 1,
+        model_count: 3,
+        default_configured: true,
+      }],
+    },
   }
 }
 
-function fakeContext({ credential = 'test-key' } = {}) {
-  const state = { routes: [], tools: [], skills: [], events: [], effects: [], adapterOptions: undefined, httpRoutes: [] }
+/** `tmax agent inspect TARGET`: native entries, delivery facts, capabilities. */
+function agentInspect(overrides = {}) {
+  return {
+    code: 'ok',
+    status: 'success',
+    data: {
+      target: 'dsh-main',
+      agent: 'dsh',
+      path: '/tmp/dsh',
+      scope_state: 'available',
+      scope_reason_code: null,
+      configuration_revision: 'rev-1',
+      providers: [{
+        name: 'tmax',
+        source: { provider: 'tmax' },
+        relayed: true,
+        base_url: 'http://127.0.0.1:17840',
+        credential_ref: 'TMAX_TEST',
+        applied_delivery: null,
+        models: [
+          { id: 'public-model', protocol: 'responses' },
+          { id: 'text-only', protocol: 'responses' },
+          { id: 'no-context', protocol: 'responses' },
+        ],
+      }],
+      default: { provider: 'tmax', id: 'deepseek-v4.1-flash', protocol: 'responses', effort: 'max' },
+      roles: {},
+      native_projection: [{
+        name: 'tmax',
+        source: { provider: 'tmax' },
+        models: [
+          {
+            id: 'public-model',
+            protocol: 'responses',
+            capabilities: { contextWindow: 200000, input: ['text', 'image'], reasoningEfforts: { max: 'max' } },
+            efforts: ['max'],
+            projection: { fields: {} },
+          },
+          { id: 'text-only', protocol: 'responses', capabilities: { contextWindow: 1000 }, efforts: [], projection: { fields: {} } },
+          { id: 'no-context', protocol: 'responses', capabilities: {}, efforts: [], projection: { fields: {} } },
+        ],
+      }],
+      native_default: {
+        state: 'available',
+        fields: { provider: 'tmax', model: 'deepseek-v4.1-flash', effort: 'max', present: true },
+      },
+      installation: {
+        executable: '/tmp/bin/dsh',
+        version: '0.2.3-alpha.2',
+        state: 'detected',
+        source: 'https://github.com/deepseek-ai/deepseek-harness',
+      },
+      applied_state: 'unknown',
+      pending_native_changes: null,
+      blockers: [{
+        code: 'gateway_not_ready',
+        field: null,
+        message: 'Explicitly start the configured gateway and activate the matching complete snapshot and shared key before native application',
+      }],
+      ...overrides,
+    },
+  }
+}
+
+/** `tmax gateway status`: daemon identity, gateway readiness, supervision. */
+function gatewayStatus(overrides = {}) {
+  return {
+    code: 'ok',
+    status: 'success',
+    data: {
+      daemon: {
+        discovery_state: 'unidentified',
+        reason_code: 'daemon_identity_unavailable',
+        identity: null,
+        inference: null,
+        web: null,
+        caller_version: '0.1.0',
+      },
+      gateway: { ready: false, listen: null, key_ref: null, config_revision: null },
+      supervision: { state: 'unavailable', reason_code: 'service_manager_unavailable' },
+      autostart: { saved_intent: true, registration: 'unavailable', unit_matches: false },
+      shared_key: { loaded_reference: null, loaded_state: 'absent' },
+      publication: { snapshot_state: 'absent', model_count: null },
+      ...overrides,
+    },
+  }
+}
+
+/** `tmax status`: authority (data directory) and the answering version. */
+function tmaxStatus(overrides = {}) {
+  return {
+    code: 'ok',
+    status: 'success',
+    data: {
+      config_path: '/tmp/tmax/tmax.toml',
+      file_revision: 'rev-1',
+      configuration_state: 'valid',
+      providers: 2,
+      targets: 1,
+      daemon: gatewayStatus().data,
+      failures: null,
+      ...overrides,
+    },
+  }
+}
+
+function providerList() {
+  return {
+    code: 'ok',
+    status: 'success',
+    data: {
+      revision: 'rev-1',
+      providers: [
+        {
+          id: 'kimi',
+          name: 'Kimi Coding Plan',
+          enabled: true,
+          authentication: 'api-key',
+          affected_targets: 3,
+          observations: {
+            billing_state: 'observed',
+            observations: [{ scope: 'quota', state: 'observed', last_attempt_outcome: 'completed', last_attempt_reason_code: null }],
+          },
+          quota_suspension: { state: 'unsupported' },
+        },
+        {
+          id: 'cpa-us2',
+          name: null,
+          enabled: true,
+          authentication: 'api-key',
+          affected_targets: 3,
+          observations: {
+            billing_state: 'unknown',
+            observations: [{ scope: 'quota', state: 'unknown', last_attempt_outcome: 'unavailable', last_attempt_reason_code: 'unsupported_source' }],
+          },
+          quota_suspension: { state: 'unsupported' },
+        },
+      ],
+    },
+  }
+}
+
+function kimiInspect() {
+  return {
+    code: 'ok',
+    status: 'success',
+    data: {
+      id: 'kimi',
+      source: 'upstream',
+      provider: {
+        enabled: true,
+        integration: 'kimi-code-plan-cn',
+        overrides: { name: 'Kimi Coding Plan' },
+        auth: { method: 'api-key' },
+        subscription: null,
+      },
+      observations: {
+        account_identity: null,
+        billing: {
+          kind: 'plan_allowance',
+          state: 'observed',
+          dashboard: 'https://www.kimi.com/code/console',
+          freshness: { state: 'unqualified' },
+          observation: { observed_at: '2026-11-23T06:26:05Z' },
+          display: {
+            notes: ['counters_unit_unqualified', 'usage_and_limits_may_overlap'],
+            rows: [{
+              label: { key: 'weekly_allowance' },
+              basis: 'counters',
+              counters: { limit: '100', remaining: '100' },
+              reset: { kind: 'provider_timestamp', at: '2026-11-26T15:42:16Z' },
+            }],
+          },
+        },
+      },
+      quota_suspension: { state: 'unsupported' },
+    },
+  }
+}
+
+function cpaInspect() {
+  return {
+    code: 'ok',
+    status: 'success',
+    data: {
+      id: 'cpa-us2',
+      source: 'upstream',
+      provider: { enabled: true, integration: 'custom', overrides: {}, auth: { method: 'api-key' }, subscription: null },
+      observations: {
+        account_identity: null,
+        billing: { kind: 'unknown', state: 'unknown', dashboard: '', freshness: { state: 'missing' }, observation: null, display: null },
+      },
+      quota_suspension: { state: 'unsupported' },
+      failure_state: { state: 'not_configured', consecutive_failures: 0, active_priority: null, expires_at: null, reason_code: null },
+    },
+  }
+}
+
+function configValidate() {
+  return { code: 'ok', status: 'success', data: { valid: true, revision: 'rev-1', snapshot_state: 'available' } }
+}
+
+function explain(id) {
+  if (id === 'public-model') {
+    return {
+      code: 'ok',
+      status: 'success',
+      data: {
+        selection: { qualified_model: 'opencode-go-2/public-model', provider: 'opencode-go-2', model: 'public-model', priority: 1 },
+        priority_evaluations: [
+          { qualified_model: 'opencode-go/public-model', priority_evaluation: { effective_priority: 0 } },
+          { qualified_model: 'opencode-go-2/public-model', priority_evaluation: { effective_priority: 1 } },
+        ],
+        excluded_candidates: [],
+      },
+    }
+  }
+  if (id === 'text-only') {
+    return {
+      code: 'ok',
+      status: 'success',
+      data: {
+        selection: null,
+        priority_evaluations: [],
+        excluded_candidates: [{ qualified_model: 'elsewhere/text-only', reason_code: 'compatibility_unavailable' }],
+      },
+    }
+  }
+  return { code: 'ok', status: 'success', data: { selection: null, priority_evaluations: [], excluded_candidates: [] } }
+}
+
+function refreshOk(id) {
+  return {
+    code: 'ok',
+    status: 'success',
+    data: { provider: id, checks: [{ scope: 'quota', outcome: 'completed', reason_code: null, published: true }] },
+  }
+}
+
+function refreshDryRun(id) {
+  return {
+    code: 'dry_run_ready',
+    status: 'dry_run',
+    data: { provider: id, checks: [{ scope: 'quota', outcome: 'not_executed', reason_code: null, publication: 'not_performed' }] },
+  }
+}
+
+function refreshFailed(id) {
+  return {
+    code: 'observation_failed',
+    status: 'incomplete',
+    data: { provider: id, checks: [{ scope: 'quota', outcome: 'failed', reason_code: 'transport_error', published: false }] },
+    __exit: 4,
+  }
+}
+
+function refreshUnsupported(id) {
+  return {
+    code: 'observation_failed',
+    status: 'incomplete',
+    data: { provider: id, checks: [{ scope: 'quota', outcome: 'unavailable', reason_code: 'unsupported_source', published: false }] },
+    __exit: 4,
+  }
+}
+
+/** `tmax agent apply TARGET --dry-run`: a completed preview, never a write. */
+function connectDryRun() {
+  return {
+    code: 'dry_run_ready',
+    status: 'dry_run',
+    data: {
+      target: 'dsh-main',
+      agent: 'dsh',
+      path: '/tmp/dsh',
+      dry_run: true,
+      files: [{ path: '/tmp/dsh/cordis.patch.yml', revision: 'a' }],
+      credentials: { resolved: false },
+      effects: { native_writes: false, secret_reads: false, processes_started: false, locks_created: false },
+    },
+  }
+}
+
+/** `tmax agent apply TARGET`: a completed write reports `awaiting_native_reload`. */
+function connectExec() {
+  return {
+    code: 'awaiting_native_reload',
+    status: 'success',
+    data: {
+      target: 'dsh-main',
+      agent: 'dsh',
+      path: '/tmp/dsh',
+      state: 'applied_reload_pending',
+      written: true,
+      changed_files: ['/tmp/dsh/cordis.patch.yml'],
+      unchanged_files: [],
+      recovery: 'recovery-1',
+      fact_gaps: [],
+    },
+  }
+}
+
+function baseScenario() {
+  return {
+    agentList: agentList(),
+    agentInspect: agentInspect(),
+    gatewayStatus: gatewayStatus(),
+    tmaxStatus: tmaxStatus(),
+    providerList: providerList(),
+    inspect: { kimi: kimiInspect(), 'cpa-us2': cpaInspect() },
+    configValidate: configValidate(),
+    explain: {
+      'public-model': explain('public-model'),
+      'text-only': explain('text-only'),
+      'no-context': explain('no-context'),
+    },
+    refresh: {
+      kimi: { exec: refreshOk('kimi'), dryRun: refreshDryRun('kimi') },
+      'cpa-us2': { exec: refreshOk('cpa-us2'), dryRun: refreshDryRun('cpa-us2') },
+    },
+    connect: { dryRun: connectDryRun(), exec: connectExec() },
+  }
+}
+
+/** A second relayed route, for multi-route ownership and credential tests. */
+function withSecondRoute(scenario, { name = 'other', credentialRef = 'TMAX_OTHER', contextWindow = 1000 } = {}) {
+  const data = scenario.agentInspect.data
+  data.providers.push({
+    name,
+    source: { provider: 'tmax' },
+    relayed: true,
+    base_url: 'http://127.0.0.1:17840',
+    credential_ref: credentialRef,
+    applied_delivery: null,
+    models: [{ id: `${name}-model`, protocol: 'responses' }],
+  })
+  data.native_projection.push({
+    name,
+    source: { provider: 'tmax' },
+    models: [{
+      id: `${name}-model`,
+      protocol: 'responses',
+      capabilities: { contextWindow },
+      efforts: [],
+      projection: { fields: {} },
+    }],
+  })
+  scenario.explain[`${name}-model`] = explain('public-model')
+  return scenario
+}
+
+// ---------------------------------------------------------------------------
+// A fake tmax executable that dispatches on the latest command surface and
+// records every call. `__HOME__` is replaced with the test's DSH home.
+
+const FAKE_SCRIPT = `#!/usr/bin/env node
+const fs = require('node:fs')
+const scenarioPath = __SCENARIO__
+const logPath = __LOG__
+const argv = process.argv.slice(2)
+fs.appendFileSync(logPath, JSON.stringify(argv) + "\\n")
+const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'))
+function pick() {
+  const a = argv
+  const dry = a.includes('--dry-run')
+  if (a[0] === 'agent' && a[1] === 'list') return scenario.agentList
+  if (a[0] === 'agent' && a[1] === 'inspect') {
+    if (a.includes('--home')) {
+      return { code: 'invalid_arguments', status: 'error', data: null, message: 'Unknown option --home.', __exit: 2 }
+    }
+    return scenario.agentInspect
+  }
+  if (a[0] === 'agent' && a[1] === 'apply') return scenario.connect && scenario.connect[dry ? 'dryRun' : 'exec']
+  if (a[0] === 'gateway' && a[1] === 'status') return scenario.gatewayStatus
+  if (a[0] === 'status') return scenario.tmaxStatus
+  if (a[0] === 'provider' && a[1] === 'list') return scenario.providerList
+  if (a[0] === 'provider' && a[1] === 'inspect') return scenario.inspect && scenario.inspect[a[2]]
+  if (a[0] === 'provider' && a[1] === 'refresh') {
+    const entry = scenario.refresh && scenario.refresh[a[2]]
+    return entry && entry[dry ? 'dryRun' : 'exec']
+  }
+  if (a[0] === 'provider' && a[1] === 'quota-resume') return scenario.quotaResume && scenario.quotaResume[dry ? 'dryRun' : 'exec']
+  if (a[0] === 'provider' && a[1] === 'failure-reset') return scenario.failureReset && scenario.failureReset[dry ? 'dryRun' : 'exec']
+  if (a[0] === 'config' && a[1] === 'validate') return scenario.configValidate
+  if (a[0] === 'model' && a[1] === 'explain') return scenario.explain && scenario.explain[a[2]]
+  if (a[0] === 'history' && a[1] === 'list') return scenario.history
+  if (a[0] === 'gateway' && ['start', 'stop', 'restart'].includes(a[1])) {
+    const entry = scenario.gateway && scenario.gateway[a[1]]
+    return entry && entry[dry ? 'dryRun' : 'exec']
+  }
+  if (a[0] === 'web' && a[1] === 'status') return scenario.web && scenario.web.status
+  if (a[0] === 'web' && a[1] === 'open') return scenario.web && scenario.web.open
+  return undefined
+}
+const body = pick() || {
+  code: 'unknown_resource',
+  status: 'error',
+  data: null,
+  blockers: [{ code: 'unknown_resource', message: 'fake tmax has no response for: ' + argv.join(' ') }],
+  __exit: 2,
+}
+if (typeof body.__raw === 'string') {
+  process.stdout.write(body.__raw)
+  process.exit(body.__exit === undefined ? 4 : body.__exit)
+}
+const exitCode = body.__exit === undefined ? (body.status === 'success' || body.status === 'dry_run' ? 0 : 4) : body.__exit
+const envelope = { ...body }
+delete envelope.__exit
+const delay = scenario.delayFor === undefined || scenario.delayFor === argv.slice(0, 2).join(' ')
+  ? (scenario.delayMs || 0)
+  : 0
+const emit = () => {
+  process.stdout.write(JSON.stringify(envelope))
+  process.exit(exitCode)
+}
+if (delay > 0) setTimeout(emit, delay)
+else emit()
+`
+
+async function fakeTmax(scenario, home = '') {
+  const directory = await mkdtemp(join(tmpdir(), 'tmax-host-'))
+  const scenarioPath = join(directory, 'scenario.json')
+  const logPath = join(directory, 'calls.jsonl')
+  const scriptPath = join(directory, 'tmax')
+  const serialize = value => JSON.stringify(value).replaceAll('__HOME__', home)
+  await writeFile(scenarioPath, serialize(scenario))
+  await writeFile(logPath, '')
+  await writeFile(scriptPath, FAKE_SCRIPT.replace('__SCENARIO__', JSON.stringify(scenarioPath)).replace('__LOG__', JSON.stringify(logPath)))
+  await chmod(scriptPath, 0o755)
+  const api = {
+    path: scriptPath,
+    async update(next) {
+      await writeFile(scenarioPath, serialize(next))
+    },
+    async calls() {
+      const text = await readFile(logPath, 'utf8')
+      return text.split('\n').filter(line => line !== '').map(line => JSON.parse(line))
+    },
+    async clearCalls() {
+      await writeFile(logPath, '')
+    },
+    /** Record further substitutes on top of a live scenario. */
+    async patch(mutator) {
+      const current = JSON.parse(await readFile(scenarioPath, 'utf8'))
+      mutator(current)
+      await writeFile(scenarioPath, serialize(current))
+    },
+  }
+  return api
+}
+
+// ---------------------------------------------------------------------------
+// A fake plugin context exposing the services the host half touches. Optional
+// services are provided through `inject`, exactly as the plugin acquires them.
+
+function fakeContext({
+  credential = 'test-key',
+  resolveCredential,
+  configuredRefs = ['TMAX_TEST'],
+  rejectCredentialRefs = [],
+  liveNames = [],
+  agentDefault = { provider: 'tmax', model: 'gpt-6.1-sol' },
+  settingsDescribe = () => [],
+  configurableProviders = () => [],
+  throwDuplicate = false,
+  throwOnReplace = false,
+  settingsUnavailable = false,
+  deferred = [],
+} = {}) {
+  const state = {
+    routes: [],
+    registrations: [],
+    replaces: 0,
+    tools: [],
+    skills: [],
+    commands: [],
+    events: [],
+    effects: [],
+    listeners: [],
+    adapterOptions: undefined,
+    httpRoutes: [],
+    credentialRefCalls: [],
+    resolveCalls: 0,
+    injections: [],
+    duplicate: throwDuplicate,
+    replaceThrows: throwOnReplace,
+  }
   const modules = {
     '@deepseek-ai/dsh-llm-pi-ai': {
       PiAiAdapter: class {
-        constructor(options) { state.adapterOptions = options }
+        constructor(options) {
+          this.options = options
+          state.adapterOptions = options
+        }
         stream() { throw new Error('not called') }
       },
     },
@@ -115,7 +541,13 @@ function fakeContext({ credential = 'test-key' } = {}) {
       resolveImageAttachmentAccess: () => undefined,
     },
     '@deepseek-ai/dsh-credentials': {
-      credentialRef: ref => ref,
+      credentialRef: ref => {
+        state.credentialRefCalls.push(ref)
+        if (ref === null || ref === undefined) throw new Error('credentialRef received a null reference')
+        // A real DSH credentials service throws for a name outside its grammar.
+        if (rejectCredentialRefs.includes(ref)) throw new TypeError(`credential ref "${ref}" must match /^[A-Za-z_][A-Za-z0-9_]*$/`)
+        return ref
+      },
       normalizeApiKey: raw => {
         const value = raw.trim()
         if (value.length === 0) return { ok: false, reason: 'empty' }
@@ -130,458 +562,1784 @@ function fakeContext({ credential = 'test-key' } = {}) {
     '@earendil-works/pi-ai/api/anthropic-messages.lazy': { anthropicMessagesApi: () => ({ stream() {}, streamSimple() {} }) },
     '@deepseek-ai/dsh-tools': { defineTool: definition => definition },
   }
+  const credentialsService = {
+    credentialRef(ref) {
+      state.credentialRefCalls.push(ref)
+      if (ref === null || ref === undefined) throw new Error('credentialRef received a null reference')
+      // A real DSH credentials service throws for a name outside its grammar.
+      if (rejectCredentialRefs.includes(ref)) throw new TypeError(`credential ref "${ref}" must match /^[A-Za-z_][A-Za-z0-9_]*$/`)
+      return ref
+    },
+    resolve: async () => {
+      state.resolveCalls += 1
+      if (resolveCredential !== undefined) return resolveCredential()
+      return credential === null ? undefined : { value: credential }
+    },
+    describe: async ref => ({ configured: configuredRefs.includes(ref) }),
+  }
+  const services = {
+    credentials: credentialsService,
+    settings: settingsUnavailable ? undefined : { describe: settingsDescribe },
+    agentDefaultModel: { currentSelection: () => agentDefault },
+    tools: { register(definition) { state.tools.push(definition); return () => {} } },
+    skills: { register(definition) { state.skills.push(definition); return () => {} } },
+    commands: { register(definition) { state.commands.push(definition); return () => {} } },
+    webServer: {
+      register(route) {
+        state.httpRoutes.push(route)
+        return () => {
+          state.httpRoutes = state.httpRoutes.filter(candidate => candidate !== route)
+        }
+      },
+    },
+  }
+  for (const name of deferred) delete services[name]
+
+  function activate(record) {
+    if (record.active) return
+    if (!record.deps.every(dep => services[dep] !== undefined)) return
+    record.active = true
+    record.effects = []
+    const child = Object.create(ctx)
+    child.effect = callback => {
+      const dispose = callback()
+      record.effects.push(dispose)
+      return dispose
+    }
+    // Cordis exposes injected services as properties on the child context.
+    for (const name of record.deps) {
+      Object.defineProperty(child, name, { get: () => services[name], configurable: true })
+    }
+    record.callback(child)
+  }
+
   const ctx = {
     fiber: { entry: { parent: { tree: { import: async specifier => modules[specifier] } } } },
     logger: { info() {}, warn() {} },
     get(name) {
-      if (name === 'credentials') return {
-        credentialRef: ref => ref,
-        resolve: async () => credential == null ? undefined : { value: credential },
-      }
-      if (name === 'tools') return { register(definition) { state.tools.push(definition); return () => {} } }
-      if (name === 'skills') return { register(definition) { state.skills.push(definition); return () => {} } }
-      if (name === 'attachments') return undefined
-      if (name === 'fs') return undefined
-      if (name === 'webServer') return { register(route) { state.httpRoutes.push(route); return () => {} } }
-      return undefined
+      return services[name]
     },
     llm: {
+      // Real DSH returns {id, name} records, including routes this plugin just
+      // registered; a plain string list stays accepted where a test supplies it.
+      listProviders: () => [...(state.liveNames ?? liveNames), ...state.routes].map(entry =>
+        typeof entry === 'string' ? { id: entry, name: entry } : entry),
+      listConfigurableProviders: () => configurableProviders(),
       registerAdapter(routes, adapter) {
+        state.registrations.push([...routes])
+        if (state.duplicate) {
+          const error = new Error('DUPLICATE_ADAPTER: provider route is already registered')
+          error.code = 'DUPLICATE_ADAPTER'
+          throw error
+        }
         state.routes = [...routes]
-        state.adapter = adapter
-        const handle = () => { state.routes = [] }
-        handle.replace = next => { state.routes = [...next] }
+        state.adapterOptions = adapter.options
+        const handle = () => {
+          state.routes = []
+        }
+        handle.replace = next => {
+          state.replaces += 1
+          if (state.replaceThrows) {
+            const error = new Error('DUPLICATE_ADAPTER: provider route is already registered')
+            error.code = 'DUPLICATE_ADAPTER'
+            throw error
+          }
+          state.routes = [...next]
+        }
         return handle
       },
     },
+    on(name, callback) {
+      const entry = { name, callback }
+      state.listeners.push(entry)
+      return () => {
+        state.listeners = state.listeners.filter(candidate => candidate !== entry)
+      }
+    },
     emit(event, payload) { state.events.push([event, payload]) },
     effect(callback) { state.effects.push(callback()) },
+    inject(deps, callback) {
+      const record = { deps: [...deps], callback, active: false, effects: [] }
+      state.injections.push(record)
+      activate(record)
+      return {
+        dispose() {
+          record.active = false
+          for (const dispose of record.effects) {
+            try { dispose?.() } catch {}
+          }
+          record.effects = []
+        },
+      }
+    },
   }
+  /** Provide, replace, or remove one service; injected callbacks re-run. */
+  state.provide = (name, value) => {
+    if (value === undefined) delete services[name]
+    else services[name] = value
+    for (const record of state.injections) {
+      if (!record.deps.includes(name)) continue
+      if (record.active) {
+        record.active = false
+        for (const dispose of record.effects) {
+          try { dispose?.() } catch {}
+        }
+        record.effects = []
+      }
+      activate(record)
+    }
+  }
+  state.liveNames = [...liveNames]
   return { ctx, state }
 }
 
-/** One HTTP request with an optional JSON body, as the DSH server would hand it over. */
-function request({ method = 'POST', url = '/_tmax/connect', body } = {}) {
-  const handlers = new Map()
-  const req = {
-    method,
-    url,
-    headers: {},
-    setEncoding() {},
-    on(event, handler) {
-      handlers.set(event, handler)
-      return req
-    },
-  }
-  if (body !== undefined) {
-    setImmediate(() => handlers.get('data')?.(JSON.stringify(body)))
-  }
-  setImmediate(() => handlers.get('end')?.())
-  return req
+const GLM_QUOTA_BODY = {
+  success: true,
+  code: 200,
+  data: { limits: [{ type: 'TOKENS_LIMIT', unit: 5, number: 1, percentage: 37 }], level: 'pro' },
 }
 
-/** Call one registered route and read back its status and JSON payload. */
-async function call(handler, req) {
-  const res = {
-    statusCode: 0,
-    setHeader() {},
-    end(value) { res.body = value === undefined ? undefined : JSON.parse(value) },
+/** One agent-configured provider with a vendor base URL, for observation tests. */
+function glmAgentContext({ resolveCredential } = {}) {
+  const provider = {
+    provider: 'glm-coding-cn',
+    displayName: 'GLM Coding CN',
+    defaultBaseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    settingsNs: 'llm-pi-ai',
+    settingsPath: ['providers', 'glm-coding-cn'],
+    declared: true,
   }
-  await handler(req, res)
+  return {
+    provider,
+    context: {
+      ...(resolveCredential === undefined ? {} : { resolveCredential }),
+      settingsDescribe: () => [{
+        ns: 'llm-pi-ai',
+        value: { providers: { 'glm-coding-cn': { apiKeyEnv: 'GLM_KEY', baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4', models: [{ id: 'glm-5.4' }] } } },
+      }],
+      configurableProviders: () => [provider],
+    },
+  }
+}
+
+function makeRes() {
+  const out = { statusCode: undefined, headers: {}, body: undefined }
+  const res = {
+    out,
+    setHeader(name, value) { out.headers[name.toLowerCase()] = value },
+    end(value) { out.body = value === undefined ? undefined : JSON.parse(value) },
+  }
+  Object.defineProperty(res, 'statusCode', {
+    get: () => out.statusCode,
+    set: value => { out.statusCode = value },
+  })
   return res
 }
 
-test('registers one dynamic route, a status tool, and a skill without exposing maxTokens', async () => {
-  const tmax = await fakeTmax({ 'agent inspect': ok(inspect), 'gateway status': ok(gateway) })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', providerPrefix: 'tmaxp-', refreshSeconds: 3600 })
-  assert.deepEqual(await tmax.calls(), ['agent inspect dsh-main', 'gateway status'])
+function makeReq(method, { body, headers = {}, url = '/' } = {}) {
+  const chunks = body === undefined ? [] : [Buffer.from(body)]
+  return {
+    method,
+    url,
+    headers: { host: 'localhost:3080', ...headers },
+    async *[Symbol.asyncIterator]() {
+      for (const chunk of chunks) yield chunk
+    },
+  }
+}
+
+async function callRoute(route, method, options) {
+  const res = makeRes()
+  await route.handler(makeReq(method, options), res)
+  return res.out
+}
+
+function routeOf(state, path) {
+  const route = state.httpRoutes.find(candidate => candidate.path === path)
+  assert.ok(route, `route ${path} is registered`)
+  return route
+}
+
+async function postJson(state, path, payload, headers = {}) {
+  return callRoute(routeOf(state, path), 'POST', {
+    body: JSON.stringify(payload),
+    headers: { 'content-type': 'application/json', ...headers },
+  })
+}
+
+async function getJson(state, path) {
+  return callRoute(routeOf(state, path), 'GET', {})
+}
+
+/** Force a fresh state through one explicit agent-scope observation. */
+async function freshState(state) {
+  const result = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+  assert.ok(result.body?.state, `observe returns state (HTTP ${result.statusCode})`)
+  return result.body.state
+}
+
+function emptyHome() {
+  return mkdtemp(join(tmpdir(), 'tmax-home-'))
+}
+
+const defaultConfig = home => ({ tmaxPath: undefined, home, refreshSeconds: 3600 })
+
+async function applied({ scenario = baseScenario(), config = {}, context = {}, prefix = '' } = {}) {
+  const home = config.home ?? await emptyHome()
+  const fake = await fakeTmax(scenario, home)
+  const { ctx, state } = fakeContext(context)
+  const merged = { ...defaultConfig(home), tmaxPath: fake.path, providerPrefix: prefix, ...config }
+  if (merged.home === undefined) merged.home = home
+  await apply(ctx, merged)
+  return { fake, ctx, state, home }
+}
+
+/** Wait until one asynchronous refresh settles. */
+async function settle(ms = 300) {
+  await new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ---------------------------------------------------------------------------
+// Shape comparison: every object must carry exactly the fixture's keys; every
+// non-empty array is compared by its first element. `null` in the fixture is a
+// contract wildcard (the value is unknown/unavailable in that case).
+
+function assertShape(actual, expected, path = 'state') {
+  if (expected === null || expected === undefined) return
+  if (Array.isArray(expected)) {
+    assert.ok(Array.isArray(actual), `${path} must be an array`)
+    if (expected.length === 0) return
+    assert.ok(actual.length > 0, `${path} must not be empty`)
+    assertShape(actual[0], expected[0], `${path}[0]`)
+    return
+  }
+  if (typeof expected === 'object') {
+    assert.ok(actual !== null && typeof actual === 'object' && !Array.isArray(actual), `${path} must be an object`)
+    assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort(), `${path} keys`)
+    for (const key of Object.keys(expected)) {
+      assertShape(actual[key], expected[key], `${path}.${key}`)
+    }
+    return
+  }
+  assert.ok(actual === null || typeof actual === typeof expected, `${path} has type ${typeof actual}, expected ${typeof expected}`)
+}
+
+// ---------------------------------------------------------------------------
+// Tests: the inventory read path and the composed state contract.
+
+test('state matches the reviewed fixture shape, registers profile routes, and keeps image defaults complete', async () => {
+  const agentProvider = {
+    provider: 'glm-coding-cn',
+    displayName: 'GLM Coding CN',
+    defaultBaseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    settingsNs: 'llm-pi-ai',
+    settingsPath: ['providers', 'glm-coding-cn'],
+    declared: true,
+  }
+  const { fake, state } = await applied({
+    prefix: 'tmaxp-',
+    context: {
+      settingsDescribe: () => [{
+        ns: 'llm-pi-ai',
+        value: { providers: { 'glm-coding-cn': { apiKeyEnv: 'GLM_KEY', baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4', models: [{ id: 'glm-5.4' }] } } },
+      }],
+      configurableProviders: () => [agentProvider],
+    },
+  })
+
   assert.deepEqual(state.routes, ['tmaxp-tmax'])
+  assert.equal(state.registrations.length, 1)
   const profiles = state.adapterOptions.profiles()
+  assert.deepEqual([...profiles.keys()], ['tmaxp-tmax'])
   const profile = profiles.get('tmaxp-tmax')
   assert.equal(profile.displayName, 'tmax')
-  assert.equal(profile.piProvider.baseUrl, 'http://127.0.0.1:17840')
-  // The adapter reads resolved scalars directly; a missing idle timeout fails
-  // every stream at `idleWatchdog`.
-  for (const [key, value] of Object.entries({
+  // The complete resolved scalar set llm-pi-ai reads on every stream.
+  assert.deepEqual({
+    streamIdleTimeoutMs: profile.streamIdleTimeoutMs,
+    maxRequestImageBytes: profile.maxRequestImageBytes,
+    maxRequestImages: profile.maxRequestImages,
+    imageOffloadCountQuantum: profile.imageOffloadCountQuantum,
+    requestImageBudgetCount: profile.requestImageBudgetCount,
+    requestImagePixelBudget: profile.requestImagePixelBudget,
+    maxImageBytes: profile.maxImageBytes,
+    requestImageMaxBytes: profile.requestImageMaxBytes,
+  }, {
     streamIdleTimeoutMs: 300_000,
     maxRequestImageBytes: 20 * 1024 * 1024,
     maxRequestImages: 50,
     imageOffloadCountQuantum: 10,
+    requestImageBudgetCount: 20,
     requestImagePixelBudget: 2048 * 2048,
+    maxImageBytes: 1024 * 1024,
     requestImageMaxBytes: 1024 * 1024,
-  })) {
-    assert.equal(profile[key], value, key)
-  }
+  })
   const models = profile.piProvider.getModels()
-  assert.equal(models.length, 2)
-  assert.equal(models[0].id, 'public-model')
+  assert.equal(models.length, 2, 'a model without a contextWindow is hidden')
   assert.equal(models[0].provider, 'tmaxp-tmax')
-  assert.equal(models[0].api, 'openai-responses')
-  assert.equal(models[0].contextWindow, 200000)
-  assert.deepEqual(models[0].thinkingLevelMap, { off: null, minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: null })
   assert.equal(models[0].maxTokens, undefined)
-  assert.deepEqual(models[1].input, ['text'])
-  assert.equal(state.tools[0].name, 'tmax_status')
-  assert.equal(state.skills[0].name, 'tmax')
-  assert.deepEqual(state.httpRoutes.map(route => route.path), ['/_tmax/dsh-usage', '/_tmax/status', '/_tmax/usage', '/_tmax/usage/refresh', '/_tmax/connect'])
-  const status = await state.tools[0].execute()
-  assert.equal(status.target, 'dsh-main')
-  assert.deepEqual(status.gateway, {
-    configured: true,
-    ready: true,
-    listen: '127.0.0.1:17840',
-    daemon_discovery_state: 'compatible',
-    reason_code: null,
-  })
-  assert.deepEqual(status.routes, [{ name: 'tmax', protocol: 'responses', models: ['public-model', 'text-only', 'no-context'] }])
-  assert.deepEqual(status.blockers, [])
+  assert.deepEqual(models[0].thinkingLevelMap, { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: 'max' })
+
+  const status = await getJson(state, '/_tmax/status')
+  assert.equal(status.statusCode, 200)
+  assert.equal(status.body.ok, true)
+  assert.equal(status.body.target.id, 'dsh-main')
+  assert.deepEqual(status.body.routes.map(route => route.provider), ['tmaxp-tmax'])
+
+  const usage = await getJson(state, '/_tmax/usage')
+  assert.equal(usage.statusCode, 200)
+  assert.equal(usage.body.providers.length, 2, 'every provider appears, including unknown quota')
+
+  const stateRoute = await getJson(state, '/_tmax/state')
+  assert.equal(stateRoute.statusCode, 200)
+  const result = stateRoute.body
+  // One agent-configured provider is enough to pin the agent record contract;
+  // compare it against the fixture's not-yet-observed record.
+  const expectedShape = structuredClone(fixtureCase)
+  expectedShape.providers.agent = [fixtureCase.providers.agent[1]]
+  // `diagnostics.readModel` is the read-source marker; the reviewed fixture
+  // predates it, so compare the reviewed keys and assert the marker separately.
+  delete expectedShape.diagnostics.readModel
+  const shapeCandidate = structuredClone(result)
+  delete shapeCandidate.diagnostics.readModel
+  assertShape(shapeCandidate, expectedShape)
+  assert.equal(result.diagnostics.readModel, 'inventory', 'the state names its inventory source')
+
+  // Contract values the fixture states explicitly.
+  assert.equal(result.schemaVersion, 1)
+  assert.equal(result.ownership.owner, 'page')
+  assert.equal(result.ownership.scope, 'profile_scoped')
+  assert.equal(result.ownership.homeIntegration.present, false)
+  assert.equal(result.routes[0].provider, 'tmaxp-tmax')
+  assert.equal(result.routes[0].credentialRef, 'TMAX_TEST')
+  assert.equal(result.routes[0].credentialConfigured, true)
+  assert.equal(result.routes[0].active, true, 'the registered route is live')
+  assert.deepEqual(result.routes[0].blockers.map(blocker => blocker.code), ['route_model_context_window_unknown'])
+  assert.deepEqual(result.routes[0].blockers[0].models, ['no-context'])
+  assert.equal(result.target.effectiveDefault.provider, 'tmax')
+  assert.equal(result.target.effectiveDefault.model, 'gpt-6.1-sol')
+  assert.equal(result.target.effectiveDefault.source, 'agent-default-model')
+  assert.equal(result.target.nativeDefault.state, 'available')
+  assert.equal(result.authority, '/tmp/tmax', 'authority is the tmax data directory from `tmax status`')
+  assert.equal(result.tmaxVersion, '0.1.0', 'the answering CLI version comes from the daemon status')
+  assert.equal(result.configurationRevision, 'rev-1')
+  assert.equal(typeof result.generatedAt, 'string')
+  assert.deepEqual(result.providers.tmax.map(provider => provider.id), ['kimi', 'cpa-us2'])
+  assert.equal(result.providers.tmax[0].billing.state, 'observed')
+  assert.equal(result.providers.tmax[1].billing.state, 'unknown')
+  assert.equal(result.providers.tmax[1].billing.reasonCode, 'unsupported_source')
+  assert.equal(result.providers.tmax[1].billing.lastAttempt, 'unavailable')
+  assert.equal('reasonCode' in result.providers.tmax[0].billing, false, 'a completed attempt needs no extra keys')
+  assert.equal('lastAttempt' in result.providers.tmax[0].billing, false)
+  assert.deepEqual(result.routing[0].candidates.map(candidate => candidate.selected), [true, false])
+  assert.equal(result.routing[0].selection.qualifiedModel, 'opencode-go-2/public-model')
+  assert.deepEqual(result.diagnostics.history, { state: 'unavailable', reasonCode: 'daemon_identity_unavailable' })
+  assert.equal(result.gateway.ready, null)
+  assert.equal(result.gateway.daemonDiscoveryState, 'unidentified')
+  assert.equal(result.gateway.listen, '127.0.0.1:17840', 'a configured listener survives an absent daemon')
+  assert.equal(result.config.state, 'valid')
+
+  assert.equal(result.providers.agent.length, 1)
+  assert.equal(result.providers.agent[0].provider, 'glm-coding-cn')
+  assert.equal(result.providers.agent[0].state, 'not_observed')
+
+  const dshUsage = await getJson(state, '/_tmax/dsh-usage')
+  assert.equal(dshUsage.statusCode, 200)
+  assert.equal(dshUsage.body.cached, true)
+  assert.equal(dshUsage.body.providers.length, 1)
+
+  // GET purity: no observation, no apply, no vendor request, no resolve, and
+  // no removed `tmax dsh` command.
+  const calls = await fake.calls()
+  assert.equal(calls.some(argv => argv[0] === 'dsh'), false, 'no host code calls the removed dsh command family')
+  assert.equal(calls.some(argv => argv[0] === 'provider' && argv[1] === 'refresh'), false)
+  assert.equal(calls.some(argv => argv[0] === 'agent' && argv[1] === 'apply'), false)
+  assert.equal(calls.some(argv => argv[0] === 'history'), false, 'a state read never reads request history')
+  assert.deepEqual(state.credentialRefCalls, ['TMAX_TEST'])
+  assert.equal(state.resolveCalls, 0)
+  assert.equal(JSON.stringify(result).includes('test-key'), false, 'no credential value in the state payload')
 })
 
-test('manageRoutes false leaves model routes to the home plugin', async () => {
-  const tmax = await fakeTmax({ 'agent inspect': ok(inspect), 'gateway status': ok(gateway) })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600, manageRoutes: false })
-  assert.deepEqual(state.routes, [])
-  assert.equal(state.adapterOptions, undefined)
-  const status = await state.tools[0].execute()
-  assert.deepEqual(status.routes, [{ name: 'tmax', protocol: 'responses', models: ['public-model', 'text-only', 'no-context'] }])
+test('the inventory composes from agent list/inspect, gateway status, and tmax status', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const body = (await getJson(state, '/_tmax/state')).body
+  const calls = await fake.calls()
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'list'])), 'the home resolves the target')
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'inspect', 'dsh-main'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['gateway', 'status'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['status'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['provider', 'list'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['provider', 'inspect', 'kimi'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['config', 'validate'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['model', 'explain', 'public-model', '--protocol', 'responses'])))
+  assert.equal(calls.some(argv => argv[0] === 'dsh'), false)
+  assert.equal(body.diagnostics.readModel, 'inventory')
+  assert.equal(body.ok, true)
 })
 
-test('resolveApiKey trims a usable credential and rejects unusable or absent ones', async () => {
-  const tmax = await fakeTmax({ 'agent inspect': ok(inspect), 'gateway status': ok(gateway) })
-
-  const usable = fakeContext({ credential: '  test-key\n' })
-  await apply(usable.ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  const profile = usable.state.adapterOptions.profiles().get('tmax')
-  assert.equal(await usable.state.adapterOptions.resolveApiKey('tmax', profile), 'test-key')
-
-  const unusable = fakeContext({ credential: 'bad\u0000key' })
-  await apply(unusable.ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  await assert.rejects(
-    unusable.state.adapterOptions.resolveApiKey('tmax', profile),
-    error => error.code === 'INVALID_CREDENTIAL' && /illegalCharacters/.test(error.message),
+test('an explicit target skips agent list and is the agent inspect operand', async () => {
+  const { fake, state } = await applied({ config: { target: 'custom-target' } })
+  await fake.clearCalls()
+  await getJson(state, '/_tmax/state')
+  const calls = await fake.calls()
+  assert.equal(calls.some(argv => argv[0] === 'agent' && argv[1] === 'list'), false)
+  assert.deepEqual(
+    calls.find(argv => argv[0] === 'agent' && argv[1] === 'inspect'),
+    ['agent', 'inspect', 'custom-target'],
   )
-
-  const absent = fakeContext({ credential: null })
-  await apply(absent.ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  await assert.rejects(
-    absent.state.adapterOptions.resolveApiKey('tmax', profile),
-    error => error.code === 'MISSING_CREDENTIAL',
-  )
+  assert.equal(calls.some(argv => argv.includes('--home')), false, 'agent inspect has no --home selector')
 })
 
-test('a missing tmax does not fail activation and the status tool reports the blocker', async () => {
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: '/definitely/missing/tmax', refreshSeconds: 3600 })
-  assert.deepEqual(state.routes, [])
-  const status = await state.tools[0].execute()
-  assert.equal(status.blockers[0].code, 'tmax_unavailable')
-  const statusRoute = state.httpRoutes.find(route => route.path === '/_tmax/status')
-  const response = await call(statusRoute.handler, request({ method: 'GET' }))
-  assert.match(response.body.lastError, /ENOENT|tmax/)
-})
-
-test('resolves the target whose declared path matches the DSH home', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'tmax-home-'))
-  const real = join(root, 'real-home')
-  const link = join(root, 'link-home')
-  await mkdir(real)
-  await symlink(real, link)
-  const tmax = await fakeTmax({
-    'agent list': ok({
-      agents: [
-        { target: 'pi-main', agent: 'pi', path: join(root, 'pi-home') },
-        { target: 'dsh-main', agent: 'dsh', path: real },
-        { target: 'dsh-second', agent: 'dsh', path: join(root, 'second-home') },
-      ],
-    }),
-    'agent inspect': ok({ ...inspect, path: real }),
-    'gateway status': ok(gateway),
-  })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, home: `${link}/`, refreshSeconds: 3600 })
-  assert.deepEqual(await tmax.calls(), ['agent list', 'agent inspect dsh-main', 'gateway status'])
-  const status = await state.tools[0].execute()
-  assert.equal(status.target, 'dsh-main')
-})
-
-test('reports an unmatched or ambiguous DSH home as an actionable error', async () => {
-  const unmatched = await fakeTmax({
-    'agent list': ok({ agents: [{ target: 'dsh-main', agent: 'dsh', path: '/tmp/somewhere-else' }] }),
-  })
-  const unmatchedContext = fakeContext()
-  await apply(unmatchedContext.ctx, { tmaxPath: unmatched.path, home: '/tmp/nowhere', refreshSeconds: 3600 })
-  const unmatchedStatus = await unmatchedContext.state.tools[0].execute()
-  assert.equal(unmatchedStatus.blockers[0].code, 'tmax_unavailable')
-  assert.match(unmatchedStatus.blockers[0].message, /unknown_resource/)
-  const unmatchedRoute = unmatchedContext.state.httpRoutes.find(route => route.path === '/_tmax/connect')
-  const unmatchedResponse = await call(unmatchedRoute.handler, request())
-  assert.equal(unmatchedResponse.statusCode, 409)
-  assert.equal(unmatchedResponse.body.code, 'unknown_resource')
-
-  const ambiguous = await fakeTmax({
-    'agent list': ok({
-      agents: [
-        { target: 'dsh-main', agent: 'dsh', path: HOME },
-        { target: 'dsh-other', agent: 'dsh', path: `${HOME}/` },
-      ],
-    }),
-  })
-  const ambiguousContext = fakeContext()
-  await apply(ambiguousContext.ctx, { tmaxPath: ambiguous.path, home: HOME, refreshSeconds: 3600 })
-  const ambiguousStatus = await ambiguousContext.state.tools[0].execute()
-  assert.equal(ambiguousStatus.blockers[0].code, 'tmax_unavailable')
-  assert.match(ambiguousStatus.blockers[0].message, /invalid_arguments/)
-})
-
-test('a failing inspect envelope surfaces its code and message', async () => {
-  const tmax = await fakeTmax({
-    'agent inspect': {
-      envelope: {
-        code: 'invalid_configuration',
-        status: 'error',
-        blockers: [{ code: 'invalid_configuration', message: 'Configuration format version 1 is unsupported' }],
-      },
-      exitCode: 4,
-    },
-  })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  assert.deepEqual(state.routes, [])
-  const status = await state.tools[0].execute()
-  assert.equal(status.blockers[0].code, 'tmax_unavailable')
-  assert.match(status.blockers[0].message, /invalid_configuration/)
-  assert.match(status.blockers[0].message, /Configuration format version 1 is unsupported/)
-})
-
-test('an older inspect shape is reported as unsupported rather than projecting no routes', async () => {
-  const legacy = {
-    ...inspect,
-    providers: [{
-      name: 'tmax',
-      source: { gateway: true },
-      models: [{ id: 'public-model', protocol: 'responses' }],
-    }],
-    native_projection: [{
-      name: 'tmax',
-      source: { gateway: true },
-      models: [{ id: 'public-model', protocol: 'responses', efforts: [] }],
-    }],
+test('no declared target matching the DSH home is a visible typed error', async () => {
+  const scenario = baseScenario()
+  scenario.agentList = {
+    code: 'ok',
+    status: 'success',
+    data: { agents: [{ target: 'pi-main', agent: 'pi', path: '/tmp/pi' }] },
   }
-  const tmax = await fakeTmax({ 'agent inspect': ok(legacy), 'gateway status': ok(gateway) })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
+  const { state } = await applied({ scenario })
   assert.deepEqual(state.routes, [])
-  const status = await state.tools[0].execute()
-  assert.equal(status.blockers[0].code, 'tmax_unavailable')
-  assert.match(status.blockers[0].message, /unsupported_tmax/)
-  assert.match(status.blockers[0].message, /update tmax/)
+  assert.equal(state.registrations.length, 0)
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ok, true, 'providers and configuration still answered')
+  assert.equal(body.target, null)
+  assert.deepEqual(body.routes, [])
+  assert.equal(body.errors.length, 1)
+  assert.equal(body.errors[0].section, 'projection')
+  assert.equal(body.errors[0].code, 'unknown_resource')
+  assert.match(body.errors[0].message, /No declared DSH target matches the DSH home/)
+  assert.equal(body.providers.tmax.length, 2, 'readable sections are not erased by the failed target read')
+  assert.equal(body.diagnostics.readModel, 'inventory')
+  const status = (await getJson(state, '/_tmax/status')).body
+  assert.ok(status.blockers.some(blocker => blocker.source === 'projection' && blocker.code === 'unknown_resource'))
 })
 
-test('mixed protocols add a blocker and skip the route', async () => {
-  const mixed = {
-    ...inspect,
-    providers: [{
-      name: 'tmax',
-      source: { provider: 'tmax' },
-      relayed: true,
-      base_url: 'http://127.0.0.1:17840',
-      credential_ref: 'TMAX_TEST',
-      models: [
-        { id: 'public-model', protocol: 'responses' },
-        { id: 'public-model', protocol: 'chat-completions' },
-      ],
-    }],
-    native_projection: null,
-    blockers: [{
-      code: 'incompatible',
-      message: 'This native provider has one effective transport; select separate native entries for different protocols',
-    }],
-  }
-  const tmax = await fakeTmax({ 'agent inspect': ok(mixed), 'gateway status': ok(gateway) })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  assert.deepEqual(state.routes, [])
-  const status = await state.tools[0].execute()
-  assert.deepEqual(status.routes, [])
-  assert.ok(status.blockers.some(blocker =>
-    blocker.code === 'incompatible'
-    && blocker.message === 'Gateway route "tmax" mixes protocols; split it into one route per protocol'))
-  assert.ok(!status.blockers.some(blocker => blocker.code === 'gateway_entry_missing'))
-})
-
-test('a stopped gateway keeps the routes but reports readiness as not ready', async () => {
-  const tmax = await fakeTmax({ 'agent inspect': ok(inspect), 'gateway status': ok(stopped) })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  assert.deepEqual(state.routes, ['tmax'])
-  const status = await state.tools[0].execute()
-  assert.deepEqual(status.gateway, {
-    configured: true,
-    ready: false,
-    listen: null,
-    daemon_discovery_state: 'absent',
-    reason_code: 'gateway_not_ready',
-  })
-  assert.deepEqual(status.routes, [{ name: 'tmax', protocol: 'responses', models: ['public-model', 'text-only', 'no-context'] }])
-})
-
-test('a failing gateway status leaves gateway facts unknown without losing routes', async () => {
-  // No `gateway status` arm: the fake exits with its generic error envelope.
-  const tmax = await fakeTmax({ 'agent inspect': ok(inspect) })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  const status = await state.tools[0].execute()
-  assert.equal(status.gateway.configured, true)
-  assert.equal(status.gateway.ready, null)
-  assert.equal(status.gateway.listen, null)
-  assert.equal(status.gateway.reason_code, 'daemon_identity_unavailable')
-  assert.equal(status.routes.length, 1)
-})
-
-test('gateway reason codes distinguish an unconfigured gateway from a not-ready one', async () => {
-  const unconfigured = await fakeTmax({
-    'agent inspect': ok({ ...inspect, providers: [], native_projection: null }),
-    'gateway status': ok(stopped),
-  })
-  const unconfiguredContext = fakeContext()
-  await apply(unconfiguredContext.ctx, { tmaxPath: unconfigured.path, target: 'dsh-main', refreshSeconds: 3600 })
-  const unconfiguredStatus = await unconfiguredContext.state.tools[0].execute()
-  assert.equal(unconfiguredStatus.gateway.configured, false)
-  assert.equal(unconfiguredStatus.gateway.ready, null)
-  assert.equal(unconfiguredStatus.gateway.reason_code, 'gateway_unconfigured')
-  assert.deepEqual(unconfiguredStatus.blockers.map(blocker => blocker.code), ['gateway_unconfigured'])
-
-  const notReady = await fakeTmax({
-    'agent inspect': ok(inspect),
-    'gateway status': ok({
-      daemon: { discovery_state: 'compatible', reason_code: null },
-      gateway: { ready: false, listen: '127.0.0.1:17840', key_ref: 'secret:gateway', config_revision: 'rev-1' },
-    }),
-  })
-  const notReadyContext = fakeContext()
-  await apply(notReadyContext.ctx, { tmaxPath: notReady.path, target: 'dsh-main', refreshSeconds: 3600 })
-  const notReadyStatus = await notReadyContext.state.tools[0].execute()
-  assert.equal(notReadyStatus.gateway.configured, true)
-  assert.equal(notReadyStatus.gateway.ready, false)
-  assert.equal(notReadyStatus.gateway.reason_code, 'gateway_not_ready')
-  assert.equal(notReadyStatus.routes.length, 1)
-})
-
-test('a target without a relayed entry adds the gateway entry blocker', async () => {
-  const direct = {
-    ...inspect,
-    providers: [{
-      name: 'upstream',
-      source: { provider: 'upstream' },
-      relayed: false,
-      base_url: null,
-      credential_ref: null,
-      models: [{ id: 'deepseek-v4.1-flash', protocol: 'responses' }],
-    }],
-    native_projection: null,
-    blockers: [{ code: 'native_scope_unavailable', message: 'Select an existing DSH home before applying' }],
-  }
-  const tmax = await fakeTmax({ 'agent inspect': ok(direct), 'gateway status': ok(gateway) })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  const status = await state.tools[0].execute()
-  assert.equal(status.gateway.configured, true)
-  assert.deepEqual(status.routes, [])
-  assert.deepEqual(status.blockers.map(blocker => blocker.code), ['gateway_entry_missing', 'native_scope_unavailable'])
-})
-
-test('http routes expose status and apply the target without returning a key', async () => {
-  const applied = {
-    code: 'awaiting_native_reload',
+test('multiple targets matching the DSH home are an invalid-arguments error', async () => {
+  const scenario = baseScenario()
+  scenario.agentList = {
+    code: 'ok',
     status: 'success',
     data: {
-      target: 'dsh-main',
-      agent: 'dsh',
-      path: HOME,
-      state: 'applied_reload_pending',
-      written: true,
-      changed_files: [`${HOME}/.credentials.yaml`],
-      unchanged_files: [],
-      recovery: 'native-1',
+      agents: [
+        { target: 'dsh-a', agent: 'dsh', path: '__HOME__' },
+        { target: 'dsh-b', agent: 'dsh', path: '__HOME__' },
+      ],
     },
   }
-  const tmax = await fakeTmax({
-    'agent inspect': ok(inspect),
-    'gateway status': ok(gateway),
-    'agent apply': applied,
-  })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', providerPrefix: 'tmaxp-', refreshSeconds: 3600 })
-  const statusRoute = state.httpRoutes.find(route => route.path === '/_tmax/status')
-  const connectRoute = state.httpRoutes.find(route => route.path === '/_tmax/connect')
-  const statusResponse = await call(statusRoute.handler, request({ method: 'GET' }))
-  assert.equal(statusResponse.body.routes[0].name, 'tmax')
-  assert.equal(statusResponse.body.routes[0].models.length, 3)
-  const connectResponse = await call(connectRoute.handler, request())
-  assert.equal(connectResponse.statusCode, 200)
-  assert.equal(connectResponse.body.ok, true)
-  assert.equal(connectResponse.body.connect.state, 'applied_reload_pending')
-  assert.equal(JSON.stringify(connectResponse.body).includes('gateway-key'), false)
-  assert.ok((await tmax.calls()).includes('agent apply dsh-main'))
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.errors[0].section, 'projection')
+  assert.equal(body.errors[0].code, 'invalid_arguments')
+  assert.match(body.errors[0].message, /Multiple DSH targets match/)
 })
 
-test('connect rejects a blocked apply with the envelope code and message', async () => {
-  const tmax = await fakeTmax({
-    'agent inspect': ok(inspect),
-    'gateway status': ok(stopped),
-    'agent apply': {
-      envelope: {
-        code: 'gateway_not_ready',
-        status: 'blocked',
-        blockers: [{ code: 'gateway_not_ready', message: 'Explicitly start the configured gateway' }],
+test('a selected target that is not a DSH target is refused', async () => {
+  const scenario = baseScenario()
+  scenario.agentInspect = agentInspect({ agent: 'pi' })
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.errors[0].section, 'projection')
+  assert.equal(body.errors[0].code, 'invalid_arguments')
+  assert.match(body.errors[0].message, /not a DSH target/)
+})
+
+test('an agent inspect failure is a visible projection error, not a crash', async () => {
+  const scenario = baseScenario()
+  scenario.agentInspect = {
+    code: 'unknown_resource',
+    status: 'error',
+    data: null,
+    blockers: [{ code: 'unknown_resource', message: 'Unknown DSH target "dsh-main".' }],
+    __exit: 2,
+  }
+  const { state } = await applied({ scenario })
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.registrations.length, 0)
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ok, true, 'the provider and config reads still answered')
+  assert.equal(body.target, null)
+  assert.deepEqual(body.errors, [{
+    section: 'projection',
+    code: 'unknown_resource',
+    message: 'tmax agent inspect failed: unknown_resource (Unknown DSH target "dsh-main".)',
+  }])
+  assert.match(body.diagnostics.lastError, /Unknown DSH target/)
+  const status = (await getJson(state, '/_tmax/status')).body
+  const projectionBlockers = status.blockers.filter(blocker => blocker.source === 'projection')
+  assert.equal(projectionBlockers.length, 1)
+  assert.equal(projectionBlockers[0].code, 'unknown_resource')
+  assert.equal(status.blockers.some(blocker => blocker.code === 'tmax_unavailable'), false)
+})
+
+test('an older tmax without relayed/capability inspection is an unsupported_tmax error', async () => {
+  const scenario = baseScenario()
+  delete scenario.agentInspect.data.providers[0].relayed
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.errors[0].section, 'projection')
+  assert.equal(body.errors[0].code, 'unsupported_tmax')
+  assert.match(body.errors[0].message, /update tmax/)
+})
+
+test('a missing tmax CLI does not fail activation and is reported as a blocker', async () => {
+  const home = await emptyHome()
+  const { ctx, state } = fakeContext()
+  await apply(ctx, { tmaxPath: '/definitely/missing/tmax', home, refreshSeconds: 3600 })
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.registrations.length, 0)
+  const status = await getJson(state, '/_tmax/status')
+  assert.equal(status.statusCode, 200)
+  assert.equal(status.body.ok, false)
+  assert.match(status.body.lastError, /ENOENT|could not be executed/)
+  assert.ok(status.body.blockers.some(blocker => blocker.source === 'projection' && blocker.code === 'tmax_unavailable'))
+  const stateBody = (await getJson(state, '/_tmax/state')).body
+  // Nothing answered: the target, provider, and configuration reads each name
+  // their own failure instead of one generic claim.
+  assert.deepEqual([...new Set(stateBody.errors.map(error => error.section))].sort(), ['config', 'projection', 'providers'])
+  assert.ok(stateBody.errors.every(error => typeof error.code === 'string' && error.code !== '' && typeof error.message === 'string'))
+  assert.equal(stateBody.diagnostics.readModel, 'inventory')
+  const tool = state.tools.find(candidate => candidate.name === 'tmax_status')
+  const value = await tool.execute()
+  assert.equal(value.ok, false)
+  assert.deepEqual(value.routes, [])
+  assert.ok(value.errors.length > 0)
+})
+
+test('a gateway status failure leaves gateway facts unknown without erasing routes', async () => {
+  const scenario = baseScenario()
+  scenario.gatewayStatus = {
+    code: 'daemon_incompatible',
+    status: 'error',
+    data: null,
+    blockers: [{ code: 'daemon_incompatible', message: 'The daemon management protocol is incompatible.' }],
+    __exit: 4,
+  }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ok, true, 'the inventory still describes the target')
+  assert.deepEqual(body.routes.map(route => route.name), ['tmax'])
+  assert.equal(body.gateway.ready, null)
+  assert.equal(body.gateway.daemonDiscoveryState, 'unknown')
+  assert.equal(body.gateway.reasonCode, 'daemon_identity_unavailable')
+  assert.equal(body.gateway.listen, '127.0.0.1:17840')
+  assert.ok(body.errors.some(error => error.section === 'gateway' && error.code === 'daemon_incompatible'))
+  assert.deepEqual(body.diagnostics.history, { state: 'unavailable', reasonCode: 'daemon_identity_unavailable' })
+})
+
+test('a tmax status failure keeps authority unknown and names it, never inventing a path', async () => {
+  const scenario = baseScenario()
+  scenario.tmaxStatus = {
+    code: 'configuration_invalid',
+    status: 'error',
+    data: null,
+    message: 'Configuration format version 1 is unsupported',
+    __exit: 4,
+  }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.authority, null)
+  assert.equal(body.tmaxVersion, '0.1.0', 'the gateway status still names the answering version')
+  assert.ok(body.errors.some(error => error.section === 'authority' && error.code === 'configuration_invalid'))
+})
+
+test('an unavailable target sub-read stays visible in the target section', async () => {
+  const scenario = baseScenario()
+  scenario.agentInspect.data.native_default = { state: 'unavailable', reason_code: 'dsh_target_inspect_failed' }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.deepEqual(body.target.nativeDefault, { state: 'unavailable', reason_code: 'dsh_target_inspect_failed' })
+  assert.equal(body.target.id, 'dsh-main')
+})
+
+test('gateway daemon and shared-key tokens use the page vocabulary', async () => {
+  assert.equal(normalizeDaemonDiscovery('compatible'), 'identified')
+  assert.equal(normalizeDaemonDiscovery('identified'), 'identified')
+  assert.equal(normalizeDaemonDiscovery('unidentified'), 'unidentified')
+  assert.equal(normalizeDaemonDiscovery('absent'), 'unidentified')
+  assert.equal(normalizeDaemonDiscovery('incompatible'), 'unknown')
+  assert.equal(normalizeDaemonDiscovery(undefined), 'unknown')
+  assert.equal(normalizeSharedKeyState('ready'), 'loaded')
+  assert.equal(normalizeSharedKeyState('loaded'), 'loaded')
+  assert.equal(normalizeSharedKeyState('absent'), 'absent')
+  assert.equal(normalizeSharedKeyState(undefined), 'unknown')
+  assert.equal(normalizeSharedKeyState('rotating'), 'unknown')
+
+  const scenario = baseScenario()
+  scenario.gatewayStatus.data.daemon.discovery_state = 'compatible'
+  scenario.gatewayStatus.data.daemon.reason_code = null
+  scenario.gatewayStatus.data.gateway = { ready: true, listen: '127.0.0.1:17840', key_ref: 'k1', config_revision: 'rev-1' }
+  scenario.gatewayStatus.data.shared_key = { loaded_reference: 'k1', loaded_state: 'ready' }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.gateway.daemonDiscoveryState, 'identified')
+  assert.equal(body.gateway.sharedKey.loadedState, 'loaded')
+  assert.equal(body.gateway.ready, true)
+  assert.equal(body.gateway.reasonCode, null)
+  assert.deepEqual(body.diagnostics.history, { state: 'available', reasonCode: null })
+})
+
+test('a configured gateway with no running daemon is not ready, not unknown', async () => {
+  const scenario = baseScenario()
+  scenario.gatewayStatus.data.daemon.discovery_state = 'absent'
+  scenario.gatewayStatus.data.daemon.reason_code = null
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.gateway.ready, false)
+  assert.equal(body.gateway.reasonCode, 'gateway_not_ready')
+})
+
+test('an unconfigured gateway reports its blocker and no invented routes', async () => {
+  const scenario = baseScenario()
+  scenario.agentInspect.data.providers = []
+  scenario.agentInspect.data.native_projection = []
+  scenario.agentInspect.data.default = null
+  scenario.agentInspect.data.blockers = [{ code: 'target_incomplete', message: 'Select providers and models before applying' }]
+  const { state } = await applied({ scenario })
+  assert.deepEqual(state.routes, [])
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.gateway.configured, false)
+  assert.equal(body.gateway.ready, null)
+  assert.equal(body.gateway.reasonCode, 'gateway_unconfigured')
+  assert.deepEqual(body.routes, [])
+  assert.deepEqual(
+    body.target.blockers.map(blocker => blocker.code).sort(),
+    ['gateway_unconfigured', 'target_incomplete'],
+  )
+  const status = (await getJson(state, '/_tmax/status')).body
+  assert.ok(status.blockers.some(blocker => blocker.source === 'target' && blocker.code === 'gateway_unconfigured'))
+})
+
+test('routes without a credential reference or base URL are skipped with declared blockers', async () => {
+  const scenario = withSecondRoute(baseScenario(), { name: 'no-cred', credentialRef: null })
+  withSecondRoute(scenario, { name: 'no-base', credentialRef: 'TMAX_OTHER' })
+  scenario.agentInspect.data.providers.find(entry => entry.name === 'no-base').base_url = null
+  // Keep the base route fully servable so the declared blockers below are the
+  // only route-build blockers in play.
+  scenario.agentInspect.data.providers[0].models = scenario.agentInspect.data.providers[0].models
+    .filter(model => model.id !== 'no-context')
+  scenario.agentInspect.data.native_projection[0].models =
+    scenario.agentInspect.data.native_projection[0].models.filter(model => model.id !== 'no-context')
+  const { state } = await applied({ scenario })
+
+  assert.deepEqual(state.routes, ['tmax'])
+  assert.equal(state.credentialRefCalls.includes(null), false)
+  assert.equal(state.credentialRefCalls.includes(undefined), false)
+  assert.deepEqual(state.credentialRefCalls, ['TMAX_TEST'])
+
+  const status = (await getJson(state, '/_tmax/status')).body
+  const declared = status.blockers.filter(blocker => blocker.source === 'route')
+  assert.deepEqual(declared.map(blocker => blocker.code), ['route_credential_missing', 'route_base_url_missing'])
+  assert.deepEqual(declared[0].models, ['no-cred-model'])
+  assert.deepEqual(declared[1].models, ['no-base-model'])
+  assert.match(declared[0].message, /tmax agent apply dsh-main/)
+
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.deepEqual(body.routes.map(route => route.name), ['tmax', 'no-cred', 'no-base'])
+  assert.equal(body.routes[1].credentialRef, null)
+  assert.equal(body.routes[1].credentialConfigured, null)
+  assert.deepEqual(body.routes[1].models.map(model => model.id), ['no-cred-model'])
+})
+
+test('a malformed credential reference skips only that route with a declared blocker', async () => {
+  const scenario = withSecondRoute(baseScenario(), { name: 'bad-ref', credentialRef: 'bad-ref' })
+  const { state } = await applied({ scenario, context: { rejectCredentialRefs: ['bad-ref'] } })
+
+  // One bad reference never drops the working route.
+  assert.deepEqual(state.routes, ['tmax'])
+  assert.equal(state.registrations.length, 1)
+  const status = (await getJson(state, '/_tmax/status')).body
+  const invalid = status.blockers.filter(blocker => blocker.code === 'route_credential_invalid')
+  assert.equal(invalid.length, 1)
+  assert.equal(invalid[0].source, 'route')
+  assert.match(invalid[0].message, /bad-ref/)
+  assert.deepEqual(invalid[0].models, ['bad-ref-model'])
+
+  const body = (await getJson(state, '/_tmax/state')).body
+  const bad = body.routes.find(route => route.name === 'bad-ref')
+  assert.ok(bad)
+  assert.equal(bad.active, false)
+  assert.deepEqual(bad.blockers.map(blocker => blocker.code), ['route_credential_invalid'])
+  assert.equal(body.routes.find(route => route.name === 'tmax').active, true)
+})
+
+test('state routes carry liveness and the declared route blockers', async () => {
+  const scenario = withSecondRoute(baseScenario(), { name: 'partial', contextWindow: 1000 })
+  // A second model with no context capacity on the same route is hidden.
+  scenario.agentInspect.data.providers.find(entry => entry.name === 'partial').models.push({ id: 'hidden', protocol: 'responses' })
+  scenario.agentInspect.data.native_projection.find(entry => entry.name === 'partial').models.push({
+    id: 'hidden',
+    protocol: 'responses',
+    capabilities: {},
+    efforts: [],
+    projection: { fields: {} },
+  })
+  scenario.explain.hidden = explain('public-model')
+  const { state } = await applied({ scenario })
+  assert.deepEqual(state.routes, ['tmax', 'partial'], 'only a route with a usable model registers')
+
+  const body = (await getJson(state, '/_tmax/state')).body
+  const partial = body.routes.find(route => route.name === 'partial')
+  assert.equal(partial.active, true)
+  assert.deepEqual(partial.blockers.map(blocker => blocker.code), ['route_model_context_window_unknown'])
+  assert.deepEqual(partial.blockers[0].models, ['hidden'])
+
+  const status = (await getJson(state, '/_tmax/status')).body
+  const routeCodes = status.blockers.filter(blocker => blocker.source === 'route').map(blocker => blocker.code)
+  assert.deepEqual(routeCodes, ['route_model_context_window_unknown', 'route_model_context_window_unknown'])
+})
+
+test('a provider inspect failure stays a per-provider error record', async () => {
+  const scenario = baseScenario()
+  delete scenario.inspect['cpa-us2']
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ok, true)
+  assert.deepEqual(body.providers.tmax.map(provider => provider.id), ['kimi', 'cpa-us2'])
+  assert.equal(body.providers.tmax[0].error, null)
+  assert.equal(body.providers.tmax[1].error.code, 'unknown_resource')
+  assert.equal(typeof body.providers.tmax[1].error.message, 'string')
+  assert.deepEqual(body.errors, [], 'a provider row error is not a section failure')
+  const status = (await getJson(state, '/_tmax/status')).body
+  assert.ok(status.blockers.some(blocker => blocker.source === 'provider' && blocker.code === 'unknown_resource'))
+})
+
+test('a provider-list failure is a visible section error, not zero providers', async () => {
+  const scenario = baseScenario()
+  scenario.providerList = {
+    code: 'storage_unavailable',
+    status: 'error',
+    data: null,
+    blockers: [{ code: 'storage_unavailable', message: 'storage unavailable' }],
+    __exit: 4,
+  }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ok, true, 'the inventory itself was readable')
+  assert.deepEqual(body.providers.tmax, [])
+  const providersError = body.errors.find(error => error.section === 'providers')
+  assert.equal(providersError.code, 'storage_unavailable')
+  assert.equal(body.routes.length, 1)
+})
+
+test('an invalid config is reported without making the whole state unreadable', async () => {
+  const scenario = baseScenario()
+  scenario.configValidate = {
+    code: 'invalid_config',
+    status: 'error',
+    data: { valid: false, revision: 'rev-bad' },
+    blockers: [{ code: 'invalid_config', message: 'Unknown field "bogus" in the saved configuration' }],
+    __exit: 4,
+  }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ok, true)
+  assert.equal(body.config.state, 'invalid')
+  assert.equal(body.config.revision, 'rev-bad')
+  assert.deepEqual(body.config.errors, [{
+    code: 'invalid_config',
+    message: 'Unknown field "bogus" in the saved configuration',
+  }])
+  assert.equal(body.routes[0].active, true)
+  assert.equal(body.diagnostics.lastError, null)
+  assert.ok(body.errors.some(error => error.section === 'config' && error.code === 'invalid_config'))
+  const status = (await getJson(state, '/_tmax/status')).body
+  assert.ok(status.blockers.some(blocker => blocker.source === 'config' && blocker.code === 'invalid_config'))
+  assert.ok(status.blockers.some(blocker => blocker.source === 'section' && blocker.code === 'invalid_config'))
+})
+
+test('an absent saved configuration is valid evidence, not unavailable', async () => {
+  const scenario = baseScenario()
+  scenario.configValidate = { code: 'ok', status: 'success', data: { valid: true, revision: null, snapshot_state: 'absent' } }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.deepEqual(body.config, { state: 'valid', revision: null, errors: [] })
+  assert.equal(body.diagnostics.lastError, null)
+})
+
+test('routing candidates keep tmax evaluation order behind the selected row', async () => {
+  const scenario = baseScenario()
+  scenario.agentInspect.data.providers[0].models = [{ id: 'order-model', protocol: 'responses' }]
+  scenario.agentInspect.data.native_projection[0].models = [{
+    id: 'order-model',
+    protocol: 'responses',
+    capabilities: { contextWindow: 1000 },
+    efforts: [],
+    projection: { fields: {} },
+  }]
+  scenario.explain = {
+    'order-model': {
+      code: 'ok',
+      status: 'success',
+      data: {
+        selection: { qualified_model: 'b/order-model', provider: 'b', model: 'order-model', priority: 5 },
+        priority_evaluations: [
+          { qualified_model: 'a/order-model', priority_evaluation: { effective_priority: 0 } },
+          { qualified_model: 'b/order-model', priority_evaluation: { effective_priority: 5 } },
+          { qualified_model: 'c/order-model', priority_evaluation: { effective_priority: 1 } },
+        ],
+        excluded_candidates: [],
       },
-      exitCode: 3,
     },
-  })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  const connectRoute = state.httpRoutes.find(route => route.path === '/_tmax/connect')
-  const response = await call(connectRoute.handler, request())
-  assert.equal(response.statusCode, 409)
-  assert.equal(response.body.ok, false)
-  assert.equal(response.body.code, 'gateway_not_ready')
-  assert.equal(response.body.message, 'Explicitly start the configured gateway')
-  assert.ok((await tmax.calls()).includes('agent apply dsh-main'))
+  }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.deepEqual(
+    body.routing[0].candidates.map(candidate => candidate.qualifiedModel),
+    ['b/order-model', 'a/order-model', 'c/order-model'],
+    'selected leads, the rest keep evaluation order rather than priority order',
+  )
 })
 
-test('connect preview passes --dry-run instead of applying', async () => {
-  const tmax = await fakeTmax({
-    'agent inspect': ok(inspect),
-    'gateway status': ok(gateway),
-    'agent apply': {
-      code: 'dry_run_ready',
-      status: 'dry_run',
-      data: { target: 'dsh-main', dry_run: true, files: [], effects: { native_writes: false } },
-    },
-  })
-  const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: tmax.path, target: 'dsh-main', refreshSeconds: 3600 })
-  const connectRoute = state.httpRoutes.find(route => route.path === '/_tmax/connect')
-
-  const byBody = await call(connectRoute.handler, request({ body: { preview: true } }))
-  assert.equal(byBody.statusCode, 200)
-  assert.equal(byBody.body.connect.dry_run, true)
-
-  const byQuery = await call(connectRoute.handler, request({ url: '/_tmax/connect?preview=1' }))
-  assert.equal(byQuery.statusCode, 200)
-
-  const applyCalls = (await tmax.calls()).filter(call => call.startsWith('agent apply'))
-  assert.deepEqual(applyCalls, ['agent apply dsh-main --dry-run', 'agent apply dsh-main --dry-run'])
+test('a model explain failure stays a per-row routing error', async () => {
+  const scenario = baseScenario()
+  delete scenario.explain['public-model']
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  const row = body.routing.find(entry => entry.model === 'public-model')
+  assert.equal(row.error.code, 'unknown_resource')
+  assert.equal(row.selection, null)
+  assert.deepEqual(body.errors, [], 'a routing row error is not a section failure')
 })
 
-test('connect reports a transport failure as 502', async () => {
+test('the state cache serves repeated reads and single-flights cold ones', async () => {
+  const warm = await applied()
+  await warm.fake.clearCalls()
+  const first = await getJson(warm.state, '/_tmax/state')
+  const inspectsAfterFirst = (await warm.fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'inspect').length
+  const second = await getJson(warm.state, '/_tmax/state')
+  assert.deepEqual(second.body, first.body)
+  assert.equal(
+    (await warm.fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'inspect').length,
+    inspectsAfterFirst,
+    'a warm read spawns no new composition',
+  )
+
+  // Two cold readers share one composition (single-flight).
+  const cold = await applied()
+  await cold.fake.clearCalls()
+  await cold.fake.update({ ...baseScenario(), delayFor: 'agent inspect', delayMs: 120 })
+  const [left, right] = await Promise.all([
+    callRoute(routeOf(cold.state, '/_tmax/state'), 'GET', {}),
+    callRoute(routeOf(cold.state, '/_tmax/state'), 'GET', {}),
+  ])
+  assert.deepEqual(left.body, right.body)
+  const inspects = (await cold.fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'inspect').length
+  assert.equal(inspects, 1, 'one cold composition serves both readers')
+  await cold.fake.update(baseScenario())
+})
+
+test('an unchanged route set does not churn the adapter registration', async () => {
+  const { fake, state } = await applied()
+  const eventsOf = () => state.events.filter(([event]) => event === 'llm/models-updated').length
+  const initialEvents = eventsOf()
+  assert.equal(state.replaces, 0)
+
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(250)
+  assert.equal(state.replaces, 0, 'the same route names are not replaced')
+  assert.equal(eventsOf(), initialEvents, 'no registry event for an unchanged set')
+  assert.deepEqual(state.routes, ['tmax'])
+
+  await fake.patch(current => {
+    current.agentInspect.data.providers[0].name = 'renamed'
+    current.agentInspect.data.native_projection[0].name = 'renamed'
+  })
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(250)
+  assert.equal(state.replaces, 1, 'a changed route set is replaced once')
+  assert.equal(eventsOf(), initialEvents + 1, 'the change is announced')
+  assert.deepEqual(state.routes, ['renamed'])
+})
+
+test('a model-only change replaces the route and announces it', async () => {
+  const { fake, state } = await applied()
+  const eventsOf = () => state.events.filter(([event]) => event === 'llm/models-updated').length
+  const initialEvents = eventsOf()
+  assert.equal(state.replaces, 0)
+
+  await fake.patch(current => {
+    current.agentInspect.data.providers[0].models.push({ id: 'extra-model', protocol: 'responses' })
+    current.agentInspect.data.native_projection[0].models.push({
+      id: 'extra-model',
+      protocol: 'responses',
+      capabilities: { contextWindow: 5000, input: ['text'] },
+      efforts: [],
+      projection: { fields: {} },
+    })
+    current.explain['extra-model'] = explain('public-model')
+  })
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(300)
+
+  assert.equal(state.replaces, 1, 'the same route name with changed content is replaced')
+  assert.equal(eventsOf(), initialEvents + 1, 'the model picker is told to refresh')
+  assert.equal(state.events.at(-1)[1], 'tmax')
+  const models = state.adapterOptions.profiles().get('tmax').piProvider.getModels()
+  assert.equal(models.length, 3)
+  assert.ok(models.some(model => model.id === 'extra-model'))
+
+  // A capability-only change is content too.
+  await fake.patch(current => {
+    current.agentInspect.data.native_projection[0].models[0].capabilities.contextWindow = 300000
+  })
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(300)
+  assert.equal(state.replaces, 2, 'a capability change is replaced')
+  assert.equal(eventsOf(), initialEvents + 2)
+  const updated = state.adapterOptions.profiles().get('tmax').piProvider.getModels()
+  assert.equal(updated.find(model => model.id === 'public-model').contextWindow, 300000)
+})
+
+test('a failed registration replacement keeps the working route live', async () => {
+  const scenario = withSecondRoute(baseScenario(), { name: 'other' })
+  const { fake, state } = await applied({ scenario })
+  assert.deepEqual(state.routes, ['tmax', 'other'])
+
+  state.replaceThrows = true
+  await fake.patch(current => {
+    const provider = current.agentInspect.data.providers[1]
+    provider.name = 'third'
+    provider.models[0].id = 'third-model'
+    const projection = current.agentInspect.data.native_projection.find(entry => entry.name === 'other')
+    projection.name = 'third'
+    projection.models[0].id = 'third-model'
+    current.explain['third-model'] = explain('public-model')
+  })
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(300)
+  const body = await freshState(state)
+
+  assert.deepEqual(state.routes, ['tmax', 'other'], 'the previous registration stays live')
+  assert.equal(state.registrations.length, 1)
+  assert.equal(state.replaces, 1, 'the replacement was attempted')
+  assert.deepEqual([...state.adapterOptions.profiles().keys()], ['tmax', 'other'])
+  assert.equal(body.ownership.conflict.code, 'route_owner_conflict')
+  assert.match(body.ownership.conflict.message, /DUPLICATE_ADAPTER/)
+})
+
+test('DUPLICATE_ADAPTER becomes a route_owner_conflict blocker and assigns no profiles', async () => {
+  const { state } = await applied({ context: { throwDuplicate: true } })
+  assert.equal(state.registrations.length, 1)
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.adapterOptions.profiles().size, 0)
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'other')
+  assert.equal(body.ownership.conflict.code, 'route_owner_conflict')
+  assert.match(body.ownership.conflict.message, /DUPLICATE_ADAPTER/)
+})
+
+test('teardown disposes routes and an in-flight refresh never re-registers', async () => {
+  const { fake, state } = await applied()
+  assert.deepEqual(state.routes, ['tmax'])
+  assert.equal(state.registrations.length, 1)
+
+  await fake.update({ ...baseScenario(), delayFor: 'agent inspect', delayMs: 200 })
+  await fake.clearCalls()
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(50)
+  for (const dispose of state.effects) {
+    if (typeof dispose === 'function') dispose()
+  }
+  await settle(400)
+  assert.equal(state.registrations.length, 1, 'the in-flight refresh did not register after disposal')
+  assert.deepEqual(state.routes, [], 'the disposed registration is gone')
+
+  const callsAfterDisposal = (await fake.calls()).length
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(100)
+  assert.equal((await fake.calls()).length, callsAfterDisposal)
+  await fake.update(baseScenario())
+})
+
+test('a late initial registration is disposed when the plugin unloads first', async () => {
+  const home = await emptyHome()
+  const fake = await fakeTmax({ ...baseScenario(), delayFor: 'agent inspect', delayMs: 150 }, home)
   const { ctx, state } = fakeContext()
-  await apply(ctx, { tmaxPath: '/definitely/missing/tmax', target: 'dsh-main', refreshSeconds: 3600 })
-  const connectRoute = state.httpRoutes.find(route => route.path === '/_tmax/connect')
-  const response = await call(connectRoute.handler, request())
-  assert.equal(response.statusCode, 502)
-  assert.equal(response.body.ok, false)
-  assert.equal(response.body.code, 'connect_unavailable')
+  const pending = apply(ctx, { tmaxPath: fake.path, home, refreshSeconds: 3600 })
+  for (let attempt = 0; attempt < 200 && state.effects.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.ok(state.effects.length > 0, 'the cleanup effect is installed before the read')
+  for (const dispose of state.effects) {
+    if (typeof dispose === 'function') dispose()
+  }
+  await pending
+  assert.equal(state.registrations.length, 0, 'no registration after unload')
+  assert.equal(state.httpRoutes.length, 0, 'no HTTP routes after unload')
+})
+
+// ---------------------------------------------------------------------------
+// Tests: optional services acquired by injection (S4).
+
+test('optional services injected late or replaced still receive registrations', async () => {
+  const home = await emptyHome()
+  const fake = await fakeTmax(baseScenario(), home)
+  const { ctx, state } = fakeContext({ deferred: ['webServer', 'tools', 'skills', 'commands'] })
+  await apply(ctx, { tmaxPath: fake.path, home, refreshSeconds: 3600 })
+
+  assert.deepEqual(state.routes, ['tmax'], 'the required services still activate the plugin')
+  assert.equal(state.httpRoutes.length, 0)
+  assert.deepEqual(state.tools, [])
+  assert.deepEqual(state.skills, [])
+  assert.deepEqual(state.commands, [])
+
+  const makeServer = () => {
+    const server = { routes: [], register(route) { server.routes.push(route); return () => { server.routes = server.routes.filter(candidate => candidate !== route) } } }
+    return server
+  }
+  const first = makeServer()
+  state.provide('webServer', first)
+  assert.ok(first.routes.some(route => route.path === '/_tmax/state'), 'a late web server receives the routes')
+
+  // A replacement disposes the old registrations and registers on the new one.
+  const second = makeServer()
+  state.provide('webServer', second)
+  assert.equal(first.routes.length, 0, 'the replaced server keeps no live routes')
+  assert.ok(second.routes.some(route => route.path === '/_tmax/state'))
+  assert.ok(second.routes.some(route => route.path === '/_tmax/connect'))
+
+  const toolRegistry = { register(definition) { state.tools.push(definition); return () => {} } }
+  state.provide('tools', toolRegistry)
+  assert.equal(state.tools.find(definition => definition.name === 'tmax_status')?.name, 'tmax_status')
+
+  const skillRegistry = { register(definition) { state.skills.push(definition); return () => {} } }
+  state.provide('skills', skillRegistry)
+  assert.equal(state.skills[0].name, 'tmax')
+
+  const commandRegistry = { register(definition) { state.commands.push(definition); return () => {} } }
+  state.provide('commands', commandRegistry)
+  assert.equal(state.commands[0].name, 'tmax')
+})
+
+// ---------------------------------------------------------------------------
+// Tests: HTTP route surface, POST hardening, and explicit operations.
+
+test('POST actions are hardened: method, media type, origin, size, JSON, scope, and busy', async () => {
+  const { state } = await applied()
+  const route = routeOf(state, '/_tmax/observe')
+
+  const wrongMethod = await callRoute(route, 'GET', {})
+  assert.equal(wrongMethod.statusCode, 405)
+  assert.equal(wrongMethod.headers.allow, 'POST')
+
+  const noType = await callRoute(route, 'POST', { body: '{}' })
+  assert.equal(noType.statusCode, 415)
+
+  const wrongType = await callRoute(route, 'POST', { body: '{}', headers: { 'content-type': 'text/plain' } })
+  assert.equal(wrongType.statusCode, 415)
+
+  const jsonWithCharset = await callRoute(route, 'POST', { body: '{}', headers: { 'content-type': 'application/json; charset=utf-8' } })
+  assert.equal(jsonWithCharset.statusCode, 200)
+
+  const crossOrigin = await postJson(state, '/_tmax/observe', {}, { origin: 'http://evil.test' })
+  assert.equal(crossOrigin.statusCode, 403)
+
+  const crossSite = await postJson(state, '/_tmax/observe', {}, { 'sec-fetch-site': 'cross-site' })
+  assert.equal(crossSite.statusCode, 403)
+
+  const sameOrigin = await postJson(state, '/_tmax/observe', {}, { origin: 'http://localhost:3080' })
+  assert.equal(sameOrigin.statusCode, 200)
+
+  const tooLarge = await callRoute(route, 'POST', { body: '{}', headers: { 'content-type': 'application/json', 'content-length': String(20 * 1024) } })
+  assert.equal(tooLarge.statusCode, 413)
+
+  const notJson = await callRoute(route, 'POST', { body: '{not json', headers: { 'content-type': 'application/json' } })
+  assert.equal(notJson.statusCode, 400)
+
+  const invalidScope = await postJson(state, '/_tmax/observe', { scope: 'galaxy' })
+  assert.equal(invalidScope.statusCode, 400)
+  assert.equal(invalidScope.body.code, 'invalid_scope')
+
+  const invalidDryRun = await postJson(state, '/_tmax/observe', { dryRun: 'yes' })
+  assert.equal(invalidDryRun.statusCode, 400)
+  assert.equal(invalidDryRun.body.code, 'invalid_dry_run')
+})
+
+test('concurrent observe requests are rejected with busy', async () => {
+  const { fake, state } = await applied()
+  await fake.update({ ...baseScenario(), delayFor: 'provider refresh', delayMs: 150 })
+  const first = postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  await new Promise(resolve => setTimeout(resolve, 40))
+  const second = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  assert.equal(second.statusCode, 409)
+  assert.equal(second.body.code, 'busy')
+  const firstResult = await first
+  assert.ok(firstResult.statusCode === 200 || firstResult.statusCode === 207)
+  await fake.update(baseScenario())
+})
+
+test('explicit observe reports all-failed and partial outcomes without claiming success', async () => {
+  const scenario = baseScenario()
+  scenario.refresh = {
+    kimi: { exec: refreshFailed('kimi'), dryRun: refreshDryRun('kimi') },
+    'cpa-us2': { exec: refreshFailed('cpa-us2'), dryRun: refreshDryRun('cpa-us2') },
+  }
+  const { fake, state } = await applied({ scenario })
+  await fake.clearCalls()
+  const failed = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  assert.equal(failed.statusCode, 207)
+  assert.equal(failed.body.ok, false)
+  assert.deepEqual(failed.body.items.map(item => item.status), ['failed', 'failed'])
+  assert.ok(failed.body.items.every(item => item.code === 'observation_failed'))
+  assert.ok(failed.body.state, 'state accompanies the outcome')
+  assert.equal(failed.body.dryRun, false)
+
+  // Partial: one completed, one blocked-by-configuration is not a transport failure.
+  await fake.patch(current => {
+    current.refresh.kimi.exec = refreshOk('kimi')
+    current.refresh['cpa-us2'].exec = refreshUnsupported('cpa-us2')
+  })
+  const partial = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  assert.equal(partial.statusCode, 200)
+  assert.equal(partial.body.ok, true)
+  assert.deepEqual(partial.body.items.map(item => item.status), ['refreshed', 'blocked'])
+  assert.equal(partial.body.items[1].code, 'unsupported_source')
+
+  // Mixed with a real failure: not success.
+  await fake.patch(current => {
+    current.refresh['cpa-us2'].exec = refreshFailed('cpa-us2')
+  })
+  const mixed = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  assert.equal(mixed.statusCode, 207)
+  assert.equal(mixed.body.ok, false)
+  assert.deepEqual(mixed.body.items.map(item => item.status), ['refreshed', 'failed'])
+})
+
+test('dry-run observe previews with --dry-run and performs no agent request', async () => {
+  const { fake, state } = await applied({
+    prefix: '',
+    context: glmAgentContext().context,
+  })
+  await fake.clearCalls()
+  const realFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => { fetchCalls += 1; return new Response('{}', { status: 200 }) }
+  try {
+    const preview = await postJson(state, '/_tmax/observe', { scope: 'all', dryRun: true })
+    assert.equal(preview.statusCode, 200)
+    assert.equal(preview.body.ok, true)
+    const refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
+    assert.equal(refreshes.length, 2)
+    assert.ok(refreshes.every(argv => argv.includes('--dry-run')))
+    assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged', 'unchanged', 'unchanged'])
+    assert.ok(preview.body.items.every(item => item.code === 'dry_run'))
+    assert.equal(fetchCalls, 0, 'dry run makes no vendor request')
+    assert.equal(state.resolveCalls, 0, 'dry run resolves no credential')
+    assert.equal(preview.body.state.providers.agent[0].state, 'not_observed')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('agent-configured providers are cache-only on GET and observed only on explicit POST', async () => {
+  const { state } = await applied({ context: glmAgentContext().context })
+  const realFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => {
+    fetchCalls += 1
+    return new Response(JSON.stringify(GLM_QUOTA_BODY), { status: 200 })
+  }
+  try {
+    const before = await getJson(state, '/_tmax/state')
+    assert.equal(before.body.providers.agent.length, 1)
+    assert.equal(before.body.providers.agent[0].state, 'not_observed')
+    assert.equal(before.body.providers.agent[0].vendor, 'glm-coding-plan')
+    assert.equal(before.body.providers.agent[0].observedAt, null)
+    assert.equal(fetchCalls, 0)
+    assert.equal(state.resolveCalls, 0)
+    // The legacy route is cache-only too.
+    const legacy = await callRoute(routeOf(state, '/_tmax/dsh-usage'), 'GET', { headers: {} })
+    assert.equal(legacy.statusCode, 200)
+    assert.equal(fetchCalls, 0)
+
+    const observed = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+    assert.equal(observed.statusCode, 200)
+    assert.deepEqual(observed.body.items, [{ source: 'agent', id: 'dsh:glm-coding-cn', status: 'refreshed' }])
+    assert.equal(fetchCalls, 1)
+    assert.equal(state.resolveCalls, 1)
+    assert.equal(observed.body.state.providers.agent[0].state, 'observed')
+    assert.equal(observed.body.state.providers.agent[0].rows[0].percent, 37)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a failed agent observation keeps the last reading and its time', async () => {
+  const { state } = await applied({ context: glmAgentContext().context })
+  const realFetch = globalThis.fetch
+  let mode = 'ok'
+  let fetchCalls = 0
+  globalThis.fetch = async () => {
+    fetchCalls += 1
+    return mode === 'ok'
+      ? new Response(JSON.stringify(GLM_QUOTA_BODY), { status: 200 })
+      : new Response('', { status: 500 })
+  }
+  try {
+    const first = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+    assert.equal(first.body.items[0].status, 'refreshed')
+    const good = first.body.state.providers.agent[0]
+    assert.equal(good.state, 'observed')
+    assert.equal(good.rows.length, 1)
+    assert.equal(typeof good.observedAt, 'string')
+    assert.deepEqual(good.plan, { level: 'pro' })
+
+    mode = 'fail'
+    const second = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+    assert.equal(second.body.items[0].status, 'failed')
+    assert.equal(second.body.items[0].code, 'upstream_rejection')
+    const after = second.body.state.providers.agent[0]
+    assert.equal(after.state, 'failed')
+    assert.equal(after.observedAt, good.observedAt, 'the reading time survives the failed attempt')
+    assert.equal(after.rows.length, 1, 'the last reading survives')
+    assert.equal(after.rows[0].percent, 37)
+    assert.deepEqual(after.plan, { level: 'pro' })
+    assert.equal(after.reasonCode, 'upstream_rejection')
+    assert.match(after.message, /upstream 500/)
+    assert.equal(fetchCalls, 2)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a blocked agent observation never overwrites the cached reading', async () => {
+  const credential = { value: 'test-key' }
+  const { state } = await applied({
+    context: glmAgentContext({
+      resolveCredential: async () => (credential.value === undefined ? undefined : { value: credential.value }),
+    }).context,
+  })
+  const realFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => {
+    fetchCalls += 1
+    return new Response(JSON.stringify(GLM_QUOTA_BODY), { status: 200 })
+  }
+  try {
+    const first = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+    const good = first.body.state.providers.agent[0]
+    assert.equal(good.state, 'observed')
+    assert.equal(good.rows.length, 1)
+
+    credential.value = undefined
+    const second = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+    assert.equal(second.body.items[0].status, 'blocked')
+    assert.equal(second.body.items[0].code, 'credential_unavailable')
+    assert.equal(fetchCalls, 1, 'a blocked observation makes no vendor request')
+    const after = second.body.state.providers.agent[0]
+    assert.equal(after.state, 'observed', 'the prior reading stays readable')
+    assert.equal(after.observedAt, good.observedAt)
+    assert.equal(after.rows.length, 1)
+    assert.equal(after.reasonCode, null)
+    assert.deepEqual(after.plan, { level: 'pro' })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a blocked or failed observation with no prior reading fabricates nothing', async () => {
+  const realFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => {
+    fetchCalls += 1
+    return new Response('', { status: 500 })
+  }
+  try {
+    const blocked = await applied({
+      context: glmAgentContext({ resolveCredential: async () => undefined }).context,
+    })
+    const blockedBody = await postJson(blocked.state, '/_tmax/observe', { scope: 'agent' })
+    assert.equal(blockedBody.body.items[0].status, 'blocked')
+    assert.equal(blockedBody.body.items[0].code, 'credential_unavailable')
+    const blockedRecord = blockedBody.body.state.providers.agent[0]
+    assert.equal(blockedRecord.state, 'not_observed')
+    assert.equal(blockedRecord.observedAt, null)
+    assert.deepEqual(blockedRecord.rows, [])
+    assert.equal(blockedRecord.plan, null)
+    assert.equal(blockedRecord.reasonCode, 'credential_unavailable')
+    assert.equal(fetchCalls, 0)
+
+    const failed = await applied({ context: glmAgentContext().context })
+    const failedBody = await postJson(failed.state, '/_tmax/observe', { scope: 'agent' })
+    assert.equal(failedBody.body.items[0].status, 'failed')
+    const failedRecord = failedBody.body.state.providers.agent[0]
+    assert.equal(failedRecord.state, 'failed')
+    assert.deepEqual(failedRecord.rows, [])
+    assert.equal(typeof failedRecord.observedAt, 'string')
+    assert.equal(failedRecord.reasonCode, 'upstream_rejection')
+    assert.equal(fetchCalls, 1)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a provider named after a vendor is observed only when its base URL matches the vendor', async () => {
+  const provider = {
+    provider: 'opencode-go',
+    displayName: 'Custom OpenCode',
+    defaultBaseURL: 'https://llm.example.test/v1',
+    settingsNs: 'llm-pi-ai',
+    settingsPath: ['providers', 'opencode-go'],
+    declared: true,
+  }
+  const { state } = await applied({
+    context: {
+      settingsDescribe: () => [{
+        ns: 'llm-pi-ai',
+        value: { providers: { 'opencode-go': { apiKeyEnv: 'CUSTOM_KEY', baseURL: 'https://llm.example.test/v1', models: [{ id: 'custom-model' }] } } },
+      }],
+      configurableProviders: () => [provider],
+    },
+  })
+  const realFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => { fetchCalls += 1; return new Response('{}', { status: 200 }) }
+  try {
+    const before = (await getJson(state, '/_tmax/state')).body
+    assert.equal(before.providers.agent[0].vendor, null)
+    assert.equal(before.providers.agent[0].reasonCode, 'unsupported_source')
+    const observed = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+    assert.equal(observed.statusCode, 200)
+    assert.deepEqual(observed.body.items.map(item => [item.id, item.status, item.code]), [
+      ['dsh:opencode-go', 'blocked', 'unsupported_source'],
+    ])
+    assert.equal(fetchCalls, 0, 'a vendor-named route without a vendor host makes no request')
+    assert.equal(state.resolveCalls, 0)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('dsh-usage reports unavailable agent discovery', async () => {
+  const { state } = await applied({ context: { settingsUnavailable: true } })
+  const usage = await getJson(state, '/_tmax/dsh-usage')
+  assert.equal(usage.statusCode, 200)
+  assert.equal(usage.body.ok, false)
+  assert.deepEqual(usage.body.providers, [])
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.ok(body.errors.some(error => error.section === 'providers' && error.code === 'agent_settings_unavailable'))
+  assert.deepEqual(body.providers.agent, [])
+})
+
+test('the legacy usage refresh route observes explicitly and reports per-item results', async () => {
+  const { state } = await applied()
+  const body = await postJson(state, '/_tmax/usage/refresh', {})
+  assert.equal(body.statusCode, 200)
+  assert.equal(body.body.ok, true)
+  assert.equal(body.body.dryRun, false)
+  assert.equal(body.body.providers.length, 2)
+  assert.deepEqual(body.body.items.map(item => item.status), ['refreshed', 'refreshed'])
+})
+
+// ---------------------------------------------------------------------------
+// Tests: S1 — the usage refresh route honors preview requests.
+
+test('POST /_tmax/usage/refresh honors dryRun/preview and never observes on preview', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+
+  const preview = await postJson(state, '/_tmax/usage/refresh', { dryRun: true })
+  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.body.ok, true)
+  assert.equal(preview.body.dryRun, true)
+  assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged', 'unchanged'])
+  let refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
+  assert.equal(refreshes.length, 2)
+  assert.ok(refreshes.every(argv => argv.includes('--dry-run')), 'a preview passes --dry-run to every refresh')
+
+  // The body `preview` alias and the query form are the same request.
+  await fake.clearCalls()
+  const aliased = await postJson(state, '/_tmax/usage/refresh', { preview: true })
+  assert.equal(aliased.statusCode, 200)
+  assert.equal(aliased.body.dryRun, true)
+  await fake.clearCalls()
+  const query = await callRoute(routeOf(state, '/_tmax/usage/refresh'), 'POST', {
+    body: '{}',
+    headers: { 'content-type': 'application/json' },
+    url: '/_tmax/usage/refresh?dry-run=1',
+  })
+  assert.equal(query.statusCode, 200)
+  assert.equal(query.body.dryRun, true)
+  refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
+  assert.ok(refreshes.every(argv => argv.includes('--dry-run')), 'the query preview never observes for real')
+
+  // A real request still observes.
+  await fake.clearCalls()
+  const executed = await postJson(state, '/_tmax/usage/refresh', { dryRun: false })
+  assert.equal(executed.statusCode, 200)
+  assert.equal(executed.body.dryRun, false)
+  assert.deepEqual(executed.body.items.map(item => item.status), ['refreshed', 'refreshed'])
+  refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
+  assert.ok(refreshes.every(argv => argv.includes('--dry-run') === false), 'a real refresh never previews')
+})
+
+// ---------------------------------------------------------------------------
+// Tests: Connect through `tmax agent apply TARGET [--dry-run]`.
+
+test('connect previews with --dry-run, executes without it, and returns state without key material', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const preview = await postJson(state, '/_tmax/connect', { dryRun: true })
+  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.body.ok, true)
+  assert.equal(preview.body.dryRun, true)
+  assert.deepEqual(preview.body.connect.effects, { native_writes: false, secret_reads: false, processes_started: false, locks_created: false })
+  assert.ok(preview.body.state)
+  let calls = await fake.calls()
+  assert.deepEqual(
+    calls.find(argv => argv[0] === 'agent' && argv[1] === 'apply'),
+    ['agent', 'apply', 'dsh-main', '--dry-run'],
+  )
+  assert.equal(calls.some(argv => argv[0] === 'dsh'), false)
+
+  await fake.clearCalls()
+  const executed = await postJson(state, '/_tmax/connect', { dryRun: false })
+  assert.equal(executed.statusCode, 200, 'a completed apply may report awaiting_native_reload')
+  assert.equal(executed.body.ok, true)
+  assert.equal(executed.body.connect.state, 'applied_reload_pending')
+  assert.equal(executed.body.connect.written, true)
+  assert.deepEqual(executed.body.connect.changed_files, ['/tmp/dsh/cordis.patch.yml'])
+  assert.deepEqual(executed.body.connect.effects, undefined, 'a real apply reports files, not preview effects')
+  calls = await fake.calls()
+  assert.deepEqual(
+    calls.find(argv => argv[0] === 'agent' && argv[1] === 'apply'),
+    ['agent', 'apply', 'dsh-main'],
+  )
+  assert.equal(JSON.stringify(executed.body).includes('gateway-key'), false)
+
+  // A refused connect is a 409 with the tmax blocker, still state-bearing.
+  await fake.patch(current => {
+    current.connect.exec = {
+      code: 'target_incomplete',
+      status: 'blocked',
+      data: null,
+      blockers: [{ code: 'target_incomplete', message: 'This DSH target has no gateway route to connect' }],
+      __exit: 3,
+    }
+  })
+  const refused = await postJson(state, '/_tmax/connect', { dryRun: false })
+  assert.equal(refused.statusCode, 409)
+  assert.equal(refused.body.ok, false)
+  assert.equal(refused.body.code, 'target_incomplete')
+  assert.equal(refused.body.message, 'This DSH target has no gateway route to connect')
+  assert.equal(refused.body.connect.blockers[0].code, 'target_incomplete')
+  assert.ok(refused.body.state)
+  await fake.update(baseScenario())
+})
+
+test('an unresolvable connect target is a typed 409 refusal, not a 502', async () => {
+  const scenario = baseScenario()
+  scenario.agentList = { code: 'ok', status: 'success', data: { agents: [] } }
+  const { state } = await applied({ scenario })
+  const result = await postJson(state, '/_tmax/connect', { dryRun: true })
+  assert.equal(result.statusCode, 409)
+  assert.equal(result.body.ok, false)
+  assert.equal(result.body.code, 'unknown_resource')
+  assert.match(result.body.message, /No declared DSH target matches/)
+})
+
+test('a connect transport failure is a 502, not a typed refusal', async () => {
+  const { fake, state } = await applied()
+  await fake.patch(current => {
+    current.connect.exec = { __raw: 'not a tmax envelope', __exit: 4 }
+  })
+  const result = await postJson(state, '/_tmax/connect', { dryRun: false })
+  assert.equal(result.statusCode, 502)
+  assert.equal(result.body.ok, false)
+  assert.equal(result.body.code, 'connect_unavailable')
+  await fake.update(baseScenario())
+})
+
+// ---------------------------------------------------------------------------
+// Tests: home ownership and the S2 comment fix.
+
+test('home-entry detection accepts block and embedded-JSON forms and ignores comments', () => {
+  assert.equal(hasHomeEntry('- id: llm-tmax\n  name: /home/u/.dsh/tmax-dsh.mjs'), true)
+  assert.equal(hasHomeEntry("- id: 'llm-tmax'"), true)
+  assert.equal(hasHomeEntry('{"insert":[{"id":"llm-tmax","name":"/home/u/.dsh/tmax-dsh.mjs"}]}'), true)
+  assert.equal(hasHomeEntry('- id: credentials\n- id: agent-default-model'), false)
+  assert.equal(hasHomeEntry('# llm-tmax is installed elsewhere'), false)
+  assert.equal(hasHomeEntry('- id: llm-tmaxx'), false)
+  assert.equal(hasHomeEntry(undefined), false)
+  assert.equal(hasHomeEntry(''), false)
+  // A commented-out entry is not an installed entry.
+  assert.equal(hasHomeEntry('# - id: llm-tmax'), false)
+  assert.equal(hasHomeEntry('  # - {"insert":[{"id":"llm-tmax"}]}'), false)
+  assert.equal(hasHomeEntry('- id: other\n  # id: llm-tmax'), false)
+  // A `#` inside a quoted scalar is content, not a comment.
+  assert.equal(hasHomeEntry('- {"insert":[{"id":"llm-tmax","name":"/tmp/#tmax-dsh.mjs"}]}'), true)
+})
+
+test('a commented-out home entry does not count as an installed home plugin', async () => {
+  const home = await emptyHome()
+  await writeFile(join(home, 'cordis.patch.yml'), '# - id: llm-tmax\n#   name: tmax-dsh.mjs\n')
+  await writeFile(join(home, 'tmax-dsh.mjs'), 'export {}\n')
+  const { state } = await applied({ config: { home } })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.deepEqual(body.ownership.homeIntegration, { present: false, entry: false, artifact: true })
+  assert.equal(body.ownership.owner, 'unknown')
+  assert.equal(body.ownership.conflict.code, 'home_integration_partial')
+  assert.deepEqual(state.routes, [], 'a commented-out entry is not an installed owner')
+})
+
+test('home ownership defers registration and reports home_wide scope', async () => {
+  const home = await emptyHome()
+  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n  name: tmax-dsh.mjs\n')
+  await writeFile(join(home, 'tmax-dsh.mjs'), 'export const name = "llm-tmax"\n')
+  const { state } = await applied({
+    config: { home, manageRoutes: 'auto' },
+    context: { liveNames: ['tmax'] },
+  })
+
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.registrations.length, 0)
+  const body = await getJson(state, '/_tmax/state')
+  assert.deepEqual(body.body.ownership, {
+    mode: 'auto',
+    owner: 'home',
+    scope: 'home_wide',
+    reason: null,
+    homeIntegration: { present: true, entry: true, artifact: true },
+    conflict: null,
+  })
+  assert.deepEqual(body.body.routes[0].blockers, [])
+  assert.deepEqual(state.credentialRefCalls, [])
+  assert.equal(body.body.routes[0].scope, 'home_wide')
+})
+
+test('a partial home integration is unknown with a blocker', async () => {
+  const home = await emptyHome()
+  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
+  const { state } = await applied({ config: { home } })
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.registrations.length, 0)
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'unknown')
+  assert.equal(body.ownership.conflict.code, 'home_integration_partial')
+  const status = (await getJson(state, '/_tmax/status')).body
+  assert.ok(status.blockers.some(blocker => blocker.source === 'ownership' && blocker.code === 'home_integration_partial'))
+})
+
+test('the home artifact must be a regular file', async () => {
+  const home = await emptyHome()
+  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
+  await mkdir(join(home, 'tmax-dsh.mjs'))
+  const { state } = await applied({ config: { home } })
+  assert.deepEqual(state.routes, [])
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'unknown')
+  assert.equal(body.ownership.homeIntegration.artifact, false)
+  assert.equal(body.ownership.conflict.code, 'home_integration_partial')
+})
+
+test('a live route owned elsewhere is not duplicated', async () => {
+  const { state } = await applied({ context: { liveNames: ['tmax'] } })
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.registrations.length, 0)
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'other')
+  assert.equal(body.ownership.conflict.code, 'route_owner_conflict')
+  assert.deepEqual(body.ownership.conflict.routes, ['tmax'])
+})
+
+test('live provider records are reduced to ids for ownership and liveness', async () => {
+  assert.deepEqual(providerIds(['a', { id: 'b', name: 'B' }, { name: 'no-id' }, null, 7, '']), ['a', 'b'])
+  const { state } = await applied({ context: { liveNames: [{ id: 'tmax', name: 'Home tmax' }] } })
+  assert.deepEqual(state.routes, [], 'a live route named tmax is not registered twice')
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'other')
+  assert.deepEqual(body.ownership.conflict.routes, ['tmax'])
+  assert.equal(body.routes[0].active, true, 'the projected route is live under another owner')
+})
+
+test('manageRoutes=false never registers, and manageRoutes=true forces the page route with a warning', async () => {
+  const off = await applied({ config: { manageRoutes: false } })
+  assert.deepEqual(off.state.routes, [])
+  assert.equal(off.state.adapterOptions, undefined)
+  const offBody = (await getJson(off.state, '/_tmax/state')).body
+  assert.equal(offBody.ownership.owner, 'none')
+  assert.equal(offBody.ownership.scope, null)
+  assert.equal(offBody.ownership.mode, false)
+  assert.equal(offBody.ownership.reason, 'route_management_disabled')
+  assert.equal(offBody.routes[0].active, false, 'nothing registered the route')
+  assert.deepEqual(offBody.routes[0].blockers, [], 'the disabled page claims no route blockers')
+
+  const home = await emptyHome()
+  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
+  await writeFile(join(home, 'tmax-dsh.mjs'), 'export {}\n')
+  const offHome = await applied({ config: { home, manageRoutes: false } })
+  assert.deepEqual(offHome.state.routes, [])
+  assert.equal(offHome.state.adapterOptions, undefined)
+  const offHomeBody = (await getJson(offHome.state, '/_tmax/state')).body
+  assert.equal(offHomeBody.ownership.owner, 'home')
+  assert.equal(offHomeBody.ownership.scope, 'home_wide')
+  assert.equal(offHomeBody.ownership.conflict, null)
+  assert.equal(offHomeBody.ownership.mode, false)
+
+  const forced = await applied({ config: { home, manageRoutes: true } })
+  assert.deepEqual(forced.state.routes, ['tmax'])
+  const forcedBody = (await getJson(forced.state, '/_tmax/state')).body
+  assert.equal(forcedBody.ownership.owner, 'page')
+  assert.equal(forcedBody.ownership.mode, true)
+  assert.equal(forcedBody.ownership.conflict.code, 'home_integration_present')
+  assert.equal(forcedBody.routes[0].active, true)
+})
+
+test('an installed home integration does not dispose the working page route', async () => {
+  const home = await emptyHome()
+  const { state } = await applied({ config: { home } })
+  assert.deepEqual(state.routes, ['tmax'])
+  assert.equal(state.registrations.length, 1)
+
+  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
+  await writeFile(join(home, 'tmax-dsh.mjs'), 'export {}\n')
+  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
+  await settle(300)
+  const body = await freshState(state)
+  assert.equal(body.ownership.owner, 'page')
+  assert.equal(body.ownership.reason, 'home_integration_pending_reload')
+  assert.deepEqual(state.routes, ['tmax'], 'the working route stays live until DSH reloads')
+  assert.equal(state.registrations.length, 1, 'no second registration')
+  assert.equal(state.replaces, 0, 'an unchanged route set is not replaced')
+})
+
+test('manageRoutes is tri-state with auto as the default', () => {
+  assert.equal(normalizeManageRoutes(undefined), 'auto')
+  assert.equal(normalizeManageRoutes('auto'), 'auto')
+  assert.equal(normalizeManageRoutes(true), true)
+  assert.equal(normalizeManageRoutes('true'), true)
+  assert.equal(normalizeManageRoutes(false), false)
+  assert.equal(normalizeManageRoutes('false'), false)
+  assert.equal(normalizeManageRoutes('sometimes'), 'auto')
+})
+
+// ---------------------------------------------------------------------------
+// Tests: tools, skills, commands, history, and CLI helpers.
+
+test('tmax_status returns compact sections and triggers no observation', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const tool = state.tools.find(candidate => candidate.name === 'tmax_status')
+  assert.ok(tool)
+  const value = await tool.execute()
+  for (const key of ['ok', 'target', 'ownership', 'gateway', 'routes', 'providers', 'routing', 'diagnostics', 'blockers']) {
+    assert.ok(key in value, `tmax_status exposes ${key}`)
+  }
+  assert.deepEqual(value.routes.map(route => route.provider), ['tmax'])
+  assert.equal(value.providers.tmax.length, 2)
+  assert.equal(value.providers.agent.length, 0)
+  assert.equal(value.routing[0].selection.qualifiedModel, 'opencode-go-2/public-model')
+  const calls = await fake.calls()
+  assert.equal(calls.some(argv => argv[0] === 'provider' && argv[1] === 'refresh'), false)
+  assert.equal(calls.some(argv => argv[0] === 'agent' && argv[1] === 'apply'), false)
+  assert.equal(calls.some(argv => argv[0] === 'history'), false)
+})
+
+test('the tmax skill states explicit operations, unknowns, and no secret handling', async () => {
+  const { state } = await applied()
+  const skill = state.skills.find(candidate => candidate.name === 'tmax')
+  assert.ok(skill)
+  const content = skill.content
+  assert.match(content, /never contacts a provider/i)
+  assert.match(content, /unknown/i)
+  assert.match(content, /Never put keys or tokens/i)
+  assert.match(content, /tmax agent apply/)
+  assert.equal(/dsh connect/i.test(content), false)
+  assert.equal(/always.{0,40}dry-run/i.test(content), false)
+  assert.equal(/dry-run before mutations/i.test(content), false)
+})
+
+test('the /tmax command registers once and reads state or history only', async () => {
+  const scenario = baseScenario()
+  scenario.history = {
+    code: 'ok',
+    status: 'success',
+    data: {
+      matched_retained_count: 1,
+      coverage: { process_instance: 'proc-1', retained_count: 1 },
+      records: [{ request: 'r1', time: '2026-11-23T09:00:00Z', time_basis: 'completed', outcome: 'ok', model: 'public-model', protocol: 'responses', provider: 'p' }],
+    },
+  }
+  const { fake, state } = await applied({ scenario })
+  assert.equal(state.commands.length, 1)
+  const command = state.commands[0]
+  assert.equal(command.name, 'tmax')
+
+  await fake.clearCalls()
+  const status = await command.handler({ rawInput: 'status' })
+  assert.equal(status.kind, 'success')
+  assert.match(status.text, /tmax state: readable/)
+  let calls = await fake.calls()
+  assert.equal(calls.some(argv => argv[0] === 'history'), false)
+
+  await fake.clearCalls()
+  const history = await command.handler({ rawInput: 'history' })
+  assert.equal(history.kind, 'success')
+  assert.match(history.text, /records: 1 matched/)
+  calls = await fake.calls()
+  assert.deepEqual(calls, [['history', 'list']], 'the history command is one bounded read')
+
+  const unknown = await command.handler({ rawInput: 'galaxy' })
+  assert.equal(unknown.kind, 'error')
+  assert.match(unknown.text, /unknown \/tmax subcommand/)
+})
+
+test('GET /_tmax/history maps a retained-history read', async () => {
+  const scenario = baseScenario()
+  scenario.history = {
+    code: 'ok',
+    status: 'success',
+    data: {
+      coverage: { process_instance: 'proc-1', retained_count: 2, oldest: '2026-11-23T09:00:00Z' },
+      records: [
+        { request: 'r1', time: '2026-11-23T09:00:00Z', time_basis: 'completed', outcome: 'ok', model: 'public-model', protocol: 'responses', provider: 'p' },
+        { request: 'r2', time: '2026-11-23T09:01:00Z', time_basis: 'completed', outcome: 'failed', model: 'public-model', protocol: 'responses', provider: 'p', reason_code: 'upstream_rejection' },
+      ],
+    },
+  }
+  const { state } = await applied({ scenario })
+  const body = await getJson(state, '/_tmax/history')
+  assert.equal(body.statusCode, 200)
+  assert.equal(body.body.ok, true)
+  assert.equal(body.body.records.length, 2)
+  assert.equal(body.body.records[0].model, 'public-model')
+  assert.equal(body.body.coverage.processInstance, 'proc-1')
+})
+
+test('host CLI helpers trim DSH_HOME and keep the documented deadlines', () => {
+  assert.equal(REFRESH_TIMEOUT_MS, 45_000)
+  assert.equal(CONNECT_TIMEOUT_MS, 45_000)
+  assert.equal(INVENTORY_TIMEOUT_MS, 45_000)
+  assert.equal(resolveHome({}, { DSH_HOME: '  /tmp/dsh-home  ' }), '/tmp/dsh-home')
+  assert.equal(resolveHome({}, { DSH_HOME: '   ' }), join(homedir(), '.dsh'))
+  assert.equal(resolveHome({ home: '/explicit' }, { DSH_HOME: '/env' }), '/explicit')
+})
+
+test('the inventory module composes a projection-shaped object', async () => {
+  const home = await emptyHome()
+  const fake = await fakeTmax(baseScenario(), home)
+  const inventory = await readInventory({ target: 'dsh-main', tmaxPath: fake.path })
+  assert.equal(inventory.schema_version, 1)
+  assert.equal(typeof inventory.generated_at, 'string')
+  assert.equal(inventory.configuration_revision, 'rev-1')
+  assert.equal(inventory.authority, '/tmp/tmax')
+  assert.equal(inventory.tmax_version, '0.1.0')
+  assert.equal(inventory.target.id, 'dsh-main')
+  assert.deepEqual(inventory.target.routes, ['tmax'])
+  assert.deepEqual(inventory.routes.map(route => route.name), ['tmax'])
+  assert.deepEqual(inventory.routes[0].models.map(model => model.id), ['public-model', 'text-only', 'no-context'])
+  assert.deepEqual(inventory.blockers, [])
+
+  // The pure composer never invents a target: an empty dossier is empty.
+  const empty = composeInventory({ inspect: { agent: 'dsh', providers: [], native_projection: [] } })
+  assert.deepEqual(empty.routes, [])
+  assert.deepEqual(empty.target.routes, [])
+  assert.deepEqual(empty.blockers.map(blocker => blocker.code), ['gateway_unconfigured'])
+})
+
+test('the module exports the DSH plugin contract', async () => {
+  const module = await import('../index.js')
+  assert.equal(module.name, 'tmax')
+  assert.deepEqual(module.inject, ['llm', 'settings', 'credentials'])
+  assert.equal(typeof module.apply, 'function')
 })

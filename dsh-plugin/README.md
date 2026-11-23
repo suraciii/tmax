@@ -1,9 +1,24 @@
 # tmax
 
-Use tmax-managed model access inside DeepSeek Harness. The plugin reads tmax's
-target inventory — the declared DSH target, its relayed gateway entries, and
-their public models — and projects it into DSH; it does not copy keys or start
-the gateway.
+Use tmax-managed model access inside DeepSeek Harness. The plugin projects the
+DSH target tmax declares into DSH: a first-level page, four seats on DSH-owned
+pages, a read-only `/tmax` command, one read tool, and one skill. It reads
+tmax's effect-free inventory — `agent list`, `agent inspect`, `status`,
+`gateway status`, `provider list`/`provider inspect`, `config validate`, and
+`model explain` — and never copies keys, starts the gateway, or becomes a second
+configuration authority.
+
+Qualified against DSH **0.2.3-alpha.2** and tmax **0.1.0**: the plugin's host and
+client API fit, the composed inventory read model, and the action and command
+tests were exercised at that revision. The package declares `engines.dsh`
+`>=0.2.3-alpha.2 <0.3.0`; no other DSH version has been tested. The contract is
+owned by the
+[DSH plugin specification](../specs/integrations/dsh-plugin/spec.md); the
+[DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits) records what
+was and was not exercised, including the browser surfaces that remain
+unverified. That reference also carries the older source qualification of the
+independent `llm-tmax` home plugin (DSH 0.2.1-rc.2); it is separate from this
+profile bundle's evidence.
 
 ## Install or update
 
@@ -42,50 +57,93 @@ uninstalls it. The plugin used to be the `dsh-plugin/` directory; a profile that
 still links it needs one more `just dsh-install`, because that directory no
 longer carries a manifest.
 
-## Inventory source
+## Configuration
 
-The host half reads three read-only commands, each with a 10-second timeout:
+Configuration is optional. The plugin resolves the DSH home from `home`, then
+`DSH_HOME`, then `~/.dsh`, and selects the tmax target from `target`, or by that
+home when `target` is empty.
 
-| Command | Facts it owns |
-|---|---|
-| `tmax agent list` | Which declared target matches the DSH home, when the plugin has no explicit `target`. |
-| `tmax agent inspect <TARGET>` | The target's relayed provider entries, their selected models and native projection, the configuration revision, and tmax's own blockers. |
-| `tmax gateway status` | Daemon discovery state, gateway readiness, listen address, and the gateway reason code. |
-
-A failing inspect is reported as an error, with tmax's own code and message,
-rather than as an empty page. A configured gateway whose daemon is absent or
-stopped is reported as `ready: false` with `gateway_not_ready`, not as unknown;
-readiness stays unreported only when the `gateway status` read itself fails. The
-routes the target already declares stay visible either way. The plugin
-does not fall back to a removed `tmax dsh` command: an older tmax whose
-inspect predates these fields is reported as unsupported, with the next action
-being to update tmax.
-
-## Home-owned routes
-
-`tmax agent apply` can install the independent `llm-tmax` home plugin, which
-owns the tmax provider routes for that DSH home. When both plugins are active in
-one home, set `manageRoutes: false` on this plugin's entry so the page does not
-register a second copy of the same route names:
+| Key | Meaning |
+| --- | --- |
+| `home` | DSH home to inspect. Defaults to `DSH_HOME`, then `~/.dsh`. |
+| `target` | Declared tmax target ID. When empty, the one DSH target whose path matches the home is used. |
+| `manageRoutes` | `auto` (default), `true`, or `false`; see [Route ownership](#route-ownership). |
+| `providerPrefix` | Prefix for the provider route names this plugin registers when it serves the profile-scoped fallback. Empty by default; it does not rename the home integration's routes. |
+| `refreshSeconds` | Inventory refresh interval in seconds; an integer of at least 10, default `60`. It only re-reads tmax; it never observes a provider. |
+| `tmaxPath` | `tmax` executable to run. Defaults to `tmax` on `PATH`. |
 
 ```yaml
 - id: tmax
   config:
     home: /home/you/.dsh
     target: dsh-main
-    manageRoutes: false
 ```
 
-The page still reads inventory, status, and quota data. If the home plugin is
-removed, drop the key or set it to `true` to restore route registration.
+## Inventory source
+
+The host half composes one read model from effect-free tmax reads, each with a
+bounded deadline:
+
+| Command | Facts it owns |
+|---|---|
+| `tmax agent list` | Which declared target matches the DSH home, when the plugin has no explicit `target`. |
+| `tmax agent inspect <TARGET>` | The target's relayed provider entries, their selected models and native projection, applied and pending state, configuration revision, and tmax's own blockers. |
+| `tmax status` | The tmax data directory (reported as the state's authority) and the caller's tmax version. |
+| `tmax gateway status` | Daemon discovery state, gateway readiness, listen address, supervision, autostart, and shared-key load state. |
+| `tmax provider list` | The tmax provider rows: authentication, affected targets, integration, quota state, and suspension/failure summaries. |
+| `tmax provider inspect <ID>` | One provider's billing observations, freshness, quota suspension, and failure detail. |
+| `tmax config validate` | Whether the saved configuration is valid, its revision, and its errors. |
+| `tmax model explain <MODEL> --protocol <P>` | The selected route candidate, priorities, exclusions, and availability for one projected model. |
+
+A failing inspect is reported as an error, with tmax's own code and message,
+rather than as an empty page. A configured gateway whose daemon is absent or
+stopped is reported as `ready: false` with `gateway_not_ready`, not as unknown;
+readiness stays unreported only when the `gateway status` read itself fails. The
+routes the target already declares stay visible either way. There is no
+`tmax dsh` command and no snapshot contract: the plugin composes these reads
+directly, and `diagnostics.readModel` reports the source as `inventory`. An
+older tmax whose inspect predates the relayed-entry or native capability fields
+is reported as unsupported, with the next action being to update tmax.
+
+## Route ownership
+
+`tmax agent apply` can install the independent `llm-tmax` home plugin (the
+`llm-tmax` entry in the home `cordis.patch.yml` plus the `tmax-dsh.mjs`
+artifact), which owns the tmax provider routes for that DSH home. Those routes
+are common to every profile using that home.
+
+Normal use requires no `manageRoutes` setting: `auto` inspects the resolved home
+and defers to an installed home integration, otherwise the page registers the
+same routes for the running profile only (profile-scoped fallback). If a home
+integration is installed while the page still serves the fallback, the page
+keeps its routes until a DSH restart loads the home entry, and the page's next
+action is that reload.
+
+| Value | Effect |
+| --- | --- |
+| `auto` (default) | Home integration when installed; otherwise the profile-scoped fallback. Keeps working fallback routes until the reload that activates the home entry. |
+| `true` | Force the profile-scoped fallback even when a home integration is installed. This is a diagnostic override: duplicate registration can result, and the page reports that risk. |
+| `false` | Never register routes; read-only page. With no home integration the page reports route management as disabled and offers no Apply. |
+
+A route conflict, an incomplete home integration (entry without artifact, or the
+reverse), or a duplicate-adapter failure is reported as a blocker. The page
+keeps working instead of crashing or registering a partial route set. Route
+blockers describe only the profile-scoped fallback this plugin owns or tries to
+register; when the home integration owns the routes, the page claims no route
+blocker.
 
 ## Apply
 
-On the **tmax** page, select **Apply**. This runs `tmax agent apply` for the
-configured target, writing the target's native DSH routes and credential
-reference; the key is never returned to the browser. A request with
-`{"preview": true}` (or `POST /_tmax/connect?dry-run=1`) passes `--dry-run`, so
-the page can preview the change without writing.
+On the **tmax** page, select **Apply**. This first requests a preview
+(`{"preview": true}`, or `POST /_tmax/connect?dry-run=1`), which runs
+`tmax agent apply TARGET --dry-run` and writes nothing; the preview discloses the
+planned native writes, secret reads, started processes, created locks, and the
+files it would change. **Apply** then runs `tmax agent apply TARGET`, writing the
+target's native DSH files: the home `cordis.patch.yml` entry, the `tmax-dsh.mjs`
+artifact, and the credential reference in the adjacent `.credentials.yaml`. The
+result reports changed and unchanged files, applied state, recovery, blockers,
+next actions, and effects. The key never enters the browser, a log, or a
+response, and native file contents never cross.
 
 The terminal equivalents are:
 
@@ -94,124 +152,300 @@ tmax agent apply "$TARGET" --dry-run
 tmax agent apply "$TARGET"
 ```
 
+Apply is the only DSH or native write this page offers. Observation publishes
+provider evidence, which can feed tmax's automatic quota suspension, but writes
+no DSH or native state. Quota resume and failure reset are separate previewed
+tmax mutations. Gateway start, stop, and restart are separate previewed tmax
+operations; native restore, provider authentication, and profile or preset
+changes stay explicit CLI or tmax Web operations. No action chains into another.
+
+## Actions
+
+The page uses `POST /_tmax/action` for provider, gateway, and management
+actions. The browser names one action and its closed operands only; the host
+owns the exact tmax argv, timeout, and single-flight key. The page's Apply still
+uses `POST /_tmax/connect`, and its whole-surface Refresh still uses
+`POST /_tmax/observe`; those two routes remain supported compatibility forms for
+the same apply and observation operations.
+
+| Action | Where it appears | Preview | What confirmation does |
+| --- | --- | --- | --- |
+| **Observe quota** (`observe_provider`) | Every listed tmax provider | Provider refresh dry run | Publishes provider evidence; scope is `quota` by default. |
+| **Resume quota** (`resume_quota`) | Only a provider that reports a suspension | `provider quota-resume --dry-run` | Explicit tmax mutation that clears the suspension. |
+| **Reset failure** (`reset_failure`) | Only a provider with an active failure | `provider failure-reset --dry-run` | Explicit tmax mutation that clears the failure override. |
+| **Open management** (`open_management`) | Only a configured gateway | `tmax web status` listener readiness | Starts or reuses the tmax management listener and reports its ready URL. It does not start inference, reload configuration, or launch a browser. |
+| **Start gateway** (`gateway_start`) | Configured gateway that is not ready | `gateway start --dry-run` | Starts the tmax inference gateway, or reuses a compatible running owner. |
+| **Stop gateway** (`gateway_stop`) | Configured gateway that is ready or whose daemon is identified | `gateway stop --dry-run` | Stops the tmax inference gateway (not the Web listener) and reports interrupted work. |
+| **Restart gateway** (`gateway_restart`) | Configured gateway that is ready or whose daemon is identified | `gateway restart --dry-run` | Recycles the tmax inference gateway through its native manager and reports readiness. |
+| **Apply** (`connect`) | The Apply next action | `tmax agent apply TARGET --dry-run` | Writes the target's native DSH files. The page uses its own Apply panel. |
+
+Every action is previewed first and then explicitly confirmed or cancelled. A
+preview writes nothing and is reported separately from execution. The gateway
+card offers **Start gateway** whenever a configured gateway is not ready,
+including when readiness is unknown; that preview reports the current blocker
+instead of doing anything. **Stop gateway** or **Restart gateway** appear only
+when the gateway reports ready or its daemon is identified. A gateway action
+needs a readable current state and a configured gateway. Results show the typed
+code, status, message, data, blockers, next actions, and effects from tmax.
+Provider IDs are taken exactly from the current read model, and no client string
+reaches tmax argv.
+
+The outcomes are distinct:
+
+- `200` — the action or its preview completed; the body carries the typed
+  `result` and a freshly read state.
+- `409` — either tmax refused with a typed result and fresh state, or the request
+  named a provider outside the current read model, hit a busy action, or asked
+  for gateway lifecycle while the gateway is unconfigured or its state is
+  unavailable; those guards carry a typed refusal but no result or state.
+- `400` — the request itself was invalid; no result or state.
+- `502` — the current read model is unavailable (`state_unavailable`, no result or
+  state), or the attempt failed after it began: tmax did not answer or the host
+  itself failed (typed result and state when a read is available).
+
+A fresh state is a new read after the attempt, not the cached pre-action model.
+Action paths are covered by host/action tests; the pre-port temporary-profile
+HTTP checks are recorded in the [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits).
+The pre-port page was rendered in both light and dark themes and in English and
+Chinese locales; browser clicks on action controls, non-dry-run actions, and
+seat interactions beyond the sidebar marker and gateway card have not been
+browser-verified.
+
 ## The page
 
 The plugin claims a first-level page: `sidebar.panellist` adds the **tmax** row
-beside Plugins and Schedules, and `main` renders the page itself, so it owns a
-full content column instead of competing for room inside a settings section.
+beside Plugins and Schedules, and `main` renders the page itself.
 
-- **Access** — the DSH target, its home, the gateway address and a genuinely
-  three-valued readiness (ready / not ready / never reported, with tmax's
-  `reason_code` when there is one), the default model, and every route protocol.
-- **Models** — the inventory's model IDs as chips, or the reason there are none.
-  Whether tmax has runtime-verified a model is tmax's own evidence about itself;
-  it is not something this page can show or act on, so it is left out.
-- **Usage and limits** — one card per provider tmax reports, ordered by how much
-  attention it needs. Each window gets a proportional meter capped at a fixed
-  width so every card shares one 100% end, its share consumed, and its reset
-  date in the interface's language. A window at zero keeps a visible mark.
-  A suspended provider carries its own line: `额度已用尽 · 月 · 重置 …`, taken from
-  tmax's `reason_code`, `window`, and `reset_at`.
+- **Header** — one reachability verdict (Reachable, Gateway not ready, Status
+  unknown, Read failed, Not connected, Registered, not usable, Reload pending,
+  Configured, not active, Route conflict, Routes unavailable, Route management
+  disabled), one next action when an action can change the reported state, and
+  the state generation time, configuration revision, and state schema. A failed
+  refresh labels the retained table `Last known`.
+- **Status and access** — the DSH target and home, tmax authority, DSH
+  installation, route ownership, ownership mode, and the two home facts, applied
+  and pending state, tmax default versus DSH's effective default, each route's
+  protocol, base URL, scope, liveness, credential readiness, and blockers, the
+  gateway detail, configuration validation, a read failure for any part of this
+  section whose read failed, and the gateway's **Start**, **Stop**, and
+  **Restart** controls plus **Open management** as the reported state allows. If
+  the target inventory failed, routes and the target dossier are reported as
+  unavailable rather than partly invented.
+- **Models and routing** — projected models with kind, continuity, candidate
+  count, tmax availability, and capabilities; fields the target inspection does
+  not report stay unknown. Per model, the selected candidate, its effective
+  priority, the other candidates, and excluded candidates with their reasons.
+- **Providers and limits** — every provider tmax lists, including providers with
+  unknown quota: authentication, affected targets, subscription or renewal when
+  known, observation time, freshness, suspension, and failure. A provider with no
+  supported quota source says so, with its last attempt when the host reports
+  one, which is not the same as a provider that was never observed. Each provider
+  also carries the actions its evidence calls for: **Observe quota** always,
+  **Resume quota** only for a reported suspension, and **Reset failure** only for
+  an active failure. Providers this DSH profile configures appear in their own
+  subsection.
+- **Diagnostics** — read-model source (`inventory`), tmax version, state schema,
+  state generation time, last inventory read time, request-history availability
+  and its reason, last error, configuration revision, and the list of every
+  failed section read. The history area loads
+  only on **Load history** (no mount fetch), shows coverage and gaps with up to
+  20 retained rows and a more-count, keeps a typed unavailable answer distinct
+  from an empty history, and offers **Reload history** after a read. The
+  selected-model cell is unknown when the list record does not report it, there
+  is no duration column, and coverage includes the numeric incomplete-capture
+  count as a gap when positive.
+- **Action panel** — a previewed action's typed result, shown separately from
+  Refresh and Apply: code, status, message, data, blockers, next actions, and
+  effects, with explicit **Confirm** and **Cancel**.
 
-No provider is ever dropped. Credit counters (`counters.total`) are read as a
-share, so a balance like `剩余 75.6亿 / 80亿` gets a real meter. A row whose shape
-yields no share is shown as text with no meter at all — a bar is a claim about
-proportion, and drawing one for a value the plugin cannot compute would be a
-different kind of lie from omitting it.
+Opening the page reads one cached host read model, once. It never observes a
+provider on mount, on a visibility change, or on a timer. A section whose read
+failed names that failure in place and must not look like an empty result; a
+failed target inventory reports the target and routes as unavailable, not
+absent. Diagnostics repeats the complete list of failed reads. If the whole read
+model is unavailable, the page lists the failures and offers Retry.
 
-Both tmax window conventions (consumed and remaining) become the same filling
-meter, so a row never needs mental arithmetic. Every colour resolves through a
-`--dsw-alias-*` token, so the page follows the light and dark themes; the two
-semantic text tones mix toward the foreground label so they clear 4.5:1 in both
-themes, not only in light.
+**Refresh** observes the whole surface: tmax providers and the providers this
+DSH profile configures. A provider's **Observe quota** action observes that one
+provider without touching the rest. Both report each item as refreshed, blocked,
+failed, or unchanged, and a failed item is shown as a failure, never as a
+successful refresh. Agent-provider reads run with bounded concurrency and an
+overall deadline; a provider still unfinished at the deadline is reported as
+failed with `observation_deadline`, and any earlier reading stays.
 
-The header answers one question — can this page reach tmax and its gateway —
-with `可用`, `网关未就绪`, `状态未知`, `读取失败`, `未连接`, `检查中…`. A
-route inventory merely existing in DSH is not "ready", and a gateway whose readiness
-was never reported is not "not ready".
+Unknown is not absent and not zero. A provider with no supported quota source
+says so and gets no zero meter. A quota row without a computable share is text,
+never a bar; a zero-consumed window keeps a visible mark; the accessible value
+and the drawn share describe the same quantity.
 
-It deliberately says nothing about what the subscriptions are doing. A provider
-that used up its quota, or one tmax suspended, is a fact about that card; the
-card carries it, with the reason and the reset time. Repeating it as a page-wide
-state would make a normal, expected situation look like a fault.
+Times come from the data: the header shows when the host composed the state,
+provider rows show their own observation time, and the providers section names
+the oldest reading on screen. The page never re-stamps an old reading. A failed
+read keeps the last good table and shows the failure next to it.
 
-A quota reading is a timestamped observation, not a live fact. Opening the page
-reads the cache and shows it; it re-observes the providers
-(`tmax provider refresh <id> --scope quota`) only when that cache has expired —
-older than five minutes, or never read. Reaching a provider costs a live request
-each, so a fresh open costs none. A deliberate **Refresh** always re-observes.
+## Seats
 
-The page states one thing about time: `更新于 HH:mm`, taken from the **oldest**
-reading on screen rather than the newest, and from the data rather than from the
-moment the page read its cache — so it can never overstate freshness, and it
-carries a date once the reading is not from today. Providers
-are not annotated individually and no reading is branded stale — either the
-number is what tmax last observed, and the header says when, or the read failed
-and the failure is named. A failed read or refresh keeps the last good table and
-shows its reason beside it: an outage must not erase a reading, and a refresh
-that fails must not look like a no-op.
+The plugin also adds four small surfaces to DSH's own pages. Each registers on a
+declared slot only when the DSH composition provides it; missing packages simply
+mean that seat is absent, and the plugin page keeps working. The bundle injects
+the DSH client packages it needs: `dsh-client-locale`, `dsh-client-ui-sidebar`,
+`dsh-client-ui-layout`, `dsh-client-ui-conversation`,
+`dsh-client-ui-model-selection`, `dsh-client-ui-settings-models`, and
+`dsh-client-ui-tool`.
 
-**Refresh** re-observes everything on demand.
+| Seat | Where it appears | What it does |
+| --- | --- | --- |
+| Sidebar marker | Trailing slot of the **tmax** row in the sidebar panel list | A non-interactive dot with screen-reader text: an invalid configuration, `a blocker is reported`, `gateway not ready`, `quota suspended`, or `route conflict` as errors; an unavailable configuration, a failed section read, or no usable route as warnings; `unknown` when no state is readable. It never opens the page or runs an action. |
+| Models footer card | **Settings > Models**, below the model list | Gateway readiness, active and usable route counts, model count, and the reason tmax models are or are not usable. **Apply** appears only when the page's own next action is Apply, then previews and confirms the same native DSH write as the page; **Reload** appears when the read failed or the next action is retry; **Open tmax** opens the plugin page when that page exists. |
+| Model menu option and routing pane | The model menu, only when the current selection is a tmax-provided model, and its tmax pane | The option opens a pane showing the selected model's kind, continuity, candidate count, availability, capabilities, and routing evidence. It never changes the selected model. **Reload routing** re-reads the cached host state only; dismiss closes the pane. |
+| Tool card | The `tmax_status` tool call | A compact card of the result the tool already returned: target, routes, gateway, provider and model counts, and blockers, with pending, unreadable, and failed states. It never performs a new read. |
+
+Seat reads are GET-only and never observe a provider, apply, or mutate tmax.
+The only write from a seat is the settings card's explicit Apply preview and
+confirmation. Seats never change a DSH selection, setting, or route; they only
+add content on the slot they were given.
+
+Seat data is a one-shot GET taken when the seat mounts (seats mounted together
+share a short client cache). There is no subscription or timer, so an
+already-mounted marker or footer can lag a newer page read, an action result, or
+a state change until it remounts or the page reloads. The routing pane's
+**Reload routing**, the footer's **Reload**, and the footer's **Apply** are the
+only seat actions that read again.
+
+A failed, unavailable, or non-ok read renders the affected seat counts as
+unknown, never as zero: unknown routes, models, or providers are not "none
+configured". Only a readable empty list counts as zero.
+
+## /tmax command
+
+When the host exposes DSH's optional `commands` service, the plugin registers
+`/tmax`, a human read command. It never sends a model turn and never writes,
+observes, refreshes, applies, or starts a service.
+
+```text
+/tmax [status|providers|routing|gateway|diagnostics|history]
+```
+
+Empty input shows `status`. The subcommands print the same facts as the page's
+read model in bounded text:
+
+- `status` — target and effective default, applied and pending state, routes and
+  credential readiness, gateway readiness, provider counts, and blockers.
+- `providers` — every tmax provider's authentication, integration, quota state,
+  freshness, observation time, suspension, and failure; agent-configured
+  providers separately. Unknown quota stays unknown, never zero.
+- `routing` — every projected model's selection, candidates, exclusions, and any
+  per-model error.
+- `gateway` — readiness, listener, daemon discovery, supervision, autostart, and
+  shared-key state.
+- `diagnostics` — read-model source (`inventory`), state generation time,
+  revision, tmax version, history availability, last inventory read time, last
+  error, and every section error.
+- `history` — a read-only `tmax history list`: coverage, range, matched and
+  omitted counts, and a bounded record list. It reads the same retained metadata
+  as the page's history area; an unavailable daemon or history is reported with
+  its reason, never as an empty history.
+
+Output is bounded: at most 20 routes, 40 tmax providers and 40 agent-configured
+providers, 40 routing rows, 20 section errors, and 10 history records; at most
+10 blockers; each cell is capped at 120 characters. A truncated list states how
+many rows were omitted. An unknown or multi-word subcommand returns an error
+with the usage and performs no read. A failed or absent section prints
+`unavailable (code: message)` for that section instead of zero counts. The
+page's `GET /_tmax/history` table and this subcommand share one retained-history
+contract; neither returns bodies, headers, or secrets.
 
 ## HTTP routes
 
-Both are served on the DSH web server and guarded by the composition's
-`connection.requestRejection` fence.
+The routes are exact paths on the DSH web server and use DSH's authenticated
+route admission (`auth` defaults to `required`). The plugin adds same-origin,
+JSON media-type, 16 KiB body-size, and single-flight checks to its POST actions.
 
 | Route | Effect |
-|---|---|
-| `GET /_tmax/status` | Secret-free inventory summary, gateway readiness, routes, blockers. |
-| `GET /_tmax/usage` | Provider quota rows as last observed, with their observation time. |
-| `POST /_tmax/usage/refresh` | Re-observes quotas through tmax, then returns the same payload. |
-| `POST /_tmax/connect` | Runs `tmax agent apply` for the configured target, then refreshes; `{"preview": true}` passes `--dry-run`. |
-| `GET /_tmax/dsh-usage` | Quota reads for providers the agent is configured with, taken without tmax. Cached for the same five minutes, `?force=1` to re-read. |
+| --- | --- |
+| `GET /_tmax/state` | The host read model used by the page: `ok`, `schemaVersion`, `generatedAt`, `configurationRevision`, `tmaxVersion`, `authority`, `target`, `ownership` including its mode, `gateway`, `config`, `routes`, `providers` (tmax and agent), `routing`, `diagnostics` including `readModel` (`inventory`), and a top-level `errors` list naming every failed section read. Reads cached state only; `502` only when the host cannot produce any state. |
+| `GET /_tmax/status` | First-generation page compatibility summary of the same read model. Reads cached state only. |
+| `GET /_tmax/usage` | First-generation provider and usage rows from the same read model. Reads cached state only. |
+| `GET /_tmax/dsh-usage` | First-generation cached readings for providers this DSH profile configures. Reads cached state only and never observes. |
+| `GET /_tmax/history` | Explicit retained-history read. One read-only `tmax history list` (45 s) mapped to `{ ok, generatedAt, coverage, records, truncated?, omitted? }` with at most 50 compact rows; a typed unavailable daemon/history answer is `200` with `ok:false` and its reason (never an empty history), while a missing transport envelope is `502` `history_unavailable`. Bodies, headers, URLs, and secrets never cross. |
+| `POST /_tmax/observe` | Explicit observation. Body `{ "scope": "all", "dryRun": false }`, where `scope` is `all`, `tmax`, or `agent`. Returns per-provider outcomes and fresh state: `200` when no item failed, `207` when one did, `409` when an observation is already running, and `502` when the host cannot run the observation at all. |
+| `POST /_tmax/connect` | Explicit Apply. Body `{ "dryRun": true }` previews through `tmax agent apply TARGET --dry-run`; `{ "dryRun": false }` executes. Returns the typed result and fresh state (`200`). A typed refusal from tmax is `409` with the refusal and fresh state; an unresolved target is `409` with its typed code and writes nothing; a busy Apply is `409` `busy` with no state; a transport failure, timeout, or output that is not a JSON envelope is `502` `connect_unavailable`. |
+| `POST /_tmax/action` | The allowlisted action surface used by the page for provider and management actions. Body `{ "action": "...", "provider"?: "...", "scope"?: "...", "dryRun": true }` for `connect`, `observe_provider`, `resume_quota`, `reset_failure`, `open_management`, `gateway_start`, `gateway_stop`, and `gateway_restart`. `200`: typed `result` plus fresh state. `409`: typed refusal plus fresh state, or an unknown-provider, gateway guard, or busy refusal with neither. `400`: invalid request with neither. `502`: `state_unavailable` with neither, or a transport/no-envelope failure with a typed `result` and state when a read is available. |
+| `POST /_tmax/usage/refresh` | First-generation explicit tmax observation. Same rules as the `tmax` scope of `/_tmax/observe`; a `dryRun`/`preview` body or `?dry-run=1`/`?preview=1` performs no real
+observation. |
 
-It also registers the `tmax_status` tool and the `tmax` skill for agents.
+`POST /_tmax/connect` and `POST /_tmax/observe` remain supported compatibility
+forms: the page's Apply and Refresh still use them, and provider, gateway, or
+management actions use `POST /_tmax/action`. The plugin also registers the
+`tmax_status` tool and the `tmax` skill for agents. The tool reads the same
+cached model and never observes.
+
+No route returns key material. Responses, logs, argv, and error text are
+secret-free, and action and apply payloads are filtered to non-secret fields.
+The page keeps no tmax data in browser storage.
 
 ## Providers the agent configures itself
 
 The page is not limited to providers tmax manages. It also reads the model
-configuration of the running DSH profile — through `settings` and
-`credentials`, never by parsing the profile file — and, for the vendors tmax
-already implements, queries that vendor's quota endpoint directly.
+configuration of the running DSH profile through `settings` and the
+configurable-provider directory, never by parsing profile files, and for the
+vendors tmax already implements it observes that vendor's quota endpoint only
+after an explicit Refresh or that provider's Observe quota action.
 
 Each vendor is implemented separately, because a subscription quota is not a
-protocol: every vendor has its own endpoint, its own auth style (GLM wants the
-key raw, the rest want a bearer token), and its own idea of a window. A provider
-whose vendor has no implementation is not guessed at — it simply is not a row
-this page draws.
+protocol: every vendor has its own endpoint, its own auth style (GLM wants the key
+raw, the rest want a bearer token), and its own idea of a window. The destination
+must match a vendor's host and path exactly; a custom proxy URL does not borrow a
+vendor's endpoint or send it the provider's key. A provider whose vendor has no
+implementation is reported as having no supported quota source, never as zero or
+unlimited.
 
-Two records become one card when they describe one account: a vendor tmax knows
-only one provider for identifies it outright, and a vendor with several uses the
-reading to say which. Two providers on one vendor with different keys answer
-differently and stay apart, so a suspended instance is never silently folded
-into a healthy sibling.
+Providers that share one vendor and one credential reference are read once, but
+each configured provider keeps its own row, so a suspended instance is never
+folded into a healthy sibling.
 
-The card carries no provenance label. One account is one card — that is the
-whole statement, and a caption explaining the page's own bookkeeping would be
-the page talking about itself.
+No credential value leaves the host: `apiKeyEnv` is a reference, resolved only
+inside the explicit observation, and only the vendor's JSON crosses back to the
+page.
 
-No credential value leaves the host: `apiKeyEnv` is a reference, resolved at
-request time, and only the vendor's JSON ever crosses back to the page.
+The vendor quota reads are implemented twice — once in tmax (Rust) and once in
+this plugin — because the two read different credential stores: tmax can only
+reach keys in its own secret file, and the agent's keys live in DSH's. They share
+a contract, not code: `test/fixtures/quota-contract.json` holds each vendor's
+response body and the rows both sides must project from it, and
+`crates/tmax-core` asserts the same file from its own test. Changing a quota
+projection means changing that fixture, which breaks the other side's test.
 
 ## Limitations
 
-- A route is only projected when the tmax target declares one protocol for it;
-  a mixed-protocol entry is skipped and named as a blocker.
-- Models with unknown context capacity are hidden rather than given a guessed
-  value; unknown input modalities are advertised as text-only.
-- No quota editor, provider manager, or write tool. Those stay in the tmax CLI.
-- Agent-configured providers are read-only and cover only vendors tmax already
-  implements; a vendor without one is reported as nothing rather than as zero.
-- A provider the agent configures is observed on page load, not tracked: its
-  reading carries no observation history.
-- The vendor quota reads are implemented twice — once in tmax (Rust) and once in
-  this plugin — because the two read different credential stores: tmax can only
-  reach keys in its own secret file, and the agent's keys live in DSH's. They
-  share a contract, not code: `test/fixtures/quota-contract.json` holds each
-  vendor's response body and the rows both sides must project from it, and
-  `crates/tmax-core` asserts the same file from its own test. Changing a quota
-  projection means changing that fixture, which breaks the other side's test.
+- Routes are registered only when the tmax target declares them; mixed-protocol
+  entries are refused.
+- A route with no usable credential reference or base URL is not registered. It
+  stays visible with a typed blocker instead of being silently hidden.
+- Models with unknown context capacity are hidden from DSH with a route blocker
+  rather than given a guessed value; unknown input modalities are advertised as
+  text-only.
+- The page has no configuration editor: provider, model, alias, priority, and
+  schedule edits stay in the tmax CLI or Web. Apply is its only DSH or native
+  write; its other operations are observation, the previewed provider repairs,
+  and the previewed gateway lifecycle actions.
+- Agent-configured providers are read-only and cover only vendors tmax
+  implements. Their observations are explicit and have no history.
+- Request bodies, headers, URLs, model output, error-log viewing, and history
+  clear or export controls are not shipped. The page's history table and
+  `/tmax history` read retained metadata only; a successful load with no retained
+  records is empty, while a typed unavailable answer stays unavailable.
+- The `/_tmax/state` payload is the plugin's own contract composed from tmax's
+  effect-free reads; it is not a tmax CLI contract.
+- Native restore, provider authentication, and profile/preset/session features
+  are not page operations. Gateway start, stop, and restart are previewed page
+  actions; Open management starts or reuses the management listener only.
+- The sidebar marker and gateway card were seen in a real temporary DSH page
+  render of the pre-port host read model, in both light and dark themes and in
+  English and Chinese locales. The ported read model is covered by host tests;
+  the settings footer, model option and pane, tool card, `/tmax` command
+  invocation, a successful history-table load, and non-dry-run actions have not
+  been browser-verified.
 - Install/uninstall stays with DSH; tmax does not manage DSH profiles.
 
 ## License

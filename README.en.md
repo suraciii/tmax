@@ -84,6 +84,7 @@ longer carries a manifest.
 
 - [CLI usage](docs/usage.md) — provider and model setup, native configuration,
   and the local gateway.
+- [DSH plugin](dsh-plugin/README.md) — install, page surfaces, actions, and limits.
 - [Documentation index](docs/README.md) — user guides.
 - [Product specification](specs/product/spec.md) — product scope and boundaries.
 - [Building and verification](docs/building.md) — dependencies and project checks.

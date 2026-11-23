@@ -229,6 +229,30 @@ native representation, and request intent, including this lossy DSH boundary.
 The [versioned DSH reference](../../docs/agents/dsh.md) records source evidence
 and its limits without establishing an untested version range or provider access.
 
+### DSH plugin boundary
+
+A DSH profile may also load the `tmax` profile plugin. That plugin serves a
+first-level page, four seats on DSH-owned pages, a read-only `/tmax` human
+command when DSH exposes its optional `commands` service, a bounded
+retained-history read, one read tool, and one skill inside the profile. The page
+composes its read model from tmax's effect-free reads — agent, provider,
+gateway, configuration, and model inspection — plus an explicit retained-history
+read, and adds only the DSH-side facts tmax cannot know. The plugin is not
+another route owner and not another tmax authority; configuration authority
+stays with the [product contract](../product/spec.md#configuration-authority),
+and tmax's CLI and Web remain where configuration is authored.
+
+| Surface | Required behavior |
+| --- | --- |
+| Ownership | The [home boundary](#dsh-home-boundary) `llm-tmax` entry remains the sole managed adapter entry. A profile-scoped page may register the projected routes only when no home integration is present in the resolved home. That page fallback is a transitional exception owned by the [DSH plugin contract](dsh-plugin/spec.md#route-ownership). |
+| Conflict | Two owners must never serve one route name. A detected live-route conflict or a duplicate-adapter registration failure is reported as a blocker. The plugin must not crash, replace the other registration, or register a partial set. |
+| Transition | An installed home integration is not live until a DSH start loads that home entry. While the home routes are absent, working profile-scoped routes must remain, and the needed DSH reload is reported. Routes must not be dropped during the transition. |
+| Mode | `manageRoutes` accepts `auto` (the default), `true`, or `false`. Normal use requires no setting. `auto` defers to an installed home integration; `true` is a diagnostic override that reports the duplicate-registration risk when a home integration exists; `false` never registers routes. |
+| Installation | Installing, updating, or removing the profile plugin stays with DSH. `agent apply` and `agent restore` own only the home entry, the home artifact, and its native fields; they do not install, configure, or remove the page plugin. |
+| Apply | The page's Apply action is the previewed `agent apply` operation on the configured target: it writes the home `llm-tmax` entry, the `tmax-dsh.mjs` artifact, and the adjacent native credential reference. It is tmax's native application, not a plugin-authored format, and it is the page's only DSH or native write. |
+| Read model | The plugin maps tmax's effect-free reads into one plugin-owned state contract; it does not add a tmax command, require a snapshot command, or become a tmax CLI contract. `diagnostics.readModel` reports `inventory`, and a failed read is a visible section error. The [DSH plugin contract](dsh-plugin/spec.md#state-consumer-contract) owns the shape. |
+| Surfaces | The plugin may add the page, four additive seats, a read-only `/tmax` command, a bounded retained-history read, and allowlisted previewed actions; each is admitted only under the [DSH plugin contract](dsh-plugin/spec.md), which owns its content and rules. No surface observes on open, changes a DSH selection or setting, or acts without explicit preview and confirmation. |
+
 Sources:
 
 - [Codex authentication](https://developers.openai.com/codex/auth),

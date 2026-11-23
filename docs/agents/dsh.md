@@ -1,11 +1,23 @@
 # DeepSeek Harness (DSH)
 
-Source-qualified version: **0.2.1-rc.2**. Consulted 2026-10-27 from the installed
-checkout `/home/szf/repos/deepseek-harness`, source commit
-[`687f282e8625c6b8d11ff58211a90524be2e4317`](https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317).
-No supported version range is inferred. See the
-[reference index](README.md) and the owning
-[DSH home boundary](../../specs/integrations/spec.md#dsh-home-boundary).
+Two separate version claims apply to this reference:
+
+- **Native integration sources: 0.2.1-rc.2.** Consulted 2026-10-27 from a local checkout of
+  `deepseek-harness`, source commit
+  [`687f282e8625c6b8d11ff58211a90524be2e4317`](https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317).
+  These citations own the native home target, loader, adapter, credential, and
+  model-field sections below.
+- **Profile plugin: 0.2.3-alpha.2.** Consulted 2026-11-23 from the running source
+  install and a local checkout of `deepseek-harness`, source commit
+  [`4b399c39a6d1479cd84ca591b4d7c88e24d38a96`](https://github.com/deepseek-ai/deepseek-harness/tree/4b399c39a6d1479cd84ca591b4d7c88e24d38a96)
+  (tag `dsh-v0.2.3-alpha.2`). These citations own the [profile page
+  plugin](#profile-page-plugin) surfaces: client slots, locale, the optional
+  command service, authenticated web routes, and credential `describe`.
+
+No supported version range is inferred. See the [reference index](README.md), the
+owning [DSH home boundary](../../specs/integrations/spec.md#dsh-home-boundary), the
+[DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary), and
+the [DSH plugin contract](../../specs/integrations/dsh-plugin/spec.md).
 
 ## Configure through tmax
 
@@ -117,6 +129,50 @@ Sources at the pinned revision:
 [shared adapter registry](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/llm/llm/src/index.ts#L393-L458),
 [shared provider directory](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/llm/llm/src/index.ts#L488-L538),
 and [native loader import](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/vendor/loader/src/config/tree.ts#L110-L128).
+
+## Profile page plugin
+
+A separate bundle entry with id `tmax` may load in a DSH profile. It adds a
+first-level page (`sidebar.panellist` plus `main`), four seats on DSH-owned pages
+(`sidebar.panellist.trailing`, `settings.models.footer`,
+`conversation.input.model.options` and `.pane`, and `tool.call.toolview` keyed
+`tmax_status`), a read-only `/tmax` human command when the host exposes the
+optional `commands` service, a bounded retained-history area in Diagnostics, one
+read tool, one skill, and exact authenticated web routes. The page, seats, and
+command read one host model; the page reads the model composed from tmax's
+effect-free commands — `agent list` when no target is configured, `agent inspect
+TARGET`, `status`, `gateway status`, `provider list`, `provider inspect`,
+`config validate`, and `model explain` — and adds only the DSH-side facts tmax
+cannot know. There is no `tmax dsh` command, no snapshot contract, and no
+fallback source: `diagnostics.readModel` reports `inventory`, and a failed read
+is a visible section error.
+
+The page's Apply action is the previewed `tmax agent apply TARGET [--dry-run]`
+operation: it writes the target's native DSH files (the home `cordis.patch.yml`
+`llm-tmax` entry, the `tmax-dsh.mjs` artifact, and the adjacent credential
+reference) and is the page's only DSH or native write. When the home integration
+is installed, that integration owns the provider routes and the page does not
+register a second copy; the profile-scoped fallback is the transitional
+exception in the shared [DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary).
+Seats are additive and non-authoritative. The page also performs only previewed,
+allowlisted tmax operations, including provider observation, quota resume,
+failure reset, management-listener open, and gateway start, stop, and restart; it
+does not manage DSH profiles and does not author tmax configuration. Page
+behavior is owned by the
+[DSH plugin contract](../../specs/integrations/dsh-plugin/spec.md); installation
+and use are in the [plugin README](../../dsh-plugin/README.md).
+
+Sources at the running revision:
+[route admission default](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/host/webserver/src/index.ts#L781-L790),
+[provider registry](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/llm/llm/src/index.ts#L465-L470),
+[credential description](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/credentials/credentials/src/index.ts#L226),
+[redacted settings](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/settings/settings/src/index.ts#L324-L331),
+[effective default model](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/core/agent-default-model/src/index.ts#L68),
+[human command registry](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/interaction/commands/src/index.ts#L30),
+[sidebar trailing slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-sidebar/src/client/index.ts#L95),
+[models footer slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-settings-models/src/client/index.ts#L151),
+[model selection slots](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-model-selection/src/client/slots.ts#L54-L64),
+and [tool view slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-tool/src/client/apply.ts#L42).
 
 ## Protocol and model fields
 
@@ -275,6 +331,11 @@ and [`headless` bundle](https://github.com/deepseek-ai/deepseek-harness/blob/687
 | --- | --- |
 | Configuration contract | Native home target declaration, selection, explicit apply/restore, independent `llm-tmax` artifact and patch ownership, unchanged credential handoff, and the safety boundaries in the owning specification. |
 | Source inspection | The pinned 0.2.1-rc.2 checkout implements the cited patch layers, whole-entry configuration replacement, shared runtime and provider directory, reusable protocol adapter, model schema, credential service, and headless disablement. Source inspection is not a native parser or inference run. |
+| Profile plugin API fit, 2026-11-23 | The running DSH 0.2.3-alpha.2 (source launch, profile `web`) and the installed tmax 0.1.0 were inspected through `cordis_inspect` and source reads. The plugin's host and client rely on the exact authenticated web-route API (`auth` defaults to `required`), the provider registry, credential `describe`, redacted settings and the configurable-provider directory, client slots and locale registration, the optional `commands` service, and effective default-model selection that this version provides. This establishes API fit; the actual temporary-profile load is recorded in the pre-port render row below. |
+| Profile plugin inventory, actions, command, and tests, 2026-11-24 | The ported host composes one `/_tmax/state` contract from `agent list` (when no target is configured), `agent inspect TARGET`, `status`, `gateway status`, `provider list`/`provider inspect`, `config validate`, and `model explain`; no host path runs `tmax dsh`, and `diagnostics.readModel` reports `inventory`. Connect is the previewed `tmax agent apply TARGET [--dry-run]` native write. Host, action, command, history, and observation tests cover route ownership and liveness, credential readiness, section `errors`, allowlist validation, exact argv, preview versus execute, gateway guards and deadlines, busy, typed 409 refusals, 502 transport, secret-free results, every `/tmax` subcommand and its bounded output, the 45 s history read and its typed-unavailable split, and the page's explicit load state and unknown-count handling. The plugin Node suite passed 236/236 (host 64, actions 23, command 13, client 81, history 9, observations 9, quota 29, adapter 4, package 4). |
+| Ported inventory real-CLI check, 2026-11-24 | A latest-main binary was built for a read-only smoke check. The real user store is still configuration format 1, so the composed success path could not be exercised against it; the success path is covered by hermetic fake-CLI tests. Real-CLI reads covered target resolution, the typed `unsupported_tmax` gate against the older installed CLI, and the typed `invalid_configuration` answer against the latest binary. No mutation, apply, refresh, or profile load was performed. |
+| Pre-port profile page render, 2026-11-23 | A temporary DSH 0.2.3-alpha.2 profile loaded the earlier, snapshot-backed plugin and served the page. Real authenticated HTTP returned `GET /_tmax/state` `200`; the page rendered in the light theme, the sidebar **tmax** row showed its trailing marker text `a blocker is reported`, and the gateway card showed **Start gateway** and **Open management**. Real `POST /_tmax/action` previews returned `open_management` 200, `observe_provider` 200 `dry_run_ready`, `resume_quota` 200 `dry_run_ready`, a `gateway_start` dry run typed 409 `runtime_blocked`, and an unknown provider 409 typed; earlier checks covered `401` without the session cookie, `415` for a non-JSON observation POST, and `403` for a cross-origin POST. The page was also rendered in dark theme and with a zh-CN locale. This render exercised the pre-port snapshot-backed read model; it does not qualify the ported inventory-backed read model. Not verified in that run or since: a browser click on any action control, non-dry-run Apply/Refresh/actions, the settings footer card, the model menu option and routing pane, the `tmax_status` tool card, `/tmax` invocation, or a successful history-table load. |
+| Retained request history, 2026-11-23 | The history service was exercised against the live CLI and returned a typed `unavailable` / `daemon_identity_unavailable` at HTTP 200 rather than an empty history. Host and client tests cover the typed-unavailable versus transport-502 split, the allowlist, the 50-row response cap and omission count, the page's explicit **Load history** state, the 20-row table, coverage and gaps including the numeric incomplete-capture count, the more-count, and the empty-versus-unavailable rule. A successful history-table load or interaction in a browser was not verified; the live read was the unavailable case only. |
 | Independent-plugin loader and protocols, 2026-10-27 | Actual DSH 0.2.1-rc.2 loaded the independent home artifact through its native Loader. A synthetic loopback smoke run passed Chat Completions, Responses, and Messages using an attachment-local PNG image and an `echo` tool declaration. Each route returned the expected text, a tool call, usage of 11 input / 5 output / 16 total tokens, a `tool-calls` finish, and generated replay state. Wire requests carried the truthful `deepseek-harness/0.2.1-rc.2` User-Agent and resolved the native credential reference despite incorrect ambient API keys. This qualifies these local request paths, not hosted access or a replay-state follow-up. |
 | Independent-plugin application and recovery, 2026-10-27 | An isolated run used the public Rust apply path, issued native DSH requests through all three protocols, and restored the target with exit 0. Restore removed the newly owned home plugin artifact and patch; profile files remained unchanged. These results do not establish hosted access or native Web settings behavior. |
 | Independent-plugin gateway forwarding, 2026-10-27 | Actual DSH requests passed all three protocols through an isolated tmax `Runtime`, `Snapshot`, and gateway router to synthetic loopback upstreams. Concrete qualified model IDs were rewritten to upstream IDs, upstream credentials replaced the gateway credential, and truthful DSH attribution, PNG images, tools, text, usage, finish reasons, and generated replay state were retained. Native home gateway routes and credential references were prepared by the harness; this does not qualify public gateway apply, daemon readiness, hosted access, alias selection, or session continuity. |
@@ -287,6 +348,17 @@ and [`headless` bundle](https://github.com/deepseek-ai/deepseek-harness/blob/687
 | Historical home-target recovery and Web, 2026-10-26 | Apply and restore previews left native files unchanged. Restore removed managed credential references and preserved existing home routes/defaults, later native patch rows, and unrelated credential records. Both profile manifests and patches remained byte-unchanged. The actual Web discovery form offered only the DSH home, recognized the registered target, and described the then-current home-only file boundary. This predates the plugin artifact. |
 | Historical gateway runtime boundary | Earlier profile-path runs exercised all three protocols through tmax's gateway against loopback fixtures. The historical home-target runs above exercised direct routes, not gateway continuity or hosted providers. These historical runs do not qualify the independent plugin; its concrete gateway-forwarding evidence is recorded separately above. |
 | Historical alias reasoning runtime and Web, 2026-10-27 | Before the independent-plugin cutover, a release CLI applied a stateless Chat Completions alias referencing two OpenCode Go provider instances for `deepseek-v4.1-flash`. The actual DSH Web selector displayed Default, Low, High, and Max on the alias. Headless gateway calls succeeded with native default effort and a one-run explicit `high` effort, returning `DSH_ALIAS_OK` and `DSH_ALIAS_HIGH_OK`. Alias membership and native effort defaults remained unchanged. This exercises alias selection and the dispatched hosted route, not both accounts individually, other protocols, session continuity, or the independent plugin. |
+
+The 2026-11-23/24 profile-plugin rows establish API fit for the client slots,
+locale, command service, and credential `describe`; the composed inventory read
+model and its `inventory` source marker; the action, command, history, and
+observation test contracts; and a pre-port temporary-profile page render. They do
+not establish browser interaction with the seats or `/tmax` command, the settings
+footer, the model option and pane, or the tool card; a successful history-table
+load in a browser; non-dry-run Apply, Refresh, or actions; or a real workspace
+session using the plugin routes. The ported inventory-backed read model has not
+been loaded in a live profile in this evidence set; its behavior is covered by
+the host and client tests only.
 
 In the historical home-target runs, DSH 0.2.1-rc.2 sent its truthful
 `deepseek-harness/...` User-Agent and no qualified session header. Complete independent requests may use

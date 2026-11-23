@@ -1,0 +1,368 @@
+{
+  "contract": "dsh-plugin host state, consumed by the tmax page and seats",
+  "schemaVersion": 1,
+  "cases": {
+    "connectedHomeOwned": {
+      "ok": true,
+      "errors": [],
+      "schemaVersion": 1,
+      "generatedAt": "2026-11-23T10:15:00Z",
+      "configurationRevision": "352a0e3fc342e94777e1a819244e016d98ad211fa7bdd0a082d85bc15a4cbe15",
+      "tmaxVersion": "0.1.0",
+      "authority": "/home/user/.tmax",
+      "target": {
+        "id": "dsh-main",
+        "path": "/home/user/.dsh",
+        "default": {
+          "provider": "tmax",
+          "id": "deepseek-v4.1-flash",
+          "protocol": "responses",
+          "effort": "max"
+        },
+        "nativeDefault": {
+          "state": "available",
+          "fields": {
+            "provider": "tmax",
+            "model": "deepseek-v4.1-flash",
+            "effort": "max",
+            "present": true
+          }
+        },
+        "effectiveDefault": {
+          "provider": "tmax",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": null,
+          "source": "agent-default-model"
+        },
+        "appliedState": "unknown",
+        "pendingNativeChanges": null,
+        "blockers": [
+          {
+            "code": "gateway_not_ready",
+            "message": "Explicitly start the configured gateway and activate the matching complete snapshot and shared key before native application"
+          }
+        ],
+        "installation": {
+          "version": "0.2.3-alpha.2",
+          "state": "detected",
+          "source": "https://github.com/deepseek-ai/deepseek-harness"
+        }
+      },
+      "ownership": {
+        "owner": "home",
+        "scope": "home_wide",
+        "reason": null,
+        "homeIntegration": {
+          "present": true,
+          "entry": true,
+          "artifact": true
+        },
+        "conflict": null,
+        "mode": "auto"
+      },
+      "gateway": {
+        "configured": true,
+        "ready": null,
+        "listen": "127.0.0.1:17840",
+        "daemonDiscoveryState": "unidentified",
+        "reasonCode": "daemon_identity_unavailable",
+        "supervision": {
+          "state": "unavailable",
+          "reasonCode": "service_manager_unavailable"
+        },
+        "autostart": {
+          "savedIntent": true,
+          "registration": "unavailable",
+          "unitMatches": false
+        },
+        "sharedKey": {
+          "loadedState": "absent",
+          "reasonCode": null
+        }
+      },
+      "config": {
+        "state": "valid",
+        "revision": "352a0e3fc342e94777e1a819244e016d98ad211fa7bdd0a082d85bc15a4cbe15",
+        "errors": []
+      },
+      "routes": [
+        {
+          "name": "tmax",
+          "provider": "tmax",
+          "protocol": "responses",
+          "baseUrl": "http://127.0.0.1:17840",
+          "credentialRef": "TMAX_TEST_REFERENCE",
+          "credentialConfigured": true,
+          "scope": "home_wide",
+          "models": [
+            {
+              "id": "deepseek-v4.1-flash",
+              "name": "deepseek-v4.1-flash",
+              "kind": "alias",
+              "continuity": "stateless",
+              "candidateCount": 3,
+              "availability": "unverified",
+              "capabilities": {
+                "contextWindow": 500000,
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "reasoningEfforts": {
+                  "max": "max"
+                }
+              }
+            },
+            {
+              "id": "glm-5.4",
+              "name": "glm-5.4",
+              "kind": "alias",
+              "continuity": "stateless",
+              "candidateCount": 1,
+              "availability": "unverified",
+              "capabilities": {
+                "contextWindow": 1000000,
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "reasoningEfforts": {
+                  "max": "max"
+                }
+              }
+            }
+          ],
+          "active": true,
+          "blockers": []
+        }
+      ],
+      "providers": {
+        "tmax": [
+          {
+            "id": "kimi",
+            "name": "Kimi Coding Plan",
+            "enabled": true,
+            "authentication": "api-key",
+            "affectedTargets": 3,
+            "accountIdentity": null,
+            "subscription": null,
+            "integration": "kimi-code-plan-cn",
+            "billing": {
+              "kind": "plan_allowance",
+              "state": "observed",
+              "freshness": "unqualified",
+              "dashboard": "https://www.kimi.com/code/console",
+              "observedAt": "2026-11-23T06:26:05Z",
+              "notes": [
+                "counters_unit_unqualified",
+                "usage_and_limits_may_overlap"
+              ],
+              "rows": [
+                {
+                  "label": {
+                    "key": "weekly_allowance"
+                  },
+                  "basis": "counters",
+                  "counters": {
+                    "limit": "100",
+                    "remaining": "100"
+                  },
+                  "reset": {
+                    "at": "2026-11-26T15:42:16Z",
+                    "kind": "provider_timestamp"
+                  }
+                },
+                {
+                  "label": {
+                    "key": "duration",
+                    "duration": 300,
+                    "unit": "TIME_UNIT_MINUTE"
+                  },
+                  "basis": "counters",
+                  "counters": {
+                    "limit": "100",
+                    "remaining": "100"
+                  },
+                  "reset": {
+                    "at": "2026-11-23T10:42:16Z",
+                    "kind": "provider_timestamp"
+                  }
+                }
+              ]
+            },
+            "suspension": {
+              "state": "unsupported",
+              "reasonCode": null,
+              "resetAt": null,
+              "source": null,
+              "window": null
+            },
+            "failure": {
+              "state": "not_configured",
+              "consecutiveFailures": 0,
+              "activePriority": null,
+              "expiresAt": null,
+              "reasonCode": null
+            },
+            "error": null
+          },
+          {
+            "id": "cpa-us2",
+            "name": "cpa-us2",
+            "enabled": true,
+            "authentication": "api-key",
+            "affectedTargets": 3,
+            "accountIdentity": null,
+            "subscription": null,
+            "integration": "custom",
+            "billing": {
+              "kind": "unknown",
+              "state": "unknown",
+              "freshness": "missing",
+              "dashboard": null,
+              "observedAt": null,
+              "notes": [],
+              "rows": [],
+              "reasonCode": "unsupported_source",
+              "lastAttempt": "unavailable"
+            },
+            "suspension": {
+              "state": "unsupported",
+              "reasonCode": null,
+              "resetAt": null,
+              "source": null,
+              "window": null
+            },
+            "failure": {
+              "state": "not_configured",
+              "consecutiveFailures": 0,
+              "activePriority": null,
+              "expiresAt": null,
+              "reasonCode": null
+            },
+            "error": null
+          }
+        ],
+        "agent": [
+          {
+            "id": "dsh:glm-coding-cn",
+            "provider": "glm-coding-cn",
+            "displayName": "GLM Coding CN",
+            "vendor": "glm-coding-plan",
+            "baseURL": "https://open.bigmodel.cn/api/coding/paas/v4",
+            "models": [
+              "glm-5.4"
+            ],
+            "state": "observed",
+            "observedAt": "2026-11-23T09:10:00Z",
+            "reasonCode": null,
+            "message": null,
+            "plan": {
+              "level": "pro"
+            },
+            "rows": [
+              {
+                "label": {
+                  "key": "limit",
+                  "type": "tokens",
+                  "unit": 5,
+                  "number": 1
+                },
+                "basis": "consumed_percent",
+                "percent": 37,
+                "reset": {
+                  "kind": "unqualified_epoch_millis",
+                  "raw": 1795073471000,
+                  "encoding": "epoch_milliseconds_unqualified"
+                }
+              }
+            ]
+          },
+          {
+            "id": "dsh:proxy",
+            "provider": "proxy",
+            "displayName": "Custom proxy",
+            "vendor": null,
+            "baseURL": "https://llm.example.test/v1",
+            "models": [
+              "custom-model"
+            ],
+            "state": "not_observed",
+            "observedAt": null,
+            "reasonCode": "unsupported_source",
+            "message": null,
+            "plan": null,
+            "rows": []
+          }
+        ]
+      },
+      "routing": [
+        {
+          "model": "deepseek-v4.1-flash",
+          "protocol": "responses",
+          "kind": "alias",
+          "continuity": "stateless",
+          "candidateCount": 3,
+          "availability": "unverified",
+          "selection": {
+            "qualifiedModel": "opencode-go-2/deepseek-v4.1-flash",
+            "provider": "opencode-go-2",
+            "model": "deepseek-v4.1-flash",
+            "priority": 1
+          },
+          "candidates": [
+            {
+              "qualifiedModel": "opencode-go-2/deepseek-v4.1-flash",
+              "priority": 1,
+              "selected": true
+            },
+            {
+              "qualifiedModel": "opencode-go/deepseek-v4.1-flash",
+              "priority": 0,
+              "selected": false
+            },
+            {
+              "qualifiedModel": "opencode-go-3/deepseek-v4.1-flash",
+              "priority": 0,
+              "selected": false
+            }
+          ],
+          "excluded": [],
+          "error": null
+        },
+        {
+          "model": "glm-5.4",
+          "protocol": "responses",
+          "kind": "alias",
+          "continuity": "stateless",
+          "candidateCount": 1,
+          "availability": "unverified",
+          "selection": {
+            "qualifiedModel": "zai-coding-cn/glm-5.4",
+            "provider": "zai-coding-cn",
+            "model": "glm-5.4",
+            "priority": 0
+          },
+          "candidates": [
+            {
+              "qualifiedModel": "zai-coding-cn/glm-5.4",
+              "priority": 0,
+              "selected": true
+            }
+          ],
+          "excluded": [],
+          "error": null
+        }
+      ],
+      "diagnostics": {
+        "history": {
+          "state": "unavailable",
+          "reasonCode": "daemon_identity_unavailable"
+        },
+        "lastProjectionAt": "2026-11-23T10:14:31Z",
+        "lastError": null,
+        "readModel": "snapshot"
+      }
+    }
+  }
+}

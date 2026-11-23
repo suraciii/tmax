@@ -84,25 +84,58 @@ const VENDORS = [
   },
 ]
 
-/** The vendor whose inference host a base URL belongs to, if any. */
+/**
+ * The vendor a provider key names, for display and identity only.
+ *
+ * A key is a name, not a route: `kimi-coding` says what the user calls the
+ * provider, not where its requests go. It must never choose the destination a
+ * credential is sent to; only `vendorFor(baseURL)` proves where a request goes.
+ */
 export function vendorForKey(key) {
   if (typeof key !== 'string') return undefined
   return VENDORS.find(vendor => (vendor.keys ?? []).includes(key))
 }
 
+/**
+ * The vendor whose inference host a base URL belongs to, if any.
+ *
+ * Matching is an allowlist, not a search. The URL's parsed host must equal a
+ * vendor host exactly, and its path must be the vendor's path or continue
+ * beneath it at a slash boundary. A host string inside a proxy URL's path, a
+ * host suffix such as `api.minimax.io.evil.test`, or a longer path segment
+ * such as `/step_planning` is not a vendor.
+ */
 export function vendorFor(baseURL) {
-  if (typeof baseURL !== 'string' || baseURL === '') return undefined
-  const host = hostAndPath(baseURL)
-  return VENDORS.find(vendor => vendor.base.some(prefix => host.includes(prefix)))
+  const parsed = parsedBaseURL(baseURL)
+  if (parsed === undefined) return undefined
+  return VENDORS.find(vendor => vendor.base.some(base => baseMatches(base, parsed)))
 }
 
-function hostAndPath(url) {
+/** A base URL reduced to the only two parts a vendor match may use. */
+function parsedBaseURL(baseURL) {
+  if (typeof baseURL !== 'string' || baseURL === '') return undefined
+  let parsed
   try {
-    const parsed = new URL(url)
-    return `${parsed.host}${parsed.pathname}`
+    parsed = new URL(baseURL)
   } catch {
-    return ''
+    return undefined
   }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+  return { hostname: parsed.hostname, pathname: parsed.pathname }
+}
+
+/**
+ * One `VENDORS.base` entry is `host` or `host/path`. The host must match
+ * exactly; a present path must match exactly or continue at a slash boundary.
+ */
+function baseMatches(base, parsed) {
+  const slash = base.indexOf('/')
+  const host = slash === -1 ? base : base.slice(0, slash)
+  if (parsed.hostname !== host) return false
+  if (slash === -1) return true
+  const path = base.slice(slash)
+  if (parsed.pathname === path) return true
+  return parsed.pathname.startsWith(path.endsWith('/') ? path : `${path}/`)
 }
 
 /** The rows one vendor's response projects to — the surface the contract pins. */
@@ -114,23 +147,32 @@ export function quotaRowsFor(vendorId, body) {
 
 /** The destination a vendor's quota read must use for this host. */
 function quotaUrlFor(vendor, baseURL) {
-  if (vendor.altQuotaUrl !== undefined && hostAndPath(baseURL).startsWith(vendor.altQuotaUrl[0])) {
-    return vendor.altQuotaUrl[1]
-  }
-  return vendor.quotaUrl
+  if (vendor.altQuotaUrl === undefined) return vendor.quotaUrl
+  const parsed = parsedBaseURL(baseURL)
+  return parsed !== undefined && parsed.hostname === vendor.altQuotaUrl[0]
+    ? vendor.altQuotaUrl[1]
+    : vendor.quotaUrl
 }
 
 // ---------------------------------------------------------------------------
 // Transport: one GET, no redirects, no retries, bounded body and deadline.
 // A quota read is a read; a 3xx or a slow vendor must not become a silent
-// second request or an unbounded read.
+// second request or an unbounded read. A caller's signal (the whole agent
+// scope's budget) aborts the same request, so a cancellation is one exit.
 
 const BODY_LIMIT = 64 * 1024
 const DEADLINE_MS = 30_000
 
-async function requestQuota(vendor, key, baseURL) {
+async function requestQuota(vendor, key, baseURL, signal) {
+  if (signal?.aborted === true) {
+    return { error: 'the observation budget ran out before the vendor answered', reasonCode: 'observation_deadline' }
+  }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), DEADLINE_MS)
+  // Relay the caller's abort into this request's controller; whichever deadline
+  // fires first, the other listener/timer is removed in the finally below.
+  const relayAbort = () => controller.abort()
+  signal?.addEventListener('abort', relayAbort, { once: true })
   try {
     const response = await fetch(quotaUrlFor(vendor, baseURL), {
       method: 'GET',
@@ -155,13 +197,14 @@ async function requestQuota(vendor, key, baseURL) {
     }
     return { body }
   } catch (error) {
-    const aborted = error instanceof Error && error.name === 'AbortError'
+    const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')
     return {
       error: aborted ? 'vendor did not answer in time' : 'vendor is unreachable',
       reasonCode: aborted ? 'observation_deadline' : 'transport_error',
     }
   } finally {
     clearTimeout(timer)
+    signal?.removeEventListener('abort', relayAbort)
   }
 }
 
@@ -392,10 +435,19 @@ function readOpencodeGo(body) {
 
 /**
  * Observe one provider that exists only in the agent's configuration.
+ *
+ * The base URL alone decides whether a credential may be sent. A provider
+ * whose route is named after a vendor but points at another host is an
+ * unsupported source, not a reason to try that vendor: no credential is
+ * resolved and no request is made.
+ *
+ * `signal` is the caller's scope-wide budget (see host/observations.js). When
+ * it aborts, an in-flight vendor request is cancelled and the read reports
+ * `observation_deadline`; a read that already finished is unaffected.
  * @returns a normalized provider record, or nothing when the vendor is unknown.
  */
-export async function observeProvider({ provider, baseURL, apiKeyEnv, resolveKey }, now = new Date()) {
-  const vendor = vendorFor(baseURL) ?? vendorForKey(provider)
+export async function observeProvider({ provider, baseURL, apiKeyEnv, resolveKey, signal }, now = new Date()) {
+  const vendor = vendorFor(baseURL)
   if (vendor === undefined) {
     return {
       id: `dsh:${provider}`,
@@ -405,6 +457,21 @@ export async function observeProvider({ provider, baseURL, apiKeyEnv, resolveKey
       baseURL,
       observedAt: now.toISOString(),
       reasonCode: 'unsupported_source',
+      rows: [],
+      windows: [],
+    }
+  }
+  if (signal?.aborted === true) {
+    return {
+      id: `dsh:${provider}`,
+      name: provider,
+      source: 'dsh',
+      vendor: vendor.id,
+      vendorName: vendor.name,
+      baseURL,
+      observedAt: now.toISOString(),
+      reasonCode: 'observation_deadline',
+      message: 'the observation budget ran out before the vendor answered',
       rows: [],
       windows: [],
     }
@@ -430,7 +497,7 @@ export async function observeProvider({ provider, baseURL, apiKeyEnv, resolveKey
       windows: [],
     }
   }
-  const result = await requestQuota(vendor, key, baseURL)
+  const result = await requestQuota(vendor, key, baseURL, signal)
   if (result.body === undefined) {
     return {
       id: `dsh:${provider}`,
