@@ -128,6 +128,11 @@ impl Runtime {
         };
         let mut names = BTreeMap::new();
         for (provider_id, provider) in &config.providers {
+            // The derived provider's children are public routes, not upstream
+            // destinations; they must never become rename targets.
+            if config.is_gateway_provider(provider_id) {
+                continue;
+            }
             for model in provider.models.keys() {
                 if let Some((identity, _, model_identity)) =
                     identities.destination_identity(provider_id, model)
@@ -280,7 +285,7 @@ impl Runtime {
         let alias = config
             .model_aliases
             .iter()
-            .find(|a| a.id == public_id && a.protocol == protocol);
+            .find(|a| a.id == public_id && a.publishes(protocol));
         let continuity = alias
             .map(|a| a.continuity.as_deref().unwrap_or("session"))
             .unwrap_or("fixed");
@@ -671,6 +676,11 @@ fn binding_blocker(
     let Some(p) = config.providers.get(&b.provider) else {
         return Some("provider_removed");
     };
+    // The derived provider is never a real destination; a retained binding
+    // naming it points at state the gateway no longer owns.
+    if config.is_gateway_provider(&b.provider) {
+        return Some("provider_removed");
+    }
     if !p.enabled {
         return Some("provider_disabled");
     }
@@ -700,7 +710,7 @@ fn binding_blocker(
     if let Some(alias) = config
         .model_aliases
         .iter()
-        .find(|a| a.id == b.public_id && a.protocol == b.protocol)
+        .find(|a| a.id == b.public_id && a.publishes(&b.protocol))
     {
         if !alias.enabled {
             return Some("alias_disabled");

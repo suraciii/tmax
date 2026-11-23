@@ -1,9 +1,11 @@
-// Host half: project tmax's DSH gateway access into the live LLM registry.
+// Host half: project tmax's declared DSH target into the live LLM registry.
 //
 // The plugin is deliberately thin: tmax owns provider/model/alias/quota facts;
-// this module only reads `tmax dsh projection` and maps it onto DSH's adapter,
-// tool, and skill surfaces. No credential value ever enters this module.
+// this module reads `tmax agent list`, `tmax agent inspect`, and
+// `tmax gateway status`, then maps the target's relayed entries onto DSH's
+// adapter, tool, and skill surfaces. No credential value ever enters this module.
 import { execFile } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -21,43 +23,220 @@ const API_NAMES = {
   'messages': 'anthropic-messages',
 }
 
-/** Read one tmax CLI envelope, or fail with its code and message. */
-async function readProjection(config) {
-  const tmax = config.tmaxPath || 'tmax'
-  const args = ['dsh', 'projection']
-  if (config.target) args.push(String(config.target))
-  else {
-    const home = config.home || process.env.DSH_HOME || join(homedir(), '.dsh')
-    args.push('--home', home)
-  }
-  const { stdout } = await execFileAsync(tmax, args, {
-    timeout: 10_000,
-    maxBuffer: 2 * 1024 * 1024,
-    env: process.env,
-  })
-  const envelope = JSON.parse(stdout)
-  if (envelope.code !== 'ok' || envelope.status !== 'success') {
-    throw new Error(`tmax projection failed: ${envelope.code || 'unknown'}${envelope.message ? ` (${envelope.message})` : ''}`)
-  }
-  return envelope.data
-}
-
 /** Run one tmax command and parse its JSON envelope. Never logs a key. */
-async function runTmax(config, args) {
+async function runTmax(config, args, timeout = 20_000) {
   const tmax = config.tmaxPath || 'tmax'
-  const { stdout } = await execFileAsync(tmax, args, {
-    timeout: 20_000,
-    maxBuffer: 2 * 1024 * 1024,
-    env: process.env,
-  })
+  let stdout
+  try {
+    ({ stdout } = await execFileAsync(tmax, args, {
+      timeout,
+      maxBuffer: 2 * 1024 * 1024,
+      env: process.env,
+    }))
+  } catch (error) {
+    // tmax writes its failure envelope to stdout with a nonzero exit status;
+    // keep that code and message instead of the exec error.
+    if (typeof error?.stdout !== 'string' || error.stdout.trim() === '') throw error
+    stdout = error.stdout
+  }
   return JSON.parse(stdout)
 }
 
-/** Arguments selecting the configured DSH target. */
-function targetArgs(config) {
-  if (config.target) return [String(config.target)]
+/** One user-actionable failure: the next action is a tmax or configuration change. */
+function actionableError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  error.actionable = true
+  return error
+}
+
+/** The error for one rejected tmax command, carrying its own code and message. */
+function envelopeError(command, envelope) {
+  const blocker = Array.isArray(envelope.blockers) ? envelope.blockers[0] : undefined
+  const message = envelope.message || blocker?.message
+  return actionableError(envelope.code || 'unknown',
+    `tmax ${command} failed: ${envelope.code || 'unknown'}${message ? ` (${message})` : ''}`)
+}
+
+/** Run one read command and return its data, or fail with tmax's code and message. */
+async function readCommand(config, args) {
+  const envelope = await runTmax(config, args, 10_000)
+  if (envelope.code !== 'ok' || envelope.status !== 'success') {
+    throw envelopeError(args.slice(0, 2).join(' '), envelope)
+  }
+  return envelope.data || {}
+}
+
+/** One comparable path: the real path when it exists, else separators and trailing slashes removed. */
+function normalizePath(value) {
+  let path = String(value)
+  // Only an existing home can be resolved; an absent one stays comparable by spelling.
+  try { path = realpathSync(path) } catch {}
+  return path.replaceAll('\\', '/').replace(/\/+$/u, '')
+}
+
+/** Resolve the declared DSH target: config.target, or the one target matching the DSH home. */
+async function resolveTarget(config) {
+  if (config.target) return String(config.target)
   const home = config.home || process.env.DSH_HOME || join(homedir(), '.dsh')
-  return ['--home', home]
+  const listed = await readCommand(config, ['agent', 'list'])
+  const wanted = normalizePath(home)
+  const matches = (Array.isArray(listed.agents) ? listed.agents : []).filter(agent =>
+    agent?.agent === 'dsh' && typeof agent.path === 'string' && normalizePath(agent.path) === wanted)
+  const [match] = matches
+  if (match === undefined) {
+    throw actionableError('unknown_resource',
+      `tmax agent list failed: unknown_resource (No declared DSH target matches the DSH home ${home})`)
+  }
+  if (matches.length > 1) {
+    throw actionableError('invalid_arguments',
+      'tmax agent list failed: invalid_arguments (Multiple DSH targets match the DSH home; set target or home)')
+  }
+  return String(match.target)
+}
+
+/** One route's model rows: tmax's native projection when inspect carries it, else bare selections. */
+function projectModels(projected, selected) {
+  const models = Array.isArray(projected?.models)
+    ? projected.models
+    : selected.map(model => ({ id: model.id, protocol: model.protocol, capabilities: null }))
+  return models.map(model => ({
+    id: model.id,
+    protocol: model.protocol,
+    display_name: model.display_name || model.id,
+    capabilities: model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : null,
+    availability: 'unverified',
+  }))
+}
+
+/**
+ * Compose the target inventory from `tmax agent list`, `tmax agent inspect`,
+ * and `tmax gateway status`. The adapter and page read the same fields they
+ * always have, so only the source of the data changed.
+ */
+async function readInventory(config) {
+  const target = await resolveTarget(config)
+  const [inspect, statusEnvelope] = await Promise.all([
+    readCommand(config, ['agent', 'inspect', target]),
+    runTmax(config, ['gateway', 'status'], 10_000).catch(() => undefined),
+  ])
+  if (inspect.agent !== 'dsh') {
+    throw actionableError('invalid_arguments',
+      'tmax agent inspect failed: invalid_arguments (The selected target is not a DSH target)')
+  }
+  // A missing or failing gateway status leaves gateway facts unknown; it must
+  // not erase the routes that the desired configuration already describes.
+  const status = statusEnvelope?.code === 'ok' && statusEnvelope.status === 'success'
+    ? statusEnvelope.data || {}
+    : undefined
+  const daemonState = status?.daemon?.discovery_state ?? null
+  const daemonReason = status?.daemon?.reason_code
+  const reported = status?.gateway !== null && typeof status?.gateway === 'object' ? status.gateway : undefined
+  const providers = Array.isArray(inspect.providers) ? inspect.providers : []
+  const projected = Array.isArray(inspect.native_projection) ? inspect.native_projection : []
+  // An older tmax predates the relayed source and native capability fields.
+  // Fail loudly instead of projecting a target whose routes cannot be read.
+  const outdated = providers.some(entry => typeof entry?.relayed !== 'boolean')
+    || projected.some(entry => (Array.isArray(entry?.models) ? entry.models : []).some(model =>
+      model === null || typeof model !== 'object' || !('capabilities' in model)))
+  if (outdated) {
+    throw actionableError('unsupported_tmax',
+      'tmax agent inspect failed: unsupported_tmax (inspect does not report relayed provider entries and native model capabilities; update tmax)')
+  }
+  const relayed = providers.filter(entry => entry?.relayed === true)
+  const configured = relayed.length > 0 || reported?.key_ref != null || reported?.listen != null
+  let ready = null
+  let reasonCode = null
+  if (!configured) {
+    reasonCode = 'gateway_unconfigured'
+  } else if (daemonState === 'compatible') {
+    ready = reported?.ready === true
+    reasonCode = ready ? null : 'gateway_not_ready'
+  } else if (daemonState === 'absent') {
+    // A configured gateway with no running daemon is not ready, not unknown:
+    // tmax status reports readiness false for the same state.
+    ready = false
+    reasonCode = 'gateway_not_ready'
+  } else {
+    reasonCode = daemonReason || 'daemon_identity_unavailable'
+  }
+  const blockers = []
+  const routes = []
+  const names = []
+  if (!configured) {
+    blockers.push({
+      code: 'gateway_unconfigured',
+      message: 'Configure and explicitly start the tmax gateway before this target can use it',
+    })
+  }
+  for (const entry of relayed) {
+    const name = String(entry.name)
+    const selected = Array.isArray(entry.models) ? entry.models : []
+    const protocols = [...new Set(selected.map(model => model?.protocol).filter(Boolean))]
+    if (selected.length === 0) {
+      blockers.push({ code: 'target_incomplete', message: `Gateway route "${name}" has no selected models` })
+      continue
+    }
+    if (protocols.length !== 1) {
+      blockers.push({ code: 'incompatible', message: `Gateway route "${name}" mixes protocols; split it into one route per protocol` })
+      continue
+    }
+    names.push(name)
+    routes.push({
+      name,
+      protocol: protocols[0],
+      base_url: entry.base_url ?? null,
+      credential_ref: entry.credential_ref ?? null,
+      models: projectModels(projected.find(item => item?.name === name), selected),
+    })
+  }
+  if (routes.length === 0 && blockers.length === 0) {
+    blockers.push({ code: 'gateway_entry_missing', message: 'This DSH target has no gateway provider entry' })
+  }
+  if (Array.isArray(inspect.blockers)) blockers.push(...inspect.blockers)
+  return {
+    schema_version: 1,
+    configuration_revision: inspect.configuration_revision ?? null,
+    generated_at: new Date().toISOString(),
+    target: {
+      id: String(inspect.target ?? target),
+      path: inspect.path,
+      default: inspect.default ?? null,
+      routes: names,
+    },
+    gateway: {
+      configured,
+      ready,
+      listen: reported?.listen ?? null,
+      daemon_discovery_state: daemonState,
+      reason_code: reasonCode,
+    },
+    routes,
+    blockers,
+  }
+}
+
+/** One JSON request body; a preview request is the only body this plugin reads. */
+function readJsonBody(req) {
+  if (req === null || typeof req.on !== 'function') return Promise.resolve({})
+  return new Promise(resolve => {
+    let body = ''
+    req.setEncoding?.('utf8')
+    req.on('data', chunk => { if (body.length <= 64 * 1024) body += chunk })
+    req.on('end', () => {
+      try {
+        const value = JSON.parse(body === '' ? '{}' : body)
+        resolve(value !== null && typeof value === 'object' ? value : {})
+      } catch { resolve({}) }
+    })
+    req.on('error', () => resolve({}))
+  })
+}
+
+/** Whether one connect request asks for a dry run instead of a native write. */
+function previewRequested(req, body) {
+  if (body?.preview === true || body?.dryRun === true) return true
+  return req.url !== undefined && /[?&](?:preview|dry-run)=1(&|$)/u.test(req.url)
 }
 
 /** Read compact, secret-free provider usage for the Models card. */
@@ -167,16 +346,16 @@ export async function apply(ctx, config = {}) {
   let profiles = new Map()
   let registration
   let refreshing
-  let lastProjection
+  let lastInventory
   let lastError
 
   const manageRoutes = config.manageRoutes !== false
   const log = message => ctx.logger?.warn?.(`tmax: ${message}`)
 
-  function rebuild(projection) {
+  function rebuild(inventory) {
     const next = new Map()
     const prefix = typeof config.providerPrefix === 'string' ? config.providerPrefix : ''
-    for (const route of projection.routes || []) {
+    for (const route of inventory.routes || []) {
       const factory = protocolApis[route.protocol]
       if (factory === undefined) {
         log(`route "${route.name}" uses unsupported protocol "${route.protocol}"`)
@@ -230,10 +409,10 @@ export async function apply(ctx, config = {}) {
   async function refresh() {
     if (refreshing) return refreshing
     refreshing = (async () => {
-      const projection = await readProjection(config)
-      lastProjection = projection
+      const inventory = await readInventory(config)
+      lastInventory = inventory
       lastError = undefined
-      const next = manageRoutes ? rebuild(projection) : new Map()
+      const next = manageRoutes ? rebuild(inventory) : new Map()
       profiles = next
       const routes = [...next.keys()]
       if (!manageRoutes || routes.length === 0) {
@@ -241,7 +420,7 @@ export async function apply(ctx, config = {}) {
           registration()
           registration = undefined
         }
-        return projection
+        return inventory
       }
       if (registration === undefined) {
         registration = ctx.llm.registerAdapter(routes, adapter)
@@ -249,7 +428,7 @@ export async function apply(ctx, config = {}) {
         registration.replace(routes)
       }
       for (const route of routes) ctx.emit('llm/models-updated', route)
-      return projection
+      return inventory
     })().catch(error => {
       lastError = error instanceof Error ? error.message : String(error)
       throw error
@@ -263,7 +442,7 @@ export async function apply(ctx, config = {}) {
     await refresh()
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error)
-    log(`initial projection unavailable: ${lastError}`)
+    log(`initial inventory unavailable: ${lastError}`)
   }
   const seconds = Number(config.refreshSeconds)
   const interval = Number.isFinite(seconds) && seconds >= 10 ? seconds : 60
@@ -288,19 +467,18 @@ export async function apply(ctx, config = {}) {
       res.end(JSON.stringify(payload))
     }
     const summary = () => ({
-      target: lastProjection?.target,
-      gateway: lastProjection?.gateway,
-      routes: (lastProjection?.routes || []).map(route => ({
+      target: lastInventory?.target,
+      gateway: lastInventory?.gateway,
+      routes: (lastInventory?.routes || []).map(route => ({
         name: route.name,
         protocol: route.protocol,
         models: (route.models || []).map(model => ({
           id: model.id,
           name: model.display_name || model.id,
-          kind: model.kind,
           availability: model.availability,
         })),
       })),
-      blockers: lastProjection?.blockers || [],
+      blockers: lastInventory?.blockers || [],
       lastError,
     })
     /**
@@ -445,14 +623,27 @@ export async function apply(ctx, config = {}) {
       handler: async (req, res) => {
         if (req.method !== 'POST') { send(res, 405, { code: 'method-not-allowed' }); return }
         try {
-          const envelope = await runTmax(config, ['dsh', 'connect', ...targetArgs(config)])
-          if (envelope.code !== 'ok' || envelope.status !== 'success') {
-            send(res, 409, { ok: false, code: envelope.code || 'connect_failed', message: envelope.message || 'tmax connect failed', ...summary() })
+          const body = await readJsonBody(req)
+          const preview = previewRequested(req, body)
+          const target = await resolveTarget(config)
+          const envelope = await runTmax(config, ['agent', 'apply', target, ...(preview ? ['--dry-run'] : [])])
+          if (envelope.status !== 'success' && envelope.status !== 'dry_run') {
+            const blocker = Array.isArray(envelope.blockers) ? envelope.blockers[0] : undefined
+            send(res, 409, {
+              ok: false,
+              code: envelope.code || 'connect_failed',
+              message: envelope.message || blocker?.message || 'tmax agent apply failed',
+              ...summary(),
+            })
             return
           }
-          await refresh()
+          if (!preview) await refresh()
           send(res, 200, { ok: true, connect: envelope.data, ...summary() })
         } catch (error) {
+          if (error instanceof Error && error.actionable === true) {
+            send(res, 409, { ok: false, code: error.code || 'connect_failed', message: error.message, ...summary() })
+            return
+          }
           send(res, 502, { ok: false, code: 'connect_unavailable', message: error instanceof Error ? error.message : String(error), ...summary() })
         }
       },
@@ -463,7 +654,7 @@ export async function apply(ctx, config = {}) {
   if (tools) {
     ctx.effect(() => tools.register(toolsModule.defineTool({
       name: 'tmax_status',
-      description: 'Read tmax model-access state: authority, gateway readiness, projected routes/models, and blockers. Use it before changing model access or explaining a tmax failure.',
+      description: 'Read tmax model-access state: the DSH target, gateway readiness, route models, and blockers. Use it before changing model access or explaining a tmax failure.',
       parameters: {},
       output: {
         schema: { type: 'object', additionalProperties: true },
@@ -471,21 +662,19 @@ export async function apply(ctx, config = {}) {
       },
       async execute() {
         try {
-          const projection = await refresh()
+          const inventory = await refresh()
           return {
-            authority: projection.authority,
-            target: projection.target?.id,
-            gateway: projection.gateway,
-            routes: (projection.routes || []).map(route => ({
+            target: inventory.target?.id,
+            gateway: inventory.gateway,
+            routes: (inventory.routes || []).map(route => ({
               name: route.name,
               protocol: route.protocol,
               models: route.models.map(model => model.id),
             })),
-            blockers: projection.blockers || [],
+            blockers: inventory.blockers || [],
           }
         } catch (error) {
           return {
-            authority: '',
             target: undefined,
             gateway: undefined,
             routes: [],
@@ -517,6 +706,6 @@ export async function apply(ctx, config = {}) {
   }
 
   ctx.logger?.info?.(
-    `tmax: ${lastProjection?.routes?.length || 0} route(s), ${lastProjection?.routes?.reduce((count, route) => count + route.models.length, 0) || 0} model(s)${lastError ? `; last error: ${lastError}` : ''}`,
+    `tmax: ${lastInventory?.routes?.length || 0} route(s), ${lastInventory?.routes?.reduce((count, route) => count + route.models.length, 0) || 0} model(s)${lastError ? `; last error: ${lastError}` : ''}`,
   )
 }

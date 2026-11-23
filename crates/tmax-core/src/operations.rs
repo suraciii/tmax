@@ -3,9 +3,11 @@ pub mod commands;
 mod configuration;
 mod edit;
 mod inspection;
+mod migrate;
 mod references;
 mod results;
 mod secret_commands;
+mod status;
 
 pub(crate) use arguments::{arg, operand, required};
 pub(crate) use configuration::{activate_saved, diff_values, impact};
@@ -93,19 +95,13 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         return crate::service::status(store).await;
     }
     if path == "status" {
-        let file = config::load(store);
-        let daemon = crate::service::status(store).await?;
-        return Ok(match file {
-            Ok(f) => {
-                json!({"config_path":store.root.join("tmax.toml"),"file_revision":f.revision,"configuration_state":if f.exists{"valid"}else{"absent"},"providers":f.config.providers.len(),"targets":f.config.agents.len(),"daemon":daemon})
-            }
-            Err(e) => {
-                json!({"config_path":store.root.join("tmax.toml"),"configuration_state":"invalid","reason_code":e.code,"field":e.field,"daemon":daemon,"next_action":"config reset or correct supported fields"})
-            }
-        });
+        return status::run(store, r).await;
     }
     if path == "config reset" {
         return configuration::reset(store, r).await;
+    }
+    if path == "config migrate" {
+        return migrate::run(store, r);
     }
     if path == "secret cleanup" {
         return secret_commands::cleanup(store, r).await;
@@ -135,12 +131,6 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             Err(error) => Err(error),
         };
     }
-    if path == "dsh projection" {
-        return crate::agent_integration::dsh_projection(store, r).await;
-    }
-    if path == "dsh connect" {
-        return crate::agent_integration::dsh_connect(store, r).await;
-    }
     let file = match inspection::selected(store, r).await {
         Ok(Some(file)) => file,
         Ok(None) => {
@@ -157,8 +147,12 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     };
     let config = &file.config;
     if path == "config show" {
+        let mut configuration = config.clone();
+        if config.is_gateway_provider(config::GATEWAY_PROVIDER_ID) {
+            configuration.providers.remove(config::GATEWAY_PROVIDER_ID);
+        }
         return Ok(
-            json!({"state":arg(r,"state").unwrap_or("file"),"snapshot_state":if file.exists{"available"}else{"absent"},"configuration_revision":file.revision,"path":store.root.join("tmax.toml"),"configuration":config}),
+            json!({"state":arg(r,"state").unwrap_or("file"),"snapshot_state":if file.exists{"available"}else{"absent"},"configuration_revision":file.revision,"path":store.root.join("tmax.toml"),"configuration":configuration}),
         );
     }
     if path == "config validate" {
@@ -175,6 +169,12 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     }
     if path == "provider failure-reset" {
         let provider = operand(r, 0)?;
+        if config.is_gateway_provider(provider) {
+            return Err(Error::new(
+                "unsupported",
+                "The gateway provider is derived from the gateway; it carries no failure or quota state of its own",
+            ));
+        }
         if r.if_revision
             .as_ref()
             .is_some_and(|expected| expected != &file.revision)
@@ -196,6 +196,12 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     }
     if path == "provider quota-resume" {
         let provider = operand(r, 0)?;
+        if config.is_gateway_provider(provider) {
+            return Err(Error::new(
+                "unsupported",
+                "The gateway provider is derived from the gateway; it carries no failure or quota state of its own",
+            ));
+        }
         if r.if_revision
             .as_ref()
             .is_some_and(|expected| expected != &file.revision)
@@ -263,9 +269,26 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         return Ok(result);
     }
     if path == "provider refresh" {
+        let requested = operand(r, 0)?;
+        if config.is_gateway_provider(requested) {
+            let mut data = crate::gateway::provider_refresh(store, config, r).await?;
+            if !r.dry_run
+                && data["checks"].as_array().is_some_and(|checks| {
+                    checks.iter().any(|check| {
+                        matches!(
+                            check["outcome"].as_str(),
+                            Some("failed" | "unavailable" | "not_executed")
+                        )
+                    })
+                })
+            {
+                data["_code"] = json!("observation_failed");
+            }
+            return Ok(data);
+        }
         let provider = config
             .providers
-            .get(operand(r, 0)?)
+            .get(requested)
             .ok_or_else(|| Error::new("unknown_resource", "Provider is not configured"))?;
         let scope = required(r, "scope")?;
         let scopes = if scope == "all" {
@@ -277,7 +300,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             crate::provider_integration::observation_destination(provider, scope)?;
         }
         let mut data =
-            crate::provider_integration::refresh(store, config, operand(r, 0)?, scope, r.dry_run)
+            crate::provider_integration::refresh(store, config, requested, scope, r.dry_run)
                 .await?;
         if !r.dry_run
             && data["checks"].as_array().is_some_and(|a| {
@@ -361,7 +384,7 @@ mod tests {
     async fn provider_quota_resume_previews_guards_revision_and_preserves_disablement() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
-        let text = "version=1\n[providers.p]\nintegration='opencode-go'\nenabled=false\n";
+        let text = "version=2\n[providers.p]\nintegration='opencode-go'\nenabled=false\n";
         store.write_raw("tmax.toml", text.as_bytes()).unwrap();
         let config = config::parse(text).unwrap();
         crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
@@ -431,7 +454,7 @@ mod tests {
     async fn provider_failure_reset_previews_without_mutation_and_checks_revision() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
-        let text = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.failure_policy]\nconsecutive_failures=1\npriority=-100\nduration_seconds=3600\nerrors={http_statuses=[503]}\n";
+        let text = "version=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.failure_policy]\nconsecutive_failures=1\npriority=-100\nduration_seconds=3600\nerrors={http_statuses=[503]}\n";
         store.write_raw("tmax.toml", text.as_bytes()).unwrap();
         let config = config::parse(text).unwrap();
         crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
@@ -597,7 +620,7 @@ mod tests {
         store
             .write_raw(
                 "tmax.toml",
-                b"version=1\n[gateway]\nlisten='127.0.0.1:12345'\nkey_ref='retained'\n",
+                b"version=2\n[gateway]\nlisten='127.0.0.1:12345'\nkey_ref='retained'\n",
             )
             .unwrap();
         store.write_raw("daemon.sock", b"unidentified").unwrap();
@@ -617,7 +640,7 @@ mod tests {
     async fn offline_management_input_inspection_keeps_declarations_and_runtime_unknown() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
-        store.write_raw("tmax.toml", b"version=1\n[providers.p]\nintegration='deepseek'\n[providers.p.models.m]\n[providers.p.inputs.q]\nkind='quota'\nsource='manual'\nscope='weekly'\nmodels=['m']\nmax_age_seconds=60\n").unwrap();
+        store.write_raw("tmax.toml", b"version=2\n[providers.p]\nintegration='deepseek'\n[providers.p.models.m]\n[providers.p.inputs.q]\nkind='quota'\nsource='manual'\nscope='weekly'\nmodels=['m']\nmax_age_seconds=60\n").unwrap();
         store.write_raw("daemon.sock", b"unidentified").unwrap();
         let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
         let inspect = dispatch(
@@ -652,7 +675,7 @@ mod tests {
     async fn invalid_saved_effort_map_rejects_validation_and_reload_before_effects() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().join("state"));
-        let config = b"version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='https://example.invalid/v1'\n[providers.p.models.m.effort_map.chat-completions]\nmax='undeclared'\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
+        let config = b"version=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='https://example.invalid/v1'\n[providers.p.models.m.effort_map.chat-completions]\nmax='undeclared'\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
         store.write_raw("tmax.toml", config).unwrap();
         for (action, dry_run) in [("validate", false), ("reload", true), ("reload", false)] {
             let mut request = request(&["config", action], &[], &[]);
@@ -670,5 +693,64 @@ mod tests {
                 .collect();
             assert_eq!(files, [std::ffi::OsString::from("tmax.toml")]);
         }
+    }
+
+    #[tokio::test]
+    async fn gateway_provider_refresh_reports_scopes_and_refuses_derived_state_operations() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        let text = "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.models.route]\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncandidates=['up/route']\n";
+        store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+        let refresh = dispatch(
+            &store,
+            &request(&["provider", "refresh"], &["tmax"], &[("scope", &["all"])]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(refresh["provider"], "tmax");
+        let checks = refresh["checks"].as_array().unwrap();
+        assert_eq!(checks.len(), 3);
+        assert_eq!(checks[0]["scope"], "auth");
+        assert_eq!(checks[0]["reason_code"], "gateway_not_ready");
+        assert_eq!(checks[1]["scope"], "models");
+        assert_eq!(checks[1]["reason_code"], "gateway_not_ready");
+        assert_eq!(checks[2]["scope"], "quota");
+        assert_eq!(checks[2]["reason_code"], "no_daemon_history");
+        assert_eq!(refresh["_code"], "observation_failed");
+        for command in [
+            &["provider", "failure-reset"][..],
+            &["provider", "quota-resume"][..],
+        ] {
+            let error = dispatch(&store, &request(command, &["tmax"], &[]))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "unsupported");
+            assert_eq!(
+                error.message,
+                "The gateway provider is derived from the gateway; it carries no failure or quota state of its own"
+            );
+        }
+        let show = dispatch(&store, &request(&["config", "show"], &[], &[]))
+            .await
+            .unwrap();
+        assert!(
+            show["configuration"]["providers"]
+                .get(crate::config::GATEWAY_PROVIDER_ID)
+                .is_none()
+        );
+        assert_eq!(
+            show["configuration"]["providers"]["up"]["integration"],
+            "custom"
+        );
+        assert_eq!(
+            show["configuration"]["gateway"]["listen"],
+            "127.0.0.1:17840"
+        );
+        assert_eq!(show["configuration"]["model_aliases"][0]["id"], "route");
+        assert!(
+            !std::fs::read_to_string(store.root.join("tmax.toml"))
+                .unwrap()
+                .contains("providers.tmax")
+        );
     }
 }

@@ -39,7 +39,7 @@ fn protocol_eligibility_uses_provider_endpoints_not_model_identity() {
         ("unverified-model".into(), crate::config::Model::default()),
     ]
     .into();
-    go.model_aliases[0].protocol = "responses".into();
+    go.model_aliases[0].protocols = vec!["responses".into()];
     go.model_aliases[0].continuity = Some("stateless".into());
     go.model_aliases[0].candidates = vec!["p/deepseek-v4.1-flash".into()];
     publish(&runtime, &config, &go, "provider-protocols");
@@ -159,7 +159,7 @@ fn effort_mapping_applies_on_the_selected_backend_for_both_protocols() {
     for protocol in ["chat-completions", "responses"] {
         let (_temporary, runtime, original) = fixture();
         let mut config = original.clone();
-        config.model_aliases[0].protocol = protocol.into();
+        config.model_aliases[0].protocols = vec![protocol.into()];
         for (id, values) in [("p", vec!["low", "high"]), ("q", vec!["max"])] {
             let provider = config.providers.get_mut(id).unwrap();
             provider
@@ -413,7 +413,7 @@ fn arbitrary_aliases_use_only_explicit_members_across_calendar_boundaries() {
             fallback: None,
             candidate_reasoning_effort: Default::default(),
             id: id.into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: members.into_iter().map(String::from).collect(),
             enabled: true,
             continuity: None,

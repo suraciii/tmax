@@ -47,25 +47,26 @@ on a target, native provider entry, default, or role.
 
 | Command | Requested change |
 | --- | --- |
-| `agent provider add TARGET NAME (--provider PROVIDER \| --gateway)` | Create an entry with the explicit source and an empty model list. |
-| `agent provider update TARGET NAME (--provider PROVIDER \| --gateway)` | Replace the source, validating the complete resulting entry and target references. |
+| `agent provider add TARGET NAME --provider PROVIDER` | Create an entry that references one configured provider and has an empty model list. |
+| `agent provider update TARGET NAME --provider PROVIDER` | Replace the referenced provider, validating the complete resulting entry and target references. |
 | `agent provider remove TARGET NAME` | Remove the entry after default/role and other reference checks; do not write native files or revoke gateway access. |
 
-Exactly one source is required: `--provider` references one existing tmax upstream
-access instance; `--gateway` uses the sole tmax model gateway. Neither is a fallback.
-Reject missing/mixed selectors and duplicate entry names. Source replacement
-validates every existing selected ID/protocol against the new source and reports
-affected selections/default/roles. Reject unresolved IDs; never reinterpret,
-repair, clear, or add them implicitly. Existing valid selections may remain;
-there is no extra empty-list precondition.
+`--provider` is required and names one configured provider ID; `tmax` names the
+derived [gateway provider](../../product/spec.md#gateway-provider). There is no
+second selector and no fallback. Reject a missing or unknown provider and duplicate
+entry names. Provider replacement validates every existing selected ID/protocol
+against the new provider and reports affected selections/default/roles. Reject
+unresolved IDs; never reinterpret, repair, clear, or add them implicitly. Existing
+valid selections may remain; there is no extra empty-list precondition.
 
-For an upstream source, `ID` is the exact upstream model ID under that provider,
-without a redundant provider prefix. For a gateway source, it is the public concrete
-qualified name or alias ID, without an adapter's native display prefix.
+For a direct entry, `ID` is the exact upstream model ID under the referenced
+provider, without a redundant provider prefix. For a relayed entry, it is a public
+route name that declares the selection's protocol, without an adapter's native
+display prefix.
 Protocol is explicit and establishes no conversion or compatibility. Prefer
 Responses when the upstream declares it and the native client supports it, under
 the [client-owned protocol rule](../../integrations/spec.md#endpoint-resolution).
-Upstream and gateway entries may coexist in one target. Native namespace conflicts
+Direct and relayed entries may coexist in one target. Native namespace conflicts
 or lack of qualified multi-provider support block application; never omit an
 entry silently.
 
@@ -89,7 +90,7 @@ tmax gateway start
 tmax agent add pi-main --agent pi --path /home/user/.pi/agent
 tmax agent provider add pi-main upstream --provider deepseek
 tmax agent model add pi-main upstream deepseek-flash --protocol chat-completions
-tmax agent provider add pi-main local --gateway
+tmax agent provider add pi-main local --provider tmax
 tmax agent model add pi-main local L0 --protocol chat-completions
 tmax agent default set pi-main upstream deepseek-flash --protocol chat-completions
 tmax agent apply pi-main --dry-run
@@ -109,7 +110,7 @@ Help uses supported native roles, not invented ones.
 | --- | --- |
 | `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, and `default_configured`. |
 | `agent discover [--agent AGENT]` | Supported installations/paths, versions, profiles, and read-only `native_default`, without registration/import. |
-| `agent inspect TARGET` | Native entries/sources, precedence, supported roles/requirements, effective auth/model use, native capability projection, desired/applied differences, blockers, and recovery. |
+| `agent inspect TARGET` | Native entries and their configured provider source, relayed delivery facts, precedence, supported roles/requirements, effective auth/model use, native capability projection, desired/applied differences, blockers, and recovery. |
 | `agent inspect --agent AGENT --path PATH` | Inspect an explicit undeclared native path without registration/import. |
 | `agent apply TARGET` | Apply current complete desired configuration; report affected files, applied state, and recovery. |
 | `agent restore TARGET` | Restore owned changes using the declared target's retained recovery. |
@@ -166,7 +167,7 @@ names must be globally unique; tmax does not automatically merge colliding names
 Removing a previously managed DSH route restores its captured baseline and removes
 introduced empty containers, not an invalid empty provider registration. Unowned
 settings that keep a newly introduced route in use block before native writes.
-Direct upstream and gateway entries may coexist. Existing HOME-level fields and
+Direct and relayed entries may coexist. Existing HOME-level fields and
 expressions remain preserved under the owning boundary. Model-only application
 writes no `agent-default-model` entry or reasoning preferences; an explicit
 default writes provider/model and, only when configured, one validated effort,
@@ -176,11 +177,12 @@ insertion, and owned provider and credential fields. `llm-tmax` is the only
 managed adapter entry; no earlier adapter application format is supported or
 automatically migrated. Runtime overlays remain outside tmax's ownership.
 
-Upstream entries use their referenced endpoints/auth and need no running tmax
-gateway or model aliases. Gateway entries use its local URL and the current shared
-key, requiring the matching ready listener and loaded snapshot. Start explicitly
-first. Applying both kinds preserves native precedence, supported credential
-handoff, and disclosure of any required plaintext in native files. Never copy
+Direct entries use their referenced endpoints/auth and need no running tmax
+gateway or model aliases. Relayed entries reference provider `tmax` and use its
+derived local URL and the current shared key, requiring the matching ready
+listener and loaded snapshot. Start explicitly first. Applying both kinds
+preserves native precedence, supported credential handoff, and disclosure of any
+required plaintext in native files. Never copy
 upstream login tokens to create another refresh maintainer. Native writes preserve later user
 edits, check ownership/conflicts, and report partial write/reload state. Recovery
 is stored as plaintext under current-user-restricted `~/.tmax`; file permissions
@@ -201,17 +203,20 @@ restoring native settings never revokes the shared key. Stop management with
 | --- | --- |
 | Target/tool identity | `target` is the declared target ID; `agent` is its tool identity, never a target ID. An undeclared native scope has null `target`; resolved `path` identifies the inspected scope. |
 | `NativeModelRef` | `{provider, id, protocol}` with a target-local provider name; a default adds optional `effort` or `native_effort`. |
-| `AgentProviderView` | `name`, `source` (`{provider: string}` or `{gateway: true}`), and exact `{id, protocol}` selections. |
+| `AgentProviderView` | `name`, `source` (`{provider: string}`), `relayed`, and exact `{id, protocol}` selections. A relayed entry also reports `base_url`, `credential_ref` (DSH target with one selected protocol only), and `applied_delivery`; a direct entry has null values for those fields. |
 | Provider detail | Qualified requirements, readiness, native precedence/evidence, and desired/applied differences; no mode, target credential, permission list, or target continuity field. |
+| `configuration_revision` | `agent inspect` returns the current saved configuration revision at the top level; null when unavailable. It is not an applied revision. |
+| `applied_delivery` | Relayed entry field comparing the applied delivery facts with the current ones: `state` (`current`, `stale`, `blocked`, `unknown`, `not_applied`, or `not_configured`), `revision`, `applied_revision` when recorded, named `reasons`, and `routes.removed`. Reasons are not merged: `listen_changed`, `key_rotated`, `route_removed`, and `entry_selection_changed` make the state `stale`; `entry_references_missing_route`, `native_edit_conflict`, and `gateway_not_ready` make it `blocked` when no drift is present, and an apply whose native writes did not finish is `blocked` with `apply_incomplete`. The recorded revision is target-scoped over the `route/protocol` pairs that target references, so an unrelated added route changes neither the revision nor the state, while a changed selection protocol is drift. An unknown or not-applied state names its `reason_code` (`delivery_not_recorded` or `never_applied`). |
 | `agent inspect` | `data.providers` contains entries; `data.default` uses `NativeModelRef` with optional `effort` or `native_effort`, `data.roles` use model-only `NativeModelRef`, and a null default means unmanaged. |
 | `native_default` | `agent inspect` reports the tool's currently persisted default selection read-only: `state` (`available` or `unavailable` with `reason_code`) and `fields` carrying `present`, `provider`, `model`, and `effort` when the native file exposes them. It is inspection evidence, never desired configuration and never imported automatically. |
-| `native_projection` | `agent inspect` and `agent apply --dry-run` return one entry per native provider entry: `name`, `source` (`{provider: string}` or `{gateway: true}`), and `models` of `{id, protocol, efforts, projection}`; `efforts` lists the effort names representable for that model and target, or is empty. A `projection` has `state`, `reason_code`, `fields`, and `omitted`; a blocked projection adds `message`. `fields` carries only safe capability metadata and never secrets. |
+| `native_projection` | `agent inspect` and `agent apply --dry-run` return one entry per native provider entry: `name`, `source` (`{provider: string}`), and `models` of `{id, protocol, capabilities, efforts, projection}`; `capabilities` carries the model's safe capability metadata, and `efforts` lists the effort names representable for that model and target, or is empty. A `projection` has `state`, `reason_code`, `fields`, and `omitted`; a blocked projection adds `message`. `fields` carries only safe capability metadata and never secrets. |
 | Lists | Target/tool identities, counts, and readiness summaries instead of complete entries/evaluations; `default_configured` reports whether the target has a configured default. |
 
 Projection semantics follow the shared
 [capability mapping](../../integrations/spec.md#agent-boundaries) boundary.
-Gateway concrete entries use caller-facing names after explicit model maps;
-direct entries retain actual upstream declarations. Gateway aliases use the same
+`native_projection` is the desired projection and is reported even when the
+gateway is not running. Application instead requires a ready gateway listener.
+Direct entries retain actual upstream declarations. Relayed entries use the same
 states below after the shared
 [alias reasoning capability](../../integrations/spec.md#alias-reasoning-capability)
 rule intersects all candidate input sets after maps and fixed restrictions. No

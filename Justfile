@@ -44,13 +44,17 @@ test-scripts:
 test-plugin:
     node --test dsh-plugin/test/*.test.mjs
 
+# Compile the local Web interface entry without executing it.
+check-web:
+    node --check crates/tmax-core/src/service/app.js
+
 # Exercise the actual CLI entrypoint.
 smoke:
     cargo run --locked -p tmax-cli -- --help
     cargo run --locked -p tmax-cli -- --version
 
 # Required pull request gate.
-ci-pr: check-python-cache check-python fmt check clippy test test-scripts test-plugin smoke
+ci-pr: check-python-cache check-python fmt check clippy test test-scripts test-plugin check-web smoke
 
 # Full local and main-branch gate.
 ci: ci-pr build

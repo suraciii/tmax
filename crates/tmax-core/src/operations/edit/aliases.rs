@@ -1,16 +1,15 @@
 use super::document::{error, get, get_mut, put, remove, string, strings, table};
 use super::fields::{apply_fields, require_change};
 use super::references::rename_alias_refs;
-use crate::operations::arguments::{arg, args, operand, required};
+use crate::operations::arguments::{args, operand};
 use crate::{Error, Request, Result};
 use toml::Value;
 
 pub(super) fn mutate(root: &mut Value, r: &Request) -> Result<()> {
     let id = operand(r, 0)?;
-    let protocol = required(r, "protocol")?;
     let action = r.command.last().map(String::as_str).unwrap_or("");
     if r.command.len() == 4 {
-        let pos = alias_position(root, id, protocol)?;
+        let pos = alias_position(root, id)?;
         let alias = &mut aliases_mut(root)?[pos];
         let candidates = alias
             .get_mut("candidates")
@@ -32,23 +31,32 @@ pub(super) fn mutate(root: &mut Value, r: &Request) -> Result<()> {
         }
         trim_candidate_efforts(alias)?;
     } else if action == "add" {
+        let protocols = protocol_list(r);
+        if protocols.is_empty() {
+            return Err(Error::new(
+                "invalid_arguments",
+                "Add at least one protocol with --protocol chat-completions|responses|messages",
+            )
+            .field("protocol"));
+        }
         let mut alias = table();
         put(&mut alias, &["id"], string(id))?;
-        put(&mut alias, &["protocol"], string(protocol))?;
+        put(&mut alias, &["protocols"], strings(&protocols))?;
         alias_source(&mut alias, r, true)?;
         apply_fields(&mut alias, r, "alias")?;
         aliases_mut(root)?.push(alias);
     } else {
-        let pos = alias_position(root, id, protocol)?;
+        let pos = alias_position(root, id)?;
         match action {
             "remove" => {
                 aliases_mut(root)?.remove(pos);
             }
             "update" => {
                 require_change(r)?;
+                let protocols = protocol_list(r);
                 let a = &mut aliases_mut(root)?[pos];
-                if let Some(new) = arg(r, "new-protocol") {
-                    put(a, &["protocol"], string(new))?;
+                if !protocols.is_empty() {
+                    put(a, &["protocols"], strings(&protocols))?;
                 }
                 alias_source(a, r, false)?;
                 apply_fields(a, r, "alias")?;
@@ -56,7 +64,7 @@ pub(super) fn mutate(root: &mut Value, r: &Request) -> Result<()> {
             "rename" => {
                 let new = operand(r, 1)?;
                 put(&mut aliases_mut(root)?[pos], &["id"], string(new))?;
-                rename_alias_refs(root, id, new, protocol)?;
+                rename_alias_refs(root, id, new)?;
             }
             _ => return Err(error()),
         }
@@ -71,16 +79,20 @@ fn aliases_mut(root: &mut Value) -> Result<&mut Vec<Value>> {
         .as_array_mut()
         .ok_or_else(error)
 }
-fn alias_position(root: &Value, id: &str, protocol: &str) -> Result<usize> {
+fn alias_position(root: &Value, id: &str) -> Result<usize> {
     root.get("model_aliases")
         .and_then(Value::as_array)
         .and_then(|a| {
-            a.iter().position(|a| {
-                a.get("id").and_then(Value::as_str) == Some(id)
-                    && a.get("protocol").and_then(Value::as_str) == Some(protocol)
-            })
+            a.iter()
+                .position(|a| a.get("id").and_then(Value::as_str) == Some(id))
         })
         .ok_or_else(error)
+}
+fn protocol_list(r: &Request) -> Vec<String> {
+    let mut protocols = args(r, "protocol").to_vec();
+    protocols.sort();
+    protocols.dedup();
+    protocols
 }
 fn alias_source(a: &mut Value, r: &Request, required_source: bool) -> Result<()> {
     let candidates = args(r, "candidate");

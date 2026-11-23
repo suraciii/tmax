@@ -70,7 +70,7 @@ pub(super) fn fixture() -> (tempfile::TempDir, Arc<Runtime>, Config) {
         fallback: None,
         candidate_reasoning_effort: Default::default(),
         id: "dynamic".into(),
-        protocol: "chat-completions".into(),
+        protocols: vec!["chat-completions".into()],
         candidates: vec!["p/m".into(), "q/m".into()],
         enabled: true,
         continuity: None,

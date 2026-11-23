@@ -165,7 +165,7 @@ pub(super) async fn forward(
             .config
             .model_aliases
             .iter()
-            .any(|a| a.id == public_id && a.protocol == protocol);
+            .any(|a| a.id == public_id && a.publishes(protocol));
         let recognized = alias || crate::config::model(&snapshot.config, &public_id).is_ok();
         if !recognized {
             flight.record.model_kind = "unrecognized".into();
@@ -227,7 +227,7 @@ pub(super) async fn forward(
         .config
         .model_aliases
         .iter()
-        .find(|alias| alias.id == public_id && alias.protocol == protocol)
+        .find(|alias| alias.id == public_id && alias.publishes(protocol))
         .and_then(|alias| alias.fallback.as_ref());
     flight.record.admitted_at = Some(now);
     flight.record.configuration_revision = Some(snapshot.revision.clone());
@@ -1027,6 +1027,12 @@ impl Drop for ForwardStream {
 pub fn publication(config: &Config) -> Value {
     let mut data = Vec::new();
     for (provider_id, p) in &config.providers {
+        // The derived provider mirrors public routes; republishing its children
+        // would offer `tmax/<route>` as a servable concrete model that routes
+        // back into this same gateway.
+        if config.is_gateway_provider(provider_id) {
+            continue;
+        }
         if !p.enabled || p.auth.is_none() {
             continue;
         }
@@ -1041,10 +1047,33 @@ pub fn publication(config: &Config) -> Value {
     }
     for a in &config.model_aliases {
         if a.enabled {
-            data.push(json!({"id":a.id,"object":"model","protocols":[a.protocol],"continuity":a.continuity.as_deref().unwrap_or("session")}));
+            data.push(json!({"id":a.id,"object":"model","protocols":a.protocols,"continuity":a.continuity.as_deref().unwrap_or("session")}));
         }
     }
     json!({"object":"list","data":data})
+}
+
+#[cfg(test)]
+mod gateway_provider_publication {
+    use super::*;
+    #[test]
+    fn children_of_the_derived_provider_are_never_republished_as_concrete_models() {
+        let config = crate::config::parse(
+            "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.models.route]\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncandidates=['up/route']\n",
+        )
+        .unwrap();
+        let published = publication(&config);
+        let data = published["data"].as_array().unwrap();
+        let ids: Vec<&str> = data
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["up/route", "route"]);
+        assert!(
+            data.iter()
+                .all(|entry| entry["owned_by"].as_str() != Some("tmax"))
+        );
+    }
 }
 
 #[cfg(test)]

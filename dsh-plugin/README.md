@@ -1,7 +1,9 @@
 # tmax
 
-Use tmax-managed model access inside DeepSeek Harness. The plugin projects the
-configured tmax gateway into DSH; it does not copy keys or start the gateway.
+Use tmax-managed model access inside DeepSeek Harness. The plugin reads tmax's
+target inventory — the declared DSH target, its relayed gateway entries, and
+their public models — and projects it into DSH; it does not copy keys or start
+the gateway.
 
 ## Install or update
 
@@ -40,6 +42,25 @@ uninstalls it. The plugin used to be the `dsh-plugin/` directory; a profile that
 still links it needs one more `just dsh-install`, because that directory no
 longer carries a manifest.
 
+## Inventory source
+
+The host half reads three read-only commands, each with a 10-second timeout:
+
+| Command | Facts it owns |
+|---|---|
+| `tmax agent list` | Which declared target matches the DSH home, when the plugin has no explicit `target`. |
+| `tmax agent inspect <TARGET>` | The target's relayed provider entries, their selected models and native projection, the configuration revision, and tmax's own blockers. |
+| `tmax gateway status` | Daemon discovery state, gateway readiness, listen address, and the gateway reason code. |
+
+A failing inspect is reported as an error, with tmax's own code and message,
+rather than as an empty page. A configured gateway whose daemon is absent or
+stopped is reported as `ready: false` with `gateway_not_ready`, not as unknown;
+readiness stays unreported only when the `gateway status` read itself fails. The
+routes the target already declares stay visible either way. The plugin
+does not fall back to a removed `tmax dsh` command: an older tmax whose
+inspect predates these fields is reported as unsupported, with the next action
+being to update tmax.
+
 ## Home-owned routes
 
 `tmax agent apply` can install the independent `llm-tmax` home plugin, which
@@ -55,19 +76,22 @@ register a second copy of the same route names:
     manageRoutes: false
 ```
 
-The page still reads projection, status, and quota data. If the home plugin is
+The page still reads inventory, status, and quota data. If the home plugin is
 removed, drop the key or set it to `true` to restore route registration.
 
-## Connect
+## Apply
 
-On the **tmax** page, select **Connect**. This writes only the DSH credential
-reference through `tmax dsh connect`; the key is never returned to the browser.
+On the **tmax** page, select **Apply**. This runs `tmax agent apply` for the
+configured target, writing the target's native DSH routes and credential
+reference; the key is never returned to the browser. A request with
+`{"preview": true}` (or `POST /_tmax/connect?dry-run=1`) passes `--dry-run`, so
+the page can preview the change without writing.
 
 The terminal equivalents are:
 
 ```sh
-tmax dsh connect --home "$DSH_HOME" --dry-run
-tmax dsh connect --home "$DSH_HOME"
+tmax agent apply "$TARGET" --dry-run
+tmax agent apply "$TARGET"
 ```
 
 ## The page
@@ -79,7 +103,7 @@ full content column instead of competing for room inside a settings section.
 - **Access** — the DSH target, its home, the gateway address and a genuinely
   three-valued readiness (ready / not ready / never reported, with tmax's
   `reason_code` when there is one), the default model, and every route protocol.
-- **Models** — the projected model IDs as chips, or the reason there are none.
+- **Models** — the inventory's model IDs as chips, or the reason there are none.
   Whether tmax has runtime-verified a model is tmax's own evidence about itself;
   it is not something this page can show or act on, so it is left out.
 - **Usage and limits** — one card per provider tmax reports, ordered by how much
@@ -103,7 +127,7 @@ themes, not only in light.
 
 The header answers one question — can this page reach tmax and its gateway —
 with `可用`, `网关未就绪`, `状态未知`, `读取失败`, `未连接`, `检查中…`. A
-projection merely existing in DSH is not "ready", and a gateway whose readiness
+route inventory merely existing in DSH is not "ready", and a gateway whose readiness
 was never reported is not "not ready".
 
 It deliberately says nothing about what the subscriptions are doing. A provider
@@ -136,10 +160,10 @@ Both are served on the DSH web server and guarded by the composition's
 
 | Route | Effect |
 |---|---|
-| `GET /_tmax/status` | Secret-free projection summary, gateway readiness, models, blockers. |
+| `GET /_tmax/status` | Secret-free inventory summary, gateway readiness, routes, blockers. |
 | `GET /_tmax/usage` | Provider quota rows as last observed, with their observation time. |
 | `POST /_tmax/usage/refresh` | Re-observes quotas through tmax, then returns the same payload. |
-| `POST /_tmax/connect` | Runs `tmax dsh connect` for the configured target, then refreshes. |
+| `POST /_tmax/connect` | Runs `tmax agent apply` for the configured target, then refreshes; `{"preview": true}` passes `--dry-run`. |
 | `GET /_tmax/dsh-usage` | Quota reads for providers the agent is configured with, taken without tmax. Cached for the same five minutes, `?force=1` to re-read. |
 
 It also registers the `tmax_status` tool and the `tmax` skill for agents.
@@ -172,8 +196,8 @@ request time, and only the vendor's JSON ever crosses back to the page.
 
 ## Limitations
 
-- Responses routes only when the tmax target declares them; mixed-protocol
-  entries are refused.
+- A route is only projected when the tmax target declares one protocol for it;
+  a mixed-protocol entry is skipped and named as a blocker.
 - Models with unknown context capacity are hidden rather than given a guessed
   value; unknown input modalities are advertised as text-only.
 - No quota editor, provider manager, or write tool. Those stay in the tmax CLI.

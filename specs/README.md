@@ -4,7 +4,7 @@ This directory holds the product contracts for tmax: what the program must do
 and the invariants it protects.
 
 - [Product](product/spec.md) — CLI-first access from any calling agent, provider
-  instances, authentication, billing, independent configuration and gateway capabilities, and acceptance.
+  instances, authentication, billing, direct and relayed delivery, and acceptance.
 - [Product design](product/design.md) — ownership, native provider entries, configuration
   safety, operation boundaries, and native-protocol forwarding.
 - [Supervised service](service/spec.md) — native process recovery, explicit-stop

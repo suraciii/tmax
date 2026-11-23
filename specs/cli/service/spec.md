@@ -41,7 +41,7 @@ These addresses do not claim a running proxy or successful connectivity.
 ## Gateway configuration and field coverage
 
 `gateway configure [--listen ADDRESS] [--set autostart true|false] [--clear autostart]`
-creates/edits the optional
+creates/edits the optional gateway table and
 explicitly provisions the sole shared key in a current-user-restricted plaintext
 storage-version-2 file, saving its `key_ref` with the settings. Listen is numeric
 loopback `host:port` (bracket IPv6), port 1–65535. Preserve unrelated settings and
@@ -49,7 +49,9 @@ never start inference or write native files. Existing-table edits retain the key
 reference; no implicit repair or key generation occurs on ordinary
 configure/start/reload/apply. Missing or unreadable key material blocks
 readiness; explicit [key replacement](../providers/authentication/spec.md#shared-gateway-key)
-repairs a missing or unreadable retained key.
+repairs a missing or unreadable retained key. Configuration also ensures the
+derived provider `tmax` under [Gateway provider](../../product/spec.md#gateway-provider);
+a stored definition under that ID is reported as `adopted_provider`.
 
 Report provisioning, save, and activation separately. Dry-run describes key
 provisioning without generating/reserving a reference or reading key bytes. Actual
@@ -57,7 +59,7 @@ provisioning uses `data.gateway_key` from the shared-key contract; failed save r
 any orphan reference for explicit cleanup. Never return key bytes.
 Clear autostart restores the default enabled intent, not unconditional registration retry.
 
-`gateway remove` requires stopped inference and resolved native `--gateway` entry
+`gateway remove` requires stopped inference and resolved native relayed entry
 references. It removes gateway configuration/access, not the stored secret, native
 files, or unknown external copies. It never stops inference implicitly. Saved
 listen changes require explicit restart when the running listener cannot activate
@@ -254,6 +256,10 @@ not fabricated success from a reference.
 list; snapshot state uses common available/absent/unavailable values, and count
 is a nonnegative integer or null without available data. It does not repeat
 every model: use [model list/inspect](../models/spec.md#model-inspection).
+`data.failures` is the retained
+[failure aggregation](../../diagnostics/spec.md#failure-aggregation) projection.
+Failure history is process-local: an absent or unidentified daemon supplies no
+failure history, and root `status` reports null `failures` in that state.
 Known native dependencies use resource references in `data.dependencies` when
 relevant; `data.unmanaged_clients = "unknown"` never claims complete client
 enumeration. Shared key availability/serving readiness are independent of

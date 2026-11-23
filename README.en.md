@@ -11,7 +11,8 @@ local Web interface is also available.
 - Manage native model-provider settings for Codex CLI, pi, omp, OpenCode, and
   Hermes Agent.
 - Run a local, same-protocol model gateway with concrete models or user-defined
-  aliases. Native configuration and gateway forwarding are independent capabilities.
+  aliases. Native configuration and gateway forwarding are two delivery forms of
+  the same provider inventory.
 - Use offline CLI help and JSON output for explicit management operations.
 
 ## Usage scenarios

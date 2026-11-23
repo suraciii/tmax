@@ -100,26 +100,31 @@ owns candidate validation, selection, and time-based schedules.
 
 Provider and AgentTarget are the principal independently managed objects. A Model
 is a provider-owned child, referenced by `provider-id/model-id`, not an independent
-service or cross-provider catalog entity. A ModelAlias is named configuration
-referencing existing models; each alias candidate is a model reference plus
-alias-local settings, with no independent identity or lifecycle. Account identity
+service or cross-provider catalog entity. A ModelAlias is one named route declaring
+its protocols and referencing existing models; each alias candidate is a model
+reference plus alias-local settings, with no independent identity or lifecycle.
+Account identity
 is optional observed information, subscription information is optional provider
 data, and authentication is provider configuration with separately protected
 credentials. Session bindings and observations are runtime state. The
 [design boundaries](design.md#product-structure) state their ownership.
 
-Agent provider configuration and model gateway forwarding are independent capabilities.
-An agent target may contain both upstream provider entries and a tmax gateway entry
-where its native capabilities permit. Neither capability requires use of the other.
+Provider entries have two delivery forms: direct and relayed. The difference is
+whether tmax is on the inference request path. Direct delivery keeps tmax off
+that path. Relayed delivery sends every request through the gateway. Both forms
+exist independently. A target may contain direct and relayed entries together
+where its native capabilities permit; there is no target-wide mode.
 The gateway must perform same-protocol forwarding only. It must not translate
 Responses, Chat Completions, or Anthropic Messages into one another.
 Model protocol availability follows configured provider endpoints under
 [endpoint resolution](../integrations/spec.md#endpoint-resolution), not a
 per-model qualification whitelist.
 Known provider integrations identify one service product and fixed destination
-set, including regional alternatives as distinct integration IDs. Local provider
-names remain arbitrary; neither their spelling nor a catalog default may choose
-a different region or billing product.
+set, including regional alternatives as distinct integration IDs. The derived
+`tmax-gateway` integration is the only exception; see
+[Gateway provider](#gateway-provider). Local provider names remain arbitrary;
+neither their spelling nor a catalog default may choose a different region or
+billing product.
 
 Team administration, remote gateway sharing, subscription purchase/cancellation,
 and payment execution are outside this product scope. Selection must stay within
@@ -216,12 +221,15 @@ replay requests, or overwrite current native settings as a side effect of startu
 ## Providers and authentication
 
 A user must be able to add, name, inspect, disable, reauthenticate, and remove a
-provider. Each provider represents one independently managed upstream access
-instance, with one authorization configuration, an integration type, endpoints,
-native protocols, and provider-owned models. Separate access instances may use
-the same service or account; distinct local IDs or credentials do not establish
-separate accounts, subscriptions, or allowances. A different account requires
-another provider, not a nested account or a second credential resource.
+user-managed provider. Each such provider represents one independently managed
+upstream access instance, with one authorization configuration, an integration
+type, endpoints, native protocols, and provider-owned models. Separate access
+instances may use the same service or account; distinct local IDs or credentials
+do not establish separate accounts, subscriptions, or allowances. A different
+account requires another provider, not a nested account or a second credential
+resource. The derived gateway provider `tmax` is not user-managed: it is owned by
+the [gateway](#gateway-provider) and its lifecycle belongs to
+`gateway configure`/`gateway remove`.
 
 Each provider must have a unique user-editable local ID and a separate display
 name. The local ID qualifies model references and is independent of the optional
@@ -500,9 +508,10 @@ providers from native settings or collect existing agent credentials.
 
 For each target, the user can configure named native provider entries, their
 model choices, a default model with an optional reasoning effort, and any native
-model roles. An entry refers to
-one upstream provider or to the tmax gateway. Upstream entries select that provider's
-concrete models; gateway entries select public concrete model IDs or model aliases.
+model roles. An entry references exactly one provider. A direct entry references
+any provider other than `tmax` and selects that provider's concrete models. A
+relayed entry references the derived [gateway provider](#gateway-provider) `tmax`
+and selects its public route names.
 Both kinds may coexist in the same target. There is no target-wide operating mode.
 Unsupported native multi-provider configurations must be explained, not silently
 collapsed to one provider. Defaults and native roles identify both the entry and
@@ -570,10 +579,10 @@ model, provider, credential, or billing product.
 
 ## Agent provider configuration
 
-An upstream entry configures inference directly to its selected provider.
-No running tmax server is required on that inference path. Supported on-demand
-secret resolution may require the installed tmax CLI; disclose that dependency.
-A gateway entry uses the tmax listener address and shared access key. Applying it
+A direct entry configures inference to its selected provider. No running tmax
+server is required on that inference path. Supported on-demand secret
+resolution may require the installed tmax CLI; disclose that dependency. A
+relayed entry uses the gateway listen address and shared gateway key. Applying it
 requires an explicitly started, ready listener; application must not start it.
 Adapters supply the native model list through supported discovery or static
 configuration. Saving settings and choosing a model never start the gateway.
@@ -650,13 +659,13 @@ configuration, using qualified `provider-id/model-id` public names. They do not
 require another route resource. Concrete requests pin that model; unknown or
 unavailable models must not cause registration, fuzzy lookup, or implicit fallback.
 
-A model alias is named configuration mapping a user-defined request model ID and
-native protocol to a required nonempty list of unique, registered qualified
+A model alias is one named route with declared native protocols and a required
+nonempty list of unique, registered qualified
 `provider-id/model-id` references under
 [Model selection](../model-routing/spec.md#model-aliases). Candidate-local settings
 belong to that alias, not to independent candidate objects or a second model
-lifecycle. The alias is not a new model, account pool, route resource, or protocol
-converter.
+lifecycle. The alias is not a new model, account pool, separate publication
+resource, or protocol converter.
 The [multi-source example](../model-routing/spec.md#multi-source-model-alias-example)
 shows different upstream IDs behind one request ID. Concrete gateway access still
 needs no alias definition.
@@ -840,6 +849,115 @@ not rewrite native-agent networking or the networking of a delegated
 native sign-in process; those boundaries must be disclosed, not claimed as
 tmax-controlled traffic.
 
+## Gateway provider
+
+Gateway configuration must create one derived provider named `tmax`. The gateway
+is a provider source: provider `tmax` appears in the inventory like any other
+provider, and `apply` distributes it to Agent targets exactly like any other
+provider under the [Agent provider configuration](#agent-provider-configuration)
+rules. A user-managed provider has `source = upstream`. Provider `tmax` has
+`source = gateway`. `gateway start` must not create or modify provider `tmax`;
+it changes availability only.
+
+`tmax` is a reserved provider ID. `gateway configure` must ensure provider
+`tmax`: it must create the provider when absent and update it when present.
+`gateway remove` must delete the provider after reference resolution. `provider
+add`, `provider remove`, and `provider rename` must refuse `tmax` as
+`reserved_resource` with exit 2; without a gateway the refusal names
+`tmax gateway configure`, and with a gateway it names `tmax gateway remove`.
+
+### Derived fields
+
+The gateway must own every derived field. Users must not edit a derived field,
+and provider operations must not accept an edit to one.
+
+| Field | Derived value |
+| --- | --- |
+| `source` | `gateway` |
+| `integration` | `tmax-gateway` |
+| `endpoints` | The gateway listen address for every protocol |
+| `auth` | Reference to the shared gateway key |
+| `models` | The enabled route set |
+| `enabled` | `true`; the provider must not be disabled |
+
+The gateway provider's children must be the gateway's public route names only.
+A child must never be a concrete `provider-id/model-id` reference. A route name
+must not contain `/`. Concrete `provider-id/model-id` access must remain an
+HTTP-level capability for unmanaged clients and must not be projected into the
+provider. `tmax-gateway` is the only integration whose destination is local and
+configurable; the [integration contract](../integrations/spec.md#gateway-integration)
+owns that exception.
+
+### Provider revision
+
+The gateway provider has one derived provider-level delivery revision over the
+listen address, the shared-key reference, and every enabled route. Every Agent
+target that applies provider `tmax` must record the target-scoped revision it
+applied, computed over the `route/protocol` pairs that target's relayed entries
+select; the recorded revision and its comparison are therefore target-scoped, not
+provider-wide.
+
+A key replacement must name the affected targets and mark their applied entries
+stale; it is the operation that returns a `rotation` block with
+`affected_targets`. A listen-address change, or a removed or disabled enabled
+route, marks the affected applied entries stale without a per-command
+affected-target list: the evidence is the affected target's applied delivery in
+`agent inspect`, `provider inspect tmax`, and `status --brief`. An added route
+must not mark an applied entry stale, and a changed selection protocol is drift,
+because the recorded revision hashes `route/protocol` pairs.
+
+Staleness reasons are named, not merged: `listen_changed`, `key_rotated`,
+`route_removed`, `entry_selection_changed`, `entry_references_missing_route`,
+`gateway_not_ready`, `native_edit_conflict`.
+
+### Availability, delivery, and use
+
+Availability, delivery, and use are independent facts. The product must report
+them separately and must never collapse them.
+
+| Fact | Values | Evidence |
+| --- | --- | --- |
+| Availability | ready, not ready, unknown | Gateway listener and shared key |
+| Delivery, per target | current, stale, blocked, unknown, not_applied, not_configured | Recorded target-scoped revision versus the current delivery facts, and native file checks |
+| Use, per target | unverified, observed | Agent-side evidence only |
+
+A ready gateway must not establish that a target applied provider `tmax`. The
+[diagnostics contract](../diagnostics/spec.md#independent-status-facts) owns the
+presentation of these facts.
+
+One brief status read must answer whether the installation is usable, which blocker
+comes first, and what to do next under the
+[CLI status contract](../cli/configuration/spec.md#status-and-brief). Detailed
+status, gateway status, Agent inspection, and provider inspection must keep the
+three facts separate. Repeated failures must be presented as one named condition,
+not once per request; the
+[failure aggregation](../diagnostics/spec.md#failure-aggregation) contract owns
+that projection.
+
+### Credentials and usage
+
+Replacing the shared key must increment key generation and mark every applied
+entry stale. The operation must name the affected targets. Removing an Agent
+target or one of its entries must not revoke the shared key; [Agent provider
+configuration](#agent-provider-configuration) owns that boundary. The gateway
+provider is the only provider whose usage is observed rather than read. It must
+have no upstream quota endpoint. Observed usage must never appear as a
+provider-side balance, and unknown usage must stay unknown.
+
+### Rules that always hold
+
+| Rule | Contract |
+| --- | --- |
+| Ownership | The gateway is the only owner of provider `tmax`; no second source of route truth exists. |
+| Derived models | The gateway provider's model set is derived and must not be edited directly. |
+| Delivery path | `apply` is the only path from the inventory to an Agent target. |
+| References | The gateway provider is never a model-alias candidate and never an effort-map or login source a harness could use to bypass the gateway. `auth.via = "tmax"` is the separate reserved tmax login-source namespace, not a provider reference, under the [authentication contract](../configuration/spec.md#authentication). |
+| Route identity | A listed route is one name, one ordered candidate list, and its declared protocols. |
+| Runtime use | A written file is not proof of runtime use; relayed use is proven only by Agent-side evidence. |
+| Stop behavior | Stopping the gateway must not silently convert a relayed entry into direct access. |
+| Allowance | One upstream access has one authorization and one allowance; routes must not create allowances. |
+| Lifecycle | Only the gateway owns the lifecycle of provider `tmax`. |
+
 ## Local Web and CLI experience
 
 The product name is **Gateway** (Simplified Chinese: **网关**). Navigation,
@@ -873,7 +991,7 @@ The supplementary Web interface must have these task-oriented areas:
 | --- | --- |
 | Overview | Provider-instance problems grouped by service, agent configuration state, gateway health, stale quota information, upcoming known renewal dates |
 | Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota windows with their basis, units and reset evidence, and freshness |
-| Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases with public names, explicit candidate lists, and selection previews |
+| Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases with public names, declared protocols, explicit candidate lists, and selection previews |
 | Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
 | Gateway | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
 
@@ -955,9 +1073,9 @@ agent chooses operations from help and current state.
 4. Register concrete models and add the target's native provider entries and
    selected models, default, and native roles through CLI operations. Inspect a
    requested concrete model or alias for the target before choosing its default;
-   do not infer a selection from the Agent or model name. Upstream entries need
-   no gateway or model alias. Gateway entries can use a single concrete model;
-   schedules and model aliases are optional.
+   do not infer a selection from the Agent or model name. Direct entries need
+   no gateway or model alias. Relayed entries select public route names, so each
+   selected route must be defined; schedules remain optional.
 5. For gateway use, explicitly configure, start, and validate the listener. Apply the target's
    desired configuration as a separate operation, optionally preceded by its
    dry run. Report written changes, outstanding native reload, and runtime
@@ -1030,7 +1148,7 @@ versions and provider-authorized credentials where a provider request is needed:
    one upstream identity must not duplicate its quota or inherit another identity's observations.
 3. Configure and restore each of Codex, pi, omp, OpenCode, Hermes, and DSH without
    overwriting unrelated or concurrently changed configuration.
-4. Use an upstream native entry while tmax is stopped, and a gateway entry while
+4. Use a direct native entry while tmax is stopped, and a relayed entry while
    the browser is closed. Configure both entries in one supported native target.
    Serve an independently configured client without registering any agent target.
 5. Complete streaming output and a tool-call round trip for each advertised

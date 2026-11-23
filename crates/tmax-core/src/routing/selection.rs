@@ -29,7 +29,7 @@ fn candidates(config: &Config, id: &str, protocol: &str) -> Result<(bool, Vec<(S
     if let Some(alias) = config
         .model_aliases
         .iter()
-        .find(|a| a.id == id && a.protocol == protocol)
+        .find(|a| a.id == id && a.publishes(protocol))
     {
         if !alias.enabled {
             return Err(Error::new("disabled_model", "Model alias is disabled"));
@@ -37,12 +37,20 @@ fn candidates(config: &Config, id: &str, protocol: &str) -> Result<(bool, Vec<(S
         let mut result = Vec::with_capacity(alias.candidates.len());
         for name in &alias.candidates {
             let (p, m) = config::qualified(name)?;
+            // The derived provider only mirrors public routes; it is never a
+            // concrete destination.
+            if config.is_gateway_provider(p) {
+                continue;
+            }
             config::model(config, name)?;
             result.push((p.into(), m.into()));
         }
         return Ok((true, result));
     }
     let (provider, model) = config::qualified(id)?;
+    if config.is_gateway_provider(provider) {
+        return Ok((false, Vec::new()));
+    }
     config::model(config, id)?;
     Ok((false, vec![(provider.into(), model.into())]))
 }
@@ -588,7 +596,7 @@ pub(crate) fn explain_loaded_effective(
 
 #[cfg(test)]
 mod tests {
-    use super::{Advice, explain_loaded_effective, explain_native, request_unavailable};
+    use super::{Advice, explain_loaded_effective, explain_native, request_unavailable, select};
     use crate::{
         config::{self, Config, Model, Provider},
         inputs,
@@ -628,7 +636,7 @@ mod tests {
         loaded.model_aliases.push(config::ModelAlias {
             candidate_reasoning_effort: Default::default(),
             id: "L0".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: vec!["old/m".into()],
             enabled: true,
             continuity: None,
@@ -757,5 +765,42 @@ mod tests {
         ]}));
         assert_eq!(held.code, "quota_guard");
         assert!(held.message.contains("2026-11-09T01:00:00Z"));
+    }
+
+    #[test]
+    fn derived_gateway_provider_is_never_a_concrete_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("state"));
+        let config = config::parse(
+            "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.models.route]\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncandidates=['up/route']\n",
+        )
+        .unwrap();
+        let evidence =
+            explain_native(&store, &config, "tmax/route", "responses", None, None).unwrap();
+        assert!(evidence["selection"].is_null());
+        assert_eq!(evidence["excluded_candidates"], json!([]));
+        assert_eq!(
+            select(
+                &store,
+                &config,
+                "tmax/route",
+                "responses",
+                chrono::Utc::now()
+            )
+            .unwrap_err()
+            .code,
+            "model_unavailable"
+        );
+        // A real provider's fixed model is still enumerated and ranked as before.
+        let evidence =
+            explain_native(&store, &config, "up/route", "responses", None, None).unwrap();
+        assert_eq!(
+            evidence["excluded_candidates"][0]["qualified_model"],
+            "up/route"
+        );
+        assert_eq!(
+            evidence["priority_evaluations"][0]["qualified_model"],
+            "up/route"
+        );
     }
 }

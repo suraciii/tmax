@@ -49,7 +49,7 @@ Native provider/model selections are not a gateway access filter.
 | Result coverage | Process/reset scope and material limits/gaps. |
 | Detailed history/status | Retain process start/clear time, actual limits/counts, eviction/capture evidence, and historical rule/input snapshots as specified by Diagnostics. Never use current config to relabel historical derived rule kind or reconstruct omitted candidates/rules. |
 | Canonical selection codes | Stable identity tie-breaking is `stable_model_identity`; permanent model removal/disablement blockers are `model_removed` and `model_disabled`. New results expose only canonical names. Historical binding normalization follows [Configuration](../../../configuration/spec.md#format-and-authority) without resetting tokens or blockers. |
-| Upstream-source native traffic | Outside gateway coverage even if the same target also has gateway entries; missing records prove neither inactivity, bypass, nor successful access. |
+| Upstream-source native traffic | Outside gateway coverage even if the same target also has relayed entries; missing records prove neither inactivity, bypass, nor successful access. |
 
 Clear includes terminal rejected/failed/cancelled/interrupted/unknown records as
 qualified by Diagnostics. Dry-run reports current eligible count/coverage and

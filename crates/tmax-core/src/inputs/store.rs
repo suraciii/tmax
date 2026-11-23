@@ -328,23 +328,54 @@ fn rebind_declarations(view: &mut super::model::View, legacy: &BTreeMap<String, 
 }
 
 fn decode_runtime(bytes: &[u8]) -> Result<Runtime> {
+    // Retained lineage is bookkeeping rebuilt from the saved configuration. A
+    // snapshot written under another configuration format is unusable, not an
+    // error: discard it so the next capture recreates it in the current format.
+    if serde_json::from_slice::<Value>(bytes)
+        .ok()
+        .is_some_and(|document| {
+            std::iter::once(document.get("saved"))
+                .chain(
+                    document
+                        .get("loaded")
+                        .map(Some)
+                        .unwrap_or(None)
+                        .into_iter()
+                        .map(Some),
+                )
+                .flatten()
+                .filter(|view| !view.is_null())
+                .filter_map(|view| view.get("config"))
+                .filter_map(|config| config.get("version").and_then(Value::as_i64))
+                .any(|version| version != crate::config::CONFIG_VERSION)
+        })
+    {
+        return Ok(Runtime::default());
+    }
     if let Ok(runtime) = serde_json::from_slice::<Runtime>(bytes) {
         let known_bases = std::iter::once(&runtime.saved)
             .chain(runtime.loaded.iter())
             .any(|view| {
-                view.config.providers.values().any(|provider| {
-                    provider.integration.as_deref().is_some_and(|id| {
-                        crate::retained_integration::regional_candidates(id).is_some()
-                    }) || (provider.integration.is_none()
-                        && matches!(
-                            provider.metadata.as_deref(),
-                            Some("kimi-for-coding" | "kimi-code")
-                        ))
-                        || crate::provider_integration::integration_id(provider).is_err()
-                        || (!provider.endpoints.is_empty()
-                            && crate::provider_integration::integration_id(provider)
-                                .is_ok_and(|id| id != "custom"))
-                })
+                view.config
+                    .providers
+                    .values()
+                    .filter(|provider| {
+                        provider.integration.as_deref()
+                            != Some(crate::provider_integration::GATEWAY_INTEGRATION)
+                    })
+                    .any(|provider| {
+                        provider.integration.as_deref().is_some_and(|id| {
+                            crate::retained_integration::regional_candidates(id).is_some()
+                        }) || (provider.integration.is_none()
+                            && matches!(
+                                provider.metadata.as_deref(),
+                                Some("kimi-for-coding" | "kimi-code")
+                            ))
+                            || crate::provider_integration::integration_id(provider).is_err()
+                            || (!provider.endpoints.is_empty()
+                                && crate::provider_integration::integration_id(provider)
+                                    .is_ok_and(|id| id != "custom"))
+                    })
             });
         if !known_bases {
             return Ok(runtime);
@@ -822,7 +853,7 @@ mod tests {
         config.model_aliases.push(config::ModelAlias {
             candidate_reasoning_effort: Default::default(),
             id: "custom-name".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: vec!["p/m".into()],
             enabled: true,
             continuity: None,
@@ -881,7 +912,7 @@ mod tests {
             config.model_aliases.push(config::ModelAlias {
                 candidate_reasoning_effort: Default::default(),
                 id: id.into(),
-                protocol: "chat-completions".into(),
+                protocols: vec!["chat-completions".into()],
                 candidates: vec!["p/m".into()],
                 enabled: true,
                 continuity: None,
@@ -967,13 +998,53 @@ mod tests {
     }
 
     #[test]
+    fn retained_state_from_another_format_version_is_rebuilt_instead_of_failing() {
+        let (_directory, store, original) = fixture();
+        let mut config = original.clone();
+        config.model_aliases.push(config::ModelAlias {
+            candidate_reasoning_effort: Default::default(),
+            id: "route".into(),
+            protocols: vec!["chat-completions".into()],
+            candidates: vec!["p/m".into()],
+            enabled: true,
+            continuity: None,
+            fallback: None,
+        });
+        save_intent(&store, &config);
+        reconcile(&store, &original, &config, &[]).unwrap();
+        let runtime = read_runtime(&store).unwrap();
+        let mut legacy = serde_json::to_value(runtime).unwrap();
+        legacy["saved"]["config"] = historical_config(&config);
+        legacy["saved"]["config"]["version"] = json!(1);
+        for alias in legacy["saved"]["config"]["model_aliases"]
+            .as_array_mut()
+            .unwrap()
+        {
+            let value = alias.as_object_mut().unwrap();
+            let protocols = value.remove("protocols").unwrap();
+            let protocol = protocols.as_array().unwrap()[0].clone();
+            value.insert("protocol".into(), protocol);
+        }
+        legacy["loaded"] = Value::Null;
+        store.write_json(STATE, &legacy).unwrap();
+        let bytes = std::fs::read(store.path(STATE).unwrap()).unwrap();
+        let rebuilt = read_runtime(&store).unwrap();
+        assert!(rebuilt.saved.config.model_aliases.is_empty());
+        assert_eq!(
+            std::fs::read(store.path(STATE).unwrap()).unwrap(),
+            bytes,
+            "a read must not rewrite retained state"
+        );
+    }
+
+    #[test]
     fn corrupt_historical_sources_fail_closed_without_rewriting_retained_state() {
         let (_directory, store, original) = fixture();
         let mut config = original.clone();
         config.model_aliases.push(config::ModelAlias {
             candidate_reasoning_effort: Default::default(),
             id: "historical".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: vec!["p/m".into()],
             enabled: true,
             continuity: None,

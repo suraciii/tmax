@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn preserves_comments_and_unrelated_settings() {
         let mut doc: toml_edit::DocumentMut =
-            "# personal\nversion=1\n[providers.x]\n# label\nintegration='deepseek'\nenabled=true\n"
+            "# personal\nversion=2\n[providers.x]\n# label\nintegration='deepseek'\nenabled=true\n"
                 .parse()
                 .unwrap();
         let before: Value = toml::from_str(&doc.to_string()).unwrap();

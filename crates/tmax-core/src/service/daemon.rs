@@ -243,7 +243,7 @@ impl Daemon {
                     target
                         .providers
                         .values()
-                        .any(|entry| entry.gateway == Some(true))
+                        .any(|entry| entry.is_relayed(candidate))
                 })
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>();
@@ -277,9 +277,9 @@ impl Daemon {
         if inference["state"] == "running" && self.key_state != "ready" {
             inference["state"] = json!("unavailable");
         }
-        let dependencies=self.loaded.as_ref().map(|(config,_)|config.agents.iter().filter(|(_,target)|target.providers.values().any(|entry|entry.gateway==Some(true))).map(|(id,_)|json!({"kind":"agent_target","id":id,"scope":"configured_gateway_entry"})).collect::<Vec<_>>()).unwrap_or_default();
+        let dependencies=self.loaded.as_ref().map(|(config,_)|config.agents.iter().filter(|(_,target)|target.providers.values().any(|entry|entry.is_relayed(config))).map(|(id,_)|json!({"kind":"agent_target","id":id,"scope":"configured_gateway_entry"})).collect::<Vec<_>>()).unwrap_or_default();
         let stopping = self.shutdown.stopping.load(Ordering::Acquire);
-        json!({"daemon":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("daemon_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"gateway":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"limits":crate::gateway::limits(),"unmanaged_clients":"unknown","supervision":supervisor::local_view(&self.store,&self.process)})
+        json!({"daemon":{"discovery_state":if stopping{"unavailable"}else{"compatible"},"reason_code":if stopping{json!("daemon_stopping")}else{Value::Null},"identity":identity,"inference":inference,"web":surface(&self.web),"caller_version":env!("CARGO_PKG_VERSION"),"version_relation":"same"},"gateway":{"ready":!stopping&&self.inference.as_ref().is_some_and(|s|!s.task.is_finished())&&self.key_state=="ready","listen":self.inference.as_ref().map(|s|s.address.to_string()),"key_ref":key_ref,"config_revision":self.loaded.as_ref().map(|v|&v.1)},"shared_key":{"loaded_reference":key_ref,"loaded_state":self.key_state},"publication":{"snapshot_state":if self.loaded.is_some(){"available"}else{"absent"},"model_count":count},"network":{"loaded":loaded_network},"dependencies":dependencies,"active_requests":self.runtime.active(),"sessions":self.runtime.binding_summary(),"failures":self.runtime.history.failure_summary(),"limits":crate::gateway::limits(),"unmanaged_clients":"unknown","supervision":supervisor::local_view(&self.store,&self.process)})
     }
     pub(super) async fn activate(&mut self, revision: Option<&str>) -> Result<Value> {
         let loaded = crate::config::load(&self.store)?;
@@ -815,7 +815,7 @@ mod tests {
     async fn loaded_view_exposes_daemon_pending_quota_without_changing_disk() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
-        let text = "version=1\n[providers.p]\nintegration='opencode-go'\n";
+        let text = "version=2\n[providers.p]\nintegration='opencode-go'\n";
         store.write_raw("tmax.toml", text.as_bytes()).unwrap();
         let config = crate::config::parse(text).unwrap();
         crate::inputs::reconcile(&store, &Config::empty(), &config, &[]).unwrap();
@@ -1013,7 +1013,7 @@ mod tests {
         }
         config.model_aliases.push(crate::config::ModelAlias {
             id: "dynamic".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: vec!["p/m".into(), "q/m".into()],
             enabled: true,
             continuity: None,
@@ -1142,6 +1142,41 @@ mod tests {
             daemon.loaded_metadata.as_ref().unwrap().revision,
             "pending-metadata"
         );
+    }
+    #[tokio::test]
+    async fn status_view_exposes_aggregated_failures_without_starting_a_daemon() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("state"));
+        let runtime = Runtime::new(store.clone(), "failures-view".into()).unwrap();
+        let daemon = Daemon {
+            store,
+            process: "failures-view".into(),
+            runtime,
+            inference: None,
+            web: None,
+            loaded: None,
+            loaded_metadata: None,
+            key_state: "absent".into(),
+            shutdown: Arc::new(Shutdown::new()),
+        };
+        let view = daemon.view();
+        assert_eq!(view["failures"]["state"], "available");
+        assert_eq!(view["failures"]["groups"], json!([]));
+        assert!(view["failures"]["stale_shared_key"].is_null());
+
+        let mut record = daemon.runtime.history.begin();
+        record.outcome = "rejected".into();
+        record.stage = "shared_key_authentication".into();
+        record.reason_code = Some("invalid_api_key".into());
+        daemon.runtime.history.update(record);
+
+        let view = daemon.view();
+        assert_eq!(
+            view["failures"]["groups"][0]["stage"],
+            "shared_key_authentication"
+        );
+        assert_eq!(view["failures"]["stale_shared_key"]["count"], 1);
+        assert_eq!(view["failures"]["repeated"], 0);
     }
     #[cfg(windows)]
     #[tokio::test]

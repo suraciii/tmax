@@ -218,6 +218,29 @@ pub async fn status(store: &Store) -> Result<Value> {
     Ok(status_snapshot(store).await.0)
 }
 
+/// Observed gateway usage from the identified daemon's in-memory history.
+///
+/// This mirrors the daemon's `usage` management answer. When no daemon is
+/// reachable the same absent-shaped value the command surface reports is
+/// returned, so unknown usage stays unknown instead of becoming a balance.
+pub async fn usage(store: &Store) -> Result<Value> {
+    let request = Request {
+        command: vec!["usage".into()],
+        operands: Vec::new(),
+        arguments: Default::default(),
+        dry_run: false,
+        if_revision: None,
+    };
+    let absent = || json!({"snapshot_state":"absent","coverage":{"prior_process_coverage":"unavailable"},"records":[],"reason_code":"no_daemon_history"});
+    Ok(match rpc(store, "control", Some(request), None).await {
+        Ok(Some(value)) => value,
+        Ok(None) => absent(),
+        Err(error) => {
+            json!({"snapshot_state":"absent","coverage":{"prior_process_coverage":"unavailable"},"records":[],"reason_code":error.code})
+        }
+    })
+}
+
 pub(super) async fn status_snapshot(store: &Store) -> (Value, Result<super::supervisor::Snapshot>) {
     let mut value = match rpc(store, "status", None, None).await {
         Ok(Some(v)) => v,

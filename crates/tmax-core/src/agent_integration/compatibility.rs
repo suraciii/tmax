@@ -59,7 +59,7 @@ impl Context<'_> {
         if self.gateway {
             if config.model_aliases.iter().any(|alias| {
                 alias.id == public_id
-                    && alias.protocol == protocol
+                    && alias.publishes(protocol)
                     && alias.continuity.as_deref().unwrap_or("session") == "session"
             }) && !(matches!(self.agent, "pi" | "opencode") && protocol == "chat-completions")
             {
@@ -132,7 +132,7 @@ impl Context<'_> {
         if let Some(alias) = config
             .model_aliases
             .iter()
-            .find(|a| a.id == id && a.protocol == protocol && a.enabled)
+            .find(|a| a.id == id && a.publishes(protocol) && a.enabled)
         {
             let mut failure = None;
             let mut supports = |provider: &str| match self.assess(config, provider, protocol, id) {

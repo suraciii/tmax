@@ -152,6 +152,8 @@ const providerName = id => state.config?.providers?.[id]?.overrides?.name || id;
 const serviceName = p => integrationNames[p?.integration] || p?.integration || p?.metadata || '未指定集成类型';
 const dateValue = value => typeof value === 'string' ? value : value?.$__toml_private_datetime || null;
 const modelConfig = id => { const slash=id.indexOf('/'); return state.config?.providers?.[id.slice(0,slash)]?.models?.[id.slice(slash+1)]; };
+const modelAlias = id => (state.config?.model_aliases || []).find(a => a.id === id) || null;
+const aliasProtocol = id => modelAlias(id)?.protocols?.[0] || '';
 const isSuccess = response => response?.exit_code === 0 && ['success','dry_run'].includes(response.body?.status);
 
 async function http(path, payload, signal) {
@@ -248,37 +250,40 @@ function renderOverview() {
   const providers=state.providers, models=state.models, agents=state.agents;
   const running=state.runtime?.daemon?.inference?.state==='running';
   const ready=state.runtime?.gateway?.ready===true;
-  const needsAuth=(providers || []).filter(p=>p.enabled && p.authentication==='not_configured');
+  // The derived gateway provider is inventory, not an editable access instance.
+  const upstreamProviders=(providers || []).filter(p=>p.source!=='gateway');
+  const needsAuth=upstreamProviders.filter(p=>p.enabled && p.authentication==='not_configured');
   const configuredProviders=Object.entries(state.config.providers);
   const upcoming=configuredProviders.filter(([,p])=>dateValue(p.subscription?.renewal_date)).sort((a,b)=>dateValue(a[1].subscription.renewal_date).localeCompare(dateValue(b[1].subscription.renewal_date)));
-  const providerBody=providers===null?empty('接入暂不可用','请刷新后重试。'):providers.length?providers.slice(0,5).map(p=>`<div class="agent-row"><div class="avatar blue">${escapeHtml(serviceName(state.config.providers[p.id]).slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p>${escapeHtml(serviceName(state.config.providers[p.id]))} · ${Object.keys(state.config.providers[p.id]?.models || {}).length} 个模型</p></div>${authBadge(p)}${button('管理','provider-detail',p.id,'small')}</div>`).join(''):empty('还没有添加接入','添加 API 服务或受支持的订阅，再配置授权和模型。',button('添加接入','provider-add','','soft','plus'),'providers',true);
+  const providerBody=providers===null?empty('接入暂不可用','请刷新后重试。'):upstreamProviders.length?upstreamProviders.slice(0,5).map(p=>`<div class="agent-row"><div class="avatar blue">${escapeHtml(serviceName(state.config.providers[p.id]).slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p>${escapeHtml(serviceName(state.config.providers[p.id]))} · ${Object.keys(state.config.providers[p.id]?.models || {}).length} 个模型</p></div>${authBadge(p)}${button('管理','provider-detail',p.id,'small')}</div>`).join(''):empty('还没有添加接入','添加 API 服务或受支持的订阅，再配置授权和模型。',button('添加接入','provider-add','','soft','plus'),'providers',true);
   const agentsBody=agentTypes.map(([id,name,mark,tone])=>{const targets=(agents || []).filter(t=>t.agent===id);return `<div class="agent-row"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length?`${targets.length} 个已保存配置 · 原生状态需检查`:'添加配置后选择模型'}</p></div>${button(targets.length?'管理':'设置',targets.length?'navigate':'agent-add',targets.length?'agents':id,'small')}</div>`;}).join('');
   const renewals=upcoming.length?upcoming.map(([id,p])=>{const date=dateValue(p.subscription.renewal_date);const today=new Date().toLocaleDateString('en-CA');return `<div class="list-row split"><div><h3>${escapeHtml(providerName(id))}</h3><small>${escapeHtml(p.subscription.plan || '手动记录的日期')} · 计费结果未知</small></div>${badge(date+(date<today?' · 日期已过':''),date<today?'amber':'')}</div>`;}).join(''):'<p class="muted">暂无已知续费日期。可在接入详情中记录计划和日期。</p>';
   const issues=needsAuth.length?notice(`${needsAuth.length} 个接入尚未配置授权。可以继续管理模型，使用前请完成授权。`,'warning'):'';
-  $('content').innerHTML=`<div class="metrics">${metric('接入',providers?.length ?? '—','已添加的接入实例','providers')}${metric('模型',models?.filter(m=>m.kind==='concrete').length ?? '—',`${models?.filter(m=>m.kind==='alias').length ?? '—'} 个自定义别名`,'models')}${metric('工具配置',agents?.length ?? '—','已保存的工具配置','agents')}${metric('网关',!state.runtime?'未知':running?(ready?'运行中':'运行中 · 待就绪'):'未启动',running?'仅转发已支持的原生协议':'可在网关页面启动','gateway',true)}</div>`+issues+`<div class="grid-two">${panel('接入','授权和模型按接入实例配置',providerBody,button('查看全部','navigate','providers','text small','arrow'))}${panel('编程工具','查看配置或添加工具配置',agentsBody)}</div><div class="steps"><button class="step" data-action="provider-add"><span class="step-number">01</span><span><strong>添加接入</strong><small>选择集成类型并配置授权</small></span></button><button class="step" data-action="navigate" data-id="models"><span class="step-number">02</span><span><strong>配置模型与别名</strong><small>登记模型或设置别名候选</small></span></button><button class="step" data-action="navigate" data-id="agents"><span class="step-number">03</span><span><strong>配置编程工具</strong><small>选择模型并应用到工具</small></span></button></div><div class="section-label"><h2>订阅与续费</h2><p>来自已保存的信息</p></div>${panel('已知续费日期','不推断扣款、剩余额度或续费结果',renewals)}`;
+  $('content').innerHTML=`<div class="metrics">${metric('接入',providers===null?'—':upstreamProviders.length,'已添加的接入实例','providers')}${metric('模型',models?.filter(m=>m.kind==='concrete').length ?? '—',`${models?.filter(m=>m.kind==='alias').length ?? '—'} 个自定义别名`,'models')}${metric('工具配置',agents?.length ?? '—','已保存的工具配置','agents')}${metric('网关',!state.runtime?'未知':running?(ready?'运行中':'运行中 · 待就绪'):'未启动',running?'仅转发已支持的原生协议':'可在网关页面启动','gateway',true)}</div>`+issues+`<div class="grid-two">${panel('接入','授权和模型按接入实例配置',providerBody,button('查看全部','navigate','providers','text small','arrow'))}${panel('编程工具','查看配置或添加工具配置',agentsBody)}</div><div class="steps"><button class="step" data-action="provider-add"><span class="step-number">01</span><span><strong>添加接入</strong><small>选择集成类型并配置授权</small></span></button><button class="step" data-action="navigate" data-id="models"><span class="step-number">02</span><span><strong>配置模型与别名</strong><small>登记模型或设置别名候选</small></span></button><button class="step" data-action="navigate" data-id="agents"><span class="step-number">03</span><span><strong>配置编程工具</strong><small>选择模型并应用到工具</small></span></button></div><div class="section-label"><h2>订阅与续费</h2><p>来自已保存的信息</p></div>${panel('已知续费日期','不推断扣款、剩余额度或续费结果',renewals)}`;
 }
 function searchBox(placeholder) { return `<div class="search">${icon('search')}<input id="search" type="search" aria-label="${placeholder}" placeholder="${placeholder}" value="${escapeHtml(state.query)}"></div>`; }
 function renderProviders() {
-  $('content').innerHTML=`<div class="toolbar">${searchBox('搜索接入名称或 ID')}<div class="toolbar-actions"><span class="muted">${state.providers?.length ?? '—'} 个接入</span>${button('刷新可查询额度','provider-quota-all','','small','refresh')}</div></div><div id="provider-list"></div>`;
+  const count=state.providers===null?'—':state.providers.filter(p=>p.source!=='gateway').length;
+  $('content').innerHTML=`<div class="toolbar">${searchBox('搜索接入名称或 ID')}<div class="toolbar-actions"><span class="muted">${count} 个接入</span>${button('刷新可查询额度','provider-quota-all','','small','refresh')}</div></div><div id="provider-list"></div>`;
   renderProviderList();
   $('search').addEventListener('input',e=>{state.query=e.target.value;renderProviderList();});
 }
 function renderProviderList() {
   if (!state.providers) { $('provider-list').innerHTML=empty('接入列表读取失败','点击右上角刷新重试。'); return; }
-  const filtered=state.providers.filter(p=>`${p.id} ${providerName(p.id)} ${serviceName(state.config.providers[p.id])}`.toLowerCase().includes(state.query.toLowerCase()));
+  const filtered=state.providers.filter(p=>p.source!=='gateway'&&`${p.id} ${providerName(p.id)} ${serviceName(state.config.providers[p.id])}`.toLowerCase().includes(state.query.toLowerCase()));
   if (!filtered.length) { $('provider-list').innerHTML=`<div class="panel">${empty(state.query?'没有匹配的接入':'还没有添加接入',state.query?'试试其他名称或 ID。':'选择集成类型或自定义端点，保存后配置授权和模型。',state.query?'':button('添加接入','provider-add','','primary','plus'),'providers')}</div>`; return; }
   const groups=Map.groupBy?Map.groupBy(filtered,p=>serviceName(state.config.providers[p.id])):filtered.reduce((m,p)=>{const k=serviceName(state.config.providers[p.id]);m.set(k,[...(m.get(k)||[]),p]);return m;},new Map());
   $('provider-list').innerHTML=[...groups].map(([name,providers])=>`<div class="section-label"><h2>${escapeHtml(name)}</h2><p>${providers.length} 个独立实例</p></div><div class="cards">${providers.map(p=>{const config=state.config.providers[p.id];const observation=p.observations?.observations?.find(o=>o.scope==='quota');return `<article class="provider-card"><div class="card-top"><div class="avatar blue">${escapeHtml(name.slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p class="mono">${escapeHtml(p.id)}</p></div>${authBadge(p)}</div><div class="card-facts">${fact('模型',Object.keys(config.models || {}).length+' 个')}${fact('订阅计划',config.subscription?.plan || '未记录')}${(quotaCard(observation) + quotaSuspensionCard(p))}${fact('使用此接入的工具',p.affected_targets+' 个配置')}</div><div class="card-actions">${button('管理接入','provider-detail',p.id,'small','',`管理接入 ${providerName(p.id)}`)}${button(p.authentication==='not_configured'?'配置授权':'更新授权','provider-auth',p.id,'soft small','key',`${p.authentication==='not_configured'?'配置授权':'更新授权'} ${providerName(p.id)}`)}</div></article>`;}).join('')}</div>`).join('');
 }
 function renderModels() {
-  $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">模型别名</button></div>${searchBox('搜索模型或接入')}</div>${state.modelKind==='alias'?notice('模型别名是引用已有模型的命名配置。每个候选是模型引用及别名内的局部设置，不是独立模型。可为每个候选设置推理强度覆盖；未设置时不改写客户端请求。别名仅用于网关，不自动改变工具的直接连接。'):''}<div id="model-list"></div>`;
+  $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">模型别名</button></div>${searchBox('搜索模型或接入')}</div>${state.modelKind==='alias'?notice('模型别名是引用已有模型的命名配置。每条别名声明一个或多个原生协议，候选列表应用于全部已声明协议。每个候选是模型引用及别名内的局部设置，不是独立模型。可为每个候选设置推理强度覆盖；未设置时不改写客户端请求。别名仅用于网关，不自动改变工具的直接连接。'):''}<div id="model-list"></div>`;
   renderModelList(); $('search').addEventListener('input',e=>{state.query=e.target.value;renderModelList();});
 }
 function renderModelList() {
   if (!state.models) {$('model-list').innerHTML=empty('模型列表读取失败','刷新后重试。');return;}
   const rows=state.models.filter(m=>m.kind===state.modelKind && m.id.toLowerCase().includes(state.query.toLowerCase()));
   if (!rows.length) {$('model-list').innerHTML=`<div class="panel">${empty(state.query?'没有匹配的模型':state.modelKind==='alias'?'还没有模型别名':'还没有登记模型',state.query?'试试其他关键词。':state.modelKind==='alias'?'创建别名并选择候选模型，供网关使用。':'添加接入后，登记要使用的上游模型。',state.query?'':button(state.modelKind==='alias'?'新建别名':'添加模型',state.modelKind==='alias'?'alias-add':'model-add','','primary','plus'))}</div>`;return;}
-  $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'接入'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):state.config.model_aliases.find(a=>a.id===m.id&&a.protocol===m.protocol);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${(m.published_protocols || []).map(p=>badge(protocolNames[p] || p)).join('') || badge('未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td><div class="actions">${m.kind==='alias'?button('管理','alias-edit',JSON.stringify([m.id,m.protocol]),'small'):button('管理','model-edit',m.id,'small')+button('详情','model-detail',m.id,'small soft')}</div></td></tr>`;}).join('')}</tbody></table></div>`;
+  $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'接入'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):modelAlias(m.id);const protocols=m.kind==='alias'?(m.protocols || []):(m.published_protocols || []);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${protocols.map(p=>badge(protocolNames[p] || p)).join('') || badge(m.kind==='alias'?'未声明':'未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td><div class="actions">${m.kind==='alias'?button('管理','alias-edit',JSON.stringify([m.id]),'small'):button('管理','model-edit',m.id,'small')+button('详情','model-detail',m.id,'small soft')}</div></td></tr>`;}).join('')}</tbody></table></div>`;
 }
 function renderAgents() {
   $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',defaultLabel(state.config.agents[t.target]?.default,id))}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
@@ -660,22 +665,32 @@ function modelForm(id='', provider='') {
     (editing?field('qualified','模型引用',id,{readonly:true}):field('provider','所属接入',provider || Object.keys(state.config.providers)[0],{required:true,options:Object.keys(state.config.providers).map(p=>[p,providerName(p)])})+field('model','上游模型 ID','',{required:true,placeholder:'例如：deepseek-chat'}))+
     '<div class="form-grid">'+field('name','显示名称',config?.overrides?.name ?? '',{help:'留空表示显式空名称；恢复继承请使用下方操作。'})+field('priority','基础优先级',config?.priority ?? 0,{type:'number',required:true})+'</div>'+field('enabled','模型状态',String(config?.enabled ?? true),{options:[['true','启用'],['false','停用']]})+(editing?`<div class="actions">${button('恢复名称继承','model-inherit',id,'small')}${button('高级设置 / 优先级规则','model-advanced',id,'small')}${button('移除模型','model-remove',id,'small danger')}</div>`:''),()=>({operation:editing?'model update':'model add',operands:[editing?id:value('provider')+'/'+value('model').trim()],args:{set:['overrides.name',value('name'),'priority',value('priority'),'enabled',value('enabled')]}}));
 }
+const aliasEffortProtocols=['chat-completions','responses'];
 function aliasForm(encoded='') {
-  const [id,protocol]=encoded?JSON.parse(encoded):[];const current=id?state.config.model_aliases.find(a=>a.id===id&&a.protocol===protocol):null;
-  const currentEfforts=current?.candidate_reasoning_effort || {};
+  const [id]=encoded?JSON.parse(encoded):[];
+  const current=id?modelAlias(id):null;
   const models=(state.models || []).filter(m=>m.kind==='concrete');
-  formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称并引用同一原生协议下的已有模型；每个候选由模型引用和别名内的局部设置组成，可单独覆盖推理强度。留空表示不覆盖客户端请求，只能使用具体模型有效推理能力元数据列出的值。Messages 不支持此覆盖。',
-    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+field('protocol','原生协议',protocol || Object.keys(protocolNames).find(p=>models.some(m=>m.published_protocols?.includes(p))) || 'responses',{required:true,options:Object.entries(protocolNames),help:'优先选择上游已声明的 Responses；协议由客户端配置决定，网关不自动切换或转换。'})+'</div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+
+  const declaredProtocols=new Set(current?.protocols || [Object.keys(protocolNames).find(protocol=>models.some(m=>(m.published_protocols || []).includes(protocol))) || 'responses']);
+  const reference=JSON.stringify([id]);
+  const currentEfforts=current?.candidate_reasoning_effort || {};
+  const protocolInputs=()=>[...document.querySelectorAll('#dialog-content [name=protocol]')];
+  const checkedProtocols=()=>protocolInputs().filter(input=>input.checked).map(input=>input.value);
+  const supportsEffort=protocols=>protocols.some(protocol=>aliasEffortProtocols.includes(protocol));
+  const effortDraft=new Map(Object.entries(currentEfforts));
+  const captureEfforts=()=>document.querySelectorAll('[name=candidate-effort]').forEach(input=>{const effort=input.value.trim();if(effort)effortDraft.set(input.dataset.candidate,effort);else effortDraft.delete(input.dataset.candidate);});
+  formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称并引用已有模型。每条别名声明一个或多个原生协议，候选列表应用于全部已声明协议；每个候选由模型引用和别名内的局部设置组成，可单独覆盖推理强度。留空表示不覆盖客户端请求，只能使用具体模型有效推理能力元数据列出的值。推理强度覆盖需要声明 Chat Completions 或 Responses。',
+    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+'<div class="field"><span>原生协议 <span class="required">*</span></span><div class="checklist" role="group" aria-label="原生协议">'+Object.entries(protocolNames).map(([protocol,label])=>`<label><input type="checkbox" name="protocol" value="${escapeHtml(protocol)}" ${declaredProtocols.has(protocol)?'checked':''}><span>${escapeHtml(label)}</span></label>`).join('')+'</div><small>一条路由可声明一个或多个原生协议；由客户端配置选择协议，网关不会自动切换或转换。优先选择上游已声明的 Responses。</small></div></div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+
     field('continuity','会话连续性',current?.continuity || '',{options:[['','默认会话连续性'],['session','会话连续性'],['stateless','无状态完整上下文']],help:'错误回退仅允许显式选择无状态，且请求必须携带完整上下文；不会迁移已经建立的会话或跨接入转发上游资源引用。'})+
     '<h3 class="subheading">请求错误回退</h3>'+field('fallback-mode','回退策略',current?.fallback?'configured':'absent',{options:[['absent','不配置 / 清除回退'],['configured','明确配置回退']]})+
     '<div id="fallback-fields">'+failureConditionFields('fallback',current?.fallback)+notice('仅在成功响应尚未开始时，按当前优先级选择下一个未尝试的接入；同一请求不会重复尝试同一接入。成功响应一旦开始（包括流式响应），后续中断也不会自动重试或切换。')+notice(failureAmbiguityWarning,'warning')+'</div>'+
-    (id?`<div class="actions">${button('查看共同能力','alias-detail',encoded,'small')}${button('查看选择依据','alias-explain',encoded,'small')}${button('移除别名','alias-remove',encoded,'small danger')}</div>`:''),()=>{
+    (id?`<div class="actions">${button('查看共同能力','alias-detail',reference,'small')}${button('查看选择依据','alias-explain',reference,'small')}${button('移除别名','alias-remove',reference,'small danger')}</div>`:''),()=>{
+      const protocols=checkedProtocols();if(!protocols.length)throw Error('请至少选择一个原生协议。');
       const candidates=[...document.querySelectorAll('[name=candidate]:checked')].map(i=>i.value);if(!candidates.length)throw Error('请至少选择一个候选模型。');
-      const args={protocol:[protocol || value('protocol')],candidate:candidates};if(id&&protocol!==value('protocol'))args['new-protocol']=[value('protocol')];
-      const efforts=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value.trim()]));
-      const set=candidates.flatMap(candidate=>efforts.get(candidate)?[`${candidate}=${efforts.get(candidate)}`]:[]);
-      const clear=candidates.filter(candidate=>Object.hasOwn(currentEfforts,candidate)&&!efforts.get(candidate));
-      if(value('protocol')==='messages'&&set.length)throw Error('Messages 不支持候选推理强度覆盖；请清除该候选的覆盖后重试。');
+      captureEfforts();
+      const args={protocol:protocols,candidate:candidates};
+      const set=candidates.filter(candidate=>effortDraft.has(candidate)).map(candidate=>`${candidate}=${effortDraft.get(candidate)}`);
+      const clear=candidates.filter(candidate=>Object.hasOwn(currentEfforts,candidate)&&!effortDraft.has(candidate));
+      if(!supportsEffort(protocols)&&set.length)throw Error('所选的协议不支持候选推理强度覆盖；请重新勾选 Chat Completions 或 Responses，清除对应覆盖后再保存。');
       if(set.length)args['candidate-reasoning-effort']=set;
       if(clear.length)args['clear-candidate-reasoning-effort']=clear;
       const fields=[],clearFields=[];
@@ -690,17 +705,18 @@ function aliasForm(encoded='') {
     });
   bindPolicyFields('fallback-mode','fallback-fields');
   const update=()=>{
+    const protocols=checkedProtocols();
+    captureEfforts();
     const prior=[...document.querySelectorAll('[name=candidate]')];const selectedCandidates=new Set(prior.length?prior.filter(input=>input.checked).map(input=>input.value):current?.candidates || []);
-    const entered=new Map([...document.querySelectorAll('[name=candidate-effort]')].map(input=>[input.dataset.candidate,input.value]));
+    const showEffort=supportsEffort(protocols);
     $('candidates').innerHTML=models.length?models.map(m=>{
-      const supported=m.published_protocols?.includes(value('protocol'));const selected=selectedCandidates.has(m.id);
-      const effort=entered.has(m.id)?entered.get(m.id):currentEfforts[m.id] || '';
-      const showEffort=value('protocol')!=='messages'||Object.hasOwn(currentEfforts,m.id)||Boolean(effort);
-      return `<div class="candidate-setting"><label><input type="checkbox" name="candidate" value="${escapeHtml(m.id)}" ${selected?'checked':''} ${!supported&&!selected?'disabled':''}><span>${escapeHtml(m.id)}${!supported?'<small class="label-note">此模型未发布所选协议，保存时仍需通过完整校验</small>':''}</span></label>${showEffort?`<label class="field candidate-effort"><span>推理强度覆盖</span><input type="text" name="candidate-effort" data-candidate="${escapeHtml(m.id)}" value="${escapeHtml(effort)}" placeholder="留空表示不覆盖" ${selected?'':'disabled'} autocomplete="off"><small>使用该具体模型有效能力元数据支持的值。</small></label>`:''}</div>`;
+      const supported=(m.published_protocols || []).some(protocol=>protocols.includes(protocol));const selected=selectedCandidates.has(m.id);
+      const effort=effortDraft.get(m.id) || '';
+      return `<div class="candidate-setting"><label><input type="checkbox" name="candidate" value="${escapeHtml(m.id)}" ${selected?'checked':''} ${!supported&&!selected?'disabled':''}><span>${escapeHtml(m.id)}${!supported&&protocols.length?'<small class="label-note">此模型未发布所选的任何协议，保存时仍需通过完整校验</small>':''}</span></label>${showEffort?`<label class="field candidate-effort"><span>推理强度覆盖</span><input type="text" name="candidate-effort" data-candidate="${escapeHtml(m.id)}" value="${escapeHtml(effort)}" placeholder="留空表示不覆盖" ${selected?'':'disabled'} autocomplete="off"><small>使用该具体模型有效能力元数据支持的值。</small></label>`:''}</div>`;
     }).join(''):notice('还没有具体模型，请先添加模型。','warning');
     $('candidates').querySelectorAll('[name=candidate]').forEach(checkbox=>checkbox.addEventListener('change',()=>{const input=checkbox.closest('.candidate-setting')?.querySelector('[name=candidate-effort]');if(input)input.disabled=!checkbox.checked;}));
   };
-  $('f-protocol').addEventListener('change',update);update();
+  protocolInputs().forEach(input=>input.addEventListener('change',update));update();
 }
 function nativePathKey(path) {
   const text=String(path || '').replaceAll('\\','/').replace(/^\/\/\?\//,'').replace(/\/+$/,'');
@@ -780,7 +796,7 @@ function nativeProjectionSection(data) {
   const intro=notice('以下是应用后将写入的期望能力声明，不代表已应用或工具当前状态。别名输入取全部配置候选的共同能力；目标默认档位只在显式配置时写入，否则沿用工具当前档位。');
   if(!Array.isArray(data.native_projection))return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${notice('未能生成期望能力映射。请以阻塞原因与检查结果为准。','warning')}`;
   const entries=data.native_projection.map(entry=>{
-    const source=entry.source?.gateway?'tmax 本地网关':entry.source?.provider?providerName(entry.source.provider):'来源未知';
+    const source=entry.source?.provider==='tmax'?'tmax 本地网关':entry.source?.provider?providerName(entry.source.provider):'来源未知';
     const models=(entry.models||[]).map(m=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(m.id)}</strong> <small class="label-note mono">${escapeHtml(entry.name)} · ${escapeHtml(protocolNames[m.protocol]||m.protocol)}</small>${projectionBlock(m.projection)}</div></div>`).join('');
     return `<div class="list-row split"><div><h3>${escapeHtml(entry.name)}</h3><small class="label-note">${escapeHtml(source)}</small></div></div>${models||'<p class="muted">尚未配置模型。</p>'}`;
   }).join('');
@@ -811,7 +827,7 @@ async function modelDetail(id,protocol) {
       const matrix=agentTypes.filter(([agent])=>data.native_projection?.[agent]);
       const list=items=>Array.isArray(items)?(items.length?items.join('、'):'空集合（没有共同输入）'):'未知（未声明）';
       $('dialog-content').innerHTML=notice('别名只声明全部配置候选共同支持的输入能力，包括停用或暂不可用的候选；不跟随当前赢家，也不证明上游实际可用。')+
-        `<div class="detail-facts">${fact('别名',data.definition.id)}${fact('协议',protocolNames[data.definition.protocol]||data.definition.protocol)}${fact('共同输入能力',list(input?.common))}${fact('目录来源',data.metadata?.source)}${fact('目录修订',data.metadata?.metadata_revision)}</div>`+
+        `<div class="detail-facts">${fact('别名',data.definition.id)}${fact('原生协议',(data.definition.protocols || []).map(p=>protocolNames[p]||p).join('、')||'未声明')}${fact('能力投影协议',protocolNames[data.protocol]||data.protocol)}${fact('共同输入能力',list(input?.common))}${fact('目录来源',data.metadata?.source)}${fact('目录修订',data.metadata?.metadata_revision)}</div>`+
         `<h3 class="subheading">候选输入声明（有效值）</h3>`+(input?.candidates||[]).map(candidate=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(candidate.model)}</strong><p>${escapeHtml(list(candidate.input))}</p></div></div>`).join('')+
         `<h3 class="subheading">各工具的期望能力映射</h3>`+matrix.map(([agent,name])=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(name)}</strong>${projectionBlock(data.native_projection[agent])}</div></div>`).join('')+
         notice('候选或能力变化后，需要重新应用受影响的工具配置并重新加载工具。未知不代表不支持；旧的受管图片声明会在重新应用时撤回。')+detail(data,'查看检查结果与原始信息');
@@ -843,15 +859,17 @@ async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
   try {const data=await read('agent inspect',[target]);if(generation!==state.dialogGeneration)return;
     const config=state.config.agents[target];
-    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',defaultLabel(config.default,config.agent))}${fact('工具当前默认',nativeDefaultLabel(data.native_default))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.gateway?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}${conflictSection(data,target)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
+    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',defaultLabel(config.default,config.agent))}${fact('工具当前默认',nativeDefaultLabel(data.native_default))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.provider==='tmax'?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}${conflictSection(data,target)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
 function agentSource(target) {
-  formDialog('添加模型来源','选择工具直接连接的接入，或通过 tmax 网关连接。',field('name','工具内的来源名称','',{required:true,placeholder:'例如：deepseek'})+field('source','连接来源','',{required:true,options:[['','请选择'],...Object.keys(state.config.providers).map(p=>[p,providerName(p)]),['@gateway','tmax 本地网关']]}),()=>({operation:'agent provider add',operands:[target,value('name').trim()],args:value('source')==='@gateway'?{gateway:['true']}:{provider:[value('source')]}}));
+  const gatewayOption=state.config.gateway?[['@gateway','tmax 本地网关']]:[];
+  formDialog('添加模型来源','选择工具直接连接的接入，或通过 tmax 网关连接。',field('name','工具内的来源名称','',{required:true,placeholder:'例如：deepseek'})+field('source','连接来源','',{required:true,options:[['','请选择'],...Object.keys(state.config.providers).filter(p=>p!=='tmax').map(p=>[p,providerName(p)]),...gatewayOption]}),()=>({operation:'agent provider add',operands:[target,value('name').trim()],args:{provider:[value('source')==='@gateway'?'tmax':value('source')]}}));
 }
 function agentModel(encoded) {
   const [target,name]=JSON.parse(encoded);const source=state.config.agents[target].providers[name];
-  const candidates=Object.keys(protocolNames).flatMap(p=>(state.models || []).filter(m=>(source.gateway || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/')))&&m.published_protocols?.includes(p)).map(m=>[JSON.stringify([source.gateway?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p]}`]));
+  const relayed=source.provider==='tmax';
+  const candidates=Object.keys(protocolNames).flatMap(p=>(state.models || []).filter(m=>(relayed || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/')))&&m.published_protocols?.includes(p)).map(m=>[JSON.stringify([relayed?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p]}`]));
   formDialog('添加可选模型',state.config.agents[target].agent==='codex'?'添加到此来源的模型列表后，可选择为默认模型。':'应用后可在工具中选择这些模型，保留当前默认模型。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates],help:'仅列出上游已声明的协议，Responses 优先。选择后由工具使用该协议请求；网关不转换协议，已有设置不会自动更改。'}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
 }
 function defaultEffortLabel(defaultRef) {
@@ -939,7 +957,7 @@ const operationEffects={
   'agent restore':'恢复由 tmax 管理的原生更改，保留其他修改；存在冲突时会阻止覆盖。',
   'provider remove':'移除此接入的已保存设置。若仍被引用，操作会被拒绝；不会注销上游账户。',
   'model remove':'移除模型登记；被工具或别名引用时，需先解除相关引用。',
-  'model alias remove':'移除此协议下的别名，不改变其他模型或工具的直接连接。',
+  'model alias remove':'移除此模型别名，不改变其他模型或工具的直接连接。',
   'provider refresh':'这是一次主动的上游查询，可能访问上游提供商。不会自动登记新模型或执行推理。',
   'model probe':'这会向上游发送真实推理请求，可能消耗额度或产生费用。仅在明确需要时执行。',
   'web stop':'停止管理页面后，浏览器将无法继续连接。需要通过命令行重新打开。',
@@ -1052,9 +1070,9 @@ async function dispatch(action,id) {
     case 'model-tab': state.modelKind=id;state.query='';render();break;
     case 'alias-add': aliasForm();break;
     case 'alias-edit': aliasForm(id);break;
-    case 'alias-detail': {const [name,protocol]=JSON.parse(id);await modelDetail(name,protocol);break;}
-    case 'alias-remove': {const [name,protocol]=JSON.parse(id);openOperation('model alias remove',[name],{protocol:[protocol]});break;}
-    case 'alias-explain': {const [name,protocol]=JSON.parse(id);openOperation('model explain',[name],{protocol:[protocol]});break;}
+    case 'alias-detail': {const [name]=JSON.parse(id);await modelDetail(name,aliasProtocol(name));break;}
+    case 'alias-remove': {const [name]=JSON.parse(id);openOperation('model alias remove',[name],{});break;}
+    case 'alias-explain': {const [name]=JSON.parse(id);const protocol=aliasProtocol(name);openOperation('model explain',[name],protocol?{protocol:[protocol]}:{});break;}
     case 'agent-add': agentForm(id);break;
     case 'agent-discover': agentForm(id);break;
     case 'agent-detail': await agentDetail(id);break;

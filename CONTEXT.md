@@ -6,9 +6,12 @@ and the use of that access by local coding agents.
 ## Language
 
 **Provider**:
-A user-managed upstream access instance containing one authentication configuration,
-its models, and optional subscription information. Separate providers can access
-the same service or upstream account without implying separate allowances.
+A user-managed upstream access instance that contains one authentication
+configuration, its models, and optional subscription information. The one derived
+gateway provider is also a Provider, but it has no user-owned metadata: the
+gateway owns its endpoints, authentication, and model set. Separate upstream
+providers can access the same service or upstream account without implying
+separate allowances.
 _Avoid_: Vendor, catalog provider, connection resource, account pool
 
 **Catalog provider**:
@@ -237,8 +240,10 @@ an agent target or use an Agent whose native configuration tmax manages.
 _Avoid_: Agent target, built-in tmax assistant
 
 **Agent provider**:
-A named provider entry in an agent target's native configuration. It connects to
-one configured upstream provider or to the tmax gateway. Several entries can coexist
+A named provider entry in an agent target's native configuration. Each entry
+references exactly one configured provider: a direct entry references a
+user-managed provider, and a relayed entry references the derived gateway
+provider `tmax`. Several entries can coexist
 where the agent supports them; they are not separate upstream accounts.
 _Avoid_: Provider account, target operating mode
 
@@ -254,14 +259,16 @@ native configuration.
 _Avoid_: Proxy, model proxy, agent operating mode, permission-management service
 
 **Model alias**:
-A named configuration within one native protocol that gives explicit references
-to existing models a shared gateway request ID. It does not create a model,
-establish identical weights, or define an independently managed account pool.
+One route name that declares one or more native protocols and one ordered list of
+explicit references to existing models, so callers get one shared gateway request
+ID per protocol. It does not create a model, establish identical weights, or
+define an independently managed account pool.
 _Avoid_: Virtual model, provider alias, model entity
 
 **Alias candidate configuration**:
-A model reference and optional alias-local settings within one model alias.
-It has no independent identity or lifecycle, and does not copy the referenced model.
+A model reference and optional alias-local settings within one model alias,
+shared by every protocol the route declares. It has no independent identity or
+lifecycle, and does not copy the referenced model.
 _Avoid_: Candidate model entity, provider pool, shared model default
 
 **Session binding**:

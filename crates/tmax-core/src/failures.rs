@@ -1448,7 +1448,7 @@ mod tests {
         config.providers.insert("q".into(), second);
         config.model_aliases.push(ModelAlias {
             id: "alias".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             enabled: true,
             candidates: vec!["p/m".into(), "q/m".into()],
             candidate_reasoning_effort: Default::default(),

@@ -31,7 +31,7 @@ fn setup(agents: &[(&str, &str, &Path)]) -> (TempDir, Store) {
     let temp = TempDir::new().unwrap();
     let store = Store::at(temp.path().to_owned());
     fs::create_dir_all(&store.root).unwrap();
-    let mut config = String::from("version = 1\n");
+    let mut config = String::from("version = 2\n");
     for (name, agent, scope) in agents {
         config.push_str(&format!(
             "[agents.{name}]\nagent = \"{agent}\"\nscope = \"{}\"\n",

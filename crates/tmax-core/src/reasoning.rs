@@ -190,6 +190,7 @@ pub(crate) fn alias_metadata(
     config: &Config,
     metadata: Option<&catalog::Snapshot>,
     alias: &crate::config::ModelAlias,
+    protocol: &str,
 ) -> Result<Value> {
     let mut common: Option<Vec<String>> = None;
     let mut common_input = CommonInput::Unseen;
@@ -218,7 +219,7 @@ pub(crate) fn alias_metadata(
                 Vec::new()
             }
         } else {
-            let inputs = input_metadata(&projection["effective"], model, &alias.protocol);
+            let inputs = input_metadata(&projection["effective"], model, protocol);
             effort_values(&inputs).unwrap_or_default()
         };
         if let Some(common) = &mut common {
@@ -321,8 +322,11 @@ pub(crate) fn validate(config: &Config, metadata: Option<&catalog::Snapshot>) ->
                 return Err(Error::new(
                     reason,
                     &format!(
-                        "Alias '{}' candidate '{}' effort '{}' protocol '{}': {requirement}",
-                        alias.id, candidate, effort, alias.protocol
+                        "Alias '{}' candidate '{}' effort '{}' protocols [{}]: {requirement}",
+                        alias.id,
+                        candidate,
+                        effort,
+                        alias.protocols.join(", ")
                     ),
                 )
                 .field(format!(
@@ -377,7 +381,7 @@ mod tests {
         };
         let alias = ModelAlias {
             id: "shared".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: vec!["p/a".into(), "p/b".into()],
             candidate_reasoning_effort: BTreeMap::new(),
             enabled: true,
@@ -408,7 +412,7 @@ mod tests {
             snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["modalities"] =
                 json!({"input": second, "output": ["text"]});
             assert_eq!(
-                alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+                alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
                 json!({
                     "reasoning": true,
                     "reasoning_options": [{"type": "effort", "values": ["high", "max"]}],
@@ -435,13 +439,15 @@ mod tests {
         let models = &mut snapshot.providers.get_mut("directory").unwrap()["models"];
         // Candidate a declares a context limit; candidate b does not.
         models["a"]["limit"] = json!({"context": 500000, "output": 128000});
-        let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+        let effective =
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap();
         assert!(effective.get("limit").is_none(), "{effective}");
 
         // Agreement projects both declared limits.
         snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["limit"] =
             json!({"context": 500000, "output": 128000});
-        let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+        let effective =
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap();
         assert_eq!(
             effective["limit"],
             json!({"context": 500000, "output": 128000})
@@ -449,7 +455,8 @@ mod tests {
 
         snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["limit"] =
             json!({"context": 400000, "output": 128000});
-        let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+        let effective =
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap();
         assert_eq!(effective["limit"], json!({"output": 128000}));
     }
 
@@ -468,7 +475,7 @@ mod tests {
             .candidate_reasoning_effort
             .insert("p/b".into(), "high".into());
         assert_eq!(
-            alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
             json!({"modalities": {"input": ["text"]}})
         );
         assert_eq!(
@@ -505,7 +512,9 @@ mod tests {
                         unknown.clone();
                     snapshot.providers.get_mut("directory").unwrap()["models"][known_id]["modalities"] =
                         json!({"input": known});
-                    let effective = alias_metadata(&config, Some(&snapshot), &alias).unwrap();
+                    let effective =
+                        alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0])
+                            .unwrap();
                     assert!(effective.get("modalities").is_none());
                     assert_eq!(effort_values(&effective).unwrap(), ["high", "max"]);
                     let inputs = if unknown_first {
@@ -546,7 +555,7 @@ mod tests {
             snapshot.providers.get_mut("directory").unwrap()["models"]["b"]["modalities"] =
                 json!({"input": second});
             assert_eq!(
-                alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+                alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
                 json!({
                     "reasoning": true,
                     "reasoning_options": [{"type": "effort", "values": ["high", "max"]}],
@@ -584,7 +593,7 @@ mod tests {
             serde_json::from_value::<ModelOverrides>(json!({"modalities": {"input": ["image"]}}))
                 .unwrap();
         assert_eq!(
-            alias_metadata(&config, Some(&snapshot), &alias).unwrap()["modalities"],
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap()["modalities"],
             json!({"input": ["image"]})
         );
         assert_eq!(
@@ -609,7 +618,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            alias_metadata(&config, None, &alias).unwrap(),
+            alias_metadata(&config, None, &alias, &alias.protocols[0]).unwrap(),
             json!({"modalities": {"input": ["image"]}})
         );
         assert_eq!(
@@ -632,7 +641,7 @@ mod tests {
             .overrides =
             serde_json::from_value::<ModelOverrides>(json!({"modalities": {"input": []}})).unwrap();
         assert_eq!(
-            alias_metadata(&config, Some(&snapshot), &alias).unwrap()["modalities"],
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap()["modalities"],
             json!({"input": []})
         );
         assert_eq!(
@@ -645,7 +654,7 @@ mod tests {
     fn alias_efforts_intersect_all_candidates_and_honor_local_overrides() {
         let (mut config, snapshot, alias) = fixture();
         assert_eq!(
-            alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
             json!({
                 "reasoning": true,
                 "reasoning_options": [{"type": "effort", "values": ["high", "max"]}]
@@ -663,7 +672,7 @@ mod tests {
         ]}))
         .unwrap();
         assert_eq!(
-            alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
             json!({
                 "reasoning": true,
                 "reasoning_options": [{"type": "effort", "values": ["low", "high"]}]
@@ -684,11 +693,14 @@ mod tests {
             let mut snapshot = snapshot.clone();
             snapshot.providers.get_mut("directory").unwrap()["models"]["b"] = metadata;
             assert_eq!(
-                alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+                alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
                 json!({})
             );
         }
-        assert_eq!(alias_metadata(&config, None, &alias).unwrap(), json!({}));
+        assert_eq!(
+            alias_metadata(&config, None, &alias, &alias.protocols[0]).unwrap(),
+            json!({})
+        );
     }
 
     #[test]
@@ -698,7 +710,7 @@ mod tests {
             .candidate_reasoning_effort
             .insert("p/b".into(), "high".into());
         assert_eq!(
-            alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
             json!({
                 "reasoning": true,
                 "reasoning_options": [{"type": "effort", "values": ["high"]}]
@@ -708,7 +720,7 @@ mod tests {
             .candidate_reasoning_effort
             .insert("p/a".into(), "max".into());
         assert_eq!(
-            alias_metadata(&config, Some(&snapshot), &alias).unwrap(),
+            alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap(),
             json!({})
         );
     }
@@ -732,7 +744,10 @@ mod tests {
             .candidate_reasoning_effort
             .insert("p/b".into(), "high".into());
         assert_eq!(
-            effort_values(&alias_metadata(&config, Some(&snapshot), &alias).unwrap()).unwrap(),
+            effort_values(
+                &alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap()
+            )
+            .unwrap(),
             ["high"]
         );
     }
@@ -759,7 +774,10 @@ mod tests {
         .unwrap()["effective"];
         assert_eq!(effort_values(effective).unwrap(), ["max", "high"]);
         assert_eq!(
-            effort_values(&alias_metadata(&config, Some(&snapshot), &alias).unwrap()).unwrap(),
+            effort_values(
+                &alias_metadata(&config, Some(&snapshot), &alias, &alias.protocols[0]).unwrap()
+            )
+            .unwrap(),
             ["low", "high", "max"]
         );
         assert_eq!(

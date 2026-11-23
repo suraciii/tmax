@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use super::{
     exact::ExactInstant,
-    lineage::{binding, key, project_view, provider_scope_binding_in_view, signature},
+    lineage::{binding, config_signature, key, project_view, provider_scope_binding_in_view},
     model::{Binding, Runtime, View, revision},
     store::read_runtime,
     value::{availability_checked, same_models},
@@ -66,19 +66,19 @@ impl<'a> Snapshot<'a> {
                 if let Some(revision) = &saved_revision {
                     config::guard(store, revision)?;
                 }
-                let hash = signature(config);
+                let hash = config_signature(config);
                 let view = if loaded {
                     runtime
                         .loaded
                         .as_ref()
-                        .filter(|view| signature(&view.config) == hash)
+                        .filter(|view| config_signature(&view.config) == hash)
                         .cloned()
                 } else {
                     let mut view = project_view(&runtime.saved, config);
                     view.revision = saved_file
                         .filter(|file| {
                             Some(&file.revision) == saved_revision.as_ref()
-                                && signature(&file.config) == hash
+                                && config_signature(&file.config) == hash
                         })
                         .map(|file| file.revision);
                     Some(view)

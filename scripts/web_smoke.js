@@ -139,11 +139,14 @@ async page => {
     await close();
     let savedAlias = (await configuration()).model_aliases.find(a => a.id === alias);
     assert('Alias retains exact candidate without an effort override', savedAlias?.candidates[0] === model && savedAlias.candidate_reasoning_effort?.[model] === undefined);
+    assert('New alias declares its protocol list', Array.isArray(savedAlias?.protocols) && savedAlias.protocols.length === 1 && savedAlias.protocols[0] === 'responses');
 
     await page.locator('[data-action="alias-edit"]').click();
     await page.locator(`[name="candidate-effort"][data-candidate="${model}"]`).fill('high');
     const effortInput = page.locator(`[name="candidate-effort"][data-candidate="${model}"]`);
-    await page.locator('#f-protocol').selectOption('messages');
+    const protocolCheckbox = protocol => page.locator(`[name="protocol"][value="${protocol}"]`);
+    await protocolCheckbox('responses').uncheck();
+    await protocolCheckbox('messages').check();
     let messageMutationRequests = 0;
     const countMessageMutation = request => {
       if (request.url().endsWith('/api/execute') && request.postDataJSON()?.request.command.join(' ') === 'model alias update') messageMutationRequests++;
@@ -154,7 +157,8 @@ async page => {
     page.off('request', countMessageMutation);
     assert('Messages effort is rejected in the editor', await page.locator('#form-result .notice.error').isVisible());
     assert('Messages rejection sends no alias mutation', messageMutationRequests === 0);
-    await page.locator('#f-protocol').selectOption('chat-completions');
+    await protocolCheckbox('messages').uncheck();
+    await protocolCheckbox('chat-completions').check();
     await effortInput.fill('xhigh');
     const invalidEffort = await submit('model alias update');
     assert('Unsupported metadata effort returns an error', invalidEffort.exit_code === 2 && invalidEffort.body.code === 'reasoning_effort_incompatible');
@@ -202,8 +206,8 @@ async page => {
   } finally {
     await close();
     const config = await configuration();
-    if (config.model_aliases.some(a => a.id === alias && a.protocol === 'chat-completions')) {
-      assert('Remove alias fixture', (await api('model alias remove', [alias], {protocol: ['chat-completions']})).exit_code === 0);
+    if (config.model_aliases.some(a => a.id === alias)) {
+      assert('Remove alias fixture', (await api('model alias remove', [alias])).exit_code === 0);
     }
     if (config.providers[id]?.models['test-model']) {
       assert('Remove model fixture', (await api('model remove', [model])).exit_code === 0);

@@ -1,5 +1,6 @@
 use super::document::{error, put, string};
 use crate::Result;
+use crate::config::GATEWAY_PROVIDER_ID;
 use std::collections::BTreeMap;
 use toml::Value;
 
@@ -112,24 +113,22 @@ fn rename_native_ref(r: &mut Value, changes: &BTreeMap<(String, String), String>
     }
     Ok(())
 }
-pub(super) fn rename_alias_refs(
-    root: &mut Value,
-    old: &str,
-    new: &str,
-    protocol: &str,
-) -> Result<()> {
+pub(super) fn rename_alias_refs(root: &mut Value, old: &str, new: &str) -> Result<()> {
+    let has_gateway = root.get("gateway").is_some();
     if let Some(targets) = root.get_mut("agents").and_then(Value::as_table_mut) {
         for t in targets.iter_mut().map(|(_, value)| value) {
             let mut names = Vec::new();
             if let Some(entries) = t.get_mut("providers").and_then(Value::as_table_mut) {
                 for (name, e) in entries {
-                    if e.get("gateway").and_then(Value::as_bool) == Some(true)
+                    let relayed = e.get("gateway").and_then(Value::as_bool) == Some(true)
+                        || (has_gateway
+                            && e.get("provider").and_then(Value::as_str)
+                                == Some(GATEWAY_PROVIDER_ID));
+                    if relayed
                         && let Some(models) = e.get_mut("models").and_then(Value::as_array_mut)
                     {
                         for m in models {
-                            if m.get("id").and_then(Value::as_str) == Some(old)
-                                && m.get("protocol").and_then(Value::as_str) == Some(protocol)
-                            {
+                            if m.get("id").and_then(Value::as_str) == Some(old) {
                                 put(m, &["id"], string(new))?;
                                 names.push(name.clone());
                             }
@@ -139,7 +138,6 @@ pub(super) fn rename_alias_refs(
             }
             let update = |r: &mut Value| -> Result<()> {
                 if r.get("id").and_then(Value::as_str) == Some(old)
-                    && r.get("protocol").and_then(Value::as_str) == Some(protocol)
                     && r.get("provider")
                         .and_then(Value::as_str)
                         .is_some_and(|p| names.iter().any(|n| n == p))

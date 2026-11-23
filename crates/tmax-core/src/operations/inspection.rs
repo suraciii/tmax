@@ -15,10 +15,28 @@ pub(super) async fn selected(store: &Store, r: &Request) -> Result<Option<config
     }
     Ok(Some(config::load(store)?))
 }
+/// A reference of the form `tmax/<route>` names the derived gateway provider's
+/// child, which only mirrors a public route; describing it as a concrete model
+/// would invent metadata the gateway does not own.
+fn reject_gateway_reference(config: &Config, reference: &str) -> Result<()> {
+    if let Ok((provider, _)) = config::qualified(reference)
+        && config.is_gateway_provider(provider)
+    {
+        return Err(Error::new(
+            "invalid_reference",
+            "The gateway provider exposes the gateway's routes; inspect the public route name instead",
+        )
+        .field(reference));
+    }
+    Ok(())
+}
 pub(super) fn model_list(config: &Config, r: &Request) -> Result<Value> {
     let mut entries = Vec::new();
     if arg(r, "kind") != Some("alias") {
         for (id, p) in &config.providers {
+            if config.is_gateway_provider(id) {
+                continue;
+            }
             if arg(r, "provider").is_some_and(|v| v != id) {
                 continue;
             }
@@ -33,10 +51,10 @@ pub(super) fn model_list(config: &Config, r: &Request) -> Result<Value> {
     }
     if arg(r, "kind") != Some("concrete") && arg(r, "provider").is_none() {
         for a in &config.model_aliases {
-            if arg(r, "protocol").is_some_and(|p| p != a.protocol) {
+            if arg(r, "protocol").is_some_and(|p| !a.publishes(p)) {
                 continue;
             }
-            entries.push(json!({"id":a.id,"protocol":a.protocol,"kind":"alias","enabled":a.enabled,"published_protocols":if a.enabled{vec![a.protocol.as_str()]}else{Vec::new()},"continuity":a.continuity.as_deref().unwrap_or("session")}));
+            entries.push(json!({"id":a.id,"protocols":a.protocols,"kind":"alias","enabled":a.enabled,"published_protocols":if a.enabled{a.protocols.clone()}else{Vec::new()},"continuity":a.continuity.as_deref().unwrap_or("session")}));
         }
     }
     Ok(json!({"models":entries}))
@@ -62,7 +80,11 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         .map(|snapshot| &snapshot.file.config)
         .unwrap_or(c);
     let config = c;
-    let mut id = operand(r, 0)?.to_owned();
+    let requested = operand(r, 0)?.to_owned();
+    // A public route name is never written as `tmax/<route>`; that spelling only
+    // exists internally as a model reference and carries no owned metadata.
+    reject_gateway_reference(config, &requested)?;
+    let mut id = requested;
     let protocol = required(r, "protocol")?;
     let target = arg(r, "target");
     let agent = arg(r, "agent");
@@ -85,8 +107,8 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
             let e = t.providers.get(name).ok_or_else(|| {
                 Error::new("unknown_resource", "Native provider entry not configured")
             })?;
-            if let Some(provider) = &e.provider {
-                id = format!("{provider}/{id}");
+            if !c.is_gateway_provider(&e.provider) {
+                id = format!("{}/{id}", e.provider);
             }
             json!({"kind":"agent_provider","target":target,"agent_provider":name,"agent":t.agent,"path":t.scope})
         } else {
@@ -103,7 +125,7 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
         .zip(context["agent_provider"].as_str())
         .and_then(|(target, name)| c.agents.get(target)?.providers.get(name));
     if arg(r, "session").is_some() {
-        if entry.is_some_and(|entry| entry.provider.is_some()) {
+        if entry.is_some_and(|entry| !entry.is_relayed(config)) {
             return Err(Error::new(
                 "invalid_arguments",
                 "A retained gateway session cannot be inspected through an upstream-source entry",
@@ -122,8 +144,8 @@ pub(crate) async fn explain(store: &Store, c: &Config, r: &Request) -> Result<Va
             .map(|agent| crate::agent_integration::compatibility::Context {
                 agent,
                 target: context["target"].as_str(),
-                provider: entry.and_then(|e| e.provider.as_deref()),
-                gateway: entry.is_some_and(|e| e.gateway == Some(true)),
+                provider: entry.map(|e| e.provider.as_str()),
+                gateway: entry.is_some_and(|e| e.is_relayed(config)),
             });
     let advice = crate::routing::Advice {
         native: requirements,
@@ -204,7 +226,7 @@ pub(super) async fn provider_list(
             let loaded_quota = loaded_quota_projection(&loaded, id);
             let mut quota = if arg(r, "state") == Some("loaded") { loaded_quota.clone() } else { file_quota.clone() };
             quota["views"] = json!({"file":file_quota,"loaded":loaded_quota});
-            json!({"id":id,"name":p.overrides.name,"enabled":p.enabled,"authentication":match p.auth{Some(Auth::ApiKey{..})=>"api-key",Some(Auth::Login{..})=>"login",None=>"not_configured"},"subscription":p.subscription.as_ref().and_then(|s|s.plan.as_ref()),"observations":observations,"quota_suspension":quota,"affected_targets":config.agents.values().filter(|t|t.providers.values().any(|e|e.provider.as_ref()==Some(id))).count()})
+            json!({"id":id,"source":if config.is_gateway_provider(id){"gateway"}else{"upstream"},"name":p.overrides.name,"enabled":p.enabled,"authentication":match p.auth{Some(Auth::ApiKey{..})=>"api-key",Some(Auth::Login{..})=>"login",None=>"not_configured"},"subscription":p.subscription.as_ref().and_then(|s|s.plan.as_ref()),"observations":observations,"quota_suspension":quota,"affected_targets":config.agents.values().filter(|t|t.providers.values().any(|e|e.provider.as_str()==id)).count()})
         }).collect::<Vec<_>>();
     Ok(json!({"providers":providers,"revision":file.revision}))
 }
@@ -288,9 +310,11 @@ pub(super) async fn provider_inspect(
         file_quota.clone()
     };
     quota_suspension["views"] = json!({"file":file_quota,"loaded":loaded_quota});
-    Ok(
-        json!({"id":id,"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"quota_guard":{"file":quota_guard(config,&file.revision),"loaded":loaded_quota_guard},"quota_suspension":quota_suspension,"identity":null,"upstream_authentication":"unverified","observations":observations,"failure_state":failure_state,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}}),
-    )
+    let mut data = json!({"id":id,"source":if config.is_gateway_provider(id){"gateway"}else{"upstream"},"provider":p,"metadata":crate::catalog::effective(store,p,None)?,"endpoints":{"file":endpoint(config,&file.revision),"loaded":loaded_endpoint},"quota_guard":{"file":quota_guard(config,&file.revision),"loaded":loaded_quota_guard},"quota_suspension":quota_suspension,"identity":null,"upstream_authentication":"unverified","observations":observations,"failure_state":failure_state,"renewal":p.subscription.as_ref().and_then(|s|s.renewal_date),"via":match &p.auth{Some(Auth::Login{via,..})=>Some(via),_=>None}});
+    if config.is_gateway_provider(id) {
+        data["delivery"] = crate::agent_integration::delivery(store, config).await?;
+    }
+    Ok(data)
 }
 
 pub(super) fn model_inspect(
@@ -300,6 +324,7 @@ pub(super) fn model_inspect(
 ) -> Result<Value> {
     let config = &file.config;
     let id = operand(r, 0)?;
+    reject_gateway_reference(config, id)?;
     if let Ok((p, m)) = config::model(config, id) {
         let metadata = crate::catalog::effective(store, p, Some((config::qualified(id)?.1, m)))?;
         let protocols = crate::provider_integration::protocols(p)?;
@@ -321,27 +346,32 @@ pub(super) fn model_inspect(
             json!({"kind":"concrete","qualified_model":id,"configuration":m,"metadata":metadata,"native_projection":native_projection,"gateway_projection":gateway_projection,"protocols":protocols,"revision":file.revision,"priority_evaluation":crate::routing::explain(store,config,id,arg(r,"protocol").unwrap_or("chat-completions"),None)?}),
         );
     }
-    let aliases: Vec<_> = config
+    let alias = config
         .model_aliases
         .iter()
-        .filter(|a| a.id == id && arg(r, "protocol").is_none_or(|p| p == a.protocol))
-        .collect();
-    if aliases.len() != 1 {
-        return Err(Error::new(
-            "invalid_arguments",
-            "Alias identity is unknown or ambiguous; supply its protocol",
-        ));
-    }
+        .find(|a| a.id == id)
+        .ok_or_else(|| Error::new("unknown_resource", "Alias is not configured"))?;
+    let protocol = match arg(r, "protocol") {
+        Some(requested) if alias.publishes(requested) => requested,
+        Some(requested) => {
+            return Err(Error::new(
+                "invalid_arguments",
+                "The alias does not declare that protocol",
+            )
+            .field(requested));
+        }
+        None => &alias.protocols[0],
+    };
     let snapshot = crate::catalog::read(store, "accepted")?;
-    let effective = crate::reasoning::alias_metadata(config, snapshot.as_ref(), aliases[0])?;
+    let effective = crate::reasoning::alias_metadata(config, snapshot.as_ref(), alias, protocol)?;
     let input_capability =
-        crate::reasoning::alias_input_capability(config, snapshot.as_ref(), aliases[0])?;
+        crate::reasoning::alias_input_capability(config, snapshot.as_ref(), alias)?;
     let native_projection = crate::agent_integration::reasoning_projection(
         &effective,
-        std::slice::from_ref(&aliases[0].protocol),
+        std::slice::from_ref(&protocol.to_string()),
     );
     Ok(
-        json!({"kind":"alias","definition":aliases[0],"continuity":aliases[0].continuity.as_deref().unwrap_or("session"),"revision":file.revision,"capabilities":{"input":input_capability},"metadata":{"effective":effective,"source":snapshot.as_ref().map(|s| &s.source),"metadata_revision":snapshot.as_ref().map(|s| &s.revision)},"native_projection":native_projection}),
+        json!({"kind":"alias","definition":alias,"protocol":protocol,"continuity":alias.continuity.as_deref().unwrap_or("session"),"revision":file.revision,"capabilities":{"input":input_capability},"metadata":{"effective":effective,"source":snapshot.as_ref().map(|s| &s.source),"metadata_revision":snapshot.as_ref().map(|s| &s.revision)},"native_projection":native_projection}),
     )
 }
 
@@ -389,7 +419,7 @@ mod tests {
         store
             .write_raw(
                 "tmax.toml",
-                b"version=1\n[providers.p]\nintegration='opencode-go'\n",
+                b"version=2\n[providers.p]\nintegration='opencode-go'\n",
             )
             .unwrap();
         let file = config::load(&store).unwrap();
@@ -424,7 +454,7 @@ mod tests {
     async fn provider_inspection_exposes_quota_guard_policy() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
-        let text = "version=1\n[providers.p]\nintegration='deepseek'\n[providers.p.quota_guard]\n";
+        let text = "version=2\n[providers.p]\nintegration='deepseek'\n[providers.p.quota_guard]\n";
         store.write_raw("tmax.toml", text.as_bytes()).unwrap();
         let file = config::load(&store).unwrap();
         let request = Request {
@@ -450,7 +480,7 @@ mod tests {
     async fn provider_inspection_reports_fixed_regional_destination_without_region_field() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
-        let text = "version=1\n[providers.p]\nintegration='minimax-cn-coding-plan'\n";
+        let text = "version=2\n[providers.p]\nintegration='minimax-cn-coding-plan'\n";
         store.write_raw("tmax.toml", text.as_bytes()).unwrap();
         let file = config::load(&store).unwrap();
         let request = Request {
@@ -476,7 +506,7 @@ mod tests {
     fn model_inspect_separates_gateway_maps_from_upstream_native_capabilities() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().into());
-        let text = "version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\nresponses='http://127.0.0.1:39999'\n[providers.p.models.m]\neffort_map={chat-completions={xhigh='high'}}\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
+        let text = "version=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\nresponses='http://127.0.0.1:39999'\n[providers.p.models.m]\neffort_map={chat-completions={xhigh='high'}}\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n";
         store.write_raw("tmax.toml", text.as_bytes()).unwrap();
         let file = config::load(&store).unwrap();
         let request = Request {
@@ -537,7 +567,7 @@ mod tests {
         config.model_aliases.push(config::ModelAlias {
             candidate_reasoning_effort: Default::default(),
             id: "custom-name".into(),
-            protocol: "chat-completions".into(),
+            protocols: vec!["chat-completions".into()],
             candidates: vec!["p/m".into()],
             enabled: true,
             continuity: None,
@@ -551,8 +581,7 @@ mod tests {
                 providers: [(
                     "entry".into(),
                     config::NativeProvider {
-                        provider: Some("p".into()),
-                        gateway: None,
+                        provider: "p".into(),
                         models: vec![],
                     },
                 )]
@@ -678,5 +707,106 @@ mod tests {
             );
             assert!(!store.root.exists());
         }
+    }
+
+    fn gateway_config() -> &'static str {
+        "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.models.route]\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncandidates=['up/route']\n"
+    }
+
+    fn request(command: &[&str], operands: &[&str], arguments: &[(&str, &[&str])]) -> Request {
+        Request {
+            command: command.iter().map(|value| (*value).into()).collect(),
+            operands: operands.iter().map(|value| (*value).into()).collect(),
+            arguments: arguments
+                .iter()
+                .map(|(key, values)| {
+                    (
+                        (*key).into(),
+                        values.iter().map(|value| (*value).into()).collect(),
+                    )
+                })
+                .collect(),
+            dry_run: false,
+            if_revision: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_provider_reports_source_and_children_are_not_concrete_models() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into());
+        store
+            .write_raw("tmax.toml", gateway_config().as_bytes())
+            .unwrap();
+        let file = config::load(&store).unwrap();
+        let list = provider_list(&store, &file, &request(&["provider", "list"], &[], &[]))
+            .await
+            .unwrap();
+        let providers = list["providers"].as_array().unwrap();
+        assert_eq!(
+            providers
+                .iter()
+                .find(|provider| provider["id"] == "tmax")
+                .unwrap()["source"],
+            "gateway"
+        );
+        assert_eq!(
+            providers
+                .iter()
+                .find(|provider| provider["id"] == "up")
+                .unwrap()["source"],
+            "upstream"
+        );
+        let inspect = provider_inspect(
+            &store,
+            &file,
+            &request(&["provider", "inspect"], &["tmax"], &[]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inspect["source"], "gateway");
+        assert_eq!(inspect["delivery"]["state"], "configured");
+        assert_eq!(inspect["delivery"]["routes"], serde_json::json!(["route"]));
+        assert_eq!(inspect["delivery"]["targets"], serde_json::json!([]));
+        let models = model_list(&file.config, &request(&["model", "list"], &[], &[])).unwrap();
+        let entries = models["models"].as_array().unwrap();
+        let ids: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["up/route", "route"]);
+        assert_eq!(entries[1]["kind"], "alias");
+        let error = model_inspect(
+            &store,
+            &file,
+            &request(&["model", "inspect"], &["tmax/route"], &[]),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_reference");
+        assert_eq!(
+            error.message,
+            "The gateway provider exposes the gateway's routes; inspect the public route name instead"
+        );
+        assert_eq!(error.field.as_deref(), Some("tmax/route"));
+        let error = explain(
+            &store,
+            &file.config,
+            &request(
+                &["model", "explain"],
+                &["tmax/route"],
+                &[("protocol", &["responses"])],
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_reference");
+        assert_eq!(error.field.as_deref(), Some("tmax/route"));
+        let alias = model_inspect(
+            &store,
+            &file,
+            &request(&["model", "inspect"], &["route"], &[]),
+        )
+        .unwrap();
+        assert_eq!(alias["kind"], "alias");
     }
 }

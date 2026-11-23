@@ -7,6 +7,10 @@ fn protocol_value(id: &'static str, help: &'static str) -> Arg {
     value(id, "P", help).value_parser(["chat-completions", "responses", "messages"])
 }
 
+fn repeated_protocol(id: &'static str, help: &'static str) -> Arg {
+    repeated(id, "P", help).value_parser(["chat-completions", "responses", "messages"])
+}
+
 fn agent_value(id: &'static str, help: &'static str) -> Arg {
     value(id, "AGENT", help).value_parser(["codex", "pi", "omp", "opencode", "hermes", "dsh"])
 }
@@ -162,7 +166,6 @@ pub fn command() -> Command {
         .subcommand(catalog_commands())
         .subcommand(model_commands())
         .subcommand(agent_commands())
-        .subcommand(dsh_commands())
         .subcommand(skill_commands())
         .subcommand(network_commands())
         .subcommand(gateway_commands())
@@ -351,11 +354,21 @@ fn status_command() -> Command {
     leaf(
         "status",
         "Summarize configuration, daemon service, readiness, recovery, and startup state.",
-        "Effect-free retained-state read. It does not resolve secrets, refresh remote state, sign in, or start a service. Use config show/validate, provider inspect, agent inspect, gateway status, or web status for detail.\n\nExit: 0 when the status request completed, including unhealthy or unknown state.\nExample: tmax status",
+        "Effect-free retained-state read. It does not resolve secrets, refresh remote state, sign in, or start a service. --brief answers whether the installation is usable, names the first blocker with its repair action, and aggregates repeated failures so one condition is named once. Use config show/validate, provider inspect, agent inspect, gateway status, or web status for detail.\n\nExit: 0 when the status request completed, including unhealthy or unknown state.\nExample: tmax status --brief",
     )
+    .arg(flag("brief", "Answer usable, first blocker, and next action only."))
 }
 
 fn config_commands() -> Command {
+    let migrate = mutation(
+        leaf(
+            "migrate",
+            "Convert a version-1 configuration to version 2.",
+            "Merges per-protocol alias records that agree on candidates and policy into one alias name declaring its protocols, and rewrites gateway = true entries to provider = \"tmax\". Dry-run lists every merge, rewrite, and refusal without writing. Refusals name each object and leave the file untouched. The exact pre-migration bytes are retained in the recovery area. After migration, start the gateway and re-apply affected targets.\n\nExit: 0 when migration completes; 2 when an object is refused; 4 for persistence or required safety/startup failure.\nExample: tmax config migrate --dry-run",
+        ),
+        true,
+        true,
+    );
     let reload = mutation(
         leaf(
             "reload",
@@ -380,10 +393,11 @@ fn config_commands() -> Command {
             .arg(required_pos(1, "RECORD", "Returned recovery handle.")))
         .subcommand(mutation(leaf("discard", "Discard one exact owned invalid-file recovery record.", "Deletes only the selected recovery artifact after current ownership/concurrency checks. Does not change settings, credentials, native recovery, or bindings. Records have no expiry and no restore/replay operation.\n\nExit: 0 when discarded; 3 when current safety checks block; 4 for I/O or uncertain deletion.\nExample: tmax config recovery discard RECORD --dry-run"), true, false)
             .arg(required_pos(1, "RECORD", "Returned recovery handle."))));
-    family("config", "Inspect, validate, reload, and recover desired configuration.", Command::new("config")
+    family("config", "Inspect, validate, migrate, reload, and recover desired configuration.", Command::new("config")
         .subcommand(leaf("show", "Show redacted saved or loaded configuration.", "Use --state file (default) or loaded. A missing loaded snapshot is explicit, not an empty collection. Reads do not repair, activate, or create configuration.\n\nExit: 0 for available, absent, or explicitly unavailable state.\nExample: tmax config show --state loaded")
             .arg(value("state", "STATE", "file (default) or loaded.").value_parser(["file", "loaded"])))
         .subcommand(leaf("validate", "Validate the current saved configuration without changing it.", "Distinguishes syntax, type, and reference errors from external availability. Missing configuration remains absent; no starter file is created.\n\nExit: 0 when validation/read completes; 2 for invalid saved configuration.\nExample: tmax config validate"))
+        .subcommand(migrate)
         .subcommand(reload)
         .subcommand(reset)
         .subcommand(recovery))
@@ -437,7 +451,7 @@ fn provider_commands() -> Command {
             leaf_with_fields(
                 "add",
                 "Create one independently managed provider access instance.",
-                "Select catalog metadata or an explicit supported integration with --set. A provider is an independent upstream access instance; it may remain incomplete and unauthenticated. Known integrations select fixed destinations with no region field; only custom integrations accept --endpoint.\n\nExit: 0 when saved; 2 for invalid schema/duplicate ID; 3 for action-required qualification; 4 for persistence or required safety/startup failure.\nExample: tmax provider add custom-gateway --set integration custom --endpoint chat-completions https://gateway.example/openai/v1",
+                "Select catalog metadata or an explicit supported integration with --set. A provider is an independent upstream access instance; it may remain incomplete and unauthenticated. Known integrations select fixed destinations with no region field; only custom integrations accept --endpoint.\n\nExit: 0 when saved; 2 for invalid schema, duplicate, or reserved ID (tmax is gateway-owned); 3 for action-required qualification; 4 for persistence or required safety/startup failure.\nExample: tmax provider add custom-gateway --set integration custom --endpoint chat-completions https://gateway.example/openai/v1",
                 add_fields,
             ),
             add_fields,
@@ -483,13 +497,13 @@ fn provider_commands() -> Command {
         .arg(required_pos(1, "ID", "Local provider ID.")), true, true);
     let logout = mutation(leaf("logout", "Sign out through the provider's configured login owner.", "Preserves provider/subscription declarations and identity-comparison basis. Reports affected native/shared consumers. Does not remove stored keys or provider settings.\n\nExit: 0 when the requested sign-out completes; 3 for required interaction/source; 4 for partial or uncertain native effects.\nExample: tmax provider logout deepseek")
         .arg(required_pos(1, "ID", "Local provider ID.")), true, true);
-    let refresh = mutation(leaf("refresh", "Run explicitly requested qualified auth, model, and/or quota checks.", "SCOPE is auth, models, quota, or all. Model discovery registers nothing. Refresh is not sign-in, inference, catalog apply, or desired-state edit. Manual inputs and Codex reset announcements use provider input refresh instead. Reports each check/channel separately; failures do not mean zero quota, revocation, or generic routing exclusion.\n\nExit: 0 when all requested checks complete or dry-run succeeds; 3 for known qualification/credential blockers before checks; 4 when a requested check fails or is unavailable.\nExample: tmax provider refresh deepseek --scope quota")
+    let refresh = mutation(leaf("refresh", "Run explicitly requested qualified auth, model, and/or quota checks.", "SCOPE is auth, models, quota, or all. Model discovery registers nothing. Refresh is not sign-in, inference, catalog apply, or desired-state edit. Manual inputs and Codex reset announcements use provider input refresh instead. Reports each check/channel separately; failures do not mean zero quota, revocation, or generic routing exclusion. For the derived gateway provider tmax, auth proves one authenticated model-discovery request is accepted with the current shared key, models proves one bounded request per enabled route reaches the gateway (reachability only, not native use), and quota reports observed gateway usage without contacting any upstream.\n\nExit: 0 when all requested checks complete or dry-run succeeds; 3 for known qualification/credential blockers before checks; 4 when a requested check fails, cannot run (for example the gateway is not ready), or is unavailable.\nExample: tmax provider refresh deepseek --scope quota")
         .arg(value("scope", "SCOPE", "auth, models, quota, or all.").value_parser(["auth", "models", "quota", "all"]).required(true))
         .arg(required_pos(1, "ID", "Local provider ID.")), true, false);
     let input = provider_input_commands();
     family("provider", "Create, inspect, authenticate, refresh, and remove provider access instances.", Command::new("provider")
         .subcommand(leaf("list", "List provider IDs, names, enabled/authentication state, quota status, and affected-target counts.", "Compact retained-state read, including safe file and loaded quota suspension projections. It does not resolve secrets, refresh remotely, or verify upstream authorization.\n\nExit: 0 when the read completes.\nExample: tmax provider list"))
-        .subcommand(leaf("inspect", "Inspect a provider's configuration, inherited/effective metadata, access, inputs, and references.", "File and loaded projections, endpoint resolution, quota guard policy and automatic quota suspension, auth source/known-or-unknown identity, models, subscription/balance facts, input readiness, retained secret references, and file/loaded differences are distinct. No secret resolution or remote refresh.\n\nExit: 0 when inspection completes; unknown IDs are invalid input.\nExample: tmax provider inspect deepseek")
+        .subcommand(leaf("inspect", "Inspect a provider's configuration, inherited/effective metadata, access, inputs, and references.", "File and loaded projections, endpoint resolution, quota guard policy and automatic quota suspension, auth source/known-or-unknown identity, models, subscription/balance facts, input readiness, retained secret references, and file/loaded differences are distinct. The derived gateway provider also reports its delivery revision and each applying target's applied revision with named drift reasons. No secret resolution or remote refresh.\n\nExit: 0 when inspection completes; unknown IDs are invalid input.\nExample: tmax provider inspect deepseek")
             .arg(required_pos(1, "ID", "Local provider ID.")))
         .subcommand(refresh)
         .subcommand(mutation(leaf("failure-reset", "Clear a provider's retained failure streak and active priority penalty.", "Resets runtime failure state only; does not change policy, configuration revision, credentials, diagnostics, or bindings. It does not start a service. Dry-run shows current failure state without clearing it. --if-revision guards the saved configuration used to identify the provider.\n\nExit: 0 when reset or preview completes; 2 for unknown provider; 3 for changed inputs; 4 for persistence failure.\nExample: tmax provider failure-reset deepseek --dry-run")
@@ -694,8 +708,8 @@ fn model_commands() -> Command {
             .arg(value("provider", "ID", "Filter by local provider ID."))
             .arg(protocol_value("protocol", "Filter by native protocol."))
             .arg(value("kind", "KIND", "concrete or alias.").value_parser(["concrete", "alias"])))
-        .subcommand(leaf("inspect", "Inspect one qualified concrete model or unambiguous alias ID.", "Concrete qualified names identify a model independent of protocol; --protocol filters details only. Alias identity is protocol plus ID; ambiguous bare IDs require --protocol. Includes effective metadata/provenance, local overrides, revision-scoped local indices, capabilities, priorities/rules, and file/loaded differences.\n\nExit: 0 when read completes; 2 for unknown/ambiguous identity.\nExample: tmax model inspect deepseek/deepseek-flash")
-            .arg(protocol_value("protocol", "Optional protocol filter; required for ambiguous alias IDs."))
+        .subcommand(leaf("inspect", "Inspect one qualified concrete model or alias ID.", "Concrete qualified names identify a model independent of protocol; --protocol filters details only. An alias ID alone identifies an alias; --protocol is an optional filter and is rejected when the alias does not declare it. An unknown alias ID is an error. Includes effective metadata/provenance, local overrides, revision-scoped local indices, capabilities, priorities/rules, and file/loaded differences.\n\nExit: 0 when read completes; 2 for an unknown ID.\nExample: tmax model inspect deepseek/deepseek-flash")
+            .arg(protocol_value("protocol", "Optional protocol filter; rejected when the alias does not declare it."))
             .arg(required_pos(1, "QUALIFIED-OR-ID", "Qualified concrete name or alias ID.")))
         .subcommand(edit_args(
             mutation(
@@ -924,18 +938,18 @@ fn model_rule_commands() -> Command {
 
 fn model_alias_commands() -> Command {
     let alias_edit = concat!(
-        "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session), and per-candidate reasoning effort. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set an existing candidate's effort; repeat --clear-candidate-reasoning-effort QUALIFIED to remove an override. A candidate may be changed or cleared once per request, never both. Values must be nonempty and listed in that concrete candidate's effective positive reasoning_options metadata; reasoning=true alone is not enough. Only Chat Completions and Responses support overrides; Messages does not. No arbitrary request parameters, reasoning toggles, or budgets are accepted. Each candidate is a reference to an existing registered qualified model plus alias-local settings, not a separate model. Candidate lists cannot contain aliases or bare providers; preserve order and reject duplicates. Protocol and ID jointly identify an alias; names such as L0 and L1 have no built-in meaning.\n",
+        "Editable fields: enabled (boolean; clear restores true), continuity (session|stateless; clear restores session), and per-candidate reasoning effort. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set an existing candidate's effort; repeat --clear-candidate-reasoning-effort QUALIFIED to remove an override. A candidate may be changed or cleared once per request, never both. Values must be nonempty and listed in that concrete candidate's effective positive reasoning_options metadata; reasoning=true alone is not enough. Only Chat Completions and Responses support overrides; Messages does not. No arbitrary request parameters, reasoning toggles, or budgets are accepted. Each candidate is a reference to an existing registered qualified model plus alias-local settings, not a separate model. Candidate lists cannot contain aliases or bare providers; preserve order and reject duplicates. The alias ID alone identifies an alias, and an alias declares one or more protocols; names such as L0 and L1 have no built-in meaning.\n",
         "Fallback fields: fallback.http_statuses is a comma-separated list of unique HTTP statuses 400..599 (e.g. 429,503); fallback.connection_errors and fallback.transport_errors are booleans. At least one error condition and explicit continuity=stateless are required. Clear fallback to remove the policy; clear an error field to restore empty/false only if another condition remains. Fallback stays within explicit candidates and attempts each provider once. It never migrates established sessions or falls back after partial streaming output. Transport errors and 5xx may follow upstream execution: enabling them explicitly accepts duplicate execution/billing risk.\n",
         "Example: tmax model alias update L0 --protocol chat-completions --set continuity stateless --set fallback.http_statuses 429,503",
     );
     let add = mutation(
         leaf_with_fields(
             "add",
-            "Create one protocol-qualified named configuration referencing existing models.",
-            "Requires one-or-more --candidate QUALIFIED. Candidates form the complete ordered list. Set per-candidate effort with --candidate-reasoning-effort QUALIFIED=EFFORT; no effort override is inferred.\n\nExit: 0 when saved; 2 for invalid ID/candidates/effort; 4 for persistence or required safety/startup failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate provider/model --candidate-reasoning-effort provider/model=effort",
+            "Create one named configuration declaring its protocols and referencing existing models.",
+            "Requires one-or-more --protocol P and one-or-more --candidate QUALIFIED. --protocol declares the protocols the alias publishes; repeat it for each declared protocol. Candidates form the complete ordered list. Set per-candidate effort with --candidate-reasoning-effort QUALIFIED=EFFORT; no effort override is inferred.\n\nExit: 0 when saved; 2 for invalid ID/protocols/candidates/effort; 4 for persistence or required safety/startup failure.\nExample: tmax model alias add L0 --protocol chat-completions --candidate provider/model --candidate-reasoning-effort provider/model=effort",
             alias_edit,
         )
-        .arg(protocol_value("protocol", "chat-completions, responses, or messages.").required(true))
+        .arg(repeated_protocol("protocol", "Declared protocol; repeat for each declared protocol.").required(true))
         .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete model; repeat in order.").required(true))
         .arg(repeated("candidate-reasoning-effort", "QUALIFIED=EFFORT", "Set an existing candidate's supported reasoning effort; repeat for distinct candidates.").long_help(alias_edit))
         .arg(repeated("clear-candidate-reasoning-effort", "QUALIFIED", "Clear one candidate's effort override; repeat for distinct candidates.").long_help(alias_edit))
@@ -948,12 +962,11 @@ fn model_alias_commands() -> Command {
     let update = mutation(
         leaf_with_fields(
             "update",
-            "Edit alias fields and optionally replace its complete candidate list.",
-            "At least one change is required. Repeated --candidate replaces the full list, never appends; omit it to preserve the current list. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set candidate-specific effort or --clear-candidate-reasoning-effort QUALIFIED to clear it. Removed candidates lose their effort overrides. --new-protocol changes identity only after collision/reference checks.\n\nExit: 0 when saved; 2 for invalid identity/candidates/effort; 4 for persistence or required safety/startup failure.\nExample: tmax model alias update L0 --protocol chat-completions --candidate-reasoning-effort provider/model=effort",
+            "Edit alias fields, declared protocols, or its complete candidate list.",
+            "At least one change is required. Repeated --protocol replaces the complete declared protocol list, never appends; omit it to preserve the current list. Repeated --candidate replaces the full list, never appends; omit it to preserve the current list. Repeat --candidate-reasoning-effort QUALIFIED=EFFORT to set candidate-specific effort or --clear-candidate-reasoning-effort QUALIFIED to clear it. Removed candidates lose their effort overrides.\n\nExit: 0 when saved; 2 for invalid protocols/candidates/effort; 4 for persistence or required safety/startup failure.\nExample: tmax model alias update L0 --protocol chat-completions --candidate-reasoning-effort provider/model=effort",
             alias_edit,
         )
-        .arg(protocol_value("protocol", "Current protocol identity.").required(true))
-        .arg(protocol_value("new-protocol", "Optional new protocol identity."))
+        .arg(repeated_protocol("protocol", "Replace the declared protocol list; omit to preserve it."))
         .arg(repeated("candidate", "QUALIFIED", "Replace entire ordered candidate list."))
         .arg(repeated("candidate-reasoning-effort", "QUALIFIED=EFFORT", "Set an existing candidate's supported reasoning effort; repeat for distinct candidates.").long_help(alias_edit))
         .arg(repeated("clear-candidate-reasoning-effort", "QUALIFIED", "Clear one candidate's effort override; repeat for distinct candidates.").long_help(alias_edit))
@@ -965,12 +978,10 @@ fn model_alias_commands() -> Command {
     );
     let candidates = Command::new("candidates")
         .about("Append or remove explicit candidates from an alias.")
-        .subcommand(mutation(leaf("add", "Append new unique candidates to an alias list.", "Rejects duplicate members and non-concrete/unregistered candidates. Candidate order is preserved.\n\nExit: 0 when saved; 2 for invalid member; 4 for persistence or required safety/startup failure.\nExample: tmax model alias candidates add L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
-            .arg(protocol_value("protocol", "Alias protocol identity.").required(true))
+        .subcommand(mutation(leaf("add", "Append new unique candidates to an alias list.", "Rejects duplicate members and non-concrete/unregistered candidates. Candidate order is preserved.\n\nExit: 0 when saved; 2 for invalid member; 4 for persistence or required safety/startup failure.\nExample: tmax model alias candidates add L0 --candidate deepseek/deepseek-flash")
             .arg(repeated("candidate", "QUALIFIED", "Registered qualified concrete candidate; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove named members from an alias list.", "Rejects missing members and an empty resulting list. Does not select replacements.\n\nExit: 0 when saved; 2 for invalid member/result; 4 for persistence or required safety/startup failure.\nExample: tmax model alias candidates remove L0 --protocol chat-completions --candidate deepseek/deepseek-flash")
-            .arg(protocol_value("protocol", "Alias protocol identity.").required(true))
+        .subcommand(mutation(leaf("remove", "Remove named members from an alias list.", "Rejects missing members and an empty resulting list. Does not select replacements.\n\nExit: 0 when saved; 2 for invalid member/result; 4 for persistence or required safety/startup failure.\nExample: tmax model alias candidates remove L0 --candidate deepseek/deepseek-flash")
             .arg(repeated("candidate", "QUALIFIED", "Exact existing candidate to remove; repeat.").required(true))
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true));
     Command::new("alias")
@@ -978,44 +989,13 @@ fn model_alias_commands() -> Command {
         .subcommand(add)
         .subcommand(update)
         .subcommand(candidates)
-        .subcommand(mutation(leaf("rename", "Rename an alias and update target references without an old-ID redirect.", "Requires --protocol. Rejects collision and unresolved old references; does not convert protocols or retarget sessions.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax model alias rename L0 preferred --protocol chat-completions")
-            .arg(protocol_value("protocol", "Exact alias protocol identity.").required(true))
+        .subcommand(mutation(leaf("rename", "Rename an alias and update target references without an old-ID redirect.", "Rejects collision and unresolved old references; does not change declared protocols or retarget sessions.\n\nExit: 0 when saved; 2 for collision/reference errors; 4 for persistence or required safety/startup failure.\nExample: tmax model alias rename L0 preferred")
             .arg(required_pos(1, "OLD", "Current public alias ID."))
             .arg(required_pos(2, "NEW", "New public alias ID.")), true, true))
-        .subcommand(mutation(leaf("remove", "Remove an alias definition after reference checks.", "Removal/disablement reports affected retained sessions; no cascade, retarget, or old-ID redirect.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax model alias remove L0 --protocol chat-completions")
-            .arg(protocol_value("protocol", "Exact alias protocol identity.").required(true))
+        .subcommand(mutation(leaf("remove", "Remove an alias definition after reference checks.", "Removal/disablement reports affected retained sessions; no cascade, retarget, or old-ID redirect.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax model alias remove L0")
             .arg(required_pos(1, "ID", "Public alias ID.")), true, true))
         .subcommand_required(true)
 }
-fn dsh_commands() -> Command {
-    let projection = leaf(
-        "projection",
-        "Emit the versioned, secret-free DSH integration projection.",
-        "Read-only. Selects a declared DSH target by TARGET, --home, DSH_HOME, or the sole declared DSH target. Reports the target's gateway routes, public models, capability metadata, availability, the gateway credential reference name, and gateway readiness. It never resolves or emits key material, starts a service, applies native files, or refreshes remote state. Output is intended for a DSH plugin; schema_version changes require consumer review.\n\nExit: 0 when the projection was built, including unavailable gateway state; 2 for an unknown/ambiguous target; 4 for an unreadable configuration.\nExample: tmax dsh projection dsh-main",
-    )
-    .arg(value("home", "PATH", "Existing DSH home to match against a declared DSH target."))
-    .arg(positional(1, "TARGET", "Declared DSH target ID."));
-    let connect = mutation(
-        leaf(
-            "connect",
-            "Write tmax gateway credential references into one DSH home.",
-            "Selects a declared DSH target by TARGET, --home, DSH_HOME, or the sole declared DSH target. Requires a configured gateway and at least one gateway route. Writes only the stable credential reference names for the target's gateway routes into the target DSH .credentials.yaml, preserving unrelated entries; it never writes a DSH patch, an llm-tmax artifact, or a provider route, starts a service, or emits a key. --dry-run checks the target, DSH home, file permissions, and planned references without reading the credential document or resolving a secret.\n\nExit: 0 when connected or previewed; 2 for invalid/ambiguous target or missing gateway; 4 for credentials/configuration failure.\nExample: tmax dsh connect dsh-main --dry-run",
-        )
-        .arg(value("home", "PATH", "Existing DSH home to match against a declared DSH target."))
-        .arg(positional(1, "TARGET", "Declared DSH target ID.")),
-        true,
-        false,
-    );
-    family(
-        "dsh",
-        "Project and connect tmax's DSH integration without managing DSH profiles.",
-        Command::new("dsh")
-            .subcommand(projection)
-            .subcommand(connect)
-            .subcommand_required(true),
-    )
-}
-
 fn agent_commands() -> Command {
     let agent_update = mutation(leaf("update", "Change explicit structural fields of one declared native target.", "At least one of --agent AGENT or --path PATH is required. Does not restore old files, import credentials, or write native configuration. Relative path operands resolve under ~/.tmax.\n\nExit: 0 when saved; 2 for invalid target/path; 4 for persistence or required safety/startup failure.\nExample: tmax agent update pi-main --path /home/user/.pi/agent")
         .arg(agent_value("agent", "codex, pi, omp, opencode, hermes, or dsh."))
@@ -1062,19 +1042,15 @@ fn agent_commands() -> Command {
         .subcommand(mutation(leaf("clear", "Remove all native role mappings, not model selections/default.", "\n\nExit: 0 when saved; 4 for persistence or required safety/startup failure.\nExample: tmax agent role clear omp-main")
             .arg(required_pos(1, "TARGET", "Declared target ID.")), true, true));
     let provider = Command::new("provider")
-        .about("Manage target-local provider entries with explicit upstream or gateway source.")
-        .subcommand(mutation(leaf("add", "Add an empty-model native provider entry with exactly one source.", "Choose exactly one of --provider PROVIDER or --gateway. An upstream provider is a tmax provider ID; gateway uses the sole local gateway. Does not provision a key, start services, or write native files.\n\nExit: 0 when saved; 2 for invalid/duplicate entry; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider add pi-main local --gateway")
-            .arg(value("provider", "PROVIDER", "Existing tmax upstream provider ID."))
-            .arg(flag("gateway", "Use the sole tmax model gateway."))
+        .about("Manage target-local provider entries and their configured provider source.")
+        .subcommand(mutation(leaf("add", "Add an empty-model native provider entry.", "Requires --provider PROVIDER: a configured provider ID, including the reserved gateway provider tmax. Does not provision a key, start services, or write native files.\n\nExit: 0 when saved; 2 for invalid/duplicate entry; 3 when --provider tmax needs an unconfigured gateway (run `tmax gateway configure`); 4 for persistence or required safety/startup failure.\nExample: tmax agent provider add pi-main local --provider deepseek")
+            .arg(value("provider", "PROVIDER", "Configured provider ID, or tmax for the derived gateway provider.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
-            .arg(required_pos(2, "NAME", "Unique target-local provider-entry name."))
-            .group(ArgGroup::new("source").args(["provider", "gateway"]).required(true)), true, true))
-        .subcommand(mutation(leaf("update", "Replace a target-local provider entry's source.", "Choose exactly one of --provider PROVIDER or --gateway. Validates existing selections/default/roles against the new source; never reinterprets, repairs, clears, or adds them. Does not write native files.\n\nExit: 0 when saved; 2 for invalid source/reference; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider update pi-main local --provider deepseek")
-            .arg(value("provider", "PROVIDER", "Existing tmax upstream provider ID."))
-            .arg(flag("gateway", "Use the sole tmax model gateway."))
+            .arg(required_pos(2, "NAME", "Unique target-local provider-entry name.")), true, true))
+        .subcommand(mutation(leaf("update", "Replace a target-local provider entry's source.", "Requires --provider PROVIDER. Validates existing selections/default/roles against the new source; never reinterprets, repairs, clears, or adds them. Does not write native files.\n\nExit: 0 when saved; 2 for invalid source/reference; 3 when --provider tmax needs an unconfigured gateway (run `tmax gateway configure`); 4 for persistence or required safety/startup failure.\nExample: tmax agent provider update pi-main local --provider deepseek")
+            .arg(value("provider", "PROVIDER", "Configured provider ID, or tmax for the derived gateway provider.").required(true))
             .arg(required_pos(1, "TARGET", "Declared target ID."))
-            .arg(required_pos(2, "NAME", "Target-local provider-entry name."))
-            .group(ArgGroup::new("source").args(["provider", "gateway"]).required(true)), true, true))
+            .arg(required_pos(2, "NAME", "Target-local provider-entry name.")), true, true))
         .subcommand(mutation(leaf("remove", "Remove a provider entry after default/role/reference checks.", "Does not write native files or revoke shared gateway access. Explicit apply/restore is separate.\n\nExit: 0 when saved; 2 for unresolved references; 4 for persistence or required safety/startup failure.\nExample: tmax agent provider remove pi-main local")
             .arg(required_pos(1, "TARGET", "Declared target ID."))
             .arg(required_pos(2, "NAME", "Target-local provider-entry name.")), true, true));
@@ -1090,7 +1066,7 @@ fn agent_commands() -> Command {
             .arg(positional(1, "TARGET", "Declared target ID or an exact recovery handle.").conflicts_with("recovery"))
             .arg(value("recovery", "RECORD", "Exact retained recovery handle.").conflicts_with("__operand_1"))
             .group(ArgGroup::new("accept_handle").args(["__operand_1", "recovery"]).required(true)), true, false));
-    let inspect = leaf("inspect", "Inspect a declared target or an explicit undeclared native scope without importing it.", "Declared inspection reports native entries/sources, precedence, supported roles/requirements, effective auth/model use, desired/applied/effective differences, blockers, and recovery. Undeclared scope requires --agent and --path together and never registers/imports configuration. Inspection is not proof of paid inference.\n\nExit: 0 when inspect completes, including unknown evidence; 2 for invalid scope syntax.\nExample: tmax agent inspect pi-main")
+    let inspect = leaf("inspect", "Inspect a declared target or an explicit undeclared native scope without importing it.", "Declared inspection reports native entries and their configured provider source, relayed delivery facts (base URL, credential reference, applied versus current revision with named drift reasons), precedence, supported roles/requirements, effective auth/model use, desired/applied/effective differences, blockers, and recovery. Desired projections are reported even when the gateway is not running; application is separate and requires a ready listener. Undeclared scope requires --agent and --path together and never registers/imports configuration. Inspection is not proof of paid inference.\n\nExit: 0 when inspect completes, including unknown evidence; 2 for invalid scope syntax.\nExample: tmax agent inspect pi-main")
         .arg(agent_value("agent", "Agent for an explicit undeclared native scope.").requires("path").conflicts_with("__operand_1"))
         .arg(value("path", "PATH", "Native scope path for undeclared inspection; DSH requires the existing DSH_HOME root, not a profile directory.").requires("agent").conflicts_with("__operand_1"))
         .arg(positional(1, "TARGET", "Declared target ID; alternatively supply --agent and --path.").conflicts_with_all(["agent", "path"]))
@@ -1498,6 +1474,138 @@ mod tests {
             assert!(request.dry_run);
             assert_eq!(request.if_revision.as_deref(), Some("revision"));
         }
+    }
+
+    #[test]
+    fn alias_identity_is_the_name_and_protocols_are_repeatable() {
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "model",
+                "alias",
+                "add",
+                "L0",
+                "--protocol",
+                "responses",
+                "--protocol",
+                "chat-completions",
+                "--candidate",
+                "provider/model",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.command, ["model", "alias", "add"]);
+        assert_eq!(request.operands, ["L0"]);
+        assert_eq!(
+            request.arguments["protocol"],
+            ["responses", "chat-completions"]
+        );
+        assert!(
+            command()
+                .try_get_matches_from([
+                    "tmax",
+                    "model",
+                    "alias",
+                    "add",
+                    "L0",
+                    "--candidate",
+                    "provider/model",
+                ])
+                .is_err()
+        );
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "model",
+                "alias",
+                "update",
+                "L0",
+                "--protocol",
+                "messages",
+                "--protocol",
+                "responses",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.arguments["protocol"], ["messages", "responses"]);
+        assert!(
+            command()
+                .try_get_matches_from([
+                    "tmax",
+                    "model",
+                    "alias",
+                    "update",
+                    "L0",
+                    "--new-protocol",
+                    "responses",
+                ])
+                .is_err()
+        );
+        for args in [
+            vec![
+                "tmax",
+                "model",
+                "alias",
+                "rename",
+                "L0",
+                "L1",
+                "--protocol",
+                "responses",
+            ],
+            vec![
+                "tmax",
+                "model",
+                "alias",
+                "remove",
+                "L0",
+                "--protocol",
+                "responses",
+            ],
+            vec![
+                "tmax",
+                "model",
+                "alias",
+                "candidates",
+                "add",
+                "L0",
+                "--protocol",
+                "responses",
+                "--candidate",
+                "provider/model",
+            ],
+            vec![
+                "tmax",
+                "model",
+                "alias",
+                "candidates",
+                "remove",
+                "L0",
+                "--protocol",
+                "responses",
+                "--candidate",
+                "provider/model",
+            ],
+        ] {
+            assert!(command().try_get_matches_from(args).is_err());
+        }
+        for args in [
+            vec!["tmax", "config", "migrate"],
+            vec![
+                "tmax",
+                "config",
+                "migrate",
+                "--dry-run",
+                "--if-revision",
+                "revision",
+            ],
+        ] {
+            assert!(command().try_get_matches_from(args).is_ok());
+        }
+        assert!(
+            command()
+                .try_get_matches_from(["tmax", "config", "migrate", "--protocol", "responses"])
+                .is_err()
+        );
     }
 
     #[test]

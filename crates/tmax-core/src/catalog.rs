@@ -157,6 +157,11 @@ fn adoption_impact(
     let mut providers = BTreeSet::new();
     let mut models = BTreeMap::new();
     for (provider_id, provider) in &config.providers {
+        // The derived provider is never user state; adopting catalog metadata
+        // must not rewrite its overrides or report it as affected.
+        if config.is_gateway_provider(provider_id) {
+            continue;
+        }
         let before = effective_from_snapshot(accepted, provider, None)?;
         let after = effective_from_snapshot(Some(proposed), provider, None)?;
         candidate.providers.get_mut(provider_id).unwrap().overrides =
@@ -244,10 +249,7 @@ fn adoption_impact(
             .cloned()
             .collect();
         if !affected.is_empty() {
-            aliases.insert(
-                (alias.id.clone(), alias.protocol.clone()),
-                (alias, affected),
-            );
+            aliases.insert(alias.id.clone(), (alias, affected));
         }
     }
     let mut routes = Vec::new();
@@ -257,8 +259,8 @@ fn adoption_impact(
             routes.push(json!({"kind":"concrete","id":name,"protocol":protocol,"effect":"metadata_changed"}));
         }
     }
-    for ((id, protocol), (_, affected)) in &aliases {
-        routes.push(json!({"kind":"alias","id":id,"protocol":protocol,"models":affected,"effect":"candidate_metadata_changed"}));
+    for (id, (alias, affected)) in &aliases {
+        routes.push(json!({"kind":"alias","id":id,"protocols":alias.protocols,"models":affected,"effect":"candidate_metadata_changed"}));
     }
     let mut targets = Vec::new();
     for (target_id, target) in &config.agents {
@@ -267,16 +269,13 @@ fn adoption_impact(
             let mut native_changes = Vec::new();
             let mut blockers = Vec::new();
             for selected in &entry.models {
-                let qualified = entry
-                    .provider
-                    .as_ref()
-                    .map(|provider| format!("{provider}/{}", selected.id));
-                let name = qualified.as_deref().unwrap_or(&selected.id);
+                let qualified = format!("{}/{}", entry.provider, selected.id);
+                let name = qualified.as_str();
                 let alias_metadata;
                 let mut project_metadata: fn(&str, &str, &Value) -> Result<Value> =
                     crate::agent_integration::model_metadata;
                 let metadata = if let Some(metadata) = models.get(name) {
-                    if entry.gateway == Some(true) {
+                    if entry.is_relayed(config) {
                         let (_, model) = crate::config::model(config, name)?;
                         alias_metadata = (
                             crate::reasoning::input_metadata(
@@ -294,14 +293,23 @@ fn adoption_impact(
                     } else {
                         Some(metadata)
                     }
-                } else if let Some((alias, _)) = aliases
-                    .get(&(selected.id.clone(), selected.protocol.clone()))
-                    .filter(|_| entry.gateway == Some(true))
-                {
+                } else if let Some((alias, _)) = aliases.get(&selected.id).filter(|(alias, _)| {
+                    entry.is_relayed(config) && alias.publishes(&selected.protocol)
+                }) {
                     project_metadata = crate::agent_integration::alias_model_metadata;
                     alias_metadata = (
-                        crate::reasoning::alias_metadata(config, accepted, alias)?,
-                        crate::reasoning::alias_metadata(config, Some(proposed), alias)?,
+                        crate::reasoning::alias_metadata(
+                            config,
+                            accepted,
+                            alias,
+                            &selected.protocol,
+                        )?,
+                        crate::reasoning::alias_metadata(
+                            config,
+                            Some(proposed),
+                            alias,
+                            &selected.protocol,
+                        )?,
                     );
                     Some(&alias_metadata)
                 } else {
@@ -321,7 +329,7 @@ fn adoption_impact(
                                 change["resource"] =
                                     json!({"kind":"agent_target","id":target_id,"scope":entry_id});
                             }
-                            if entry.gateway == Some(true) || !projected.is_empty() {
+                            if entry.is_relayed(config) || !projected.is_empty() {
                                 selections
                                     .push(json!({"id":selected.id,"protocol":selected.protocol}));
                                 native_changes.extend(projected);
@@ -335,7 +343,7 @@ fn adoption_impact(
                 }
             }
             if !selections.is_empty() {
-                targets.push(json!({"target":target_id,"agent":target.agent,"agent_provider":entry_id,"models":selections,"native_application":if !blockers.is_empty(){"blocked"}else if !native_changes.is_empty(){"reapply_required"}else{"unchanged"},"native_changes":native_changes,"blockers":blockers,"route_metadata":if entry.gateway==Some(true){"revalidation_required"}else{"not_applicable"}}));
+                targets.push(json!({"target":target_id,"agent":target.agent,"agent_provider":entry_id,"models":selections,"native_application":if !blockers.is_empty(){"blocked"}else if !native_changes.is_empty(){"reapply_required"}else{"unchanged"},"native_changes":native_changes,"blockers":blockers,"route_metadata":if entry.is_relayed(config){"revalidation_required"}else{"not_applicable"}}));
             }
         }
     }
@@ -527,7 +535,9 @@ pub async fn handle(store: &Store, config: &Config, r: &Request) -> Result<Value
                 };
                 let mut suggestion = id.clone();
                 let mut n = 2;
-                while config.providers.contains_key(&suggestion) {
+                while config.providers.contains_key(&suggestion)
+                    || suggestion == crate::config::GATEWAY_PROVIDER_ID
+                {
                     suggestion = format!("{id}-{n}");
                     n += 1;
                 }
@@ -620,7 +630,7 @@ mod tests {
 
     fn fixture() -> (Config, Snapshot, Snapshot) {
         let mut config = crate::config::parse(
-            r#"version = 1
+            r#"version = 2
 [providers.account]
 metadata = 'directory'
 integration = 'custom'
@@ -635,11 +645,11 @@ listen = '127.0.0.1:19876'
 key_ref = 'synthetic-gateway-reference'
 [[model_aliases]]
 id = 'explicit'
-protocol = 'chat-completions'
+protocols=['chat-completions']
 candidates = ['account/a', 'account/b']
 [[model_aliases]]
 id = 'alternate'
-protocol = 'chat-completions'
+protocols=['chat-completions']
 candidates = ['account/a', 'account/b']
 [agents.direct]
 agent = 'pi'
@@ -651,7 +661,7 @@ models = [{id = 'a', protocol = 'chat-completions'}]
 agent = 'pi'
 scope = '/synthetic/catalog-aliases'
 [agents.aliases.providers.local]
-gateway = true
+provider = "tmax"
 models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', protocol = 'chat-completions'}]
 "#,
         )
@@ -1155,5 +1165,29 @@ models = [{id = 'explicit', protocol = 'chat-completions'}, {id = 'alternate', p
             assert_eq!(error.code, "invalid_configuration");
             assert_eq!(read(&store, "accepted").unwrap().unwrap().revision, "old");
         }
+    }
+
+    #[tokio::test]
+    async fn catalog_inspection_never_suggests_the_reserved_gateway_provider_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().to_path_buf());
+        let snapshot = Snapshot {
+            revision: "test".into(),
+            source: "local fixture".into(),
+            retrieved_at: "2026-01-01T00:00:00Z".into(),
+            providers: BTreeMap::from([("tmax".into(), json!({"name": "tmax", "models": {}}))]),
+        };
+        store
+            .write_json("catalog/accepted.json", &snapshot)
+            .unwrap();
+        let request = Request {
+            command: vec!["catalog".into(), "inspect".into()],
+            operands: vec!["tmax".into()],
+            arguments: BTreeMap::new(),
+            dry_run: false,
+            if_revision: None,
+        };
+        let result = handle(&store, &Config::empty(), &request).await.unwrap();
+        assert_eq!(result["suggested_provider_id"], "tmax-2");
     }
 }

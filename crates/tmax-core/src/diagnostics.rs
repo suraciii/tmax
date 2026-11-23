@@ -13,6 +13,13 @@ use uuid::Uuid;
 pub const RECORD_LIMIT: usize = 256;
 pub const RECORD_BYTES: usize = 32 * 1024;
 pub const HISTORY_BYTES: usize = RECORD_LIMIT * RECORD_BYTES;
+/// Distinct failure groups retained by [`History::failure_summary`].
+const FAILURE_GROUPS: usize = 8;
+const STALE_SHARED_KEY_STAGE: &str = "shared_key_authentication";
+const STALE_SHARED_KEY_MESSAGE: &str =
+    "Clients are presenting a shared key that this gateway does not accept";
+const STALE_SHARED_KEY_REPAIR: &str =
+    "tmax gateway key show, then update each client's configured key";
 
 fn bounded_record(mut record: Record) -> Record {
     record.decision = safe_evidence(&record.decision);
@@ -114,6 +121,16 @@ struct State {
     cleared_at: Option<DateTime<Utc>>,
     evicted: u64,
     omitted: u64,
+}
+/// One aggregated failure identity: reason code and stage, never merged.
+struct FailureGroup {
+    reason_code: String,
+    stage: String,
+    /// Outcome of the most recently retained record in this group.
+    outcome: String,
+    count: u64,
+    first_at: DateTime<Utc>,
+    last_at: DateTime<Utc>,
 }
 pub struct History {
     pub process: String,
@@ -333,7 +350,91 @@ impl History {
         }
         json!({"coverage":self.coverage(&state),"source":"observed_gateway_requests","official_bill":false,"remaining_quota":null,"unknown_usage_records":unknown,"partial_usage_records":partial,"providers":groups})
     }
+    /// Aggregate repeated failures and rejections so one condition is named once.
+    ///
+    /// One lock acquisition reads a coherent retained snapshot. Records are
+    /// grouped by `(reason_code, stage)` and the projection keeps the largest
+    /// [`FAILURE_GROUPS`] groups; the rest are counted by `omitted_groups`.
+    /// `repeated` covers the whole retained window, including omitted groups.
+    pub fn failure_summary(&self) -> Value {
+        let state = self.state.lock().expect("history mutex");
+        let mut grouped: BTreeMap<(String, String), FailureGroup> = BTreeMap::new();
+        for record in &state.records {
+            if !matches!(record.outcome.as_str(), "failed" | "rejected") {
+                continue;
+            }
+            let reason_code = record.reason_code.as_deref().unwrap_or("unknown");
+            let stage = if record.stage.is_empty() {
+                "unknown"
+            } else {
+                record.stage.as_str()
+            };
+            let group = grouped
+                .entry((reason_code.to_owned(), stage.to_owned()))
+                .or_insert_with(|| FailureGroup {
+                    reason_code: reason_code.to_owned(),
+                    stage: stage.to_owned(),
+                    outcome: record.outcome.clone(),
+                    count: 0,
+                    first_at: record.received_at,
+                    last_at: record.received_at,
+                });
+            group.count = group.count.saturating_add(1);
+            group.outcome.clone_from(&record.outcome);
+            group.first_at = group.first_at.min(record.received_at);
+            group.last_at = group.last_at.max(record.received_at);
+        }
+        let repeated = grouped
+            .values()
+            .filter(|group| group.count >= 2)
+            .map(|group| group.count)
+            .sum::<u64>();
+        let stale_shared_key = stale_shared_key_summary(&grouped);
+        let mut rows = grouped.into_values().collect::<Vec<_>>();
+        let omitted_groups = rows.len().saturating_sub(FAILURE_GROUPS);
+        // Count descending, then reason code: the first row explains the
+        // dominant condition even when several groups share a count.
+        rows.sort_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.reason_code.cmp(&b.reason_code))
+        });
+        rows.truncate(FAILURE_GROUPS);
+        let groups = rows
+            .into_iter()
+            .map(|group| {
+                json!({"reason_code":group.reason_code,"stage":group.stage,"outcome":group.outcome,"count":group.count,"first_at":group.first_at,"last_at":group.last_at})
+            })
+            .collect::<Vec<_>>();
+        json!({"state":"available","groups":groups,"omitted_groups":omitted_groups,"repeated":repeated,"stale_shared_key":stale_shared_key,"coverage":self.coverage(&state)})
+    }
 }
+/// The one stale-shared-key condition, summed across every matching group.
+fn stale_shared_key_summary(groups: &BTreeMap<(String, String), FailureGroup>) -> Value {
+    let mut count = 0u64;
+    let mut first_at: Option<DateTime<Utc>> = None;
+    let mut last_at: Option<DateTime<Utc>> = None;
+    for group in groups
+        .values()
+        .filter(|group| group.stage == STALE_SHARED_KEY_STAGE)
+    {
+        count = count.saturating_add(group.count);
+        first_at = Some(first_at.map_or(group.first_at, |first| first.min(group.first_at)));
+        last_at = Some(last_at.map_or(group.last_at, |last| last.max(group.last_at)));
+    }
+    match (first_at, last_at) {
+        (Some(first_at), Some(last_at)) => json!({
+            "count": count,
+            "first_at": first_at,
+            "last_at": last_at,
+            "reason_code": "stale_shared_key",
+            "message": STALE_SHARED_KEY_MESSAGE,
+            "repair": STALE_SHARED_KEY_REPAIR,
+        }),
+        _ => Value::Null,
+    }
+}
+
 fn encoded_size(value: &impl Serialize) -> usize {
     struct Count(usize);
     impl std::io::Write for Count {
@@ -981,5 +1082,227 @@ mod tests {
             RECORD_BYTES,
             HISTORY_BYTES
         );
+    }
+
+    fn push(history: &History, outcome: &str, stage: &str, reason: Option<&str>, at: &str) {
+        let mut record = history.begin();
+        record.outcome = outcome.into();
+        record.stage = stage.into();
+        record.reason_code = reason.map(Into::into);
+        record.received_at = at.parse().expect("RFC3339 instant");
+        history.update(record);
+    }
+
+    #[test]
+    fn failure_summary_aggregates_orders_and_counts_repeated_failures() {
+        let history = History::new("gateway".into());
+        for at in [
+            "2026-11-18T10:00:00Z",
+            "2026-11-18T10:30:00Z",
+            "2026-11-18T11:00:00Z",
+        ] {
+            push(
+                &history,
+                "rejected",
+                "shared_key_authentication",
+                Some("invalid_api_key"),
+                at,
+            );
+        }
+        push(
+            &history,
+            "failed",
+            "upstream",
+            Some("timeout"),
+            "2026-11-18T12:00:00Z",
+        );
+        push(
+            &history,
+            "failed",
+            "upstream",
+            Some("timeout"),
+            "2026-11-18T12:30:00Z",
+        );
+        push(
+            &history,
+            "rejected",
+            "admission",
+            Some("quota_exhausted"),
+            "2026-11-18T13:00:00Z",
+        );
+        push(
+            &history,
+            "rejected",
+            "receipt",
+            None,
+            "2026-11-18T13:30:00Z",
+        );
+        push(
+            &history,
+            "completed",
+            "upstream",
+            Some("ignored"),
+            "2026-11-18T14:00:00Z",
+        );
+        let summary = history.failure_summary();
+        assert_eq!(summary["state"], "available");
+        let groups = summary["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 4);
+        assert_eq!(summary["omitted_groups"], 0);
+        assert_eq!(groups[0]["reason_code"], "invalid_api_key");
+        assert_eq!(groups[0]["stage"], "shared_key_authentication");
+        assert_eq!(groups[0]["outcome"], "rejected");
+        assert_eq!(groups[0]["count"], 3);
+        assert_eq!(groups[0]["first_at"], "2026-11-18T10:00:00Z");
+        assert_eq!(groups[0]["last_at"], "2026-11-18T11:00:00Z");
+        assert_eq!(groups[1]["reason_code"], "timeout");
+        assert_eq!(groups[1]["count"], 2);
+        assert_eq!(groups[2]["reason_code"], "quota_exhausted");
+        assert_eq!(groups[3]["reason_code"], "unknown");
+        assert_eq!(groups[3]["stage"], "receipt");
+        // Repeated failures span the whole retained window: 3 + 2.
+        assert_eq!(summary["repeated"], 5);
+        let stale = &summary["stale_shared_key"];
+        assert_eq!(stale["count"], 3);
+        assert_eq!(stale["reason_code"], "stale_shared_key");
+        assert_eq!(stale["first_at"], "2026-11-18T10:00:00Z");
+        assert_eq!(stale["last_at"], "2026-11-18T11:00:00Z");
+        assert_eq!(
+            stale["repair"],
+            "tmax gateway key show, then update each client's configured key"
+        );
+        assert!(
+            stale["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not accept")
+        );
+        assert_eq!(summary["coverage"]["retained_count"], 8);
+    }
+
+    #[test]
+    fn failure_summary_caps_groups_and_counts_omitted() {
+        let history = History::new("gateway".into());
+        for index in 0..10 {
+            push(
+                &history,
+                "failed",
+                "upstream",
+                Some(format!("reason_{index}").as_str()),
+                "2026-11-18T10:00:00Z",
+            );
+        }
+        for _ in 0..5 {
+            push(
+                &history,
+                "rejected",
+                "admission",
+                Some("hot"),
+                "2026-11-18T11:00:00Z",
+            );
+        }
+        let summary = history.failure_summary();
+        let groups = summary["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), FAILURE_GROUPS);
+        assert_eq!(summary["omitted_groups"], 3);
+        assert_eq!(groups[0]["reason_code"], "hot");
+        assert_eq!(groups[0]["count"], 5);
+        // Equal counts keep the BTreeMap identity order: reason code ascending.
+        assert_eq!(groups[1]["reason_code"], "reason_0");
+        assert_eq!(groups[7]["reason_code"], "reason_6");
+        assert_eq!(summary["repeated"], 5);
+        assert!(summary["stale_shared_key"].is_null());
+    }
+
+    #[test]
+    fn failure_summary_is_empty_without_failed_or_rejected_records() {
+        let history = History::new("gateway".into());
+        let empty = history.failure_summary();
+        assert_eq!(empty["state"], "available");
+        assert_eq!(empty["groups"], json!([]));
+        assert_eq!(empty["omitted_groups"], 0);
+        assert_eq!(empty["repeated"], 0);
+        assert!(empty["stale_shared_key"].is_null());
+        assert_eq!(empty["coverage"]["retained_count"], 0);
+
+        push(
+            &history,
+            "completed",
+            "upstream",
+            None,
+            "2026-11-18T10:00:00Z",
+        );
+        push(
+            &history,
+            "cancelled",
+            "upstream",
+            None,
+            "2026-11-18T10:01:00Z",
+        );
+        let summary = history.failure_summary();
+        assert_eq!(summary["groups"], json!([]));
+        assert!(summary["stale_shared_key"].is_null());
+    }
+
+    #[test]
+    fn failure_summary_names_stale_shared_key_once_across_groups() {
+        let history = History::new("gateway".into());
+        for at in ["2026-11-18T10:00:00Z", "2026-11-18T10:30:00Z"] {
+            push(
+                &history,
+                "rejected",
+                "shared_key_authentication",
+                Some("invalid_api_key"),
+                at,
+            );
+        }
+        push(
+            &history,
+            "failed",
+            "shared_key_authentication",
+            Some("missing_api_key"),
+            "2026-11-18T11:00:00Z",
+        );
+        push(
+            &history,
+            "failed",
+            "upstream",
+            Some("timeout"),
+            "2026-11-18T12:00:00Z",
+        );
+        let summary = history.failure_summary();
+        assert_eq!(summary["groups"].as_array().unwrap().len(), 3);
+        let stale = &summary["stale_shared_key"];
+        assert_eq!(stale["count"], 3);
+        assert_eq!(stale["first_at"], "2026-11-18T10:00:00Z");
+        assert_eq!(stale["last_at"], "2026-11-18T11:00:00Z");
+        assert_eq!(stale["reason_code"], "stale_shared_key");
+    }
+
+    #[test]
+    fn failure_summary_reports_latest_group_outcome() {
+        let history = History::new("gateway".into());
+        push(
+            &history,
+            "failed",
+            "upstream",
+            Some("timeout"),
+            "2026-11-18T10:00:00Z",
+        );
+        push(
+            &history,
+            "rejected",
+            "upstream",
+            Some("timeout"),
+            "2026-11-18T10:30:00Z",
+        );
+        let summary = history.failure_summary();
+        let groups = summary["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["outcome"], "rejected");
+        assert_eq!(groups[0]["count"], 2);
+        assert_eq!(groups[0]["first_at"], "2026-11-18T10:00:00Z");
+        assert_eq!(groups[0]["last_at"], "2026-11-18T10:30:00Z");
+        assert_eq!(summary["repeated"], 2);
     }
 }

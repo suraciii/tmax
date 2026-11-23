@@ -9,6 +9,9 @@ use std::time::Duration;
 
 pub const CONNECT_DEADLINE: Duration = Duration::from_secs(15);
 pub const OBSERVATION_DEADLINE: Duration = Duration::from_secs(30);
+/// The one integration whose destination is local configuration rather than a
+/// fixed external product. Only the derived gateway provider uses it.
+pub const GATEWAY_INTEGRATION: &str = "tmax-gateway";
 pub fn integration_id(provider: &Provider) -> Result<&str> {
     if let Some(id) = provider.integration.as_deref() {
         if matches!(
@@ -23,7 +26,8 @@ pub fn integration_id(provider: &Provider) -> Result<&str> {
                 | "stepfun-token-plan"
                 | "minimax-cn-coding-plan"
                 | "minimax-coding-plan"
-        ) {
+        ) || id == GATEWAY_INTEGRATION
+        {
             return Ok(id);
         }
         return Err(
@@ -114,7 +118,8 @@ pub fn fixed_endpoints(id: &str) -> Result<BTreeMap<String, String>> {
         ]),
         "minimax-cn-coding-plan" => map(&[("messages", "https://api.minimaxi.com/anthropic")]),
         "minimax-coding-plan" => map(&[("messages", "https://api.minimax.io/anthropic")]),
-        "custom" => BTreeMap::new(),
+        // The gateway destination is the locally configured listen address.
+        "custom" | "tmax-gateway" => BTreeMap::new(),
         _ => return Err(Error::new("invalid_arguments", "Unknown integration ID")),
     })
 }
@@ -144,14 +149,15 @@ pub fn valid_base(base: &str) -> Result<()> {
 }
 pub fn resolve(provider: &Provider) -> Result<BTreeMap<String, String>> {
     let id = integration_id(provider)?;
-    if id != "custom" && !provider.endpoints.is_empty() {
+    let local_destination = id == "custom" || id == GATEWAY_INTEGRATION;
+    if !local_destination && !provider.endpoints.is_empty() {
         return Err(Error::new(
             "invalid_configuration",
             "Known integrations do not accept endpoints; clear endpoints",
         )
         .field("endpoints"));
     }
-    if id == "custom" {
+    if local_destination {
         for (p, b) in &provider.endpoints {
             if !PROTOCOLS.contains(&p.as_str()) {
                 return Err(Error::new(
@@ -162,10 +168,19 @@ pub fn resolve(provider: &Provider) -> Result<BTreeMap<String, String>> {
             valid_base(b)?;
         }
         if provider.endpoints.is_empty() {
-            return Err(Error::new(
-                "invalid_configuration",
-                "Custom integration requires explicit protocol bases",
-            ));
+            return Err(if id == GATEWAY_INTEGRATION {
+                Error::new(
+                    "invalid_configuration",
+                    "The gateway provider requires one protocol base derived from the gateway listen address",
+                )
+                .field("endpoints")
+            } else {
+                Error::new(
+                    "invalid_configuration",
+                    "Custom integration requires explicit protocol bases",
+                )
+                .field("endpoints")
+            });
         }
         return Ok(provider.endpoints.clone());
     }
@@ -174,13 +189,14 @@ pub fn resolve(provider: &Provider) -> Result<BTreeMap<String, String>> {
 pub fn endpoint_view(provider: &Provider) -> Result<Value> {
     let id = integration_id(provider)?;
     let endpoints = resolve(provider)?;
-    let source = if id == "custom" {
+    let source = if id == "custom" || id == GATEWAY_INTEGRATION {
         "explicit_bases"
     } else {
         "integration"
     };
+    let kind = if id == "custom" { "custom" } else { "known" };
     Ok(
-        json!({"kind":if id=="custom"{"custom"}else{"known"},"source":source,"unavailable_protocols":PROTOCOLS.into_iter().filter(|p|!endpoints.contains_key(*p)).collect::<Vec<_>>(),"endpoints":endpoints}),
+        json!({"kind":kind,"source":source,"unavailable_protocols":PROTOCOLS.into_iter().filter(|p|!endpoints.contains_key(*p)).collect::<Vec<_>>(),"endpoints":endpoints}),
     )
 }
 pub fn operation_path(protocol: &str) -> Result<&'static str> {

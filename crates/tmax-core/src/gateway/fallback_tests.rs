@@ -85,7 +85,7 @@ async fn fallback_and_provider_override_apply_across_protocols_and_survive_resta
             duration_seconds: 18_000,
         });
         let alias = &mut config.model_aliases[0];
-        alias.protocol = protocol.into();
+        alias.protocols = vec![protocol.into()];
         alias.continuity = Some("stateless".into());
         alias.fallback = Some(conditions());
         publish(&runtime, &old, &config, "fallback");
@@ -314,7 +314,7 @@ async fn invalid_credential_header_is_local_without_attempt_or_fallback() {
         for provider in config.providers.values_mut() {
             provider.endpoints = [(protocol.to_owned(), url.clone())].into();
         }
-        config.model_aliases[0].protocol = protocol.into();
+        config.model_aliases[0].protocols = vec![protocol.into()];
         let identity = crate::inputs::provider_identity(&runtime.store, &old, "p")
             .unwrap()
             .unwrap();

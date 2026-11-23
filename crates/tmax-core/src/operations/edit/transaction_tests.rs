@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::BTreeMap;
 
-const EFFORT_MAP_CONFIG: &str = "# personal model settings\nversion=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\nresponses='http://127.0.0.1:39999'\n[providers.p.models.m]\npriority=7 # retained priority\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['low','high']}]\n";
+const EFFORT_MAP_CONFIG: &str = "# personal model settings\nversion=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\nresponses='http://127.0.0.1:39999'\n[providers.p.models.m]\npriority=7 # retained priority\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['low','high']}]\n";
 
 fn effort_map_request(action: &str, operands: &[&str], protocol: &str) -> Request {
     Request {
@@ -185,7 +185,7 @@ async fn effort_maps_follow_provider_and_model_renames_and_clear_only_selected_p
 async fn legacy_gateway_edit_previews_without_writes_and_retains_shared_key() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::at(dir.path().into());
-    let text = "# personal settings\nversion=1\n[proxy]\nlisten='127.0.0.1:17840'\nkey_ref='retained-reference'\nautostart=false\n";
+    let text = "# personal settings\nversion=2\n[proxy]\nlisten='127.0.0.1:17840'\nkey_ref='retained-reference'\nautostart=false\n";
     store.write_raw("tmax.toml", text.as_bytes()).unwrap();
     let mut request = Request {
         command: vec!["gateway".into(), "configure".into()],
@@ -231,7 +231,7 @@ fn request(command: &[&str], operands: &[&str], sets: &[&str]) -> Request {
 #[tokio::test]
 async fn protected_web_key_descriptor_saves_existing_provider_with_signed_rules() {
     use std::os::fd::AsRawFd;
-    let base = "# signed fixture\nversion=1\n[providers.synthetic]\nintegration='custom'\n[providers.synthetic.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.synthetic.models.signed-priority]\npriority=-10\ntimezone='UTC'\nschedule=[{priority=-10,weekdays=['mon']}]\npriority_rules=[{id='synthetic-negative',input='weekly',priority=-10,remaining_at_least_percent='1',reset_within_seconds=86400}]\n[providers.synthetic.inputs.weekly]\nkind='quota'\nmax_age_seconds=3600\nmodels=['signed-priority']\nscope='synthetic-scope'\nsource='manual'\n";
+    let base = "# signed fixture\nversion=2\n[providers.synthetic]\nintegration='custom'\n[providers.synthetic.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.synthetic.models.signed-priority]\npriority=-10\ntimezone='UTC'\nschedule=[{priority=-10,weekdays=['mon']}]\npriority_rules=[{id='synthetic-negative',input='weekly',priority=-10,remaining_at_least_percent='1',reset_within_seconds=86400}]\n[providers.synthetic.inputs.weekly]\nkind='quota'\nmax_age_seconds=3600\nmodels=['signed-priority']\nscope='synthetic-scope'\nsource='manual'\n";
     for existing_auth in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
@@ -288,7 +288,7 @@ async fn candidate_effort_rejection_precedes_protected_input_and_credential_line
     for existing_auth in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
-        let mut configured = config::parse("version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n[[model_aliases]]\nid='fixed'\nprotocol='chat-completions'\ncandidates=['p/m']\ncandidate_reasoning_effort={'p/m'='high'}\n").unwrap();
+        let mut configured = config::parse("version=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m.overrides]\nreasoning_options=[{type='effort',values=['high']}]\n[[model_aliases]]\nid='fixed'\nprotocols=['chat-completions']\ncandidates=['p/m']\ncandidate_reasoning_effort={'p/m'='high'}\n").unwrap();
         store
             .write_raw(
                 "tmax.toml",
@@ -380,7 +380,7 @@ async fn candidate_effort_rejection_precedes_protected_input_and_credential_line
 async fn candidate_effort_edits_validate_capabilities_and_track_membership_and_renames() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::at(temp.path().into());
-    store.write_raw("tmax.toml", b"version=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\nresponses='http://127.0.0.1:9999/v1'\n[providers.p.models.a.overrides]\nreasoning_options=[{type='effort',values=['high','max']}]\n[providers.p.models.b.overrides]\nreasoning=true\nreasoning_options=[{type='toggle'}]\n").unwrap();
+    store.write_raw("tmax.toml", b"version=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\nresponses='http://127.0.0.1:9999/v1'\n[providers.p.models.a.overrides]\nreasoning_options=[{type='effort',values=['high','max']}]\n[providers.p.models.b.overrides]\nreasoning=true\nreasoning_options=[{type='toggle'}]\n").unwrap();
     let mut request = Request {
         command: vec!["model".into(), "alias".into(), "add".into()],
         operands: vec!["route".into()],
@@ -395,6 +395,7 @@ async fn candidate_effort_edits_validate_capabilities_and_track_membership_and_r
     execute(&store, &request).await.unwrap();
     request.command[2] = "update".into();
     request.arguments.remove("candidate");
+    request.arguments.remove("protocol");
     let saved = std::fs::read(store.root.join("tmax.toml")).unwrap();
     for (assignment, code) in [
         ("p/a=xhigh", "reasoning_effort_incompatible"),
@@ -432,6 +433,7 @@ async fn candidate_effort_edits_validate_capabilities_and_track_membership_and_r
     };
     execute(&store, &rename).await.unwrap();
     let alias = config::load(&store).unwrap().config.model_aliases.remove(0);
+    assert_eq!(alias.protocols, ["chat-completions"]);
     assert_eq!(
         alias.candidate_reasoning_effort,
         BTreeMap::from([("renamed/new/model".into(), "high".into())])
@@ -468,26 +470,32 @@ async fn candidate_effort_edits_validate_capabilities_and_track_membership_and_r
 async fn alias_edits_replace_members_preserve_references_and_reject_partial_invalid_saves() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::at(temp.path().into());
-    store.write_raw("tmax.toml", b"# personal settings\nversion=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\n[providers.p.models.a]\npriority=7\n[providers.p.models.b]\n").unwrap();
-    let alias_request = |tail: &[&str], candidates: &[&str]| Request {
+    store.write_raw("tmax.toml", b"# personal settings\nversion=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:9999/v1'\nresponses='http://127.0.0.1:9999/v1'\n[providers.p.models.a]\npriority=7\n[providers.p.models.b]\n").unwrap();
+    let alias_request = |tail: &[&str], protocols: &[&str], candidates: &[&str]| Request {
         command: ["model", "alias"]
             .into_iter()
             .chain(tail.iter().copied())
             .map(String::from)
             .collect(),
         operands: vec!["L9".into()],
-        arguments: BTreeMap::from([
-            ("protocol".into(), vec!["chat-completions".into()]),
-            (
+        arguments: {
+            let mut arguments = BTreeMap::from([(
                 "candidate".into(),
                 candidates.iter().map(|s| s.to_string()).collect(),
-            ),
-        ]),
+            )]);
+            if !protocols.is_empty() {
+                arguments.insert(
+                    "protocol".into(),
+                    protocols.iter().map(|s| s.to_string()).collect(),
+                );
+            }
+            arguments
+        },
         dry_run: false,
         if_revision: None,
     };
     let original = std::fs::read(store.root.join("tmax.toml")).unwrap();
-    let missing = execute(&store, &alias_request(&["add"], &[]))
+    let missing = execute(&store, &alias_request(&["add"], &["chat-completions"], &[]))
         .await
         .unwrap_err();
     assert_eq!(missing.code, "invalid_arguments");
@@ -496,17 +504,39 @@ async fn alias_edits_replace_members_preserve_references_and_reject_partial_inva
         std::fs::read(store.root.join("tmax.toml")).unwrap(),
         original
     );
-    execute(&store, &alias_request(&["add"], &["p/a"]))
+    let no_protocol = execute(&store, &alias_request(&["add"], &[], &["p/a"]))
         .await
-        .unwrap();
-    execute(&store, &alias_request(&["update"], &["p/b", "p/a"]))
+        .unwrap_err();
+    assert_eq!(no_protocol.code, "invalid_arguments");
+    assert_eq!(no_protocol.field.as_deref(), Some("protocol"));
+    assert_eq!(
+        std::fs::read(store.root.join("tmax.toml")).unwrap(),
+        original
+    );
+    execute(
+        &store,
+        &alias_request(
+            &["add"],
+            &["responses", "chat-completions", "responses"],
+            &["p/a"],
+        ),
+    )
+    .await
+    .unwrap();
+    let loaded = config::load(&store).unwrap();
+    assert_eq!(loaded.config.model_aliases.len(), 1);
+    assert_eq!(
+        loaded.config.model_aliases[0].protocols,
+        ["chat-completions", "responses"]
+    );
+    execute(&store, &alias_request(&["update"], &[], &["p/b", "p/a"]))
         .await
         .unwrap();
     assert_eq!(
         config::load(&store).unwrap().config.model_aliases[0].candidates,
         ["p/b", "p/a"]
     );
-    let mut disable = alias_request(&["update"], &[]);
+    let mut disable = alias_request(&["update"], &[], &[]);
     disable
         .arguments
         .insert("set".into(), vec!["enabled".into(), "false".into()]);
@@ -514,29 +544,39 @@ async fn alias_edits_replace_members_preserve_references_and_reject_partial_inva
     let loaded = config::load(&store).unwrap();
     assert!(!loaded.config.model_aliases[0].enabled);
     assert_eq!(loaded.config.model_aliases[0].candidates, ["p/b", "p/a"]);
+    assert_eq!(
+        loaded.config.model_aliases[0].protocols,
+        ["chat-completions", "responses"]
+    );
     for invalid in [
-        alias_request(&["candidates", "add"], &["p/a"]),
-        alias_request(&["candidates", "add"], &["missing/model"]),
-        alias_request(&["candidates", "remove"], &["p/a", "p/b"]),
+        alias_request(&["candidates", "add"], &[], &["p/a"]),
+        alias_request(&["candidates", "add"], &[], &["missing/model"]),
+        alias_request(&["candidates", "remove"], &[], &["p/a", "p/b"]),
         request(&["model", "update"], &["p/a"], &["tier", "L0"]),
     ] {
         let before = std::fs::read(store.root.join("tmax.toml")).unwrap();
         assert!(execute(&store, &invalid).await.is_err());
         assert_eq!(std::fs::read(store.root.join("tmax.toml")).unwrap(), before);
     }
-    execute(&store, &alias_request(&["update"], &["p/b"]))
+    execute(&store, &alias_request(&["update"], &[], &["p/b"]))
         .await
         .unwrap();
     assert_eq!(
         config::load(&store).unwrap().config.model_aliases[0].candidates,
         ["p/b"]
     );
-    execute(&store, &alias_request(&["candidates", "add"], &["p/a"]))
-        .await
-        .unwrap();
-    execute(&store, &alias_request(&["candidates", "remove"], &["p/b"]))
-        .await
-        .unwrap();
+    execute(
+        &store,
+        &alias_request(&["candidates", "add"], &[], &["p/a"]),
+    )
+    .await
+    .unwrap();
+    execute(
+        &store,
+        &alias_request(&["candidates", "remove"], &[], &["p/b"]),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         config::load(&store).unwrap().config.model_aliases[0].candidates,
         ["p/a"]
@@ -575,7 +615,7 @@ async fn actual_update_preserves_inline_siblings_comments_and_reports_no_service
     let temp = tempfile::tempdir().unwrap();
     let store = Store::at(temp.path().to_path_buf());
     std::fs::create_dir_all(&store.root).unwrap();
-    std::fs::write(store.root.join("tmax.toml"),"# owner comment\nversion=1\n[providers.p]\nintegration='deepseek'\noverrides = { name = 'Personal', doc = 'old' } # preserve inline\n").unwrap();
+    std::fs::write(store.root.join("tmax.toml"),"# owner comment\nversion=2\n[providers.p]\nintegration='deepseek'\noverrides = { name = 'Personal', doc = 'old' } # preserve inline\n").unwrap();
     let result = execute(
         &store,
         &request(&["provider", "update"], &["p"], &["overrides.doc", "new"]),
@@ -622,7 +662,7 @@ async fn stale_guard_and_dry_run_never_initialize_missing_home() {
 async fn agent_default_set_declares_and_clears_one_effort() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::at(dir.path().into());
-    let text = "# personal settings\nversion=1\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n[agents.local]\nagent='dsh'\nscope='/native'\n[agents.local.providers.local]\nprovider='p'\n[[agents.local.providers.local.models]]\nid='m'\nprotocol='chat-completions'\n";
+    let text = "# personal settings\nversion=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n[agents.local]\nagent='dsh'\nscope='/native'\n[agents.local.providers.local]\nprovider='p'\n[[agents.local.providers.local.models]]\nid='m'\nprotocol='chat-completions'\n";
     store.write_raw("tmax.toml", text.as_bytes()).unwrap();
     let request = |options: &[(&str, &str)]| {
         let mut arguments =
@@ -667,4 +707,177 @@ async fn agent_default_set_declares_and_clears_one_effort() {
         let error = execute(&store, &invalid).await.unwrap_err();
         assert_eq!(error.code, "invalid_configuration");
     }
+}
+
+/// The gateway contributes one derived provider; a native entry references it by
+/// ID and the derived definition never reaches the saved document.
+#[tokio::test]
+async fn relayed_entries_reference_the_derived_gateway_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    let base = "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[providers.up.models.route]\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncandidates=['up/route']\n[agents.t1]\nagent='omp'\nscope='/nonexistent-native-scope'\n";
+    store.write_raw("tmax.toml", base.as_bytes()).unwrap();
+    let add_provider = Request {
+        command: vec!["agent".into(), "provider".into(), "add".into()],
+        operands: vec!["t1".into(), "relayed".into()],
+        arguments: BTreeMap::from([("provider".into(), vec!["tmax".into()])]),
+        dry_run: false,
+        if_revision: None,
+    };
+    crate::operations::commands::validate(&add_provider).unwrap();
+    execute(&store, &add_provider).await.unwrap();
+    let add_model = Request {
+        command: vec!["agent".into(), "model".into(), "add".into()],
+        operands: vec!["t1".into(), "relayed".into(), "route".into()],
+        arguments: BTreeMap::from([("protocol".into(), vec!["responses".into()])]),
+        dry_run: false,
+        if_revision: None,
+    };
+    crate::operations::commands::validate(&add_model).unwrap();
+    execute(&store, &add_model).await.unwrap();
+    let loaded = config::load(&store).unwrap();
+    let entry = &loaded.config.agents["t1"].providers["relayed"];
+    assert_eq!(entry.provider, "tmax");
+
+    assert_eq!(entry.models.len(), 1);
+    assert_eq!(entry.models[0].id, "route");
+    let derived = &loaded.config.providers["tmax"];
+    assert_eq!(
+        derived.integration.as_deref(),
+        Some(crate::provider_integration::GATEWAY_INTEGRATION)
+    );
+    assert_eq!(derived.models.keys().collect::<Vec<_>>(), vec!["route"]);
+    assert!(
+        !loaded.document.to_string().contains("[providers.tmax]"),
+        "the derived provider is never stored"
+    );
+}
+
+/// Relayed entries that reference the derived provider select routes by name, so
+/// renaming a route rewrites their selections and defaults, not only the
+/// historical gateway selector.
+#[tokio::test]
+async fn alias_rename_updates_derived_provider_selections_and_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    let text = "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[providers.up.models.route]\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncandidates=['up/route']\n[agents.t1]\nagent='omp'\nscope='/nonexistent-native-scope'\n[agents.t1.providers.relayed]\nprovider='tmax'\n[[agents.t1.providers.relayed.models]]\nid='route'\nprotocol='responses'\n[agents.t1.default]\nprovider='relayed'\nid='route'\nprotocol='responses'\n";
+    store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+    let rename = Request {
+        command: vec!["model".into(), "alias".into(), "rename".into()],
+        operands: vec!["route".into(), "renamed".into()],
+        arguments: BTreeMap::new(),
+        dry_run: false,
+        if_revision: None,
+    };
+    execute(&store, &rename).await.unwrap();
+    let loaded = config::load(&store).unwrap();
+    let entry = &loaded.config.agents["t1"].providers["relayed"];
+    assert_eq!(entry.models[0].id, "renamed");
+    assert_eq!(
+        loaded.config.agents["t1"].default.as_ref().unwrap().id,
+        "renamed"
+    );
+    assert_eq!(
+        loaded.config.providers["tmax"]
+            .models
+            .keys()
+            .collect::<Vec<_>>(),
+        vec!["renamed"]
+    );
+}
+
+#[tokio::test]
+async fn key_rotation_preview_reports_only_applied_relayed_targets() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::at(directory.path().into());
+    let scope = directory.path().join("native");
+    std::fs::create_dir_all(&scope).unwrap();
+    let text = format!(
+        "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[providers.up.models.route]\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncontinuity='stateless'\ncandidates=['up/route']\n[agents.pi-main]\nagent='pi'\nscope='{}'\n[agents.pi-main.providers.tmax]\nprovider='tmax'\nmodels=[{{id='route',protocol='responses'}}]\n",
+        scope.display()
+    );
+    store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+    let request = Request {
+        command: vec!["gateway".into(), "key".into(), "replace".into()],
+        operands: Vec::new(),
+        arguments: BTreeMap::new(),
+        dry_run: true,
+        if_revision: None,
+    };
+    crate::operations::commands::validate(&request).unwrap();
+    let impact = execute(&store, &request).await.unwrap();
+    let rotation = &impact["rotation"];
+    assert_eq!(rotation["affected_targets"], serde_json::json!([]));
+    assert_eq!(rotation["next_action"], serde_json::Value::Null);
+    assert!(
+        rotation["unmanaged_clients"]
+            .as_str()
+            .is_some_and(|value| value.contains("previous shared key")),
+        "{rotation}"
+    );
+    // A preview never provisions or stores a replacement key.
+    assert!(
+        !std::fs::read_to_string(store.root.join("tmax.toml"))
+            .unwrap()
+            .contains("secret:rotated")
+    );
+}
+
+#[tokio::test]
+async fn key_rotation_names_applied_targets_and_unknown_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::at(directory.path().into());
+    let scope = directory.path().join("native");
+    std::fs::create_dir_all(&scope).unwrap();
+    let text = format!(
+        "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[providers.up.models.route]\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncontinuity='stateless'\ncandidates=['up/route']\n[agents.pi-main]\nagent='pi'\nscope='{}'\n[agents.pi-main.providers.tmax]\nprovider='tmax'\nmodels=[{{id='route',protocol='responses'}}]\n[agents.pi-unknown]\nagent='pi'\nscope='{}/unknown'\n[agents.pi-unknown.providers.tmax]\nprovider='tmax'\nmodels=[{{id='route',protocol='responses'}}]\n",
+        scope.display(),
+        scope.display()
+    );
+    std::fs::create_dir_all(scope.join("unknown")).unwrap();
+    store.write_raw("tmax.toml", text.as_bytes()).unwrap();
+    store
+        .write_json(
+            "secret-owners.json",
+            &serde_json::json!({
+                "agent:pi-main": {"kind":"agent","identity":"owner-main","id":"pi-main"},
+                "agent:pi-unknown": {"kind":"agent","identity":"owner-unknown","id":"pi-unknown"},
+            }),
+        )
+        .unwrap();
+    store
+        .write_json(
+            "native/recovery.json",
+            &serde_json::json!({"records":[
+                {
+                    "id":"r1","owner":"owner-main","target":"pi-main","agent":"pi",
+                    "scope": scope.to_str().unwrap(), "payload_ref":"p1",
+                    "secret_refs":[], "state":"applied_reload_pending", "files":[],
+                    "delivery":{"revision":"old","listen":"127.0.0.1:17840",
+                        "key_ref":"secret:gw","routes":["route"]}
+                },
+                {
+                    "id":"r2","owner":"owner-unknown","target":"pi-unknown","agent":"pi",
+                    "scope": scope.join("unknown").to_str().unwrap(), "payload_ref":"p2",
+                    "secret_refs":[], "state":"applied_reload_pending", "files":[]
+                }
+            ]}),
+        )
+        .unwrap();
+    let request = Request {
+        command: vec!["gateway".into(), "key".into(), "replace".into()],
+        operands: Vec::new(),
+        arguments: BTreeMap::new(),
+        dry_run: true,
+        if_revision: None,
+    };
+    crate::operations::commands::validate(&request).unwrap();
+    let impact = execute(&store, &request).await.unwrap();
+    let rotation = &impact["rotation"];
+    assert_eq!(
+        rotation["affected_targets"],
+        serde_json::json!(["pi-main", "pi-unknown"]),
+        "{rotation}"
+    );
+    assert_eq!(rotation["next_action"], "tmax agent apply pi-main");
 }
