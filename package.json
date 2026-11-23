@@ -5,25 +5,28 @@
   "type": "module",
   "description": "Use tmax-managed model access inside DeepSeek Harness.",
   "exports": {
-    ".": "./index.js",
+    ".": "./dsh-plugin/index.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg",
-    "./client": "./client.js"
+    "./icon": "./dsh-plugin/icon.svg",
+    "./client": "./dsh-plugin/client.js"
   },
   "files": [
-    "index.js",
-    "adapter.js",
-    "client.js",
-    "cordis.patch.yml",
+    "dsh-plugin/index.js",
+    "dsh-plugin/adapter.js",
+    "dsh-plugin/client.js",
+    "dsh-plugin/quota.js",
+    "dsh-plugin/cordis.patch.yml",
+    "dsh-plugin/icon.svg",
+    "dsh-plugin/README.md",
     "locale/*.json",
-    "icon.svg"
+    "LICENSE"
   ],
   "engines": {
     "dsh": ">=0.2.2-rc.3 <0.3.0"
   },
   "dsh": {
     "bundle": {
-      "patch": "./cordis.patch.yml"
+      "patch": "./dsh-plugin/cordis.patch.yml"
     },
     "client": {
       "platform": "web",
@@ -36,12 +39,11 @@
     }
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test dsh-plugin/test/*.test.mjs"
   },
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "https://github.com/suraciii/tmax.git",
-    "directory": "dsh-plugin"
+    "url": "https://github.com/suraciii/tmax.git"
   }
 }

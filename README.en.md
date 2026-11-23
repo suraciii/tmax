@@ -44,18 +44,40 @@ just build
 
 ## Use from DeepSeek Harness
 
-The DSH plugin ships with this repository; it is not published to npm:
+The DSH plugin is this repository's npm package: its manifest is the repository
+root's `package.json`, which points DSH's exports, bundle patch, and packed files
+at the modules in `dsh-plugin/`; the locale files stay beside the manifest at
+`locale/`, because DSH reads display text and the detail document from fixed
+package paths. It is not published to npm, so DSH installs it straight from
+GitHub.
 
-```sh
-git clone https://github.com/suraciii/tmax.git
-cd tmax
-just dsh-install
+In DSH Web, open **Plugins** > **Add plugin** and paste the repository address:
+
+```text
+https://github.com/suraciii/tmax
 ```
 
-Restart or refresh DSH Web after installation, then open the **tmax** page in the sidebar to connect and inspect models and quotas. The plugin requires a `tmax` executable
-on `PATH` plus a configured DSH target and gateway. To update, pull the
-repository, re-run `just dsh-install`, and restart/refresh DSH. Use
-`just dsh-remove` to uninstall.
+The CLI installs and selects the same bundle in one step:
+
+```sh
+dsh plugin --profile web add https://github.com/suraciii/tmax
+```
+
+Restart or refresh DSH Web after installation, then open the **tmax** page in the
+sidebar to connect and inspect models and quotas. The plugin requires a `tmax`
+executable on `PATH` plus a configured DSH target and gateway. Updates follow the
+repository's default branch; uninstalling removes the profile dependency:
+
+```sh
+dsh plugin --profile web update tmax
+dsh plugin --profile web remove tmax
+```
+
+Working from a checkout instead, `just dsh-install` links this repository into the
+profile, so source edits reach DSH at its next recomposition; `just dsh-remove`
+uninstalls it. The plugin used to be the `dsh-plugin/` directory; a profile that
+still links it needs one more `just dsh-install`, because that directory no
+longer carries a manifest.
 
 ## Documentation
 

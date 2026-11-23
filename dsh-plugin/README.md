@@ -5,17 +5,40 @@ configured tmax gateway into DSH; it does not copy keys or start the gateway.
 
 ## Install or update
 
-The plugin ships with the tmax repository; it is not published to npm.
+The plugin is this repository's package: the manifest is the repository root's
+`package.json`, which points DSH's exports, bundle patch, and packed files at the
+modules in `dsh-plugin/`. The locale files sit beside the manifest at `locale/`,
+because DSH reads a bundle's display text and this document from those fixed
+package paths. It is not published to npm, so DSH installs it straight from
+GitHub.
+
+In DSH Web, open **Plugins** > **Add plugin** and paste the repository address:
+
+```text
+https://github.com/suraciii/tmax
+```
+
+The CLI installs and selects the same bundle in one step:
 
 ```sh
-git clone https://github.com/suraciii/tmax.git
-cd tmax
-just dsh-install
+dsh plugin --profile web add https://github.com/suraciii/tmax
 ```
 
 Restart or refresh DSH Web, then open **tmax** in the sidebar panel list, beside
-Plugins and Schedules. To update, pull and re-run `just dsh-install`; uninstall
-with `just dsh-remove`.
+Plugins and Schedules. The plugin needs a `tmax` executable on `PATH` plus a
+configured DSH target and gateway. Updates follow the repository's default
+branch; uninstall removes the profile dependency:
+
+```sh
+dsh plugin --profile web update tmax
+dsh plugin --profile web remove tmax
+```
+
+Working from a checkout instead, `just dsh-install` links this repository into
+the profile, so source edits reach DSH at its next recomposition; `just dsh-remove`
+uninstalls it. The plugin used to be the `dsh-plugin/` directory; a profile that
+still links it needs one more `just dsh-install`, because that directory no
+longer carries a manifest.
 
 ## Home-owned routes
 
