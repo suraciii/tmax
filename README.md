@@ -43,15 +43,28 @@ just build
 
 ## 在 DeepSeek Harness 中使用
 
-DSH 插件源码随本仓库分发，不通过 npm 发布：
+DSH 插件是本仓库的 npm 包：清单在仓库根的 `package.json`，导出、bundle patch 和打包文件指向 `dsh-plugin/` 下的模块，locale 资源则放在根目录 `locale/`（DSH 从固定的包路径读取显示文案和详情文档）。它不通过 npm 发布，DSH 直接从 GitHub 安装：
 
-```sh
-git clone https://github.com/suraciii/tmax.git
-cd tmax
-just dsh-install
+在 DSH Web 打开 **Plugins** > **Add plugin**，粘贴仓库地址：
+
+```text
+https://github.com/suraciii/tmax
 ```
 
-安装后重启或刷新 DSH Web，在侧栏打开 **tmax** 页面连接并查看模型与额度。插件需要已在 `PATH` 中的 `tmax`，并配置好 DSH target 和 gateway。更新时拉取仓库后重新执行 `just dsh-install`，再重启/刷新 DSH。卸载用 `just dsh-remove`。
+命令行同样一步完成安装与启用：
+
+```sh
+dsh plugin --profile web add https://github.com/suraciii/tmax
+```
+
+安装后重启或刷新 DSH Web，在侧栏打开 **tmax** 页面连接并查看模型与额度。插件需要已在 `PATH` 中的 `tmax`，并配置好 DSH target 和 gateway。更新跟随仓库默认分支，卸载移除 profile 依赖：
+
+```sh
+dsh plugin --profile web update tmax
+dsh plugin --profile web remove tmax
+```
+
+从本仓库开发时，`just dsh-install` 把当前工作副本链接进 profile（改动在 DSH 下一次重组时生效），`just dsh-remove` 卸载。插件过去是 `dsh-plugin/` 目录；profile 里若仍链接该目录，需要再执行一次 `just dsh-install` —— 该目录已不带包清单。
 
 ## 文档
 

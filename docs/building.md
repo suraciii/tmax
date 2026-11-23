@@ -13,6 +13,7 @@ Verification additionally requires:
 
 - `just` — the command runner the gates use.
 - Python 3.10 or newer — the verification and hygiene scripts under `scripts/`.
+- Node.js 22 or newer — the DSH plugin's tests run under `node --test`.
 - `git` — the scripts read the index and the working tree to record source
   provenance.
 
@@ -132,6 +133,7 @@ just check     # type-check every workspace target
 just clippy    # lint the workspace, warnings denied
 just test      # run the workspace test suite
 just test-scripts  # run the verification tooling's own tests
+just test-plugin   # run the DSH plugin's tests
 just smoke     # exercise the CLI entrypoint
 just ci-pr     # the required pull request gate
 just ci        # the full gate: ci-pr plus the release build

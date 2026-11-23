@@ -40,13 +40,17 @@ check-python:
 test-scripts:
     python3 -B -m unittest discover -s scripts -p 'test_*.py'
 
+# Run the DSH plugin's tests, including what an install ships.
+test-plugin:
+    node --test dsh-plugin/test/*.test.mjs
+
 # Exercise the actual CLI entrypoint.
 smoke:
     cargo run --locked -p tmax-cli -- --help
     cargo run --locked -p tmax-cli -- --version
 
 # Required pull request gate.
-ci-pr: check-python-cache check-python fmt check clippy test test-scripts smoke
+ci-pr: check-python-cache check-python fmt check clippy test test-scripts test-plugin smoke
 
 # Full local and main-branch gate.
 ci: ci-pr build
@@ -61,7 +65,7 @@ verify-pr evidence_dir:
 
 # Install or update the DSH plugin from this checkout into a DSH profile.
 dsh-install profile="web":
-    dsh plugin --profile {{profile}} add "$PWD/dsh-plugin"
+    dsh plugin --profile {{profile}} add "$PWD"
 
 # Remove the DSH plugin from a DSH profile.
 dsh-remove profile="web":

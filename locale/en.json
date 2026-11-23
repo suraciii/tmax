@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "tmax",
+    "description": "Use tmax-managed models and inspect model access inside DeepSeek Harness.",
+    "detail": "dsh-plugin/README.md"
+  }
+}
