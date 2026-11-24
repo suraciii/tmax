@@ -265,7 +265,68 @@ pub(super) fn schema_blocker(agent: &str, installation: &Value) -> Option<Value>
             json!({"code":"native_schema_incompatible","message":"OpenCode 1 uses a different configuration format. Upgrade to OpenCode 2 before applying"}),
         );
     }
+    if agent == "dsh"
+        && let Some(version) = installation["version"].as_str()
+        && !version_at_least(version, adapters::DSH_QUALIFIED)
+    {
+        return Some(json!({
+            "code":"native_version_unqualified",
+            "message":format!("DSH {version} predates the qualified {}; this tmax supports only that version and newer. Upgrade DSH before applying", adapters::DSH_QUALIFIED),
+            "detected":version,
+            "qualified":adapters::DSH_QUALIFIED,
+        }));
+    }
     None
+}
+
+/// Semver ordering over the dotted numeric core and prerelease identifiers
+/// tmax qualifies against. A prerelease sorts below its release; a numeric
+/// identifier sorts below an alphanumeric one; a shorter identifier list
+/// sorts below a longer one with the same prefix.
+pub(super) fn version_at_least(found: &str, floor: &str) -> bool {
+    fn split(version: &str) -> (Vec<u64>, Vec<String>) {
+        let (core, pre) = version.split_once('-').unwrap_or((version, ""));
+        let core = core
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect();
+        let pre = if pre.is_empty() {
+            Vec::new()
+        } else {
+            pre.split('.').map(str::to_owned).collect()
+        };
+        (core, pre)
+    }
+    let (found_core, found_pre) = split(found);
+    let (floor_core, floor_pre) = split(floor);
+    for index in 0..found_core.len().max(floor_core.len()) {
+        let a = found_core.get(index).copied().unwrap_or(0);
+        let b = floor_core.get(index).copied().unwrap_or(0);
+        if a != b {
+            return a > b;
+        }
+    }
+    if found_pre.is_empty() || floor_pre.is_empty() {
+        // A release outranks any prerelease; two releases are equal here.
+        return found_pre.is_empty();
+    }
+    for index in 0..found_pre.len().max(floor_pre.len()) {
+        match (found_pre.get(index), floor_pre.get(index)) {
+            (None, Some(_)) => return false,
+            (Some(_), None) => return true,
+            (Some(a), Some(b)) if a == b => {}
+            (Some(a), Some(b)) => {
+                return match (a.parse::<u64>(), b.parse::<u64>()) {
+                    (Ok(a), Ok(b)) => a > b,
+                    (Ok(_), Err(_)) => false,
+                    (Err(_), Ok(_)) => true,
+                    _ => a > b,
+                };
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -330,6 +391,48 @@ mod tests {
             "native_schema_incompatible"
         );
         assert!(schema_blocker("pi", &json!({"version":"1.9.0"})).is_none());
+    }
+    #[test]
+    fn dsh_below_the_qualified_floor_blocks_and_missing_versions_do_not() {
+        for evidence in [
+            json!({"state":"not_installed","version":null}),
+            json!({"state":"probe_failed","version":null}),
+            json!({"state":"version_unknown","version":null}),
+            json!({"state":"detected","version":adapters::DSH_QUALIFIED}),
+            json!({"state":"detected","version":"0.2.4"}),
+            json!({"state":"detected","version":"0.3.0-alpha.1"}),
+        ] {
+            assert!(schema_blocker("dsh", &evidence).is_none(), "{evidence}");
+        }
+        for older in ["0.2.1-rc.2", "0.2.2-rc.5", "0.2.3-alpha.1"] {
+            let blocker = schema_blocker("dsh", &json!({"version":older})).unwrap();
+            assert_eq!(blocker["code"], "native_version_unqualified", "{older}");
+            assert_eq!(blocker["detected"], older);
+            assert_eq!(blocker["qualified"], adapters::DSH_QUALIFIED);
+        }
+    }
+    #[test]
+    fn version_ordering_follows_numeric_cores_and_prerelease_identifiers() {
+        for (found, floor, expected) in [
+            ("0.2.3-alpha.2", "0.2.3-alpha.2", true),
+            ("0.2.3-alpha.1", "0.2.3-alpha.2", false),
+            ("0.2.3-alpha.10", "0.2.3-alpha.2", true),
+            ("0.2.3-alpha.2.1", "0.2.3-alpha.2", true),
+            ("0.2.3-alpha.2", "0.2.3-alpha.2.1", false),
+            ("0.2.2-rc.5", "0.2.3-alpha.1", false),
+            ("0.2.3", "0.2.3-alpha.2", true),
+            ("0.2.3-alpha.2", "0.2.3", false),
+            ("0.2.10", "0.2.9", true),
+            ("0.2.3-alpha.1", "0.2.3-beta.1", false),
+            ("0.2.3-1", "0.2.3-alpha", false),
+            ("0.2.3-alpha", "0.2.3-1", true),
+        ] {
+            assert_eq!(
+                version_at_least(found, floor),
+                expected,
+                "{found} >= {floor}"
+            );
+        }
     }
     #[test]
     fn hermes_provenance_resolution_never_executes_repair_capable_launcher() {

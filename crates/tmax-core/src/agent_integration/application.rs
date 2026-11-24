@@ -283,18 +283,20 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         previews.push(json!({"existing_provider_entries":existing_entries,"path":file.path,"revision":revision(before.as_deref()),"owned_fields":fields.iter().map(|(p,_)|p).collect::<Vec<_>>(),"credential_handoff":match target.agent.as_str() { "hermes" => "plaintext API key in current-user-restricted config.yaml; no token import", "dsh" => "plaintext API key in current-user-restricted DSH .credentials.yaml; home patch contains a native credential reference; no token import", _ => "native command/file reference to a private native-owned credential artifact; no inline config secret or token import" }}));
         observed_inputs.push((file.path.clone(), before));
     }
+    // A detected environment the adapter cannot serve blocks before any
+    // preview is called ready, so a dry run reports the same blocker.
+    if matches!(target.agent.as_str(), "opencode" | "dsh") {
+        let installed = version(&target.agent, &path).await;
+        if let Some(blocker) = schema_blocker(&target.agent, &installed) {
+            return Ok(
+                json!({"_code":blocker["code"],"target":id,"agent":target.agent,"path":path,"dry_run":dry_run,"installation":installed,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false}}),
+            );
+        }
+    }
     if dry_run {
         return Ok(
             json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"credentials":{"resolved":false},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false}}),
         );
-    }
-    if target.agent == "opencode" {
-        let installed = version(&target.agent, &path).await;
-        if let Some(blocker) = schema_blocker(&target.agent, &installed) {
-            return Ok(
-                json!({"_code":blocker["code"],"target":id,"agent":target.agent,"path":path,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false}}),
-            );
-        }
     }
     if desired_unchanged {
         // A no-op apply is still the documented repair for missing or outdated
@@ -707,7 +709,10 @@ mod tests {
             let executable = directory.path().join("dsh");
             fs::write(
                 &executable,
-                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '0.2.1-rc.2\\n'\n",
+                format!(
+                    "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '{}\\n'\n",
+                    adapters::DSH_QUALIFIED
+                ),
             )
             .unwrap();
             fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();

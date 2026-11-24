@@ -173,6 +173,7 @@ It must not reserve a manager job or change a recovery generation.
 | Existing compatible unsupervised owner reused | Existing success/reuse result with supervision explicitly inactive and a supported transition action; no hidden recycle |
 | Unsupported manager or unavailable required user session before effects | Exit 3 with `service_manager_unavailable` and the specific platform reason; no detached fallback |
 | Definition belongs to another authority/application | Exit 3 with `service_registration_conflict`; leave it unchanged |
+| Definition carries this authority's marker but its principal cannot be confirmed as this logon session | Exit 3 with `service_registration_unverified` naming the expected and observed identity; leave it unchanged. A principal is compared by resolved SID, never by its stored spelling; a registration whose read-back cannot be confirmed reports the same code |
 | Manager permission or I/O operation fails | Exit 4 with `service_control_failed`, completed effects, and safe external permission guidance; no automatic elevation |
 | Requested listener does not become ready before its deadline | Exit 4 with `service_readiness_failed`; report actual listener/manager state and request withdrawal or uncertain partial effects |
 | Recovery exhausts native attempts or meets a permanent blocker | Status succeeds as a read, exposing the cause and explicit start/restart action rather than readiness |
@@ -220,6 +221,11 @@ Detailed status/lifecycle uses `DaemonView`: `discovery_state` (`absent`,
 `compatible`, `incompatible`, `unidentified`, or `unavailable`), string-or-null
 `reason_code`, `identity`, `inference`, and `web`. When version comparison matters,
 include `caller_version` and `version_relation` (`same`, `different`, or `unknown`).
+`identity` also carries `executable_path` and `executable_sha256` of the running
+image; `caller_executable` and `binary_relation` (`same`, `different`, or `unknown`)
+compare content digests, so two builds of one version are `different`. A
+`different` relation is the visible cue that an explicit gateway restart adopts the
+on-disk binary; it never triggers a restart by itself.
 Executable equality and management compatibility are separate. Unverified actual
 facts remain null, never copied from caller/requested settings.
 

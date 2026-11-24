@@ -191,12 +191,28 @@ async fn rpc_exchange(
     {
         peer.wait_for_exit().await?;
     }
+    // Two builds of one version string are different binaries. The content
+    // digest, not the version, says whether this CLI is the executable
+    // actually serving; a difference is the visible cue that an explicit
+    // restart would adopt the on-disk binary.
+    let serving_digest = value
+        .pointer("/daemon/identity/executable_sha256")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let caller = super::running_image();
     if let Some(daemon) = value.get_mut("daemon") {
         daemon["caller_version"] = json!(env!("CARGO_PKG_VERSION"));
         daemon["version_relation"] = json!(if reply.version == env!("CARGO_PKG_VERSION") {
             "same"
         } else {
             "different"
+        });
+        daemon["caller_executable"] =
+            json!(caller.map(|(path, digest)| json!({"path":path,"sha256":digest})));
+        daemon["binary_relation"] = json!(match (caller, serving_digest.as_deref()) {
+            (Some((_, caller_digest)), Some(serving)) if caller_digest == serving => "same",
+            (Some(_), Some(_)) => "different",
+            _ => "unknown",
         });
         if incompatible {
             daemon["discovery_state"] = json!("incompatible");

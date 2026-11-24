@@ -24,7 +24,10 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
         let executable = directory.path().join("dsh");
         fs::write(
             &executable,
-            "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '0.2.1-rc.2\\n'\n",
+            format!(
+                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '{}'\\n'\n",
+                super::adapters::DSH_QUALIFIED
+            ),
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();

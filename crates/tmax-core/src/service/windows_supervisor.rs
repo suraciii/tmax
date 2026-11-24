@@ -91,6 +91,14 @@ fn conflict() -> Error {
         "A Windows task or legacy Run value is not owned by this authority; it was not changed",
     )
 }
+fn unverified(observed: &str, expected: &str) -> Error {
+    Error::new(
+        "service_registration_unverified",
+        &format!(
+            "The Windows task carries this authority's marker but its principal could not be confirmed as this logon session (expected {expected}, observed {observed}); it was not changed"
+        ),
+    )
+}
 fn executable_unavailable() -> Error {
     Error::new(
         "service_executable_unavailable",
@@ -244,6 +252,35 @@ function Get-TaskUpdatePolicy($op, $state, $matches, $compatible) {
   return 'update'
 }
 "#;
+// Task Scheduler stores a principal as whichever of SID or account name the
+// registration path produced, and returns that form verbatim. Compare only
+// resolved SIDs; an identifier that resolves to nothing is reported as
+// unverified rather than claimed as another owner's task.
+const IDENTITY_POLICY: &str = r#"
+function Resolve-PrincipalSid($id) {
+  if ($null -eq $id) { return $null }
+  $text = [string]$id
+  if ($text -match '^S-1-\d(-\d)+$') { return $text }
+  try { return ([System.Security.Principal.NTAccount]::new($text)).Translate([System.Security.Principal.SecurityIdentifier]).Value }
+  catch { return $null }
+}
+function Get-TaskIdentity($def, $sid) {
+  $script:UnresolvedPrincipal = [string]$def.Principal.UserId
+  $principal = Resolve-PrincipalSid $def.Principal.UserId
+  if ($null -eq $principal) { return 'unverified' }
+  if ($principal -ine $sid -or [int]$def.Principal.LogonType -ne 3) { return 'conflict' }
+  if ($def.Triggers.Count -gt 1) { return 'conflict' }
+  if ($def.Triggers.Count -eq 1) {
+    $trigger = $def.Triggers.Item(1)
+    $script:UnresolvedPrincipal = [string]$trigger.UserId
+    $triggerSid = Resolve-PrincipalSid $trigger.UserId
+    if ($null -eq $triggerSid) { return 'unverified' }
+    if ([int]$trigger.Type -ne 9 -or $triggerSid -ine $sid) { return 'conflict' }
+  }
+  $script:UnresolvedPrincipal = [string]$def.Principal.UserId
+  return 'owned'
+}
+"#;
 const SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
@@ -263,17 +300,18 @@ try {
   $registration = 'absent'; $enabled = $false; $triggerEnabled = $false; $taskEnabled = $true; $matches = $false; $state = 0
   if ($null -ne $task) {
     $def = $task.Definition
-    if ($def.RegistrationInfo.Description -cne $marker -or $def.Principal.UserId -ine $sid -or [int]$def.Principal.LogonType -ne 3) {
+    if ($def.RegistrationInfo.Description -cne $marker) {
       @{ result='conflict' } | ConvertTo-Json -Compress; exit 0
+    }
+    $identity = Get-TaskIdentity $def $sid
+    if ($identity -ne 'owned') {
+      @{ result=$identity; expected=$sid; observed=$script:UnresolvedPrincipal } | ConvertTo-Json -Compress; exit 0
     }
     $registration = 'owned'
     $state = [int]$task.State
     $taskEnabled = [bool]$task.Enabled
-    if ($def.Triggers.Count -gt 1) { @{ result='conflict' } | ConvertTo-Json -Compress; exit 0 }
     if ($def.Triggers.Count -eq 1) {
-      $trigger = $def.Triggers.Item(1)
-      if ([int]$trigger.Type -ne 9 -or $trigger.UserId -ine $sid) { @{ result='conflict' } | ConvertTo-Json -Compress; exit 0 }
-      $triggerEnabled = [bool]$trigger.Enabled
+      $triggerEnabled = [bool]$def.Triggers.Item(1).Enabled
       $enabled = $triggerEnabled -and $taskEnabled
     }
     # A marker alone does not authorize a different action. Preserve only an
@@ -311,6 +349,13 @@ try {
       $action = $new.Actions.Create(0); $action.Path = $env:TMAX_TASK_EXE; $action.Arguments = '__service'
       $flags = if ($registration -eq 'absent') { 2 } else { 4 }
       $task = $folder.RegisterTaskDefinition($name, $new, ($flags -bor 32), $sid, $null, 3, $null)
+      # Read the stored definition back: the scheduler may normalize the
+      # principal into a form this session cannot resolve, and the next
+      # operation must not discover that as a registration conflict.
+      $identity = Get-TaskIdentity $task.Definition $sid
+      if ($identity -ne 'owned') {
+        @{ result=$identity; expected=$sid; observed=$script:UnresolvedPrincipal } | ConvertTo-Json -Compress; exit 0
+      }
       $registration = 'owned'; $enabled = $want; $matches = $true
     }
   } elseif ($op -eq 'start') {
@@ -375,7 +420,7 @@ fn invoke(store: &Store, op: &str, login: bool, legacy: bool) -> Result<Value> {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            &format!("{PID_FILTER}\n{PREPARATION_POLICY}\n{SCRIPT}"),
+            &format!("{PID_FILTER}\n{PREPARATION_POLICY}\n{IDENTITY_POLICY}\n{SCRIPT}"),
         ])
         .env("TMAX_TASK_NAME", task_name(store))
         .env("TMAX_TASK_EXE", exe)
@@ -418,6 +463,10 @@ fn invoke(store: &Store, op: &str, login: bool, legacy: bool) -> Result<Value> {
     match value["result"].as_str() {
         Some("ok") => Ok(value),
         Some("conflict") => Err(conflict()),
+        Some("unverified") => Err(unverified(
+            value["observed"].as_str().unwrap_or_default(),
+            value["expected"].as_str().unwrap_or_default(),
+        )),
         Some("running_drift" | "not_prepared") => Err(failed()),
         _ if op == "inspect" || op == "probe" => Err(unavailable()),
         _ => Err(failed()),
@@ -800,6 +849,49 @@ if ((Get-TaskUpdatePolicy 'login' 4 $false $false) -ne 'deny') { throw 'login re
                 "-NonInteractive",
                 "-Command",
                 &format!("{PREPARATION_POLICY}\n{checks}"),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn task_identity_compares_resolved_sids_and_never_guesses_an_unresolvable_principal() {
+        let checks = r#"
+$ErrorActionPreference='Stop'
+$current = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$sid = $current.User.Value; $name = $current.Name
+$other = 'S-1-5-21-1-1-1-1'; $nobody = 'NOSUCHMACHINE\nosuchuser'
+function New-FakeDef($principalId, $logonType, $triggerId) {
+  $triggers = [pscustomobject]@{ Count = 1; Items = @([pscustomobject]@{ Type = 9; UserId = $triggerId }) }
+  $triggers | Add-Member -MemberType ScriptMethod -Name Item -Value { param($i) $this.Items[$i - 1] } -Force
+  [pscustomobject]@{ Principal = [pscustomobject]@{ UserId = $principalId; LogonType = $logonType }; Triggers = $triggers }
+}
+if ((Resolve-PrincipalSid $sid) -ne $sid) { throw 'SID fast path lost' }
+if ((Resolve-PrincipalSid $name) -ne $sid) { throw 'account name did not translate to the session SID' }
+if ($null -ne (Resolve-PrincipalSid $nobody)) { throw 'unresolvable name yielded a SID' }
+if ($null -ne (Resolve-PrincipalSid $null)) { throw 'null yielded a SID' }
+foreach ($owned in @((New-FakeDef $sid 3 $sid), (New-FakeDef $name 3 $name))) {
+  if ((Get-TaskIdentity $owned $sid) -ne 'owned') { throw 'own principal not owned' }
+}
+if ((Get-TaskIdentity (New-FakeDef $other 3 $sid) $sid) -ne 'conflict') { throw 'another account not a conflict' }
+if ((Get-TaskIdentity (New-FakeDef $sid 3 $other) $sid) -ne 'conflict') { throw 'another trigger account not a conflict' }
+if ((Get-TaskIdentity (New-FakeDef $sid 0 $sid) $sid) -ne 'conflict') { throw 'password logon not a conflict' }
+if ((Get-TaskIdentity (New-FakeDef $nobody 3 $sid) $sid) -ne 'unverified') { throw 'unresolvable principal not unverified' }
+if ((Get-TaskIdentity (New-FakeDef $sid 3 $nobody) $sid) -ne 'unverified') { throw 'unresolvable trigger not unverified' }
+if ($script:UnresolvedPrincipal -ne $nobody) { throw 'unresolved identifier did not name the trigger' }
+if ((Get-TaskIdentity (New-FakeDef $name 3 $name) $sid) -ne 'owned') { throw 'name principal not owned after unverified' }
+"#;
+        let status = Command::new(powershell().unwrap())
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("{IDENTITY_POLICY}\n{checks}"),
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

@@ -104,6 +104,7 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
             | "daemon_control_path_invalid"
             | "service_manager_unavailable"
             | "service_registration_conflict"
+            | "service_registration_unverified"
             | "endpoint_occupied"
             | "endpoint_conflict"
             | "active_requests"

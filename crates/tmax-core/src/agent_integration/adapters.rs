@@ -53,6 +53,10 @@ pub fn supported_roles(agent: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
+/// The one DSH version tmax qualifies against. `package.json` `engines.dsh`,
+/// `docs/agents/dsh.md`, and the installation floor all derive from it; a test
+/// keeps the non-Rust copies equal.
+pub const DSH_QUALIFIED: &str = "0.2.3-alpha.2";
 pub(super) fn qualified_version(agent: &str) -> &'static str {
     match agent {
         "codex" => "0.162.1",
@@ -60,7 +64,7 @@ pub(super) fn qualified_version(agent: &str) -> &'static str {
         "omp" => "18.12.6",
         "opencode" => "2.0.28",
         "hermes" => "0.22.1+683.g848fc0a",
-        "dsh" => "0.2.1-rc.2",
+        "dsh" => DSH_QUALIFIED,
         _ => "",
     }
 }
@@ -76,7 +80,7 @@ pub(super) fn source(agent: &str) -> &'static str {
         }
         "hermes" => "https://github.com/NousResearch/hermes-agent/tree/848fc0a",
         "dsh" => {
-            "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317"
+            "https://github.com/deepseek-ai/deepseek-harness/tree/4b399c39a6d1479cd84ca591b4d7c88e24d38a96"
         }
         _ => "",
     }
@@ -389,6 +393,22 @@ pub(super) fn validate_existing(agent: &str, file: &File, current: &Value) -> Re
 mod tests {
     use super::test_support::target;
     use super::*;
+    #[test]
+    fn dsh_qualified_version_is_the_only_copy() {
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../../package.json")).unwrap();
+        let engines = manifest["engines"]["dsh"].as_str().unwrap();
+        assert_eq!(
+            engines,
+            format!(">={DSH_QUALIFIED} <0.3.0"),
+            "package.json engines.dsh must admit exactly the qualified DSH floor"
+        );
+        let doc = include_str!("../../../../docs/agents/dsh.md");
+        assert!(
+            doc.contains(&format!("Profile plugin: {DSH_QUALIFIED}")),
+            "docs/agents/dsh.md must name the qualified DSH version"
+        );
+    }
     #[test]
     fn input_projection_distinguishes_unknown_empty_and_schema_limits() {
         for agent in AGENTS {

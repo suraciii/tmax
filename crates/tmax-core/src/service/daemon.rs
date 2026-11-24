@@ -258,7 +258,8 @@ impl Daemon {
         }
     }
     pub(super) fn view(&self) -> Value {
-        let identity = json!({"config_path":self.store.root.join("tmax.toml"),"process_instance":self.process,"pid":std::process::id(),"executable_version":env!("CARGO_PKG_VERSION"),"management_protocol_version":MANAGEMENT_PROTOCOL,"loaded_revision":self.loaded.as_ref().map(|v|&v.1)});
+        let image = super::running_image();
+        let identity = json!({"config_path":self.store.root.join("tmax.toml"),"process_instance":self.process,"pid":std::process::id(),"executable_version":env!("CARGO_PKG_VERSION"),"executable_path":image.map(|(path,_)|path),"executable_sha256":image.map(|(_,digest)|digest),"management_protocol_version":MANAGEMENT_PROTOCOL,"loaded_revision":self.loaded.as_ref().map(|v|&v.1)});
         let surface = |s: &Option<Surface>| {
             s.as_ref().map_or_else(||json!({"state":"stopped","listen":null,"url":null}),|s|json!({"state":if s.task.is_finished(){"unavailable"}else{"running"},"listen":s.address.to_string(),"url":format!("http://{}",s.address)}))
         };

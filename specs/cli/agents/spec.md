@@ -277,11 +277,17 @@ installation is not checked and reports `state: not_checked`, `version: null`,
 and reason code `native_scope_unavailable`.
 
 Applying configuration is a declared-target file edit and does not require or
-probe the tool executable, except for OpenCode schema detection. A positively
-detected OpenCode 1.x schema reports `native_schema_incompatible`, exit 3, and no
-native writes. Missing or unknown versions do not block application. Apply
-results contain no installation evidence or version warnings; neither
-`native_version_unverified` nor `native_executable_not_found` is emitted.
+probe the tool executable, except for OpenCode schema detection and the DSH
+version floor. A positively detected OpenCode 1.x schema reports
+`native_schema_incompatible`, exit 3, and no native writes. A positively detected
+DSH older than the one qualified version reports `native_version_unqualified` with
+the detected and qualified versions, exit 3, and no native writes; a dry run
+reports the same blocker instead of ready. tmax supports only that qualified DSH
+version and newer; `package.json` `engines.dsh` refuses an older DSH at
+installation. Missing or unknown versions do not block application. Apply
+results contain no installation evidence or version warnings beyond these
+blockers; neither `native_version_probe_failed` nor
+`native_executable_not_found` is emitted.
 Operations that execute the tool's own commands, such as browser login, require
 the executable and report `native_not_installed` when it is absent.
 
