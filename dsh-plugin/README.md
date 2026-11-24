@@ -9,10 +9,11 @@ tmax's effect-free inventory — `agent list`, `agent inspect`, `status`,
 configuration authority.
 
 Qualified against DSH **0.2.3-alpha.2** and tmax **0.1.0**: the plugin's host and
-client API fit, the composed inventory read model, and the action and command
-tests were exercised at that revision. The package declares `engines.dsh`
-`>=0.2.3-alpha.2 <0.3.0`; no other DSH version has been tested. The contract is
-owned by the
+client API fit, the composed inventory read model, the action and command tests,
+and a temporary-profile page render with a synthetic inventory were exercised at
+that revision. The render did not use a real format-2 tmax store. The package
+declares `engines.dsh` `>=0.2.3-alpha.2 <0.3.0`; no other DSH version has been
+tested. The contract is owned by the
 [DSH plugin specification](../specs/integrations/dsh-plugin/spec.md); the
 [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits) records what
 was and was not exercised, including the browser surfaces that remain
@@ -42,9 +43,10 @@ dsh plugin --profile web add https://github.com/suraciii/tmax
 ```
 
 Restart or refresh DSH Web, then open **tmax** in the sidebar panel list, beside
-Plugins and Schedules. The plugin needs a `tmax` executable on `PATH` plus a
-configured DSH target and gateway. Updates follow the repository's default
-branch; uninstall removes the profile dependency:
+Plugins and Schedules. The plugin needs a `tmax` executable on `PATH` and a
+configured DSH target; a configured gateway is needed to serve models, not to
+load or read the page. Updates follow the repository's default branch; uninstall
+removes the profile dependency:
 
 ```sh
 dsh plugin --profile web update tmax
@@ -135,15 +137,18 @@ blocker.
 ## Apply
 
 On the **tmax** page, select **Apply**. This first requests a preview
-(`{"preview": true}`, or `POST /_tmax/connect?dry-run=1`), which runs
-`tmax agent apply TARGET --dry-run` and writes nothing; the preview discloses the
-planned native writes, secret reads, started processes, created locks, and the
-files it would change. **Apply** then runs `tmax agent apply TARGET`, writing the
-target's native DSH files: the home `cordis.patch.yml` entry, the `tmax-dsh.mjs`
-artifact, and the credential reference in the adjacent `.credentials.yaml`. The
-result reports changed and unchanged files, applied state, recovery, blockers,
-next actions, and effects. The key never enters the browser, a log, or a
-response, and native file contents never cross.
+(`POST /_tmax/connect` with `{"dryRun": true}`, `{"preview": true}`, or
+`?dry-run=1`/`?preview=1`), which runs `tmax agent apply TARGET --dry-run` and
+writes nothing; the preview discloses the planned native writes, secret reads,
+started processes, created locks, and the files it would change. **Apply** then
+sends `{"dryRun": false}` (or `{"preview": false}`) and runs
+`tmax agent apply TARGET`, writing the target's native DSH files: the home
+`cordis.patch.yml` entry, the `tmax-dsh.mjs` artifact, and the credential
+reference in the adjacent `.credentials.yaml`. A request that states neither a
+preview nor an execution boolean is refused before any tmax call, and a preview
+query never executes. The result reports changed and unchanged files, applied
+state, recovery, blockers, next actions, and effects. The key never enters the
+browser, a log, or a response, and native file contents never cross.
 
 The terminal equivalents are:
 
@@ -204,12 +209,13 @@ The outcomes are distinct:
   itself failed (typed result and state when a read is available).
 
 A fresh state is a new read after the attempt, not the cached pre-action model.
-Action paths are covered by host/action tests; the pre-port temporary-profile
-HTTP checks are recorded in the [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits).
+Action paths are covered by host/action tests; the temporary-profile HTTP checks
+are recorded in the [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits).
 The pre-port page was rendered in both light and dark themes and in English and
-Chinese locales; browser clicks on action controls, non-dry-run actions, and
-seat interactions beyond the sidebar marker and gateway card have not been
-browser-verified.
+Chinese locales, and the ported page was rendered in a temporary profile with a
+synthetic inventory executable. Browser clicks on action controls, non-dry-run
+actions, and seat interactions beyond the sidebar marker and gateway card have
+not been browser-verified.
 
 ## The page
 
@@ -288,10 +294,12 @@ read keeps the last good table and shows the failure next to it.
 The plugin also adds four small surfaces to DSH's own pages. Each registers on a
 declared slot only when the DSH composition provides it; missing packages simply
 mean that seat is absent, and the plugin page keeps working. The bundle injects
-the DSH client packages it needs: `dsh-client-locale`, `dsh-client-ui-sidebar`,
-`dsh-client-ui-layout`, `dsh-client-ui-conversation`,
-`dsh-client-ui-model-selection`, `dsh-client-ui-settings-models`, and
-`dsh-client-ui-tool`.
+the DSH client packages it needs: `@deepseek-ai/dsh-client-locale`,
+`@deepseek-ai/dsh-client-ui-sidebar`, `@deepseek-ai/dsh-client-ui-layout`,
+`@deepseek-ai/dsh-client-ui-conversation`,
+`@deepseek-ai/dsh-client-ui-model-selection`,
+`@deepseek-ai/dsh-client-ui-settings-models`, and
+`@deepseek-ai/dsh-client-ui-tool`.
 
 | Seat | Where it appears | What it does |
 | --- | --- | --- |
@@ -369,10 +377,9 @@ JSON media-type, 16 KiB body-size, and single-flight checks to its POST actions.
 | `GET /_tmax/dsh-usage` | First-generation cached readings for providers this DSH profile configures. Reads cached state only and never observes. |
 | `GET /_tmax/history` | Explicit retained-history read. One read-only `tmax history list` (45 s) mapped to `{ ok, generatedAt, coverage, records, truncated?, omitted? }` with at most 50 compact rows; a typed unavailable daemon/history answer is `200` with `ok:false` and its reason (never an empty history), while a missing transport envelope is `502` `history_unavailable`. Bodies, headers, URLs, and secrets never cross. |
 | `POST /_tmax/observe` | Explicit observation. Body `{ "scope": "all", "dryRun": false }`, where `scope` is `all`, `tmax`, or `agent`. Returns per-provider outcomes and fresh state: `200` when no item failed, `207` when one did, `409` when an observation is already running, and `502` when the host cannot run the observation at all. |
-| `POST /_tmax/connect` | Explicit Apply. Body `{ "dryRun": true }` previews through `tmax agent apply TARGET --dry-run`; `{ "dryRun": false }` executes. Returns the typed result and fresh state (`200`). A typed refusal from tmax is `409` with the refusal and fresh state; an unresolved target is `409` with its typed code and writes nothing; a busy Apply is `409` `busy` with no state; a transport failure, timeout, or output that is not a JSON envelope is `502` `connect_unavailable`. |
+| `POST /_tmax/connect` | Explicit Apply. Body `{ "dryRun": true }` or `{ "preview": true }` previews through `tmax agent apply TARGET --dry-run`; `{ "dryRun": false }` or `{ "preview": false }` executes; a `?dry-run=1`/`?preview=1` query previews only. A request that states neither preview nor execution is `400` `invalid_dry_run` before any tmax call. Returns the typed result and fresh state (`200`). A typed refusal from tmax is `409` with the refusal and fresh state; an unresolved target is `409` with its typed code and writes nothing; a busy Apply is `409` `busy` with no state; a transport failure, timeout, or output that is not a JSON envelope is `502` `connect_unavailable`. |
 | `POST /_tmax/action` | The allowlisted action surface used by the page for provider and management actions. Body `{ "action": "...", "provider"?: "...", "scope"?: "...", "dryRun": true }` for `connect`, `observe_provider`, `resume_quota`, `reset_failure`, `open_management`, `gateway_start`, `gateway_stop`, and `gateway_restart`. `200`: typed `result` plus fresh state. `409`: typed refusal plus fresh state, or an unknown-provider, gateway guard, or busy refusal with neither. `400`: invalid request with neither. `502`: `state_unavailable` with neither, or a transport/no-envelope failure with a typed `result` and state when a read is available. |
-| `POST /_tmax/usage/refresh` | First-generation explicit tmax observation. Same rules as the `tmax` scope of `/_tmax/observe`; a `dryRun`/`preview` body or `?dry-run=1`/`?preview=1` performs no real
-observation. |
+| `POST /_tmax/usage/refresh` | First-generation explicit tmax observation. Same rules as the `tmax` scope of `/_tmax/observe`; a `dryRun`/`preview` body or `?dry-run=1`/`?preview=1` performs no real observation. |
 
 `POST /_tmax/connect` and `POST /_tmax/observe` remain supported compatibility
 forms: the page's Apply and Refresh still use them, and provider, gateway, or
@@ -442,10 +449,13 @@ projection means changing that fixture, which breaks the other side's test.
   actions; Open management starts or reuses the management listener only.
 - The sidebar marker and gateway card were seen in a real temporary DSH page
   render of the pre-port host read model, in both light and dark themes and in
-  English and Chinese locales. The ported read model is covered by host tests;
-  the settings footer, model option and pane, tool card, `/tmax` command
-  invocation, a successful history-table load, and non-dry-run actions have not
-  been browser-verified.
+  English and Chinese locales. The ported page was also rendered in a temporary
+  DSH 0.2.3-alpha.2 profile with a synthetic inventory executable: `GET
+  /_tmax/state` returned 200 with `diagnostics.readModel: "inventory"`, and the
+  page rendered with route and gateway facts and action controls. No real
+  format-2 tmax store was available. The settings footer, model option and pane,
+  tool card, `/tmax` command invocation, a successful history-table load, and
+  non-dry-run actions have not been browser-verified.
 - Install/uninstall stays with DSH; tmax does not manage DSH profiles.
 
 ## License

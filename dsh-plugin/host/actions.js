@@ -278,9 +278,11 @@ export function resultFromEnvelope(envelope) {
  * @param {Set<string>} [input.locks] - single-flight set shared with the legacy routes
  * @param {(message: string) => void} [input.log]
  * @param {object} [input.env]
+ * @param {() => Promise<object|undefined>} [input.refreshOwnership] - re-read the
+ *   home integration and ownership decision after a completed operation
  * @returns {{run: (body: object) => Promise<{status: number, body: object}>}}
  */
-export function createActionService({ config = {}, snapshot, locks = new Set(), log, env = process.env } = {}) {
+export function createActionService({ config = {}, snapshot, locks = new Set(), log, env = process.env, refreshOwnership } = {}) {
   // The route table shares this set, so an action and its legacy route form are
   // the same operation: one connect, one observation, one repair per provider.
   const running = locks
@@ -415,6 +417,16 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
     running.add(key)
     try {
       const read = await readEnvelope(config, plan.argv, { timeoutMs: plan.timeoutMs, env })
+      if (read.envelope !== undefined) {
+        // A completed operation may have written native files (connect is the
+        // only such action today). Re-read the home facts before composing the
+        // state this response carries; a failed re-read keeps the last decision.
+        try {
+          await refreshOwnership?.()
+        } catch (error) {
+          log?.(`action ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
       const result = resultFromEnvelope(read.envelope)
       const state = await freshState(current)
       if (read.envelope === undefined) {

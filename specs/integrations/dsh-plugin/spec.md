@@ -47,8 +47,8 @@ authority.
 6. The plugin does not author tmax configuration or manage DSH profiles. Apply is
    tmax's own previewed native-application operation invoked through the page; it
    is not a plugin-authored file format.
-7. Every action is allowlisted and previewed. The browser names one action and
-   closed operands, never a command, flag, or path.
+7. Every action the page offers is allowlisted and previewed. The browser names
+   one action and closed operands, never a command, flag, or path.
 8. The read model source is explicit: `diagnostics.readModel` reports
    `inventory`, the composition of effect-free tmax reads. There is no snapshot
    source and no fallback source; a failed read is a visible error, never an
@@ -210,10 +210,11 @@ Page:
 
 ## Route ownership
 
-The ownership rule, the profile-scoped fallback exception, the `manageRoutes`
-modes, the conflict blocker, and the reload transition are owned by the shared
-[DSH plugin boundary](../spec.md#dsh-plugin-boundary). This contract owns what the
-page reports and offers.
+This contract owns the profile-scoped fallback exception: when the page may
+register the projected routes, how it keeps them while an installed home
+integration waits for a DSH reload, and what the page reports and offers. The
+shared [DSH plugin boundary](../spec.md#dsh-plugin-boundary) owns the
+`manageRoutes` modes and the conflict blocker.
 
 - The page reports the active owner (`home`, `page`, `other`, `none`, `unknown`),
   the scope (`home_wide`, `profile_scoped`), and the two home facts `entry` and
@@ -343,6 +344,11 @@ POST /_tmax/connect
 { "dryRun": true }
 ```
 
+The request states its intent explicitly with a `dryRun` or `preview` boolean:
+`true` previews and `false` executes; a preview statement wins when the two
+forms disagree. A `?dry-run=1`/`?preview=1` query previews only. A request that
+states neither is refused with `400` `invalid_dry_run` before any tmax call.
+
 - The preview runs `tmax agent apply TARGET --dry-run`. It must not write, read a
   secret, or resolve one, and it discloses the planned native writes, secret
   reads, processes started, locks created, and files it would change.
@@ -408,8 +414,9 @@ Rules:
   daemon is identified. No evidence, no action.
 - A provider operand must be exactly one provider id from the current read model.
   Anything else is refused before argv. `scope` is a closed set.
-- `dryRun: true` previews; `dryRun: false` executes. Every action previews before
-  it executes, and the page must not chain one action into another.
+- `dryRun: true` previews; `dryRun: false` executes. Every action the page offers
+  previews before it executes, and the page must not chain one action into
+  another.
 - Single-flight is shared across the action and compatibility forms: connect,
   whole-surface observation, per-provider observation, and each provider's
   repair respect one lock set, so a second concurrent attempt is refused as
@@ -482,14 +489,14 @@ row says otherwise; it is never a stand-in for zero or for an empty list.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `ok` | boolean | Whether the host produced a usable read model. `false` only when the target inventory could not be read. Section-level failures inside a usable model are reported in `errors` and do not hide the model; an invalid configuration is reported inside `config`. |
+| `ok` | boolean | Whether the host produced a usable read model. A failed target inventory keeps `ok` true when the provider-list or configuration-validation read answered, and sets it false only when neither answered; the failure is still a `projection` error with a null target. Section-level failures inside a usable model are reported in `errors` and do not hide the model; an invalid configuration is reported inside `config`. |
 | `errors` | array of `{section, code, message}` (strings) | One entry per failed section read. Sections are `projection` (the target inventory and route source), `authority` (tmax data directory and CLI version), `providers`, `gateway`, and `config`; an unavailable agent-settings read is reported under `providers`. Empty when every read answered. Per-provider and per-model failures stay in their own records; this list is for section-level reads only. A section must show its own entry and must not render an empty result in place of a failed read. |
 | `schemaVersion` | integer | Plugin state schema, currently `1`. |
 | `generatedAt` | string | RFC 3339 time when the host composed this state. |
 | `configurationRevision` | string or null | tmax saved-configuration revision. |
 | `tmaxVersion` | string or null | Producing CLI version. |
 | `authority` | string or null | tmax data directory. |
-| `target` | object or null | Target dossier: `id` and `path` (string or null), `default` (object or null), `nativeDefault` (object or null), `effectiveDefault` (object or null), `appliedState` (string or null), `pendingNativeChanges` (object, array, or null), `blockers` (array of `{code, message}`), and `installation` (`{version, state, source}` with string or null members, or null). A failed target inventory yields `ok: false` with a `projection` error and a null target; a missing native default stays null and is not an error. |
+| `target` | object or null | Target dossier: `id` and `path` (string or null), `default` (object or null), `nativeDefault` (object or null), `effectiveDefault` (object or null), `appliedState` (string or null), `pendingNativeChanges` (object, array, or null), `blockers` (array of `{code, message}`), and `installation` (`{version, state, source}` with string or null members, or null). A failed target inventory yields a `projection` error and a null target; `ok` stays true when the provider-list or configuration-validation read answered and is false only when neither answered. A missing native default stays null and is not an error. |
 | `ownership` | object | `mode` (`"auto"`, `true`, or `false`), `owner` (`home`, `page`, `other`, `none`, or `unknown`), `scope` (`home_wide`, `profile_scoped`, or null), `reason` (string or null), `homeIntegration` (`present`, `entry`, `artifact` booleans), and `conflict` (`{code, message, routes?}` or null). With `mode` `false` and no home integration, `reason` is `route_management_disabled`: the page registers nothing and offers no Apply. |
 | `gateway` | object or null | `configured` and three-valued `ready` (boolean or null), `listen` (string or null), `daemonDiscoveryState` (`identified`, `unidentified`, or `unknown`), `reasonCode` (string or null), `supervision` (`state`, `reasonCode` strings or null), `autostart` (`savedIntent` boolean or null; `registration` string or null; `unitMatches` boolean or null), and `sharedKey` (`loadedState` `loaded`, `absent`, or `unknown`; `reasonCode` string or null). |
 | `config` | object | `state` (`valid`, `invalid`, or `unavailable`), `revision` (string or null), and `errors` (array of `{code, message}`). An absent saved configuration is a valid empty configuration; a missing revision stays null rather than invented. |

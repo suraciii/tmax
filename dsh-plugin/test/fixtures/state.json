@@ -361,7 +361,7 @@
         },
         "lastProjectionAt": "2026-11-23T10:14:31Z",
         "lastError": null,
-        "readModel": "snapshot"
+        "readModel": "inventory"
       }
     }
   }

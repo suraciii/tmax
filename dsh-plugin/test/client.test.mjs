@@ -819,6 +819,17 @@ test('next action is the one step that can change the reported state', async () 
   const unconfigured = { provider: 'tmax', credentialConfigured: false, active: false }
 
   assert.deepEqual(nextAction({ phase: 'failed' }), { kind: 'retry' })
+  // A failed read never offers a write, even with a last-known good state: the
+  // evidence on screen is stale, so the one honest next step is a fresh read.
+  assert.deepEqual(
+    nextAction({ phase: 'failed', value: { ok: true, routes: [], ownership: page } }),
+    { kind: 'retry' })
+  assert.deepEqual(
+    nextAction({ phase: 'failed', value: { ok: true, routes: [{ provider: 'tmax', credentialConfigured: false, active: false }], ownership: page } }),
+    { kind: 'retry' })
+  assert.deepEqual(
+    nextAction({ phase: 'failed', value: { ok: true, routes: [live], ownership: page, gateway: { ready: false }, config: { state: 'valid' } } }),
+    { kind: 'retry' })
   // No ownership evidence is not a reason to offer a write.
   assert.equal(nextAction({ phase: 'ready', value: { ok: true, routes: [] } }), undefined)
   assert.deepEqual(nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: page } }), { kind: 'connect' })
@@ -1310,6 +1321,26 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
   }
 })
 
+test('Diagnostics names the host read-model source', async () => {
+  const page = await mountPage(withState(connected))
+  try {
+    // The contract names its read source explicitly; the page must show it.
+    assert.match(textOf(await page.mount()), /readModelSource inventory/)
+  } finally {
+    page.restore()
+  }
+  // A state that omits the source is unknown, never an inferred inventory.
+  const absent = await mountPage(withState({
+    ...connected,
+    diagnostics: { ...connected.diagnostics, readModel: undefined },
+  }))
+  try {
+    assert.match(textOf(await absent.mount()), /readModelSource unknown/)
+  } finally {
+    absent.restore()
+  }
+})
+
 test('a registered route without a credential is not "connected"', async () => {
   const unusable = {
     ...connected,
@@ -1549,6 +1580,22 @@ test('a failed provider read does not hide live routes or claim an empty list', 
   }
 })
 
+test('readable empty provider lists say none instead of unknown or not reported', async () => {
+  // A readable empty list is a reported zero; it is not an unknown quota and
+  // not a section that failed to report.
+  const empty = { ...connected, providers: { tmax: [], agent: [] }, errors: [] }
+  const page = await mountPage(withState(empty))
+  try {
+    const text = textOf(await page.mount())
+    assert.match(text, /tmaxProvidersNone/)
+    assert.match(text, /agentProvidersNone/)
+    assert.doesNotMatch(text, /unknownQuota/)
+    assert.doesNotMatch(text, /notReported/)
+  } finally {
+    page.restore()
+  }
+})
+
 test('manageRoutes=false with no home integration explains itself', async () => {
   const state = {
     ...connected,
@@ -1701,6 +1748,83 @@ test('a failed refresh keeps the old table and names the failure', async () => {
     // says the table is last-known rather than current.
     assert.match(text, /Kimi Coding Plan/)
     assert.match(text, /stateLastKnown/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a failed read withdraws Apply and leaves only a read retry', async () => {
+  const pageOwned = {
+    ...connected,
+    routes: [],
+    target: { ...connected.target, blockers: [] },
+    ownership: {
+      owner: 'page', scope: 'profile_scoped', reason: null,
+      homeIntegration: { present: false, entry: false, artifact: false }, conflict: null, mode: 'auto',
+    },
+  }
+  const page = await mountPage(async record => {
+    if (pathOf(record) === '/_tmax/state') return { status: 200, body: pageOwned }
+    if (pathOf(record) === '/_tmax/observe') {
+      return { status: 502, body: { ok: false, code: 'observe_unavailable', message: 'transport failed' } }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const ready = await page.mount()
+    // The ready state's next action is Apply.
+    assert.ok(buttonByText(ready, 'connect'), 'a ready page-owned state offers Apply')
+    const failed = await page.click('refresh')
+    const text = textOf(failed)
+    assert.match(text, /stateLastKnown/)
+    // The last-known state is stale evidence: no write may be offered from it.
+    assert.equal(buttonByText(failed, 'connect'), undefined, 'a failed read withdraws Apply')
+    assert.ok(buttonByText(failed, 'retry'), 'the only next action is the read retry')
+    // That retry is one GET; it never observes or writes.
+    const before = page.calls.length
+    await page.click('retry')
+    const last = page.calls[page.calls.length - 1]
+    assert.equal(page.calls.length, before + 1)
+    assert.equal(last.method, 'GET')
+    assert.equal(pathOf(last), '/_tmax/state')
+  } finally {
+    page.restore()
+  }
+})
+
+test('a later refused read keeps the last good table and names its section errors', async () => {
+  let phase = 'good'
+  const refused = {
+    ok: false,
+    schemaVersion: 1,
+    errors: [{ section: 'projection', code: 'inventory_unavailable', message: 'inventory read failed' }],
+    target: null,
+    routes: [],
+    routing: [],
+    providers: { tmax: [], agent: [] },
+    diagnostics: { lastError: null },
+  }
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: phase === 'good' ? connected : refused }
+    if (path === '/_tmax/observe') {
+      return { status: 502, body: { ok: false, code: 'observe_unavailable', message: 'transport failed' } }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    await page.mount()
+    assert.match(textOf(await page.click('refresh')), /stateLastKnown/)
+    phase = 'refused'
+    const tree = await page.click('retry')
+    const text = textOf(tree)
+    // A refused read model does not clear the last good table...
+    assert.match(text, /Kimi Coding Plan/)
+    assert.match(text, /stateLastKnown/)
+    // ...and the refused read's own section failure is named beside it.
+    assert.match(text, /readFailed: inventory_unavailable/)
+    assert.match(text, /inventory read failed/)
+    assert.equal(buttonByText(tree, 'connect'), undefined, 'a refused read offers no write')
   } finally {
     page.restore()
   }
@@ -3206,6 +3330,8 @@ test('history mapping is bounded, gap-aware, and metadata-only', async () => {
 
   const coverage = pure.historyCoverageLines({
     process_instance: 'proc-1',
+    process_started_at: '2026-11-23T08:00:00Z',
+    last_clear_at: '2026-11-23T08:30:00Z',
     retained_count: 4,
     evicted: 2,
     incomplete_capture: 1,
@@ -3213,20 +3339,36 @@ test('history mapping is bounded, gap-aware, and metadata-only', async () => {
     direct_traffic_coverage: 'unobserved',
     oldest: '2026-11-23T09:00:00Z',
     newest: '2026-11-23T10:19:00Z',
+    limits: { records: 1000, record_bytes: 1048576 },
     retention: 'oldest terminal record evicted first; no disk history',
     gaps: ['no prior process history'],
   }, t)
   const flat = coverage.map(line => `${line.label}: ${line.value}${line.gap === true ? ' (gap)' : ''}`).join(' | ')
   assert.match(flat, /historyProcess: proc-1/)
+  assert.match(flat, /historyProcessStarted: /)
+  assert.match(flat, /historyLastClear: /)
   assert.match(flat, /historyRetained: 4/)
   assert.match(flat, /historyEvicted: 2 \(gap\)/)
   assert.match(flat, /historyIncomplete: 1 \(gap\)/)
   assert.match(flat, /historyPriorProcesses: unavailable \(gap\)/)
   assert.match(flat, /historyDirectTraffic: unobserved \(gap\)/)
+  // Storage limits are part of the coverage the host reports.
+  assert.match(flat, /historyLimits: historyLimitRecords \S+ · historyLimitBytes \S+/)
   assert.match(flat, /historyRetention: oldest terminal record evicted first/)
   assert.match(flat, /historyGap: no prior process history \(gap\)/)
   // The host's camelCase mapping works too.
   assert.match(pure.historyCoverageLines({ processInstance: 'p2', retainedCount: 1 }, t).map(line => line.value).join(','), /p2,1/)
+  assert.match(pure.historyCoverageLines({
+    processStartedAt: '2026-11-23T08:00:00Z',
+    lastClearAt: '2026-11-23T08:30:00Z',
+    limits: { records: 7, recordBytes: 4096 },
+  }, t).map(line => `${line.label}: ${line.value}`).join(' | '),
+  /historyProcessStarted: .*historyLastClear: .*historyLimits: historyLimitRecords \S+ · historyLimitBytes \S+/)
+  // Unreported process times and limits are omitted, never invented.
+  const bare = pure.historyCoverageLines({ retainedCount: 1 }, t)
+  assert.equal(bare.some(line => line.label === 'historyProcessStarted'), false)
+  assert.equal(bare.some(line => line.label === 'historyLastClear'), false)
+  assert.equal(bare.some(line => line.label === 'historyLimits'), false)
   // Absent coverage is unknown, not an empty history.
   assert.deepEqual(pure.historyCoverageLines(undefined, t),
     [{ label: 'historyCoverage', value: 'historyUnknown', gap: true }])
@@ -3282,6 +3424,8 @@ test('Load history renders coverage, gaps, a capped table, and retained overflow
     generatedAt: '2026-11-23T10:20:00Z',
     coverage: {
       process_instance: 'proc-1',
+      processStartedAt: '2026-11-23T08:00:00Z',
+      lastClearAt: '2026-11-23T08:30:00Z',
       prior_process_coverage: 'unavailable',
       direct_traffic_coverage: 'unobserved',
       retained_count: 28,
@@ -3289,6 +3433,7 @@ test('Load history renders coverage, gaps, a capped table, and retained overflow
       incomplete_capture: 1,
       oldest: '2026-11-23T09:00:00Z',
       newest: '2026-11-23T10:19:00Z',
+      limits: { records: 1000, recordBytes: 1048576 },
       retention: 'oldest terminal record evicted first; no disk history',
     },
     records,
@@ -3314,6 +3459,12 @@ test('Load history renders coverage, gaps, a capped table, and retained overflow
     assert.match(text, /historyDirectTraffic/)
     assert.match(text, /historyRetained/)
     assert.match(text, /historyIncomplete/)
+    // The host's process times and storage limits are coverage evidence too.
+    assert.match(text, /historyProcessStarted/)
+    assert.match(text, /historyLastClear/)
+    assert.match(text, /historyLimits/)
+    assert.match(text, /historyLimitRecords/)
+    assert.match(text, /historyLimitBytes/)
     const gapChips = collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-chip' && textOf(node).trim() === 'historyGap')
     assert.ok(gapChips.length >= 3, 'the material gaps are marked')
     // 20 rows at most, with the index-19 row present and index-20 absent.

@@ -69,13 +69,18 @@ against synthetic loopback endpoints. Apply/restore preserved profile files and
 unrelated home state. DSH is not part of the earlier five-agent acceptance, and
 local runtime success does not establish hosted-provider entitlement.
 
-The DSH profile bundle has its own 2026-11-23 qualification at DSH 0.2.3-alpha.2:
-the plugin's host and client API fit, the composed inventory read model, the
-action and command tests, and a pre-port temporary-profile page render were
-exercised. Its [reference](dsh.md) records the exact browser surfaces that were
-and were not verified; the bundle's page, seats, command, and history evidence
-does not qualify native inference or hosted-provider access, and the ported
-inventory-backed read model has been covered by host and client tests only.
+The DSH profile bundle has separate 2026-11-23 and 2026-11-24 qualifications at
+DSH 0.2.3-alpha.2. The 2026-11-23 rows record host and client API fit and a
+pre-port temporary-profile page render of the earlier snapshot-backed read model.
+The 2026-11-24 rows record the ported inventory read model, the action, command,
+history, and observation test contracts, and a temporary-profile page render of
+the ported root package with a synthetic inventory executable (`GET
+/_tmax/state` 200, `diagnostics.readModel` `inventory`, page rendered). That
+render did not use a real format-2 tmax store and did not exercise browser
+clicks, non-dry-run operations, the settings footer, the model option and pane,
+the tool card, or a successful history-table load. Its [reference](dsh.md)
+records the exact browser surfaces that were and were not verified; none of this
+evidence qualifies native inference or hosted-provider access.
 
 ## Safe scope and credential boundaries
 

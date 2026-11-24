@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -312,6 +312,10 @@ function connectDryRun() {
       files: [{ path: '/tmp/dsh/cordis.patch.yml', revision: 'a' }],
       credentials: { resolved: false },
       effects: { native_writes: false, secret_reads: false, processes_started: false, locks_created: false },
+      key: 'sk-live-CONNECT-SECRET',
+      token: { value: 'sk-live-CONNECT-SECRET' },
+      nested: { password: 'sk-live-CONNECT-SECRET' },
+      reference: 'TMAX_TEST',
     },
   }
 }
@@ -331,6 +335,10 @@ function connectExec() {
       unchanged_files: [],
       recovery: 'recovery-1',
       fact_gaps: [],
+      key: 'sk-live-CONNECT-SECRET',
+      token: { value: 'sk-live-CONNECT-SECRET' },
+      nested: { password: 'sk-live-CONNECT-SECRET' },
+      reference: 'TMAX_TEST',
     },
   }
 }
@@ -438,6 +446,14 @@ if (typeof body.__raw === 'string') {
   process.stdout.write(body.__raw)
   process.exit(body.__exit === undefined ? 4 : body.__exit)
 }
+const writes = (scenario.writeFiles || {})[argv.join(' ')]
+if (Array.isArray(writes)) {
+  const path = require('node:path')
+  for (const file of writes) {
+    fs.mkdirSync(path.dirname(file.path), { recursive: true })
+    fs.writeFileSync(file.path, file.content)
+  }
+}
 const exitCode = body.__exit === undefined ? (body.status === 'success' || body.status === 'dry_run' ? 0 : 4) : body.__exit
 const envelope = { ...body }
 delete envelope.__exit
@@ -497,6 +513,7 @@ function fakeContext({
   agentDefault = { provider: 'tmax', model: 'gpt-6.1-sol' },
   settingsDescribe = () => [],
   configurableProviders = () => [],
+  describeThrows = false,
   throwDuplicate = false,
   throwOnReplace = false,
   settingsUnavailable = false,
@@ -575,7 +592,10 @@ function fakeContext({
       if (resolveCredential !== undefined) return resolveCredential()
       return credential === null ? undefined : { value: credential }
     },
-    describe: async ref => ({ configured: configuredRefs.includes(ref) }),
+    describe: async ref => {
+      if (describeThrows) throw new Error('credential store unavailable')
+      return { configured: configuredRefs.includes(ref) }
+    },
   }
   const services = {
     credentials: credentialsService,
@@ -896,12 +916,7 @@ test('state matches the reviewed fixture shape, registers profile routes, and ke
   // compare it against the fixture's not-yet-observed record.
   const expectedShape = structuredClone(fixtureCase)
   expectedShape.providers.agent = [fixtureCase.providers.agent[1]]
-  // `diagnostics.readModel` is the read-source marker; the reviewed fixture
-  // predates it, so compare the reviewed keys and assert the marker separately.
-  delete expectedShape.diagnostics.readModel
-  const shapeCandidate = structuredClone(result)
-  delete shapeCandidate.diagnostics.readModel
-  assertShape(shapeCandidate, expectedShape)
+  assertShape(result, expectedShape)
   assert.equal(result.diagnostics.readModel, 'inventory', 'the state names its inventory source')
 
   // Contract values the fixture states explicitly.
@@ -1014,6 +1029,52 @@ test('no declared target matching the DSH home is a visible typed error', async 
   assert.ok(status.blockers.some(blocker => blocker.source === 'projection' && blocker.code === 'unknown_resource'))
 })
 
+test('target resolution compares the DSH home across spellings and refuses another dsh path', async () => {
+  // A trailing slash on the declared target path is the same directory.
+  const home = await emptyHome()
+  const slashScenario = baseScenario()
+  slashScenario.agentList = {
+    code: 'ok',
+    status: 'success',
+    data: { agents: [{ target: 'dsh-slash', agent: 'dsh', path: `${home}/` }] },
+  }
+  slashScenario.agentInspect.data.target = 'dsh-slash'
+  const slash = await applied({ scenario: slashScenario, config: { home } })
+  const slashBody = (await getJson(slash.state, '/_tmax/state')).body
+  assert.deepEqual(slashBody.errors, [])
+  assert.equal(slashBody.target.id, 'dsh-slash')
+
+  // A symlinked DSH home resolves to the declared real path.
+  const real = await mkdtemp(join(tmpdir(), 'tmax-real-home-'))
+  const link = `${real}-link`
+  await symlink(real, link, 'dir')
+  const symScenario = baseScenario()
+  symScenario.agentList = {
+    code: 'ok',
+    status: 'success',
+    data: { agents: [{ target: 'dsh-real', agent: 'dsh', path: real }] },
+  }
+  symScenario.agentInspect.data.target = 'dsh-real'
+  const symlinked = await applied({ scenario: symScenario, config: { home: link } })
+  const symBody = (await getJson(symlinked.state, '/_tmax/state')).body
+  assert.deepEqual(symBody.errors, [])
+  assert.equal(symBody.target.id, 'dsh-real')
+
+  // One dsh target with a different path is not this home.
+  const other = baseScenario()
+  other.agentList = {
+    code: 'ok',
+    status: 'success',
+    data: { agents: [{ target: 'dsh-other', agent: 'dsh', path: '/tmp/some-other-dsh-home' }] },
+  }
+  const refused = await applied({ scenario: other })
+  assert.deepEqual(refused.state.routes, [])
+  const refusedBody = (await getJson(refused.state, '/_tmax/state')).body
+  assert.equal(refusedBody.target, null)
+  assert.deepEqual(refusedBody.errors.map(error => error.code), ['unknown_resource'])
+  assert.match(refusedBody.errors[0].message, /No declared DSH target matches/)
+})
+
 test('multiple targets matching the DSH home are an invalid-arguments error', async () => {
   const scenario = baseScenario()
   scenario.agentList = {
@@ -1091,12 +1152,17 @@ test('a missing tmax CLI does not fail activation and is reported as a blocker',
   assert.equal(status.statusCode, 200)
   assert.equal(status.body.ok, false)
   assert.match(status.body.lastError, /ENOENT|could not be executed/)
+  // The configured executable is a path, not evidence: it never reaches an
+  // HTTP body or the command output.
+  assert.equal(status.body.lastError.includes('/definitely/missing/tmax'), false)
+  assert.equal(status.body.lastError.includes('Command failed'), false)
   assert.ok(status.body.blockers.some(blocker => blocker.source === 'projection' && blocker.code === 'tmax_unavailable'))
   const stateBody = (await getJson(state, '/_tmax/state')).body
   // Nothing answered: the target, provider, and configuration reads each name
   // their own failure instead of one generic claim.
   assert.deepEqual([...new Set(stateBody.errors.map(error => error.section))].sort(), ['config', 'projection', 'providers'])
   assert.ok(stateBody.errors.every(error => typeof error.code === 'string' && error.code !== '' && typeof error.message === 'string'))
+  assert.equal(JSON.stringify(stateBody).includes('/definitely/missing/tmax'), false, 'no section error echoes the executable path')
   assert.equal(stateBody.diagnostics.readModel, 'inventory')
   const tool = state.tools.find(candidate => candidate.name === 'tmax_status')
   const value = await tool.execute()
@@ -1178,6 +1244,15 @@ test('gateway daemon and shared-key tokens use the page vocabulary', async () =>
   assert.deepEqual(body.diagnostics.history, { state: 'available', reasonCode: null })
 })
 
+test('a model whose native reasoning is disabled reports a known false', async () => {
+  const scenario = baseScenario()
+  scenario.agentInspect.data.native_projection[0].models[0].capabilities.reasoningEfforts = false
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.routes[0].models[0].id, 'public-model')
+  assert.equal(body.routes[0].models[0].capabilities.reasoningEfforts, false)
+})
+
 test('a configured gateway with no running daemon is not ready, not unknown', async () => {
   const scenario = baseScenario()
   scenario.gatewayStatus.data.daemon.discovery_state = 'absent'
@@ -1238,6 +1313,24 @@ test('routes without a credential reference or base URL are skipped with declare
   assert.equal(body.routes[1].credentialRef, null)
   assert.equal(body.routes[1].credentialConfigured, null)
   assert.deepEqual(body.routes[1].models.map(model => model.id), ['no-cred-model'])
+})
+
+test('route credential readiness distinguishes configured, missing, and unknown', async () => {
+  const configured = await applied()
+  const configuredBody = (await getJson(configured.state, '/_tmax/state')).body
+  assert.equal(configuredBody.routes[0].credentialConfigured, true)
+
+  // A readable store that reports the reference missing is a known false; the
+  // route is still registered, it is just not usable.
+  const missing = await applied({ context: { configuredRefs: [] } })
+  assert.deepEqual(missing.state.routes, ['tmax'])
+  const missingBody = (await getJson(missing.state, '/_tmax/state')).body
+  assert.equal(missingBody.routes[0].credentialConfigured, false)
+
+  // A store that cannot answer is unknown, never missing.
+  const unknown = await applied({ context: { describeThrows: true } })
+  const unknownBody = (await getJson(unknown.state, '/_tmax/state')).body
+  assert.equal(unknownBody.routes[0].credentialConfigured, null)
 })
 
 test('a malformed credential reference skips only that route with a declared blocker', async () => {
@@ -1921,6 +2014,32 @@ test('dsh-usage reports unavailable agent discovery', async () => {
   assert.deepEqual(body.providers.agent, [])
 })
 
+test('an unreadable provider directory is a providers section error, not a failed state read', async () => {
+  const { state } = await applied({
+    context: { configurableProviders: () => { throw new Error('provider directory unavailable') } },
+  })
+  const response = await getJson(state, '/_tmax/state')
+  assert.equal(response.statusCode, 200, 'one failed directory read does not fail the state')
+  assert.equal(response.body.ok, true)
+  assert.deepEqual(response.body.providers.agent, [])
+  assert.ok(response.body.errors.some(error => error.section === 'providers' && error.code === 'agent_settings_unavailable'))
+})
+
+test('agent observation without a readable settings service reports a failed item', async () => {
+  const { state } = await applied({ context: { settingsUnavailable: true } })
+  const result = await postJson(state, '/_tmax/observe', { scope: 'agent' })
+  assert.equal(result.statusCode, 207, 'an observation that attributed nothing is not success')
+  assert.equal(result.body.ok, false)
+  assert.deepEqual(result.body.items, [{
+    source: 'agent',
+    id: 'dsh:settings',
+    status: 'failed',
+    code: 'agent_settings_unavailable',
+    message: 'the DSH settings service is unavailable, so agent-configured providers cannot be observed',
+  }])
+  assert.ok(result.body.state, 'the response still carries state')
+})
+
 test('the legacy usage refresh route observes explicitly and reports per-item results', async () => {
   const { state } = await applied()
   const body = await postJson(state, '/_tmax/usage/refresh', {})
@@ -1984,6 +2103,10 @@ test('connect previews with --dry-run, executes without it, and returns state wi
   assert.equal(preview.body.ok, true)
   assert.equal(preview.body.dryRun, true)
   assert.deepEqual(preview.body.connect.effects, { native_writes: false, secret_reads: false, processes_started: false, locks_created: false })
+  assert.equal(preview.body.connect.reference, 'TMAX_TEST', 'a credential reference name is not a secret')
+  for (const key of ['key', 'token']) assert.equal(key in preview.body.connect, false, `${key} is stripped from a preview`)
+  assert.equal('password' in preview.body.connect.nested, false, 'nested secret material is stripped')
+  assert.equal(JSON.stringify(preview.body).includes('sk-live-CONNECT-SECRET'), false, 'no key material in a preview response')
   assert.ok(preview.body.state)
   let calls = await fake.calls()
   assert.deepEqual(
@@ -2005,7 +2128,10 @@ test('connect previews with --dry-run, executes without it, and returns state wi
     calls.find(argv => argv[0] === 'agent' && argv[1] === 'apply'),
     ['agent', 'apply', 'dsh-main'],
   )
-  assert.equal(JSON.stringify(executed.body).includes('gateway-key'), false)
+  assert.equal(executed.body.connect.reference, 'TMAX_TEST')
+  for (const key of ['key', 'token']) assert.equal(key in executed.body.connect, false, `${key} is stripped from an applied result`)
+  assert.equal('password' in executed.body.connect.nested, false)
+  assert.equal(JSON.stringify(executed.body).includes('sk-live-CONNECT-SECRET'), false, 'no key material in an applied response')
 
   // A refused connect is a 409 with the tmax blocker, still state-bearing.
   await fake.patch(current => {
@@ -2013,7 +2139,12 @@ test('connect previews with --dry-run, executes without it, and returns state wi
       code: 'target_incomplete',
       status: 'blocked',
       data: null,
-      blockers: [{ code: 'target_incomplete', message: 'This DSH target has no gateway route to connect' }],
+      blockers: [{
+        code: 'target_incomplete',
+        message: 'This DSH target has no gateway route to connect',
+        key: 'sk-live-CONNECT-SECRET',
+        token: { value: 'sk-live-CONNECT-SECRET' },
+      }],
       __exit: 3,
     }
   })
@@ -2023,6 +2154,9 @@ test('connect previews with --dry-run, executes without it, and returns state wi
   assert.equal(refused.body.code, 'target_incomplete')
   assert.equal(refused.body.message, 'This DSH target has no gateway route to connect')
   assert.equal(refused.body.connect.blockers[0].code, 'target_incomplete')
+  assert.equal('key' in refused.body.connect.blockers[0], false, 'a refusal strips key material')
+  assert.equal('token' in refused.body.connect.blockers[0], false)
+  assert.equal(JSON.stringify(refused.body).includes('sk-live-CONNECT-SECRET'), false, 'no key material in a refusal')
   assert.ok(refused.body.state)
   await fake.update(baseScenario())
 })
@@ -2048,6 +2182,89 @@ test('a connect transport failure is a 502, not a typed refusal', async () => {
   assert.equal(result.body.ok, false)
   assert.equal(result.body.code, 'connect_unavailable')
   await fake.update(baseScenario())
+})
+
+test('connect preview aliases can never execute a native write and execution needs an explicit false', async () => {
+  const { fake, state } = await applied()
+  const route = routeOf(state, '/_tmax/connect')
+  const applyCalls = async () => (await fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'apply')
+  const post = async (payload, url = '/_tmax/connect') => callRoute(route, 'POST', {
+    body: JSON.stringify(payload),
+    url,
+    headers: { 'content-type': 'application/json' },
+  })
+
+  // The documented first-generation preview body form.
+  await fake.clearCalls()
+  const bodyPreview = await post({ preview: true })
+  assert.equal(bodyPreview.statusCode, 200)
+  assert.equal(bodyPreview.body.dryRun, true)
+  assert.deepEqual(await applyCalls(), [['agent', 'apply', 'dsh-main', '--dry-run']])
+
+  // Query preview forms are previews too.
+  for (const query of ['preview=1', 'dry-run=1']) {
+    await fake.clearCalls()
+    const response = await post({}, `/_tmax/connect?${query}`)
+    assert.equal(response.statusCode, 200, query)
+    assert.equal(response.body.dryRun, true, query)
+    assert.deepEqual(await applyCalls(), [['agent', 'apply', 'dsh-main', '--dry-run']], query)
+  }
+
+  // A request that does not state its intent is refused before any tmax call.
+  for (const payload of [{}, { dryRun: 'yes' }, { preview: 1 }]) {
+    await fake.clearCalls()
+    const refused = await post(payload)
+    assert.equal(refused.statusCode, 400, JSON.stringify(payload))
+    assert.equal(refused.body.code, 'invalid_dry_run')
+    assert.deepEqual(await applyCalls(), [], 'no native write is attempted')
+  }
+
+  // A preview statement wins over an execute statement: a query can only preview.
+  await fake.clearCalls()
+  const queryOverBody = await post({ dryRun: false }, '/_tmax/connect?preview=1')
+  assert.equal(queryOverBody.statusCode, 200)
+  assert.equal(queryOverBody.body.dryRun, true)
+  assert.deepEqual(await applyCalls(), [['agent', 'apply', 'dsh-main', '--dry-run']])
+
+  // Conflicting body spellings resolve to the safe preview.
+  await fake.clearCalls()
+  const conflicting = await post({ dryRun: true, preview: false })
+  assert.equal(conflicting.statusCode, 200)
+  assert.equal(conflicting.body.dryRun, true)
+  assert.deepEqual(await applyCalls(), [['agent', 'apply', 'dsh-main', '--dry-run']])
+
+  // Execution happens only with an explicit false in either spelling.
+  for (const payload of [{ dryRun: false }, { preview: false }]) {
+    await fake.clearCalls()
+    const executed = await post(payload)
+    assert.equal(executed.statusCode, 200, JSON.stringify(payload))
+    assert.equal(executed.body.dryRun, false)
+    assert.deepEqual(await applyCalls(), [['agent', 'apply', 'dsh-main']], JSON.stringify(payload))
+  }
+})
+
+test('a completed apply re-reads the home integration before returning state', async () => {
+  const home = await emptyHome()
+  const { fake, state } = await applied({ config: { home } })
+  const before = (await getJson(state, '/_tmax/state')).body
+  assert.equal(before.ownership.owner, 'page')
+  assert.deepEqual(before.ownership.homeIntegration, { present: false, entry: false, artifact: false })
+
+  // The native apply installs the home plugin while the request is in flight.
+  await fake.patch(current => {
+    current.writeFiles = {
+      'agent apply dsh-main': [
+        { path: join(home, 'cordis.patch.yml'), content: '- id: llm-tmax\n' },
+        { path: join(home, 'tmax-dsh.mjs'), content: 'export const name = "llm-tmax"\n' },
+      ],
+    }
+  })
+  const appliedResult = await postJson(state, '/_tmax/connect', { dryRun: false })
+  assert.equal(appliedResult.statusCode, 200)
+  const ownership = appliedResult.body.state.ownership
+  assert.deepEqual(ownership.homeIntegration, { present: true, entry: true, artifact: true }, 'the response reflects the files the apply wrote')
+  assert.equal(ownership.owner, 'page', 'the working page route stays until DSH reloads')
+  assert.equal(ownership.reason, 'home_integration_pending_reload')
 })
 
 // ---------------------------------------------------------------------------

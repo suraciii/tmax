@@ -15,6 +15,7 @@ import { observeTmax } from './observations.js'
 
 export const MAX_BODY_BYTES = 16 * 1024
 const SEARCH_SCOPES = new Set(['all', 'tmax', 'agent'])
+const PREVIEW_QUERY = /[?&](?:preview|dry-run)=1(&|$)/u
 
 function headerOf(req, name) {
   const headers = req?.headers ?? {}
@@ -150,6 +151,36 @@ async function readJsonPost(req, res) {
   return parsed
 }
 
+/**
+ * Read the preview/execute intent of one connect request.
+ *
+ * The documented preview forms are `{"dryRun": true}`, `{"preview": true}`, and
+ * `?dry-run=1`/`?preview=1`; a native write happens only when the caller says so
+ * explicitly with `dryRun: false` or `preview: false`. A preview query can never
+ * execute, and a request that states neither is refused before any tmax call.
+ * @returns {{ok: true, preview: boolean} | {ok: false, code: string, message: string}}
+ */
+export function connectRequest(req, body) {
+  for (const key of ['dryRun', 'preview']) {
+    const value = body?.[key]
+    if (value !== undefined && typeof value !== 'boolean') {
+      return { ok: false, code: 'invalid_dry_run', message: `${key} must be a boolean` }
+    }
+  }
+  const previewFlag = body?.dryRun === true || body?.preview === true
+  const executeFlag = body?.dryRun === false || body?.preview === false
+  const previewQuery = typeof req?.url === 'string' && PREVIEW_QUERY.test(req.url)
+  if (!previewFlag && !executeFlag && !previewQuery) {
+    return {
+      ok: false,
+      code: 'invalid_dry_run',
+      message: 'connect requires an explicit dryRun or preview boolean; a native write requires false',
+    }
+  }
+  // A preview statement always wins: a preview query can only ever preview.
+  return { ok: true, preview: previewFlag || previewQuery }
+}
+
 /** Legacy usage payload derived from the state read model (cache-only). */
 function legacyUsage(state) {
   return {
@@ -275,10 +306,12 @@ export function deriveBlockers(state, declaredBlockers = []) {
  * @param {{read: () => Promise<{status: number, body: object}>}} input.history - retained-history read service
  * @param {Set<string>} [input.locks] - single-flight set shared with the action service
  * @param {(options: {dryRun: boolean}) => Promise<object>} input.connectTmax
+ * @param {() => Promise<object|undefined>} [input.refreshOwnership] - re-read the
+ *   home integration and ownership decision after an explicit native write
  * @param {() => object[]} input.getDeclaredBlockers
  * @param {(message: string) => void} [input.log]
  */
-export function createRoutes({ config, snapshot, observations, actions, history, locks = new Set(), connectTmax, getDeclaredBlockers, log }) {
+export function createRoutes({ config, snapshot, observations, actions, history, locks = new Set(), connectTmax, refreshOwnership, getDeclaredBlockers, log }) {
   // The action service shares this set: legacy `/connect` and action `connect`
   // are one lock, legacy `observe` and action observations are one lock.
   const running = locks
@@ -295,6 +328,20 @@ export function createRoutes({ config, snapshot, observations, actions, history,
 
   async function readState() {
     return snapshot.state()
+  }
+
+  /**
+   * Re-read the home integration and ownership facts after an explicit native
+   * write. A failed re-read keeps the previous decision and never fails the
+   * action result: the periodic refresh remains the recovery path.
+   */
+  async function reEvaluateOwnership() {
+    if (typeof refreshOwnership !== 'function') return
+    try {
+      await refreshOwnership()
+    } catch (error) {
+      log?.(`ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   const routes = [
@@ -406,11 +453,12 @@ export function createRoutes({ config, snapshot, observations, actions, history,
       async handler(req, res) {
         const body = await readJsonPost(req, res)
         if (body === undefined) return
-        const dryRun = body.dryRun ?? false
-        if (typeof dryRun !== 'boolean') {
-          sendJson(res, 400, { ok: false, code: 'invalid_dry_run', message: 'dryRun must be a boolean' })
+        const request = connectRequest(req, body)
+        if (!request.ok) {
+          sendJson(res, 400, { ok: false, code: request.code, message: request.message })
           return
         }
+        const dryRun = request.preview
         if (!acquire('connect')) {
           sendJson(res, 409, { ok: false, code: 'busy', message: 'a connect is already running' })
           return
@@ -426,6 +474,9 @@ export function createRoutes({ config, snapshot, observations, actions, history,
             })
             return
           }
+          // A native apply may have installed or repaired the home integration;
+          // re-read it before composing the state this result carries.
+          await reEvaluateOwnership()
           snapshot.invalidate()
           const state = await snapshot.state({ force: true })
           if (!result.ok) {

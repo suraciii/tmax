@@ -52,7 +52,9 @@ function mapRouteModel(model) {
   const mappedCapabilities = {}
   if (Number.isInteger(capabilities.contextWindow)) mappedCapabilities.contextWindow = capabilities.contextWindow
   if (Array.isArray(capabilities.input)) mappedCapabilities.input = [...capabilities.input]
-  if (object(capabilities.reasoningEfforts) && Object.keys(object(capabilities.reasoningEfforts)).length > 0) {
+  // `false` is tmax's known "reasoning disabled" value, not a missing field.
+  if (capabilities.reasoningEfforts === false) mappedCapabilities.reasoningEfforts = false
+  else if (object(capabilities.reasoningEfforts) && Object.keys(object(capabilities.reasoningEfforts)).length > 0) {
     mappedCapabilities.reasoningEfforts = { ...object(capabilities.reasoningEfforts) }
   }
   return {

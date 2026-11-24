@@ -178,6 +178,8 @@ window.__ModuleLoader__.load({
       tmaxProvidersNote: 'Quota readings are tmax observations with their own time; they are not live facts.',
       agentProviders: 'Providers this DSH profile configures',
       agentProvidersNote: 'Observed independently of tmax; kept separate and never summed.',
+      tmaxProvidersNone: 'tmax lists no providers.',
+      agentProvidersNone: 'This DSH profile configures no providers.',
       providerDisabled: 'disabled',
       providerSuspended: 'suspended',
       quotaSuspended: 'Quota exhausted',
@@ -245,6 +247,7 @@ window.__ModuleLoader__.load({
       reasonUnknown: 'the quota read failed',
       // Diagnostics.
       diagnosticsTitle: 'Diagnostics',
+      readModelSource: 'read model source',
       tmaxVersion: 'tmax version',
       projectionSchema: 'state schema',
       generatedAt: 'state generated',
@@ -387,6 +390,8 @@ window.__ModuleLoader__.load({
       historyEmpty: 'No retained request records were reported.',
       historyCoverage: 'Coverage',
       historyProcess: 'process',
+      historyProcessStarted: 'process started',
+      historyLastClear: 'last clear',
       historyRetained: 'retained records',
       historyEvicted: 'evicted records',
       historyIncomplete: 'incomplete captures',
@@ -394,6 +399,9 @@ window.__ModuleLoader__.load({
       historyDirectTraffic: 'direct traffic',
       historyRange: 'range',
       historyRetention: 'retention',
+      historyLimits: 'storage limits',
+      historyLimitRecords: 'records',
+      historyLimitBytes: 'record bytes',
       historyGap: 'gap',
       historyMore: 'more retained',
       historyTime: 'time',
@@ -570,6 +578,8 @@ window.__ModuleLoader__.load({
       tmaxProvidersNote: '额度读数是带自身时间的 tmax 观测，不是实时事实。',
       agentProviders: '当前 DSH profile 配置的供应商',
       agentProvidersNote: '独立于 tmax 观测；单独列出，从不合并。',
+      tmaxProvidersNone: 'tmax 未列出任何供应商。',
+      agentProvidersNone: '当前 DSH profile 未配置任何供应商。',
       providerDisabled: '已停用',
       providerSuspended: '已暂停',
       quotaSuspended: '额度已用尽',
@@ -637,6 +647,7 @@ window.__ModuleLoader__.load({
       reasonUnknown: '额度读取失败',
       // Diagnostics.
       diagnosticsTitle: '诊断',
+      readModelSource: '读取模型来源',
       tmaxVersion: 'tmax 版本',
       projectionSchema: 'state schema',
       generatedAt: '状态生成于',
@@ -778,6 +789,8 @@ window.__ModuleLoader__.load({
       historyEmpty: '未报告保留的请求记录。',
       historyCoverage: '覆盖范围',
       historyProcess: '进程',
+      historyProcessStarted: '进程启动于',
+      historyLastClear: '上次清除',
       historyRetained: '保留记录',
       historyEvicted: '已淘汰记录',
       historyIncomplete: '不完整记录',
@@ -785,6 +798,9 @@ window.__ModuleLoader__.load({
       historyDirectTraffic: '直连流量',
       historyRange: '时间范围',
       historyRetention: '保留策略',
+      historyLimits: '存储上限',
+      historyLimitRecords: '记录数',
+      historyLimitBytes: '记录字节',
       historyGap: '缺口',
       historyMore: '条更多保留记录',
       historyTime: '时间',
@@ -1400,10 +1416,12 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
      * a home integration that is installed but not loaded is a reload.
      */
     function nextAction(load) {
+      // A failed read never offers a write. Even when a last-known state is
+      // still on screen (labeled last-known), only a fresh read can change the
+      // evidence, so the one honest next step is that read — never Apply or any
+      // other operation that would act on stale facts.
+      if (load?.phase === 'failed') return { kind: 'retry' }
       const state = load?.value
-      if (load?.phase === 'failed' && (state === undefined || state === null || state.ok !== true)) {
-        return { kind: 'retry' }
-      }
       if (state === undefined || state === null || state.ok !== true) return undefined
       const routes = Array.isArray(state.routes) ? state.routes : []
       const ownership = state.ownership ?? {}
@@ -2121,17 +2139,28 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           if (!response.ok) throw new Error(stateError(value, response.status))
           if (value === null || typeof value !== 'object') throw new Error(`HTTP ${response.status}`)
           // The state schema is a hard consumer gate: an unknown version is a
-          // failure, never a payload this page guesses at.
+          // failure, never a payload this page guesses at. A last-known state
+          // stays on screen, labeled, instead of being cleared.
           if (value.schemaVersion !== 1) {
-            setLoad({ phase: 'failed', schemaUnsupported: true, message: `${t('schema')} ${boundedText(value.schemaVersion, 24)}` })
+            setLoad(previous => ({
+              phase: 'failed',
+              value: previous.value,
+              schemaUnsupported: true,
+              message: `${t('schema')} ${boundedText(value.schemaVersion, 24)}`,
+            }))
             return
           }
           if (value.ok !== true) {
-            setLoad({
+            // A refused read model is a failed read, not a reason to drop the
+            // last good table. Its section failures stay on the load so the
+            // page names them beside the last-known data.
+            const errors = Array.isArray(value.errors) ? value.errors : []
+            setLoad(previous => ({
               phase: 'failed',
+              value: previous.value,
               message: stateError(value, response.status),
-              errors: Array.isArray(value.errors) ? value.errors : [],
-            })
+              errors,
+            }))
             return
           }
           setLoad({ phase: 'ready', value })
@@ -2317,9 +2346,14 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 
     function staleBanner(load, t, retry) {
       if (load.phase !== 'failed' || load.value === undefined) return null
+      // A refused read model's own section failures are evidence too: name them
+      // beside the last-known data instead of dropping them with the payload.
+      const failures = sectionErrors(load)
       return h('div', { className: 'tmx-banner', key: 'stale' }, [
         h('span', { className: 'tmx-errorText', key: 'text' },
           `${t('hostError')}${t('colon')} ${describeError(load.message, t)} · ${t('staleNotice')}`),
+        ...failures.map((error, index) => h('span', { className: 'tmx-errorText tmx-break', key: `failure:${index}` },
+          `${t('readFailed')}${t('colon')} ${error.text}`)),
         h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: retry }, t('retry')),
       ])
     }
@@ -2710,9 +2744,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         h('h3', { className: 'tmx-subhead', key: 'tmaxHead' }, t('tmaxProviders')),
       ]
       if (tmaxProviders.length === 0) {
-        // A failed provider read is not an empty provider list.
+        // A failed provider read is not an empty provider list. A readable
+        // empty list is a reported zero: say tmax lists none, never "unknown".
         if (providerErrors.length === 0) {
-          body.push(h('div', { className: 'tmx-card', key: 'tmaxEmpty' }, h('p', { className: 'tmx-empty' }, t('unknownQuota'))))
+          body.push(h('div', { className: 'tmx-card', key: 'tmaxEmpty' }, h('p', { className: 'tmx-empty' }, t('tmaxProvidersNone'))))
         }
       } else {
         body.push(h('div', { className: 'tmx-providers', key: 'tmaxList' }, tmaxProviders.map((provider, index) => providerCard(provider, index, t, handlers))))
@@ -2724,7 +2759,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         // The provider-list read covers both lists; an agent-settings read can
         // fail on its own. Either way, an empty list is not a fact.
         if (agentErrors.length === 0 && providerErrors.length === 0) {
-          body.push(h('div', { className: 'tmx-card', key: 'agentEmpty' }, h('p', { className: 'tmx-empty' }, t('notReported'))))
+          body.push(h('div', { className: 'tmx-card', key: 'agentEmpty' }, h('p', { className: 'tmx-empty' }, t('agentProvidersNone'))))
         }
       } else {
         body.push(h('div', { className: 'tmx-providers', key: 'agentList' }, agentProviders.map((record, index) => agentCard(record, index, t))))
@@ -2973,6 +3008,14 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const lines = []
       const process = field('processInstance', 'process_instance')
       if (typeof process === 'string' && process !== '') lines.push({ label: t('historyProcess'), value: boundedText(process, 80) })
+      const processStarted = field('processStartedAt', 'process_started_at')
+      if (typeof processStarted === 'string' && processStarted !== '') {
+        lines.push({ label: t('historyProcessStarted'), value: clockOf(processStarted) || boundedText(processStarted, 40) })
+      }
+      const lastClear = field('lastClearAt', 'last_clear_at')
+      if (typeof lastClear === 'string' && lastClear !== '') {
+        lines.push({ label: t('historyLastClear'), value: clockOf(lastClear) || boundedText(lastClear, 40) })
+      }
       const scope = coverage.scope
       if (typeof scope === 'string' && scope !== '') lines.push({ label: t('historyCoverage'), value: boundedText(scope, 48) })
       const retained = numeric(field('retainedCount', 'retained_count'))
@@ -3003,6 +3046,17 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       }
       const retention = field('retention')
       if (typeof retention === 'string' && retention !== '') lines.push({ label: t('historyRetention'), value: boundedText(retention, 120) })
+      // The host reports the retained-history storage limits; dropping them
+      // would hide part of the coverage the page claims to show.
+      const limits = coverage.limits
+      if (limits !== null && typeof limits === 'object' && !Array.isArray(limits)) {
+        const limitRecords = numeric(limits.records)
+        const limitBytes = numeric(limits.recordBytes ?? limits.record_bytes)
+        const parts = []
+        if (limitRecords !== undefined) parts.push(`${t('historyLimitRecords')} ${compact(limitRecords)}`)
+        if (limitBytes !== undefined) parts.push(`${t('historyLimitBytes')} ${compact(limitBytes)}`)
+        if (parts.length > 0) lines.push({ label: t('historyLimits'), value: parts.join(' · ') })
+      }
       const gaps = field('gaps')
       if (Array.isArray(gaps)) {
         for (const gap of gaps.slice(0, 6)) {
@@ -3215,6 +3269,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const revision = typeof state.configurationRevision === 'string' ? state.configurationRevision : undefined
       const errors = Array.isArray(config.errors) ? config.errors : []
       const facts = [
+        // The state contract names its read source explicitly; an absent value
+        // is unknown, never an inferred "inventory".
+        fact(t('readModelSource'), textValue(diagnostics.readModel, t, 40)),
         fact(t('tmaxVersion'), textValue(state.tmaxVersion, t)),
         fact(t('projectionSchema'), state.schemaVersion === undefined ? t('unknown') : String(state.schemaVersion)),
         fact(t('generatedAt'), state.generatedAt === undefined ? t('unknown') : clockOf(state.generatedAt) || t('unknown')),
@@ -3639,8 +3696,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       if (active.length === 0) return { tone: 'warn', key: 'markerInactive' }
       // A credential known to be missing is a warning; readiness tmax did not
       // report is a different warning. Unknown is never drawn as missing.
-      // A credential known to be missing is a warning; readiness tmax did not
-      // report is a different warning. Unknown is never drawn as missing.
       if (!active.some(route => route?.credentialConfigured === true)) {
         if (active.some(route => route?.credentialConfigured === false)) return { tone: 'warn', key: 'markerCredential' }
         return { tone: 'warn', key: 'markerCredentialUnknown' }
@@ -3940,7 +3995,9 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     /** The model menu's tmax routing option: shown only when tmax provides the selected model. */
     function TmaxModelOption(props) {
       const t = props.t
-      const projection = typeof props.useProjection === 'function' ? props.useProjection('modelSelection') : undefined
+      // A session-scope slot always supplies the standard projection hook; call
+      // it unconditionally so hook order never depends on a prop check.
+      const projection = props.useProjection('modelSelection')
       const selection = projection === null || projection === undefined
         ? undefined
         : projection.next ?? projection.lastUsed
@@ -3970,7 +4027,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     function TmaxRoutingPane(props) {
       const t = props.t
       const [load, snapshot] = useSeatSnapshot(t)
-      const projection = typeof props.useProjection === 'function' ? props.useProjection('modelSelection') : undefined
+      const projection = props.useProjection('modelSelection')
       const selection = projection === null || projection === undefined
         ? undefined
         : projection.next ?? projection.lastUsed

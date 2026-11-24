@@ -303,10 +303,19 @@ export function createObservations({ ctx }) {
     } catch {
       return undefined
     }
+    let directory
+    try {
+      directory = llm.listConfigurableProviders()
+    } catch {
+      // A directory read that fails is the same unavailable-settings fact: no
+      // provider can be attributed, and the section reports its own error
+      // instead of failing the whole state read.
+      return undefined
+    }
     const byNs = new Map()
     for (const descriptor of descriptors ?? []) byNs.set(String(descriptor.ns), descriptor.value)
     const providers = []
-    for (const entry of llm.listConfigurableProviders()) {
+    for (const entry of directory) {
       let node = byNs.get(String(entry.settingsNs))
       for (const key of entry.settingsPath ?? []) {
         node = node !== null && typeof node === 'object' ? Reflect.get(node, key) : undefined
@@ -373,7 +382,20 @@ export function createObservations({ ctx }) {
     concurrency = AGENT_OBSERVE_CONCURRENCY,
   } = {}) {
     const discovered = discover()
-    if (discovered === undefined) return { items: [] }
+    if (discovered === undefined) {
+      // An unavailable settings read is a failed observation, not an empty
+      // successful one: nothing could be attributed, so the page must not
+      // report "no providers".
+      return {
+        items: [{
+          source: 'agent',
+          id: 'dsh:settings',
+          status: 'failed',
+          code: 'agent_settings_unavailable',
+          message: 'the DSH settings service is unavailable, so agent-configured providers cannot be observed',
+        }],
+      }
+    }
     if (dryRun) {
       return {
         items: discovered.providers.map(provider => ({

@@ -73,7 +73,7 @@ function parseEnvelope(text) {
   }
 }
 
-function boundedFailure(error) {
+function boundedFailure(error, command) {
   if (error === undefined || error === null) return 'tmax did not answer'
   if (typeof error.code === 'string' && error.code === 'ETIMEDOUT') return 'tmax did not answer before the timeout'
   if (error.killed === true) return 'tmax was stopped after exceeding its timeout or output buffer'
@@ -86,7 +86,11 @@ function boundedFailure(error) {
     const line = /^Command failed:/u.test(first)
       ? (lines.slice(1).find(entry => entry.trim() !== '') ?? 'tmax could not be executed')
       : first
-    return line.length > 300 ? `${line.slice(0, 300)}…` : line
+    const bounded = line.length > 300 ? `${line.slice(0, 300)}…` : line
+    // A spawn failure names the resolved executable (`spawn /opt/tmax ENOENT`).
+    // Replace the configured command with its bare name; the path is not
+    // evidence and must not reach an HTTP body.
+    return typeof command === 'string' && command !== '' ? bounded.replaceAll(command, 'tmax') : bounded
   }
   return 'tmax could not be executed'
 }
@@ -116,7 +120,7 @@ export async function runTmax(config, args, { timeoutMs = READ_TIMEOUT_MS, env =
       return { envelope, exitCode, failure: undefined }
     }
     const exitCode = typeof error?.code === 'number' ? error.code : undefined
-    return { envelope: undefined, exitCode, failure: boundedFailure(error) }
+    return { envelope: undefined, exitCode, failure: boundedFailure(error, tmax) }
   }
 }
 

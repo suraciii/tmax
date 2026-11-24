@@ -299,6 +299,14 @@ if (typeof body.__raw === 'string') {
   process.stdout.write(body.__raw)
   process.exit(body.__exit === undefined ? 4 : body.__exit)
 }
+const writes = (scenario.writeFiles || {})[argv.join(' ')]
+if (Array.isArray(writes)) {
+  const path = require('node:path')
+  for (const file of writes) {
+    fs.mkdirSync(path.dirname(file.path), { recursive: true })
+    fs.writeFileSync(file.path, file.content)
+  }
+}
 const exitCode = body.__exit === undefined ? (body.status === 'success' || body.status === 'dry_run' ? 0 : 4) : body.__exit
 const envelope = { ...body }
 delete envelope.__exit
@@ -1213,6 +1221,29 @@ test('a provider action uses readable provider evidence and refuses only an unre
     false,
     'no observation runs against an unreadable state',
   )
+})
+
+test('a completed action-form connect re-reads the home integration before returning state', async () => {
+  const { fake, state, home } = await applied()
+  const before = (await getJson(state, '/_tmax/state')).body
+  assert.equal(before.ownership.owner, 'page')
+  assert.deepEqual(before.ownership.homeIntegration, { present: false, entry: false, artifact: false })
+
+  // The native apply installs the home plugin while the action is in flight.
+  await fake.patch(current => {
+    current.writeFiles = {
+      'agent apply dsh-main': [
+        { path: join(home, 'cordis.patch.yml'), content: '- id: llm-tmax\n' },
+        { path: join(home, 'tmax-dsh.mjs'), content: 'export const name = "llm-tmax"\n' },
+      ],
+    }
+  })
+  const result = await postJson(state, '/_tmax/action', { action: 'connect', dryRun: false })
+  assert.equal(result.statusCode, 200)
+  const ownership = result.body.state.ownership
+  assert.deepEqual(ownership.homeIntegration, { present: true, entry: true, artifact: true }, 'the response reflects the files the apply wrote')
+  assert.equal(ownership.owner, 'page', 'the working page route stays until DSH reloads')
+  assert.equal(ownership.reason, 'home_integration_pending_reload')
 })
 
 test('the action-form connect resolves the target from the DSH home when none is configured', async () => {

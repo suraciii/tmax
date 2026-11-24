@@ -509,6 +509,32 @@ export async function apply(ctx, config = {}) {
     disposeRegistration()
   }
 
+  /**
+   * Re-read the home integration and the ownership decision without re-reading
+   * tmax. An explicit native apply can install or repair the home integration,
+   * so the state returned with its result must not reuse the pre-apply
+   * decision; the periodic refresh would otherwise correct it a minute later.
+   * A failed re-read keeps the previous decision.
+   */
+  async function refreshOwnershipFacts() {
+    if (disposed) return ownershipDecision
+    try {
+      const home = await inspectHome(resolveHome(config))
+      if (disposed) return ownershipDecision
+      ownershipDecision = resolveOwnership({
+        mode: manageMode,
+        home,
+        projection: lastInventory,
+        liveNames: liveProviderIds(ctx),
+        registeredNames: registrationNames,
+        prefix,
+      })
+    } catch (error) {
+      log(`ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return ownershipDecision
+  }
+
   function disposeRegistration() {
     if (registration !== undefined) {
       try {
@@ -863,7 +889,7 @@ export async function apply(ctx, config = {}) {
   // One lock set spans the legacy routes and the action service: a connect or
   // an observation is the same operation whichever form requested it.
   const locks = new Set()
-  const actions = createActionService({ config, snapshot, locks, log })
+  const actions = createActionService({ config, snapshot, locks, log, refreshOwnership: refreshOwnershipFacts })
   // The history service answers GET /_tmax/history; the `/tmax history` command
   // uses the same bounded `history list` read.
   const history = createHistoryService({ config, log })
@@ -881,6 +907,7 @@ export async function apply(ctx, config = {}) {
       history,
       locks,
       connectTmax,
+      refreshOwnership: refreshOwnershipFacts,
       getDeclaredBlockers: () => skippedBlockers,
       log,
     })
