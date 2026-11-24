@@ -2,7 +2,7 @@ use crate::{Error, Result, config, storage::Store};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::model::Runtime;
+use super::model::{ProviderIdentity, Runtime};
 
 pub(super) const STATE: &str = "routing-state.json";
 
@@ -327,10 +327,61 @@ fn rebind_declarations(view: &mut super::model::View, legacy: &BTreeMap<String, 
     }
 }
 
+/// The lineage that outlives a configuration format.
+///
+/// Identities are kept under their provider names, as a same-format read would
+/// keep them; the loaded view is dropped because activation rebuilds it from
+/// the same identities. A record that does not parse in full still yields the
+/// tokens a credential depends on.
+fn carry_lineage(document: &Value) -> Runtime {
+    let mut runtime = Runtime::default();
+    runtime.saved.providers = carried_identities(&document["saved"]["providers"]);
+    if let Some(authorization) = document
+        .get("authorization")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+    {
+        runtime.authorization = authorization;
+    }
+    if let Some(channels) = document
+        .get("channels")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+    {
+        runtime.channels = channels;
+    }
+    runtime
+}
+
+fn carried_identities(value: &Value) -> BTreeMap<String, ProviderIdentity> {
+    let Some(entries) = value.as_object() else {
+        return BTreeMap::new();
+    };
+    entries
+        .iter()
+        .filter_map(|(name, entry)| {
+            let identity = entry.get("identity")?.as_str()?;
+            if identity.is_empty() {
+                return None;
+            }
+            let mut ids =
+                serde_json::from_value::<ProviderIdentity>(entry.clone()).unwrap_or_default();
+            ids.identity = identity.to_owned();
+            ids.authorization = entry
+                .get("authorization")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            Some((name.clone(), ids))
+        })
+        .collect()
+}
+
 fn decode_runtime(bytes: &[u8]) -> Result<Runtime> {
-    // Retained lineage is bookkeeping rebuilt from the saved configuration. A
-    // snapshot written under another configuration format is unusable, not an
-    // error: discard it so the next capture recreates it in the current format.
+    // A snapshot written under another configuration format cannot be read as
+    // configuration. Its lineage still has to be handed forward: a provider's
+    // incarnation identity is the owner stamp on every stored credential and
+    // part of the key of each retained observation, so minting new identities
+    // here would orphan them all. Everything shaped like configuration is left
+    // empty and rebuilt from the saved configuration by the next reconcile.
     if serde_json::from_slice::<Value>(bytes)
         .ok()
         .is_some_and(|document| {
@@ -350,7 +401,8 @@ fn decode_runtime(bytes: &[u8]) -> Result<Runtime> {
                 .any(|version| version != crate::config::CONFIG_VERSION)
         })
     {
-        return Ok(Runtime::default());
+        let document: Value = serde_json::from_slice(bytes).map_err(|_| state_schema_error())?;
+        return Ok(carry_lineage(&document));
     }
     if let Ok(runtime) = serde_json::from_slice::<Runtime>(bytes) {
         let known_bases = std::iter::once(&runtime.saved)
@@ -998,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_state_from_another_format_version_is_rebuilt_instead_of_failing() {
+    fn retained_state_from_another_format_version_keeps_stored_credentials_owned() {
         let (_directory, store, original) = fixture();
         let mut config = original.clone();
         config.model_aliases.push(config::ModelAlias {
@@ -1012,8 +1064,18 @@ mod tests {
         });
         save_intent(&store, &config);
         reconcile(&store, &original, &config, &[]).unwrap();
+        // A stored credential names the provider's incarnation identity as its
+        // owner, which is what makes it this provider's key rather than a file.
+        let identity = read_runtime(&store).unwrap().saved.providers["p"]
+            .identity
+            .clone();
+        let key_ref =
+            crate::secrets::put(&store, &format!("provider:{identity}:p"), b"fixture-key").unwrap();
+        config.providers.get_mut("p").unwrap().auth = Some(config::Auth::ApiKey { key_ref });
+        save_intent(&store, &config);
+        reconcile(&store, &original, &config, &[]).unwrap();
         let runtime = read_runtime(&store).unwrap();
-        let mut legacy = serde_json::to_value(runtime).unwrap();
+        let mut legacy = serde_json::to_value(&runtime).unwrap();
         legacy["saved"]["config"] = historical_config(&config);
         legacy["saved"]["config"]["version"] = json!(1);
         for alias in legacy["saved"]["config"]["model_aliases"]
@@ -1029,11 +1091,43 @@ mod tests {
         store.write_json(STATE, &legacy).unwrap();
         let bytes = std::fs::read(store.path(STATE).unwrap()).unwrap();
         let rebuilt = read_runtime(&store).unwrap();
+        // Configuration-shaped content is rebuilt from the saved configuration;
+        // the identity a credential names is not, or every key is orphaned.
         assert!(rebuilt.saved.config.model_aliases.is_empty());
+        assert_eq!(rebuilt.saved.providers["p"].identity, identity);
+        assert_eq!(
+            rebuilt.authorization.get(&identity),
+            runtime.authorization.get(&identity)
+        );
         assert_eq!(
             std::fs::read(store.path(STATE).unwrap()).unwrap(),
             bytes,
             "a read must not rewrite retained state"
+        );
+        // The next reconcile under the current format keeps that credential
+        // eligible: same incarnation, so no re-entry is needed.
+        reconcile(&store, &config, &config, &[]).unwrap();
+        assert_eq!(
+            Snapshot::capture(&store, &config)
+                .destination_identity("p", "m")
+                .map(|(identity, _, _)| identity),
+            Some(identity)
+        );
+        let explained = crate::routing::explain(
+            &store,
+            &config,
+            "p/m",
+            "chat-completions",
+            Some("2026-10-23T10:30:00Z"),
+        )
+        .unwrap();
+        assert!(
+            explained["excluded_candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate["reason_code"] != "credential_unavailable"),
+            "{explained}"
         );
     }
 
