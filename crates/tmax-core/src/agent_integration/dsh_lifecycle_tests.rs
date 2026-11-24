@@ -1,4 +1,4 @@
-//! Cross-owner DSH application/restoration lifecycle.
+//! Cross-owner DSH application/restoration lifecycle around the one bundle plugin.
 use super::{
     application::apply,
     document::{self, Format},
@@ -17,7 +17,7 @@ use std::{collections::BTreeMap, fs};
 
 #[cfg(unix)]
 #[tokio::test]
-async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials() {
+async fn dsh_apply_configures_the_installed_plugin_retires_the_embedded_one_and_restores() {
     const CHILD: &str = "TMAX_DSH_LIFECYCLE_CHILD";
     if std::env::var_os(CHILD).is_none() {
         use std::os::unix::fs::PermissionsExt;
@@ -26,14 +26,14 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
         fs::write(
             &executable,
             format!(
-                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '{}'\\n'\n",
+                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '{}\\n'\n",
                 super::adapters::DSH_QUALIFIED
             ),
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "agent_integration::dsh_lifecycle_tests::dsh_apply_restore_preserves_native_preferences_and_shared_credentials", "--nocapture"])
+            .args(["--exact", "agent_integration::dsh_lifecycle_tests::dsh_apply_configures_the_installed_plugin_retires_the_embedded_one_and_restores", "--nocapture"])
             .env(CHILD, "1")
             .env("PATH", directory.path())
             .output().unwrap();
@@ -50,6 +50,20 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
     let home = directory.path().join("dsh");
     let path = home.clone();
     fs::create_dir_all(&path).unwrap();
+    // The one DSH plugin is the bundle DSH installs into a profile; a home
+    // without such a profile has nothing for apply to configure.
+    let bundle_profile = home.join("profiles/desktop");
+    fs::create_dir_all(bundle_profile.join("node_modules/tmax")).unwrap();
+    fs::write(
+        bundle_profile.join("package.json"),
+        r#"{"name":"desktop","dsh":{"profile":{"bundles":["tmax"]}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        bundle_profile.join("node_modules/tmax/package.json"),
+        r#"{"name":"tmax","version":"0.1.0"}"#,
+    )
+    .unwrap();
     let native_profile = home.join("profiles/custom");
     fs::create_dir_all(&native_profile).unwrap();
     fs::write(
@@ -60,7 +74,15 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
     let profile_patch = "- id: llm-pi-ai\n  config: !!js process.env.NATIVE_PROVIDERS\n";
     fs::write(native_profile.join("cordis.patch.yml"), profile_patch).unwrap();
     let original = "# native policy\n- id: agent-default-model\n  config:\n    provider: existing\n    model: unchanged\n    reasoningEffort: low\n- id: user-owned\n  config: !!js process.env.NATIVE_POLICY\n";
-    fs::write(path.join("cordis.patch.yml"), original).unwrap();
+    // A home last touched by the release that embedded its own adapter.
+    let legacy_plugin = home.join("tmax-dsh.mjs");
+    let legacy_plugin_bytes = b"export const name = 'llm-tmax'\n";
+    fs::write(&legacy_plugin, legacy_plugin_bytes).unwrap();
+    let legacy = format!(
+        "{original}- insert:\n    - id: llm-tmax\n      name: {}/tmax-dsh.mjs\n      config:\n        providers:\n          local:\n            models:\n              - id: first\n",
+        path.display()
+    );
+    fs::write(path.join("cordis.patch.yml"), &legacy).unwrap();
     let credentials = home.join(".credentials.yaml");
     storage::atomic_write(
         &credentials,
@@ -89,40 +111,42 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
     store
         .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
         .unwrap();
-    let before_credentials = fs::read(&credentials).unwrap();
     let credentials_lock = home.join(".credentials.yaml.lock");
     assert!(!credentials_lock.exists());
-    let override_patch = format!(
-        "{original}- insert:\n    - id: llm-tmax\n      config:\n        providers:\n          local:\n            modelOverrides:\n              first:\n                contextWindow: 4096\n"
+
+    // Inspection names the plugin the way apply will find it.
+    let inspected = inspect(&store, &config, "managed").await.unwrap();
+    assert_eq!(inspected["plugin"]["state"], "installed");
+    let desktop = inspected["plugin"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["profile"] == "desktop")
+        .unwrap();
+    assert_eq!(desktop["listed"], true);
+    assert_eq!(desktop["version"], "0.1.0");
+    assert!(
+        !inspected["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["code"] == "dsh_plugin_not_installed")
     );
-    fs::write(path.join("cordis.patch.yml"), &override_patch).unwrap();
-    for dry_run in [true, false] {
-        assert_eq!(
-            apply(&store, &config, "managed", dry_run)
-                .await
-                .unwrap_err()
-                .code,
-            "native_config_incompatible"
-        );
-        assert!(!credentials_lock.exists());
-        assert_eq!(
-            fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-            override_patch
-        );
-        assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
-    }
-    fs::write(path.join("cordis.patch.yml"), original).unwrap();
+
+    // A dry run writes nothing and never shows the key.
+    let before_credentials = fs::read(&credentials).unwrap();
     let preview = apply(&store, &config, "managed", true).await.unwrap();
     assert!(!preview.to_string().contains("synthetic-managed"));
     assert_eq!(
         fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-        original
+        legacy
     );
     assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
-    assert!(!credentials_lock.exists());
+    assert_eq!(fs::read(&legacy_plugin).unwrap(), legacy_plugin_bytes);
+
+    // A foreign credentials lock blocks before any write.
     let external_lock = format!("{}\n", std::process::id());
     storage::atomic_write(&credentials_lock, external_lock.as_bytes()).unwrap();
-    apply(&store, &config, "managed", true).await.unwrap();
     assert_eq!(
         apply(&store, &config, "managed", false)
             .await
@@ -132,7 +156,7 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
     );
     assert_eq!(
         fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-        original
+        legacy
     );
     assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
     assert_eq!(
@@ -140,16 +164,26 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
         external_lock
     );
     fs::remove_file(&credentials_lock).unwrap();
+
+    // Apply configures the bundle entry, hands over the credential reference,
+    // and retires the embedded plugin row and file.
     apply(&store, &config, "managed", false).await.unwrap();
     assert!(!credentials_lock.exists());
     let applied = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
     assert!(applied.starts_with(original));
     assert!(!applied.contains("synthetic-managed"));
+    let value = dsh_patch::parse(&applied).unwrap();
+    assert!(value.get("llm-tmax").is_none(), "legacy row retired");
     assert_eq!(
-        dsh_patch::parse(&applied).unwrap()["credentials"]["disabled"],
-        false
+        value["tmax"]["config"]["home"],
+        path.to_string_lossy().as_ref()
     );
-    assert!(home.join("tmax-dsh.mjs").is_file());
+    assert_eq!(
+        value["tmax"]["config"]["tmaxPath"],
+        std::env::current_exe().unwrap().to_string_lossy().as_ref()
+    );
+    assert_eq!(value["credentials"]["disabled"], false);
+    assert!(!legacy_plugin.exists(), "legacy file retired");
     let native_credentials =
         document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap();
     assert_eq!(native_credentials["refs"]["EXISTING"], "synthetic-existing");
@@ -160,324 +194,124 @@ async fn dsh_apply_restore_preserves_native_preferences_and_shared_credentials()
             .values()
             .any(|v| v == "synthetic-managed")
     );
-    let mut renamed = config.clone();
-    let target = renamed.agents.get_mut("managed").unwrap();
-    let provider = target.providers.remove("local").unwrap();
-    target.providers.insert("tmax".into(), provider);
-    store
-        .write_raw("tmax.toml", toml::to_string(&renamed).unwrap().as_bytes())
-        .unwrap();
-    let user_settings = dsh_patch::set(
-        &applied,
-        &[
-            "llm-tmax".into(),
-            "config".into(),
-            "providers".into(),
-            "local".into(),
-            "compat".into(),
-        ],
-        Some(&json!({"supportsDeveloperRole":false})),
-    )
-    .unwrap();
-    fs::write(path.join("cordis.patch.yml"), &user_settings).unwrap();
-    let credentials_before_rename = fs::read(&credentials).unwrap();
-    assert_eq!(
-        apply(&store, &renamed, "managed", false)
-            .await
-            .unwrap_err()
-            .code,
-        "native_conflict"
-    );
+
+    // With nothing else touched, restore puts every byte back exactly.
+    let index: Index = store.read_json(INDEX).unwrap();
+    restore(&store, &index.records[0].id, false).await.unwrap();
+    assert!(!credentials_lock.exists());
     assert_eq!(
         fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-        user_settings
+        legacy
     );
-    assert_eq!(fs::read(&credentials).unwrap(), credentials_before_rename);
-    assert!(!credentials_lock.exists());
-    fs::write(path.join("cordis.patch.yml"), &applied).unwrap();
-    apply(&store, &renamed, "managed", false).await.unwrap();
-    let renamed_patch = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
-    let renamed_value = dsh_patch::parse(&renamed_patch).unwrap();
-    let providers = &renamed_value["llm-tmax"]["config"]["providers"];
-    assert!(
-        providers.get("local").is_none(),
-        "removed route must not remain registered"
-    );
-    assert_eq!(providers["tmax"]["api"], "openai-completions");
-    assert!(renamed_patch.starts_with(original));
-    store
-        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
-        .unwrap();
+    assert_eq!(fs::read(&legacy_plugin).unwrap(), legacy_plugin_bytes);
+    assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
+
+    // Applying again reaches the same managed state.
     apply(&store, &config, "managed", false).await.unwrap();
-    let applied = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
-    assert!(
-        dsh_patch::parse(&applied).unwrap()["llm-tmax"]["config"]["providers"]
-            .get("tmax")
-            .is_none()
-    );
+    let reapplied = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+    assert_eq!(reapplied, applied);
+    assert!(!legacy_plugin.exists());
+
+    // A user field under the entry tmax does not own is not tmax's to remove:
+    // restore takes only tmax's own fields back and leaves that field alone.
     let index: Index = store.read_json(INDEX).unwrap();
     let unowned = dsh_patch::set(
         &applied,
-        &["llm-tmax".into(), "config".into(), "custom".into()],
-        Some(&json!("keep")),
+        &["tmax".into(), "config".into(), "refreshSeconds".into()],
+        Some(&json!(30)),
     )
     .unwrap();
     fs::write(path.join("cordis.patch.yml"), &unowned).unwrap();
-    let before_conflict_credentials = fs::read(&credentials).unwrap();
-    let before_conflict_plugin = fs::read(home.join("tmax-dsh.mjs")).unwrap();
-    assert_eq!(
-        restore(&store, &index.records[0].id, false)
-            .await
-            .unwrap_err()
-            .code,
-        "native_conflict"
-    );
+    let latest = index.records.last().unwrap();
+    restore(&store, &latest.id, true).await.unwrap();
+    restore(&store, &latest.id, false).await.unwrap();
     assert!(!credentials_lock.exists());
+    let restored = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+    let restored_value = dsh_patch::parse(&restored).unwrap();
+    assert_eq!(restored_value["tmax"]["config"]["refreshSeconds"], 30);
+    assert!(restored_value["tmax"]["config"].get("home").is_none());
+    assert!(restored_value["tmax"]["config"].get("tmaxPath").is_none());
+    assert!(restored_value.get("credentials").is_none());
     assert_eq!(
-        fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-        unowned
+        restored_value["llm-tmax"]["name"],
+        format!("{}/tmax-dsh.mjs", path.display())
     );
-    assert_eq!(fs::read(&credentials).unwrap(), before_conflict_credentials);
-    assert_eq!(
-        fs::read(home.join("tmax-dsh.mjs")).unwrap(),
-        before_conflict_plugin
-    );
-    fs::write(path.join("cordis.patch.yml"), &applied).unwrap();
+    assert!(restored.contains(r#"{"insert":[{"config":{"providers":{"local":{"models":[{"id":"first"}]}}},"id":"llm-tmax""#));
+    assert!(restored.starts_with(original));
+    assert_eq!(fs::read(&legacy_plugin).unwrap(), legacy_plugin_bytes);
+    assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
     assert_eq!(
         fs::read_to_string(native_profile.join("cordis.patch.yml")).unwrap(),
         profile_patch
     );
+
+    // The user's field survives the next apply too, and a later unrelated row
+    // survives the next restore.
+    apply(&store, &config, "managed", false).await.unwrap();
+    let reapplied = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+    let reapplied_value = dsh_patch::parse(&reapplied).unwrap();
+    assert!(reapplied.starts_with(original));
+    assert_eq!(
+        reapplied_value["tmax"]["config"]["home"],
+        path.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        reapplied_value["tmax"]["config"]["tmaxPath"],
+        std::env::current_exe().unwrap().to_string_lossy().as_ref()
+    );
+    assert_eq!(reapplied_value["tmax"]["config"]["refreshSeconds"], 30);
+    assert_eq!(reapplied_value["credentials"]["disabled"], false);
+    assert!(reapplied_value.get("llm-tmax").is_none());
+    assert!(!legacy_plugin.exists());
     fs::write(
         path.join("cordis.patch.yml"),
-        format!("{applied}- id: later\n  disabled: true\n"),
+        format!("{reapplied}- id: later\n  disabled: true\n"),
     )
     .unwrap();
     let index: Index = store.read_json(INDEX).unwrap();
-    let before_restore_patch = fs::read(path.join("cordis.patch.yml")).unwrap();
-    let before_restore_credentials = fs::read(&credentials).unwrap();
-    restore(&store, &index.records[0].id, true).await.unwrap();
+    let latest = index.records.last().unwrap();
+    restore(&store, &latest.id, true).await.unwrap();
+    restore(&store, &latest.id, false).await.unwrap();
     assert!(!credentials_lock.exists());
-    storage::atomic_write(&credentials_lock, external_lock.as_bytes()).unwrap();
-    restore(&store, &index.records[0].id, true).await.unwrap();
+    let final_text = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+    let final_value = dsh_patch::parse(&final_text).unwrap();
+    // A restored insert row is appended after rows the user added later.
+    assert!(final_text.contains("- id: later\n  disabled: true\n"));
+    assert_eq!(final_value["tmax"]["config"]["refreshSeconds"], 30);
+    assert!(final_value["tmax"]["config"].get("home").is_none());
+    assert!(final_value.get("credentials").is_none());
     assert_eq!(
-        restore(&store, &index.records[0].id, false)
-            .await
-            .unwrap_err()
-            .code,
-        "native_credentials_busy"
+        final_value["agent-default-model"]["config"]["model"],
+        "unchanged"
     );
     assert_eq!(
-        fs::read(path.join("cordis.patch.yml")).unwrap(),
-        before_restore_patch
+        final_value["llm-tmax"]["config"]["providers"]["local"]["models"][0]["id"],
+        "first"
     );
-    assert_eq!(fs::read(&credentials).unwrap(), before_restore_credentials);
-    assert_eq!(
-        fs::read_to_string(&credentials_lock).unwrap(),
-        external_lock
-    );
-    fs::remove_file(&credentials_lock).unwrap();
-    restore(&store, &index.records[0].id, false).await.unwrap();
-    assert!(!credentials_lock.exists());
-    assert!(!home.join("tmax-dsh.mjs").exists());
-    assert_eq!(
-        fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-        format!("{original}- id: later\n  disabled: true\n")
-    );
-    assert_eq!(
-        document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap(),
-        json!({"version":1,"refs":{"EXISTING":"synthetic-existing"},"records":{}})
-    );
-    assert_eq!(
-        fs::read_to_string(native_profile.join("cordis.patch.yml")).unwrap(),
-        profile_patch
-    );
-    assert_eq!(
-        fs::read_to_string(native_profile.join("package.json")).unwrap(),
-        "native-owned opaque manifest"
-    );
-    for empty in ["", "# empty native credential store\n", "{}\n"] {
-        storage::atomic_write(&credentials, empty.as_bytes()).unwrap();
-        apply(&store, &config, "managed", false).await.unwrap();
-        assert!(!credentials_lock.exists());
-        let stamped =
-            document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap();
-        assert_eq!(stamped["version"], 1);
-        assert_eq!(stamped["refs"].as_object().unwrap().len(), 1);
-        let index: Index = store.read_json(INDEX).unwrap();
-        restore(&store, &index.records.last().unwrap().id, false)
-            .await
-            .unwrap();
-        assert!(!credentials_lock.exists());
-        assert_eq!(
-            document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap(),
-            json!({})
-        );
-        assert_eq!(
-            fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-            format!("{original}- id: later\n  disabled: true\n")
-        );
+    assert_eq!(fs::read(&legacy_plugin).unwrap(), legacy_plugin_bytes);
+    assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
+
+    // A home whose bundle is gone is blocked before any native write.
+    fs::remove_dir_all(bundle_profile).unwrap();
+    let untouched = final_text;
+    for dry_run in [true, false] {
+        let blocked = apply(&store, &config, "managed", dry_run).await.unwrap();
+        assert_eq!(blocked["_code"], "dsh_plugin_not_installed", "{dry_run}");
+        assert_eq!(blocked["plugin"]["state"], "absent");
+        assert_eq!(blocked["effects"]["native_writes"], false);
     }
-    for incompatible in ["refs: {}\n", "version: 2\n"] {
-        storage::atomic_write(&credentials, incompatible.as_bytes()).unwrap();
-        let before_patch = fs::read(path.join("cordis.patch.yml")).unwrap();
-        assert_eq!(
-            apply(&store, &config, "managed", false)
-                .await
-                .unwrap_err()
-                .code,
-            "native_schema_incompatible"
-        );
-        assert!(!credentials_lock.exists());
-        assert_eq!(
-            fs::read(path.join("cordis.patch.yml")).unwrap(),
-            before_patch
-        );
-        assert_eq!(fs::read_to_string(&credentials).unwrap(), incompatible);
-    }
-    storage::atomic_write(&credentials, &before_credentials).unwrap();
-    apply(&store, &config, "managed", false).await.unwrap();
-    let owned = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
-    let modified = dsh_patch::set(
-        &owned,
-        &[
-            "llm-tmax".into(),
-            "config".into(),
-            "providers".into(),
-            "local".into(),
-            "api".into(),
-        ],
-        Some(&json!("anthropic-messages")),
-    )
-    .unwrap();
-    fs::write(path.join("cordis.patch.yml"), &modified).unwrap();
-    assert_eq!(
-        apply(&store, &config, "managed", false)
-            .await
-            .unwrap_err()
-            .code,
-        "native_conflict"
-    );
-    assert!(!credentials_lock.exists());
-    let before_failed_restore_credentials = fs::read(&credentials).unwrap();
-    let index: Index = store.read_json(INDEX).unwrap();
-    assert_eq!(
-        restore(&store, &index.records.last().unwrap().id, false)
-            .await
-            .unwrap_err()
-            .code,
-        "native_conflict"
-    );
-    assert!(!credentials_lock.exists());
-    assert_eq!(
-        fs::read(&credentials).unwrap(),
-        before_failed_restore_credentials
+    let inspected = inspect(&store, &config, "managed").await.unwrap();
+    assert_eq!(inspected["plugin"]["state"], "absent");
+    assert!(
+        inspected["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["code"] == "dsh_plugin_not_installed")
     );
     assert_eq!(
         fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
-        modified
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn dsh_default_effort_is_field_scoped_and_restorable() {
-    let directory = tempfile::tempdir().unwrap();
-    let store = Store::at(directory.path().join("authority"));
-    let home = directory.path().join("dsh");
-    fs::create_dir_all(&home).unwrap();
-    let patch = home.join("cordis.patch.yml");
-    let original = "# native policy\n- id: agent-default-model\n  config:\n    provider: existing\n    model: unchanged\n    reasoningEffort: low\n- id: user-owned\n  config: !!js process.env.NATIVE_POLICY\n";
-    fs::write(&patch, original).unwrap();
-    let reference = secrets::put(&store, "provider:p", b"synthetic-dsh-effort").unwrap();
-    let mut target = inspection_target(home.clone());
-    target.agent = "dsh".into();
-    target.default.as_mut().unwrap().effort = Some("high".into());
-    let mut config = Config::empty();
-    config.providers.insert(
-        "p".into(),
-        config::Provider {
-            integration: Some("custom".into()),
-            auth: Some(Auth::ApiKey { key_ref: reference }),
-            endpoints: BTreeMap::from([(
-                "chat-completions".into(),
-                "https://example.invalid/v1".into(),
-            )]),
-            models: BTreeMap::from([(
-                "first".into(),
-                config::Model {
-                    overrides: config::ModelOverrides {
-                        reasoning_options: Some(vec![config::ReasoningOption {
-                            r#type: "effort".into(),
-                            values: Some(vec!["low".into(), "high".into()]),
-                        }]),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            )]),
-            ..Default::default()
-        },
-    );
-    config.agents.insert("managed".into(), target);
-    store
-        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
-        .unwrap();
-    apply(&store, &config, "managed", false).await.unwrap();
-    let applied = fs::read_to_string(&patch).unwrap();
-    assert!(applied.starts_with("# native policy"));
-    assert!(applied.contains("process.env.NATIVE_POLICY"));
-    let value = dsh_patch::parse(&applied).unwrap();
-    let default = &value["agent-default-model"]["config"];
-    assert_eq!(default["provider"], "local");
-    assert_eq!(default["model"], "first");
-    assert_eq!(default["reasoningEffort"], "high");
-    assert!(value.get("user-owned").is_some());
-
-    // Removing only the effort restores that field's captured baseline.
-    let mut unmanaged = config.clone();
-    unmanaged
-        .agents
-        .get_mut("managed")
-        .unwrap()
-        .default
-        .as_mut()
-        .unwrap()
-        .effort = None;
-    store
-        .write_raw("tmax.toml", toml::to_string(&unmanaged).unwrap().as_bytes())
-        .unwrap();
-    apply(&store, &unmanaged, "managed", false).await.unwrap();
-    let restored = dsh_patch::parse(&fs::read_to_string(&patch).unwrap()).unwrap();
-    let default = &restored["agent-default-model"]["config"];
-    assert_eq!(default["reasoningEffort"], "low");
-    assert_eq!(default["provider"], "local");
-    assert_eq!(default["model"], "first");
-    assert!(restored.get("user-owned").is_some());
-
-    // A later external edit to the owned effort is a conflict, not a silent overwrite.
-    store
-        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
-        .unwrap();
-    apply(&store, &config, "managed", false).await.unwrap();
-    let managed = fs::read_to_string(&patch).unwrap();
-    let edited = dsh_patch::set(
-        &managed,
-        &[
-            "agent-default-model".into(),
-            "config".into(),
-            "reasoningEffort".into(),
-        ],
-        Some(&json!("max")),
-    )
-    .unwrap();
-    assert_ne!(edited, managed);
-    fs::write(&patch, edited).unwrap();
-    assert_eq!(
-        apply(&store, &config, "managed", false)
-            .await
-            .unwrap_err()
-            .code,
-        "native_conflict"
+        untouched
     );
 }
 
@@ -490,7 +324,8 @@ async fn apply_reports_every_environment_obstacle_in_one_run() {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("dsh");
-        // An older client, below the version floor tmax generates for.
+        // An older client, below the version floor tmax generates for, and a
+        // home whose profiles carry no plugin.
         fs::write(
             &executable,
             "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '0.1.0\\n'\n",
@@ -540,8 +375,8 @@ async fn apply_reports_every_environment_obstacle_in_one_run() {
     store
         .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
         .unwrap();
-    // The environment is reported as facts beside the refusal, so the reader can
-    // see what was checked instead of inferring it from the blocker alone.
+    // Both obstacles are reported together, so fixing one does not simply reveal
+    // the next on the following run.
     let answer = apply(&store, &config, "dsh-main", true).await.unwrap();
     let codes: Vec<&str> = answer["blockers"]
         .as_array()
@@ -549,33 +384,131 @@ async fn apply_reports_every_environment_obstacle_in_one_run() {
         .iter()
         .filter_map(|blocker| blocker["code"].as_str())
         .collect();
-    assert_eq!(codes, vec!["native_version_unqualified"], "{answer}");
+    assert_eq!(
+        codes,
+        vec!["native_version_unqualified", "dsh_plugin_not_installed"],
+        "{answer}"
+    );
     assert_eq!(answer["_code"], "native_version_unqualified");
-    // Inspection names every obstacle with the dimension it belongs to, so a
+    assert_eq!(answer["blockers"][0]["detected"], "0.1.0");
+    assert_eq!(answer["environment"]["native"]["state"], "detected");
+    assert_eq!(answer["environment"]["plugin"]["state"], "absent");
+    assert_eq!(answer["effects"]["native_writes"], false);
+    // Inspection names each obstacle with the dimension it belongs to, so a
     // reader can act on the one they can act on now.
     let inspected = inspect(&store, &config, "dsh-main").await.unwrap();
     let readiness = &inspected["readiness"];
     assert_eq!(readiness["ready"], false);
-    let blocked: Vec<(&str, &str)> = readiness["blocked"]
+    let blocked: Vec<&str> = readiness["blocked"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| {
-            (
-                row["dimension"].as_str().unwrap(),
-                row["next_action"].as_str().unwrap(),
-            )
-        })
+        .filter_map(|row| row["dimension"].as_str())
         .collect();
     assert_eq!(
         blocked,
-        vec![(
-            "native_installation",
-            "update this client to the qualified version or newer"
-        )],
+        vec!["native_installation", "plugin"],
         "{inspected}"
     );
-    assert_eq!(answer["blockers"][0]["detected"], "0.1.0");
-    assert_eq!(answer["environment"]["native"]["state"], "detected");
-    assert_eq!(answer["effects"]["native_writes"], false);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_apply_never_resurrects_the_retired_artifact() {
+    const CHILD: &str = "TMAX_DSH_REAPPLY_CHILD";
+    const THIS: &str = "agent_integration::dsh_lifecycle_tests::a_second_apply_never_resurrects_the_retired_artifact";
+    if std::env::var_os(CHILD).is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("dsh");
+        fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '{}\\n'\n",
+                super::adapters::DSH_QUALIFIED
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", THIS, "--nocapture"])
+            .env(CHILD, "1")
+            .env("PATH", directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated reapply run failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::at(directory.path().join("authority"));
+    let home = directory.path().join("dsh");
+    let path = home.clone();
+    fs::create_dir_all(&path).unwrap();
+    let bundle = home.join("profiles/desktop");
+    fs::create_dir_all(bundle.join("node_modules/tmax")).unwrap();
+    fs::write(
+        bundle.join("package.json"),
+        r#"{"name":"desktop","dsh":{"profile":{"bundles":["tmax"]}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        bundle.join("node_modules/tmax/package.json"),
+        r#"{"name":"tmax","version":"0.1.0"}"#,
+    )
+    .unwrap();
+    let artifact = home.join("tmax-dsh.mjs");
+    let artifact_bytes = b"export const name = 'llm-tmax'\n";
+    fs::write(&artifact, artifact_bytes).unwrap();
+    let legacy = format!(
+        "- insert:\n    - id: llm-tmax\n      name: {}/tmax-dsh.mjs\n      config:\n        providers: {{}}\n",
+        path.display()
+    );
+    fs::write(path.join("cordis.patch.yml"), &legacy).unwrap();
+    let reference = secrets::put(&store, "provider:p", b"synthetic-reapply").unwrap();
+    let mut target = inspection_target(path.clone());
+    target.agent = "dsh".into();
+    target.default = None;
+    let mut config = Config::empty();
+    config.providers.insert(
+        "p".into(),
+        config::Provider {
+            integration: Some("custom".into()),
+            auth: Some(Auth::ApiKey { key_ref: reference }),
+            endpoints: BTreeMap::from([(
+                "chat-completions".into(),
+                "https://example.invalid/v1".into(),
+            )]),
+            models: BTreeMap::from([("first".into(), config::Model::default())]),
+            ..Default::default()
+        },
+    );
+    config.agents.insert("managed".into(), target);
+    store
+        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+        .unwrap();
+    apply(&store, &config, "managed", false).await.unwrap();
+    assert!(!artifact.exists(), "the first apply retires the artifact");
+    let applied = fs::read_to_string(path.join("cordis.patch.yml")).unwrap();
+    // The retired file is recorded as absent, so replaying its record must not
+    // restore it: an apply that recreates the adapter would reintroduce exactly
+    // the duplicate route registration the retirement removes.
+    let second = apply(&store, &config, "managed", false).await.unwrap();
+    assert!(
+        !artifact.exists(),
+        "a second apply resurrected the retired artifact"
+    );
+    assert_eq!(
+        second["changed_files"].as_array().map(Vec::len),
+        Some(0),
+        "{second}"
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("cordis.patch.yml")).unwrap(),
+        applied
+    );
 }

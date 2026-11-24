@@ -2,7 +2,7 @@
 use super::{
     adapters::{self, File, desired_fields_with_ownership, inline_credential},
     document::{self, Format},
-    installation::{schema_blocker, version},
+    installation::{INSTALL_TMAX_PLUGIN, dsh_plugin, schema_blocker, version},
     planning::{entries, fact_gap_warnings, projection_view},
     recovery::{
         Capture, Field, FileRecord, INDEX, Index, Payload, Record, baseline, conflicts,
@@ -160,26 +160,57 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         }
     }
     let mut files = files?;
+    // One decision retires both halves of the embedded plugin an earlier release
+    // installed: the row that loads this home's artifact and the artifact itself.
+    let retire_legacy = if target.agent == "dsh" {
+        let before = read_native(&path.join("cordis.patch.yml"))?;
+        let current = document::parse(before.as_deref().unwrap_or(""), Format::DshPatch)?;
+        if adapters::legacy_row(&current, &path) {
+            files.push(File {
+                path: path.join(adapters::LEGACY_PLUGIN_FILE),
+                format: Format::Text,
+                desired: json!({"$text": ""}),
+            });
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     conflicts(&index, identity.as_deref(), &files)?;
     if let Some(previous) = &previous {
         for f in &previous.files {
-            if !files.iter().any(|p| p.path == f.path) {
-                files.push(File {
-                    path: f.path.clone(),
-                    format: f.format,
-                    desired: json!({}),
-                });
+            if files.iter().any(|p| p.path == f.path) {
+                continue;
             }
+            // A file tmax deleted is not an owned field to release: releasing it
+            // would restore the bytes tmax retired on the previous run.
+            if f.format == Format::Text
+                && !f.fields.is_empty()
+                && f.fields.iter().all(|field| field.after_hash == "absent")
+            {
+                continue;
+            }
+            files.push(File {
+                path: f.path.clone(),
+                format: f.format,
+                desired: json!({}),
+            });
         }
     }
     let mut previews = Vec::new();
     let mut observed_inputs = Vec::new();
-    let mut desired_unchanged = previous
-        .as_ref()
-        .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
+    // A pending retirement is a change even when every other field already
+    // matches, so the no-op path must not answer for it.
+    let mut desired_unchanged = !retire_legacy
+        && previous
+            .as_ref()
+            .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
     for file in &files {
         if file.format == Format::Text
             && file.path.exists()
+            && !retire_legacy
             && !previous.as_ref().is_some_and(|record| {
                 record
                     .files
@@ -294,10 +325,23 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             environment_blockers.push(blocker);
         }
     }
+    // The plugin installed into a DSH profile owns the routes and the page, so a
+    // home without it has nothing for apply to configure, in a dry run or not.
+    if target.agent == "dsh" {
+        let plugin = dsh_plugin(&path);
+        environment["plugin"] = plugin.clone();
+        if plugin["state"] != "installed" {
+            environment_blockers.push(json!({
+                "code": "dsh_plugin_not_installed",
+                "message": INSTALL_TMAX_PLUGIN,
+                "plugin": plugin["state"],
+            }));
+        }
+    }
     if !environment_blockers.is_empty() {
         let primary = environment_blockers[0]["code"].clone();
         return Ok(
-            json!({"_code":primary,"target":id,"agent":target.agent,"path":path,"dry_run":dry_run,"installation":environment.get("native").cloned(),"environment":environment,"blockers":environment_blockers,"effects":{"native_writes":false,"secret_reads":false}}),
+            json!({"_code":primary,"target":id,"agent":target.agent,"path":path,"dry_run":dry_run,"installation":environment.get("native").cloned(),"plugin":environment.get("plugin").cloned(),"environment":environment,"blockers":environment_blockers,"effects":{"native_writes":false,"secret_reads":false}}),
         );
     }
     if dry_run {
@@ -375,7 +419,20 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             .and_then(|record| record.files.iter().find(|old| old.path == file.path))
             .map(|file| file.fields.as_slice())
             .unwrap_or_default();
-        let desired = desired_fields_with_ownership(&target.agent, &file.desired, &current, owned);
+        let mut desired =
+            desired_fields_with_ownership(&target.agent, &file.desired, &current, owned);
+        if retire_legacy && file.format == Format::DshPatch {
+            desired.push((vec!["llm-tmax".into()], None));
+        }
+        // An absence tmax owns stays absent. The recorded after-state is the
+        // desired state until a restore, so a later apply must not mistake it
+        // for a field tmax stopped managing and put the old bytes back.
+        for field in owned {
+            if field.after_hash == "absent" && !desired.iter().any(|(path, _)| *path == field.path)
+            {
+                desired.push((field.path.clone(), None));
+            }
+        }
         let mut after = before.clone().unwrap_or_default();
         let mut fields = Vec::new();
         let mut baseline_values = Vec::new();
@@ -414,9 +471,16 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 document::get(&current, &field)
             };
             baseline_values.push((field.clone(), before_value.cloned()));
+            // An empty text document is how whole-file absence is expressed, so
+            // the recorded state is absence too; recording the empty string would
+            // make a later restore disagree with the read-back it is compared to.
+            let after_value = match (file.format, value.as_ref()) {
+                (Format::Text, Some(empty)) if empty == &json!("") => None,
+                _ => value.as_ref(),
+            };
             fields.push(Field {
                 before_hash: field_hash(before_value),
-                after_hash: field_hash(value.as_ref()),
+                after_hash: field_hash(after_value),
                 observed_hash: field_hash(document::get(&current, &field)),
                 path: field,
                 released: false,
@@ -706,163 +770,6 @@ mod tests {
     use super::*;
     use crate::config::Auth;
     use std::collections::BTreeMap;
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn dsh_input_reapply_withdraws_owned_image_and_preserves_restore_baseline() {
-        const CHILD: &str = "TMAX_DSH_INPUT_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            use std::os::unix::fs::PermissionsExt;
-            let directory = tempfile::tempdir().unwrap();
-            let executable = directory.path().join("dsh");
-            fs::write(
-                &executable,
-                format!(
-                    "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '{}\\n'\n",
-                    adapters::DSH_QUALIFIED
-                ),
-            )
-            .unwrap();
-            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "agent_integration::application::tests::dsh_input_reapply_withdraws_owned_image_and_preserves_restore_baseline", "--nocapture"])
-                .env(CHILD, "1").env("PATH", directory.path()).output().unwrap();
-            assert!(
-                output.status.success(),
-                "isolated DSH input lifecycle failed: {}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            return;
-        }
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::at(directory.path().join("authority"));
-        let path = directory.path().join("native");
-        fs::create_dir_all(&path).unwrap();
-        let patch = path.join("cordis.patch.yml");
-        let original = "# native input baseline\n- insert:\n    - id: llm-tmax\n      config:\n        providers:\n          local:\n            models:\n              - id: first\n                input: [text, image]\n                maxTokens: 1234\n                thinkingBudgets: {high: 512}\n- id: agent-default-model\n  config: {provider: existing, model: unchanged, reasoningEffort: high}\n";
-        fs::write(&patch, original).unwrap();
-        let reference = secrets::put(&store, "provider:p", b"synthetic-input-key").unwrap();
-        let mut target = inspection_target(path.clone());
-        target.agent = "dsh".into();
-        target.default = None;
-        let mut config = Config::empty();
-        config.providers.insert(
-            "p".into(),
-            config::Provider {
-                integration: Some("custom".into()),
-                auth: Some(Auth::ApiKey { key_ref: reference }),
-                endpoints: BTreeMap::from([(
-                    "chat-completions".into(),
-                    "https://example.invalid/v1".into(),
-                )]),
-                models: BTreeMap::from([("first".into(), config::Model::default())]),
-                ..Default::default()
-            },
-        );
-        config.agents.insert("managed".into(), target);
-        let model_path = vec![
-            "llm-tmax".into(),
-            "config".into(),
-            "providers".into(),
-            "local".into(),
-            "models".into(),
-        ];
-        for (input, expected) in [
-            (
-                Some(vec!["text".to_owned(), "image".to_owned()]),
-                Some(json!(["text", "image"])),
-            ),
-            (Some(vec!["text".to_owned()]), Some(json!(["text"]))),
-            (None, None),
-            (None, None),
-        ] {
-            config
-                .providers
-                .get_mut("p")
-                .unwrap()
-                .models
-                .get_mut("first")
-                .unwrap()
-                .overrides
-                .modalities = input.map(|input| config::Modalities {
-                input: Some(input),
-                output: None,
-            });
-            store
-                .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
-                .unwrap();
-            let result = apply(&store, &config, "managed", false).await.unwrap();
-            assert_eq!(result["_code"], "awaiting_native_reload");
-            let value =
-                document::parse(&fs::read_to_string(&patch).unwrap(), Format::DshPatch).unwrap();
-            let row = &document::get(&value, &model_path).unwrap()[0];
-            assert_eq!(row.get("input"), expected.as_ref());
-            assert_eq!(row["maxTokens"], 1234);
-            assert_eq!(row["thinkingBudgets"], json!({"high":512}));
-            assert_eq!(value["agent-default-model"]["config"]["model"], "unchanged");
-        }
-        let withdrawn = fs::read_to_string(&patch).unwrap();
-        let credentials = fs::read(path.join(".credentials.yaml")).unwrap();
-        config
-            .providers
-            .get_mut("p")
-            .unwrap()
-            .models
-            .get_mut("first")
-            .unwrap()
-            .overrides
-            .modalities = Some(config::Modalities {
-            input: Some(vec![]),
-            output: None,
-        });
-        store
-            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
-            .unwrap();
-        for dry_run in [true, false] {
-            assert_eq!(
-                apply(&store, &config, "managed", dry_run)
-                    .await
-                    .unwrap_err()
-                    .code,
-                "native_metadata_unrepresentable"
-            );
-            assert_eq!(fs::read_to_string(&patch).unwrap(), withdrawn);
-            assert_eq!(
-                fs::read(path.join(".credentials.yaml")).unwrap(),
-                credentials
-            );
-        }
-        config
-            .providers
-            .get_mut("p")
-            .unwrap()
-            .models
-            .get_mut("first")
-            .unwrap()
-            .overrides
-            .modalities = None;
-        store
-            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
-            .unwrap();
-        let edited = document::set(&withdrawn, Format::DshPatch, &model_path,
-            Some(&json!([{"id":"first","input":["image"],"maxTokens":1234,"thinkingBudgets":{"high":512}}]))).unwrap();
-        fs::write(&patch, &edited).unwrap();
-        assert_eq!(
-            apply(&store, &config, "managed", false)
-                .await
-                .unwrap_err()
-                .code,
-            "native_conflict"
-        );
-        assert_eq!(fs::read_to_string(&patch).unwrap(), edited);
-        fs::write(&patch, &withdrawn).unwrap();
-        let index: Index = store.read_json(INDEX).unwrap();
-        super::super::recovery::restore(&store, &index.records.last().unwrap().id, false)
-            .await
-            .unwrap();
-        assert_eq!(fs::read_to_string(&patch).unwrap(), original);
-    }
-
     #[tokio::test]
     async fn model_only_application_preserves_defaults_roles_and_uses_its_own_scope() {
         for agent in ["pi", "omp", "hermes"] {

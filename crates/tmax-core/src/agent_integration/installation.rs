@@ -3,7 +3,7 @@ use super::{adapters, scope::read_native};
 use crate::{Error, Result};
 use serde_json::{Value, json};
 #[cfg(windows)]
-use std::path::Component;
+use std::path::{Component, Path, PathBuf};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -277,6 +277,66 @@ pub(super) fn schema_blocker(agent: &str, installation: &Value) -> Option<Value>
         }));
     }
     None
+}
+
+/// What the user is told when a DSH home has no plugin to configure.
+pub(super) const INSTALL_TMAX_PLUGIN: &str = "Install the tmax plugin into a DSH profile: from Plugins in DSH Desktop, or `dsh plugin --profile <profile> add <repository>`; then apply again";
+
+/// The installed tmax plugin, per profile of this DSH home.
+///
+/// DSH activates a plugin listed in `dsh.profile.bundles`, so a package
+/// directory alone is not an installation: it is reported as `partial` rather
+/// than counted, and an unlisted directory is not evidence at all.
+pub(super) fn dsh_plugin(scope: &Path) -> Value {
+    let mut profiles = Vec::new();
+    for profile in profile_directories(scope) {
+        let manifest = read_json(&profile.join("package.json"));
+        let listed = manifest.as_ref().is_some_and(lists_plugin);
+        let installed = read_json(&profile.join("node_modules/tmax/package.json"));
+        profiles.push(json!({
+            "profile": profile.file_name().map(|name| name.to_string_lossy().into_owned()),
+            "listed": listed,
+            "package": installed.is_some(),
+            "version": installed.as_ref().and_then(|package| package["version"].as_str()),
+        }));
+    }
+    let installed = profiles
+        .iter()
+        .any(|row| row["listed"] == true && row["package"] == true);
+    let partial = profiles.iter().any(|row| row["listed"] == true);
+    json!({
+        "state": if installed { "installed" } else if partial { "partial" } else { "absent" },
+        "profiles": profiles,
+    })
+}
+
+/// A plugin is active when the profile lists it as a bundle or as a dependency.
+fn lists_plugin(manifest: &Value) -> bool {
+    manifest
+        .pointer("/dsh/profile/bundles")
+        .and_then(Value::as_array)
+        .is_some_and(|bundles| bundles.iter().any(|bundle| bundle.as_str() == Some("tmax")))
+        || manifest
+            .get("dependencies")
+            .and_then(Value::as_object)
+            .is_some_and(|dependencies| dependencies.contains_key("tmax"))
+}
+
+fn profile_directories(scope: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(scope.join("profiles")) else {
+        return Vec::new();
+    };
+    let mut profiles: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir() && path.join("package.json").is_file())
+        .collect();
+    profiles.sort();
+    profiles
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Semver ordering over the dotted numeric core and prerelease identifiers

@@ -164,6 +164,7 @@ mod codex;
 mod credentials;
 mod dsh;
 pub(crate) use dsh::dsh_credential_ref_for;
+pub(super) use dsh::{LEGACY_PLUGIN_FILE, legacy_row};
 mod hermes;
 mod opencode;
 mod pi_omp;

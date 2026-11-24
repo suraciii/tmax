@@ -29,6 +29,7 @@ pub(super) fn success_response(operation: &str, dry_run: bool, mut data: Value) 
         | "native_version_unknown"
         | "native_version_unqualified"
         | "native_schema_incompatible"
+        | "dsh_plugin_not_installed"
         | "target_incomplete" => 3,
         "ok" | "dry_run_ready" | "daemon_reused" | "service_restart_requested" => 0,
         _ => 4,

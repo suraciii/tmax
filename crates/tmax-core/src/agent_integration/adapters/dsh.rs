@@ -1,5 +1,5 @@
 use super::super::document::{self, Format};
-use super::capabilities::{ReasoningProjection, api, catalog_model_metadata};
+use super::capabilities::{ReasoningProjection, catalog_model_metadata};
 use super::{Entry, File, file};
 use crate::{Error, Result, config::AgentTarget};
 use serde_json::{Value, json};
@@ -75,7 +75,20 @@ pub(super) fn model_metadata(effective: &Value) -> Result<Value> {
 }
 
 pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Result<Vec<File>> {
-    let mut providers = serde_json::Map::new();
+    // The plugin installed into a DSH profile owns both the routes and the page,
+    // so this home only carries that entry's configuration: the home it serves
+    // and the executable it invokes. A Desktop process does not inherit the PATH
+    // a terminal has, so the executable is absolute.
+    let executable = std::env::current_exe().map_err(|_| {
+        Error::new(
+            "native_executable_not_found",
+            "The running tmax executable path cannot be resolved",
+        )
+    })?;
+    let mut patch = json!({"tmax":{"config":{
+        "home":scope,
+        "tmaxPath":executable,
+    }}});
     let mut refs = serde_json::Map::new();
     for entry in entries {
         if entry.login_provider.is_some() {
@@ -84,7 +97,7 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 "DSH native login authentication is not qualified; select an API-key provider",
             ));
         }
-        let models = entry.models.iter().map(|id| {
+        for id in &entry.models {
             if let Some((protocol, base)) = entry.model_routes.get(id)
                 && (protocol != &entry.protocol || base != &entry.base)
             {
@@ -95,31 +108,12 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                     "DSH requires one protocol and endpoint per native provider entry; split mixed model routes into separate entries",
                 ));
             }
-            let mut model = json!({"id":id});
-            if let Some(metadata) = entry.model_metadata.get(id).and_then(Value::as_object) {
-                model.as_object_mut().expect("native model object").extend(metadata.clone());
-            }
-            Ok(model)
-        }).collect::<Result<Vec<_>>>()?;
+        }
         let credential_ref = dsh_credential_ref(scope, entry);
-        providers.insert(
-            entry.native_name().into(),
-            json!({
-                "apiKeyEnv":credential_ref,
-                "api":api(&entry.protocol)?,
-                "baseURL":entry.base,
-                "models":models,
-            }),
-        );
         if let Some(key) = &entry.key {
             refs.insert(credential_ref, json!(key));
         }
     }
-    let mut patch = json!({"llm-tmax":{
-        "name":scope.join("tmax-dsh.mjs"),
-        "disabled":false,
-        "config":{"providers":providers}
-    }});
     if let Some(default) = &target.default {
         let active = entries
             .iter()
@@ -145,14 +139,35 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             json!({"version":1,"refs":refs}),
         ));
     }
-    files.push(file(
-        scope,
-        "tmax-dsh.mjs",
-        Format::Text,
-        json!({"$text":include_str!("../../../../../dsh-plugin/adapter.js")}),
-    ));
     files.push(file(scope, "cordis.patch.yml", Format::DshPatch, patch));
     Ok(files)
+}
+
+/// The adapter file an earlier release embedded beside the home patch.
+pub(in crate::agent_integration) const LEGACY_PLUGIN_FILE: &str = "tmax-dsh.mjs";
+
+/// Whether this home still declares that embedded plugin: the `llm-tmax` row
+/// that loads *this* home's artifact. A row that loads anything else belongs to
+/// the user, whatever its id, and is left alone.
+pub(in crate::agent_integration) fn legacy_row(current: &Value, scope: &Path) -> bool {
+    current
+        .get("llm-tmax")
+        .and_then(|row| row.get("name"))
+        .and_then(Value::as_str)
+        .is_some_and(|name| portable(Path::new(name)) == portable(&scope.join(LEGACY_PLUGIN_FILE)))
+}
+
+/// Windows verbatim paths differ textually from the same path written plainly.
+fn portable(path: &Path) -> String {
+    path.to_string_lossy()
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .unwrap_or_else(|| {
+            path.to_string_lossy()
+                .strip_prefix(r"\\?\")
+                .map(str::to_owned)
+                .unwrap_or_else(|| path.to_string_lossy().into_owned())
+        })
 }
 
 pub(super) fn inline_credential(path: &[String]) -> bool {
@@ -285,35 +300,31 @@ mod tests {
     }
 
     #[test]
-    fn dsh_model_only_handoff_keeps_secrets_and_native_preferences_out_of_patch() {
+    fn dsh_model_only_handoff_configures_the_installed_plugin_and_never_installs_one() {
         let scope = Path::new("/explicit/dsh");
         let mut target = target("dsh");
         target.default = None;
-        for (protocol, expected_api) in [
-            ("chat-completions", "openai-completions"),
-            ("responses", "openai-responses"),
-            ("messages", "anthropic-messages"),
-        ] {
+        for protocol in ["chat-completions", "responses", "messages"] {
             let entry = dsh_entry(protocol);
             let credential_ref = dsh_credential_ref(scope, &entry);
             let files = build(&target, scope, &[entry]).unwrap();
-            assert_eq!(files.len(), 3);
+            // The plugin is installed by DSH into a profile, so this home carries
+            // its configuration and the credential document, never the artifact.
+            assert_eq!(files.len(), 2, "{files:?}");
             assert_eq!(files[0].path, Path::new("/explicit/dsh/.credentials.yaml"));
             assert_eq!(files[0].desired["version"], 1);
             assert_eq!(
                 files[0].desired["refs"][&credential_ref],
                 "protected-key-reference"
             );
-            assert_eq!(files[2].path, scope.join("cordis.patch.yml"));
-            assert!(matches!(files[2].format, Format::DshPatch));
-            let patch = &files[2].desired;
-            let provider = &patch["llm-tmax"]["config"]["providers"]["local"];
-            assert_eq!(provider["api"], expected_api);
-            assert_eq!(provider["apiKeyEnv"], credential_ref);
-            assert_eq!(provider["models"], json!([{"id":"m"}]));
+            assert_eq!(files[1].path, scope.join("cordis.patch.yml"));
+            assert!(matches!(files[1].format, Format::DshPatch));
+            let patch = &files[1].desired;
+            assert!(patch.get("llm-tmax").is_none(), "{patch}");
+            assert_eq!(patch["tmax"]["config"]["home"], "/explicit/dsh");
+            let executable = patch["tmax"]["config"]["tmaxPath"].as_str().unwrap();
+            assert!(Path::new(executable).is_absolute(), "{executable}");
             assert!(patch.get("agent-default-model").is_none());
-            assert!(provider.get("reasoning").is_none());
-            assert!(provider.get("headers").is_none());
             assert!(!patch.to_string().contains("protected-key-reference"));
         }
         let entry = dsh_entry("responses");
@@ -341,7 +352,7 @@ mod tests {
         }
         let files = build(&target("dsh"), scope, &[dsh_entry("chat-completions")]).unwrap();
         assert_eq!(
-            files[2].desired["agent-default-model"],
+            files[1].desired["agent-default-model"],
             json!({"config":{"provider":"local","model":"m"}})
         );
     }
@@ -526,13 +537,13 @@ mod tests {
         effort(&mut target, "max");
         let files = build(&target, scope, std::slice::from_ref(&model_entry)).unwrap();
         assert_eq!(
-            files[2].desired["agent-default-model"]["config"]["reasoningEffort"],
+            files[1].desired["agent-default-model"]["config"]["reasoningEffort"],
             "max"
         );
         target.default.as_mut().unwrap().effort = None;
         let files = build(&target, scope, &[model_entry]).unwrap();
         assert!(
-            files[2].desired["agent-default-model"]["config"]
+            files[1].desired["agent-default-model"]["config"]
                 .get("reasoningEffort")
                 .is_none()
         );

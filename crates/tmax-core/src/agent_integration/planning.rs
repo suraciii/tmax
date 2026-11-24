@@ -7,7 +7,7 @@ use super::{
     compatibility,
     discovery::safe_files,
     document::{self, Format},
-    installation::{schema_blocker, version},
+    installation::{INSTALL_TMAX_PLUGIN, dsh_plugin, schema_blocker, version},
     recovery::{INDEX, Index, Record, field_drift, field_hash, owner, record_for, record_view},
     scope::{dsh_preflight, read_native, scope_evidence, target, unavailable},
 };
@@ -325,6 +325,17 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     if available && let Some(blocker) = schema_blocker(&target.agent, &installed) {
         blockers.push(blocker);
     }
+    // A home whose profiles carry no tmax plugin has nothing to apply into, so
+    // inspection names the installation action rather than a pending write.
+    let plugin = if target.agent == "dsh" && available {
+        let plugin = dsh_plugin(&path);
+        if plugin["state"] != "installed" {
+            blockers.push(json!({"code":"dsh_plugin_not_installed","message":INSTALL_TMAX_PLUGIN}));
+        }
+        Some(plugin)
+    } else {
+        None
+    };
     let delivery = applied_delivery(config, target, record, readiness, native_conflict);
     // One row per thing a reader can act on, so a blocked target names every
     // obstacle at once instead of whichever check ran first.
@@ -336,7 +347,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view(&target.agent,&path),"pending_native_changes":pending,"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"plugin":plugin,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view(&target.agent,&path),"pending_native_changes":pending,"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -1342,6 +1353,20 @@ mod tests {
         let store = Store::at(directory.path().join("tmax"));
         let scope = directory.path().join("dsh-home");
         std::fs::create_dir_all(&scope).unwrap();
+        // The plugin installed into a profile is what apply configures, so the
+        // home is only a valid target once it carries one.
+        let profile = scope.join("profiles/desktop");
+        std::fs::create_dir_all(profile.join("node_modules/tmax")).unwrap();
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"name":"desktop","dsh":{"profile":{"bundles":["tmax"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join("node_modules/tmax/package.json"),
+            r#"{"name":"tmax","version":"0.1.0"}"#,
+        )
+        .unwrap();
         let text = "version=2\n[gateway]\nlisten='127.0.0.1:17840'\nkey_ref='secret:gw'\n[providers.up]\nintegration='custom'\n[providers.up.endpoints]\nresponses='http://127.0.0.1:39999'\n[providers.up.auth]\nmethod='api-key'\nkey_ref='secret:up'\n[providers.up.models.route]\n[[model_aliases]]\nid='route'\nprotocols=['responses']\ncontinuity='stateless'\ncandidates=['up/route']\n";
         let target = format!(
             "[agents.dsh-main]\nagent='dsh'\nscope='{}'\n[agents.dsh-main.providers.tmax]\nprovider='tmax'\nmodels=[{{id='route',protocol='responses'}}]\n[agents.dsh-main.default]\nprovider='tmax'\nid='route'\nprotocol='responses'\n",
