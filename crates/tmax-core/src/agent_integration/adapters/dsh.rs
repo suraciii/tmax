@@ -5,6 +5,9 @@ use crate::{Error, Result, config::AgentTarget};
 use serde_json::{Value, json};
 use std::path::Path;
 
+/// The DSH entry whose settings carry a profile's providers.
+pub(in crate::agent_integration) const PROFILE_SETTINGS: &str = "llm-pi-ai";
+
 // DSH 0.2.1-rc.2 catalog.ts THINKING_LEVEL_GATE and resolveModelReasoning;
 // independently qualified from Pi's thinkingLevelMap carrier.
 const DSH_EFFORT_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -220,8 +223,11 @@ pub(super) fn build(
     }
     let mut files = Vec::new();
     if !refs.is_empty() {
-        // The base bundle already composes DSH's own credential store at this
-        // path, so the reference resolves without any further configuration.
+        // The base bundle composes DSH's own credential store at this path. The
+        // headless bundle disables that service, and a key-bearing provider is
+        // useless without it, so the profile that receives the providers asserts
+        // it rather than leaving a route that cannot resolve its key.
+        patch["credentials"] = json!({"disabled":false});
         files.push(file(
             scope,
             ".credentials.yaml",
@@ -281,7 +287,7 @@ pub(super) fn inline_credential(path: &[String]) -> bool {
 
 pub(super) fn preserve_models(path: &[String], value: &mut Value, current: &Value) {
     if path.len() == 5
-        && path[0] == "llm-tmax"
+        && path[0] == PROFILE_SETTINGS
         && path[1] == "config"
         && path[2] == "providers"
         && path[4] == "models"
@@ -309,7 +315,7 @@ pub(super) fn preserve_models(path: &[String], value: &mut Value, current: &Valu
 
 pub(super) fn withdraw_input(path: &[String], value: &mut Value, desired: &Value) {
     if path.len() != 5
-        || path[0] != "llm-tmax"
+        || path[0] != PROFILE_SETTINGS
         || path[1] != "config"
         || path[2] != "providers"
         || path[4] != "models"
@@ -361,12 +367,12 @@ pub(super) fn validate_credentials(current: &Value) -> Result<()> {
 pub(super) fn validate_existing(file: &File, current: &Value) -> Result<()> {
     if let Some(providers) = file
         .desired
-        .pointer("/llm-tmax/config/providers")
+        .pointer("/llm-pi-ai/config/providers")
         .and_then(Value::as_object)
     {
         for name in providers.keys() {
             let route_path = vec![
-                "llm-tmax".into(),
+                PROFILE_SETTINGS.into(),
                 "config".into(),
                 "providers".into(),
                 name.clone(),
@@ -440,7 +446,9 @@ mod tests {
             let patch = &files[1].desired;
             assert!(patch.get("llm-tmax").is_none(), "{patch}");
             assert!(patch.get("tmax").is_none(), "{patch}");
-            assert!(patch.get("credentials").is_none(), "{patch}");
+            // A key-bearing provider asserts the service that resolves it, in
+            // the same profile that carries the providers.
+            assert_eq!(patch["credentials"]["disabled"], false);
             assert!(patch.get("agent-default-model").is_none());
             assert!(!patch.to_string().contains("protected-key-reference"));
         }
@@ -547,19 +555,19 @@ mod tests {
     }
     #[test]
     fn dsh_selected_models_preserve_native_fields_by_identity() {
-        let current = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[
+        let current = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
             {"id":"second","maxTokens":2048,"name":"Native second"},
             {"id":"first","maxTokens":1234,"contextWindow":4096,"thinkingBudgets":{"high":512}},
             {"id":"removed","maxTokens":99}
         ]}}}}});
-        let desired = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[
+        let desired = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
             {"id":"first","contextWindow":8192},
             {"id":"second"},
             {"id":"new"}
         ]}}}}});
         let fields = desired_fields("dsh", &desired, &current);
         let path: Vec<String> = vec![
-            "llm-tmax".into(),
+            PROFILE_SETTINGS.into(),
             "config".into(),
             "providers".into(),
             "local".into(),
@@ -577,15 +585,15 @@ mod tests {
 
     #[test]
     fn dsh_alias_unknown_input_withdraws_only_from_owned_models() {
-        let current = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[
+        let current = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[
             {"id":"shared","input":["text","image"],"maxTokens":1234,"thinkingBudgets":{"high":512}}
         ]}}}}});
         let mut model =
             crate::agent_integration::alias_model_metadata("dsh", "responses", &json!({})).unwrap();
         model["id"] = json!("shared");
-        let desired = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[model]}}}}});
+        let desired = json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[model]}}}}});
         let path = vec![
-            "llm-tmax".into(),
+            PROFILE_SETTINGS.into(),
             "config".into(),
             "providers".into(),
             "local".into(),
@@ -621,7 +629,7 @@ mod tests {
     #[test]
     fn dsh_alias_reapply_clears_lost_common_efforts_without_changing_native_preferences() {
         let current = json!({
-            "llm-tmax":{"config":{"providers":{"local":{"models":[{
+            "llm-pi-ai":{"config":{"providers":{"local":{"models":[{
                 "id":"shared", "reasoningEfforts":{"low":"low","high":"high"},
                 "maxTokens":1234,"thinkingBudgets":{"high":512}
             }]}}}},
@@ -641,13 +649,14 @@ mod tests {
             )
             .unwrap();
             model["id"] = json!("shared");
-            let desired = json!({"llm-tmax":{"config":{"providers":{"local":{"models":[model]}}}}});
+            let desired =
+                json!({"llm-pi-ai":{"config":{"providers":{"local":{"models":[model]}}}}});
             let mut text = serde_yaml::to_string(&current).unwrap();
             for (path, value) in desired_fields("dsh", &desired, &current) {
                 text = document::set(&text, Format::Yaml, &path, value.as_ref()).unwrap();
             }
             let after = document::parse(&text, Format::Yaml).unwrap();
-            let row = &after["llm-tmax"]["config"]["providers"]["local"]["models"][0];
+            let row = &after["llm-pi-ai"]["config"]["providers"]["local"]["models"][0];
             assert_eq!(row["reasoningEfforts"], expected);
             assert_eq!(row["maxTokens"], 1234);
             assert_eq!(row["thinkingBudgets"], json!({"high":512}));

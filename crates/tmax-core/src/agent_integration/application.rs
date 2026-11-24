@@ -499,7 +499,7 @@ pub async fn apply(
             let value = document::parse(&after, file.format)?;
             for field in owned {
                 if field.path.len() > 4
-                    && field.path[0] == "llm-tmax"
+                    && field.path[0] == adapters::PROFILE_SETTINGS
                     && field.path[1] == "config"
                     && field.path[2] == "providers"
                 {
