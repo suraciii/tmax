@@ -991,9 +991,25 @@ The supplementary Web interface must have these task-oriented areas:
 | --- | --- |
 | Overview | Provider-instance problems grouped by service, agent configuration state, gateway health, stale quota information, upcoming known renewal dates |
 | Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota windows with their basis, units and reset evidence, and freshness |
-| Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases with public names, declared protocols, explicit candidate lists, and selection previews |
+| Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases (presented as gateway entries) with public names, declared protocols, explicit candidate lists, and selection previews |
 | Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
-| Gateway | Listener lifecycle, shared key, derived concrete-model and alias availability, continuity, health and request metadata |
+| Gateway | Listener lifecycle, shared key, gateway-entry list with readiness and next actions, authenticated published raw concrete-model IDs, continuity, health and request metadata |
+
+The Web interface presents a Model alias as a **gateway entry**: the
+client-selectable public route name by which one or more existing Models are used
+through the gateway. This is a presentation label for the existing alias, not a
+second resource, a copy of a Model, or a permission. A concrete Model must offer
+an action that creates an entry with a default public name derived from the
+Model's exact model ID (the model portion of its qualified reference); the user
+confirms or edits that name before saving. If the default name is taken, the form
+prefills a non-colliding suggestion and lets the user edit it; it never changes
+the name of an existing entry. Saving an entry must not start the gateway, change
+native Agent configuration, or claim that requests can already run. The UI must
+show the entry's next step — configure the gateway, start or reload it, use the
+entry in an Agent target, or resolve a disabled entry or unavailable source — and
+must distinguish the entry name from the raw `provider-id/model-id` ID, which
+remains available to clients that call the gateway directly. The Gateway area
+must list entries rather than only a publication count.
 
 The Web interface must offer English and Simplified Chinese. An explicit valid
 language choice takes precedence and persists locally as a language preference

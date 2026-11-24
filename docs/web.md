@@ -28,10 +28,17 @@ page makes no external font, image, or script requests.
   in hours. New policies require explicit enablement. Details distinguish loaded
   routing state from saved policy and expose trigger/expiry and an explicit reset.
   Preview does not change the counter or active override.
-- **Models** separates concrete models from aliases. Concrete forms edit names,
-  enabled state, and base priority. Alias forms declare one or more native
-  protocols and edit one route; the candidate list applies to every declared
-  protocol, and the model list's alias row shows that declared protocol set.
+- **Models** separates concrete models from **gateway entries** (the Web name for
+  model aliases). A concrete model without an entry offers **通过网关使用**: the compact form
+  defaults the entry name to the model ID, offers the model's published protocols,
+  previews the change, and refuses a duplicate entry for the same model. Saving an
+  entry only writes the alias; it does not configure or start the gateway or touch
+  Agent files. The resulting status names the next step: configure the gateway,
+  start it, reload it, use the entry in a tool, or resolve a disabled entry or
+  unavailable source. The advanced form still edits one route with multiple
+  candidates, declared protocols, fallback, continuity, and per-candidate effort.
+  Concrete forms edit names, enabled state, and base priority; the model list's
+  entry row shows its declared protocol set.
   Renaming or removing an alias uses the route ID and takes no protocol. Each
   candidate has an optional reasoning-effort input; leave it blank when creating
   an alias to omit a fixed override, and blanking a saved value while editing
@@ -66,11 +73,12 @@ page makes no external font, image, or script requests.
   the declared target even when the executable is not on `PATH`; discovery
   reports that absence and never blocks the write. Saving opens the configuration details.
   Add a direct or relayed provider entry, select its models and native
-  protocols, then optionally choose its default (required for Codex). The model
-  choices list only published protocols, grouped Responses first for both concrete
-  models and aliases. An alias appears under each of its declared protocols, with
-  Responses listed first; existing selections retain their protocol. The client
-  uses the selected protocol;
+  protocols, then optionally choose its default (required for Codex). A direct
+  source lists that provider's concrete models; a relayed gateway source lists
+  only gateway entries, because a raw `provider-id/model-id` is not a valid native
+  route selection. Choices list only published protocols, grouped Responses
+  first. An entry appears under each declared protocol, with Responses listed
+  first; existing selections retain their protocol. The client uses the selected protocol;
   the gateway does not translate or choose another one. Saving these declarations
   does not write native files.
   Apply and restore remain separate explicit actions with optional previews.
@@ -91,8 +99,13 @@ page makes no external font, image, or script requests.
   ownership. See the
   [DSH reference](agents/dsh.md) for evidence limits; historical profile-path
   checks do not establish current home-wide, multi-profile behavior.
-- **Gateway** shows listener readiness, native process supervision, login-start
-  registration, shared-key state, and current-process request history separately.
+- **Gateway** lists the gateway entries with source models, protocols, readiness,
+  and next action, in addition to listener readiness, native process supervision,
+  login-start registration, shared-key state, and current-process request history.
+  The entry list distinguishes the client-facing entry name from raw
+  `provider-id/model-id` IDs, which remain available to clients that call the
+  gateway directly. A configured gateway whose process has not loaded the newest
+  configuration is shown as needing a reload rather than as ready.
   Configure, start, stop, and change login startup explicitly. A stopped inference
   listener stays stopped during Web-only process recovery. Restart reconnects the
   page and verifies a new ready process before displaying completion; it never

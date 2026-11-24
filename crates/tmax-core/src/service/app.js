@@ -25,9 +25,9 @@ const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] 
 const areas = {
   overview:['总览','OVERVIEW','查看接入、模型、工具配置和网关状态。'],
   providers:['接入','PROVIDER ACCESS','管理独立上游接入的授权、模型和订阅信息。'],
-  models:['模型','MODELS & ROUTING','管理接入下的模型，以及引用已有模型的别名配置。'],
+  models:['模型','MODELS & ROUTING','管理接入下的模型，以及工具可选择的网关入口。'],
   agents:['编程工具','CONNECTED TOOLS','为编程工具选择模型，并应用到本地配置。'],
-  gateway:['网关','LOCAL MODEL GATEWAY','配置网关地址、管理运行状态和查看请求记录。'],
+  gateway:['网关','LOCAL MODEL GATEWAY','配置网关、管理工具可选入口和查看请求记录。'],
 };
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber'],['dsh','DeepSeek Harness','D','blue']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-code-plan-cn':'Kimi Code Plan · 中国','kimi-code-plan-global':'Kimi Code Plan · 全球','glm-coding-plan':'GLM Coding Plan','stepfun-token-plan':'StepFun Step Plan','minimax-cn-coding-plan':'MiniMax Coding Plan · 中国','minimax-coding-plan':'MiniMax Coding Plan · 全球','custom':'自定义集成'};
@@ -156,6 +156,89 @@ const modelAlias = id => (state.config?.model_aliases || []).find(a => a.id === 
 const aliasProtocol = id => modelAlias(id)?.protocols?.[0] || '';
 const isSuccess = response => response?.exit_code === 0 && ['success','dry_run'].includes(response.body?.status);
 
+// Gateway entries are the existing model aliases, presented as the names a
+// client or Agent target can select. The helpers below are presentation only:
+// the Rust operation handlers own route validation, naming, and persistence.
+const gatewayStatus = () => {
+  const configured=Boolean(state.config?.gateway);
+  const known=Boolean(state.runtime);
+  const inference=state.runtime?.daemon?.inference;
+  const running=inference?.state==='running';
+  const ready=state.runtime?.gateway?.ready===true;
+  return {configured,known,running,ready,state:!configured?'unconfigured':!known?'unknown':!running?'stopped':ready?'ready':'starting'};
+};
+const rawModelCount = () => (state.models || []).filter(model=>{
+  if(model.kind!=='concrete' || !model.enabled || !(model.published_protocols || []).length) return false;
+  const providerId=model.id.split('/')[0];
+  const provider=state.providers?.find(item=>item.id===providerId);
+  return provider !== undefined && provider.authentication !== 'not_configured';
+}).length;
+const entriesForModel = modelId => (state.config?.model_aliases || []).filter(alias => Array.isArray(alias.candidates) && alias.candidates.includes(modelId));
+const entrySources = alias => Array.isArray(alias?.candidates) ? alias.candidates : [];
+const routeUsage = routeId => {
+  const found=[];
+  for(const [target,config] of Object.entries(state.config?.agents || {})) {
+    for(const [entry,source] of Object.entries(config?.providers || {})) {
+      if(source?.provider==='tmax' && Array.isArray(source.models) && source.models.some(model=>model?.id===routeId)) found.push({target,entry});
+    }
+  }
+  return found;
+};
+const entryBlockers = alias => {
+  const blockers=[];
+  for(const candidate of entrySources(alias)) {
+    const slash=candidate.indexOf('/');
+    const providerId=slash<0?candidate:candidate.slice(0,slash);
+    const modelId=slash<0?'':candidate.slice(slash+1);
+    const provider=state.config?.providers?.[providerId];
+    const model=provider?.models?.[modelId];
+    const row=(state.models || []).find(item=>item.kind==='concrete' && item.id===candidate);
+    if(!provider || !model) blockers.push(`${candidate} 已不存在`);
+    else if(provider.enabled===false || model.enabled===false) blockers.push(`${candidate} 已停用`);
+    else if(state.providers?.find(item=>item.id===providerId)?.authentication==='not_configured') blockers.push(`${candidate} 尚未配置授权`);
+    else if(row?.availability==='authentication_missing') blockers.push(`${candidate} 尚未配置授权`);
+  }
+  return [...new Set(blockers)];
+};
+function gatewayEntryState(alias) {
+  if(!alias) return {label:'未创建',tone:'',next:'gateway-entry-add'};
+  if(alias.enabled===false) return {label:'入口已停用',tone:'',next:'alias-edit'};
+  const gateway=gatewayStatus();
+  if(!gateway.configured) return {label:'等待网关配置',tone:'amber',next:'gateway-configure'};
+  if(!gateway.known) return {label:'网关状态未知',tone:'amber',next:'navigate'};
+  if(!gateway.running) return {label:'网关未启动',tone:'amber',next:'gateway-start'};
+  if(!gateway.ready) return {label:'网关待就绪',tone:'amber',next:'gateway-start'};
+  const blockers=entryBlockers(alias);
+  if(blockers.length) return {label:'来源不可用',tone:'amber',next:'alias-edit',detail:blockers[0]};
+  const loadedRevision=state.runtime?.gateway?.config_revision;
+  if(loadedRevision && state.revision && loadedRevision!==state.revision) return {label:'网关配置待重载',tone:'amber',next:'refresh-page',detail:'网关进程还没有加载最新配置；打开网关检查或重启。'};
+  const usage=routeUsage(alias.id);
+  return {label:usage.length?`可连接 · ${usage.length} 个工具已配置`:'可连接',tone:'green',next:'navigate',detail:usage.length?'':'还没有工具配置使用此入口'};
+}
+const safeEntryName = text => String(text || '').trim().replace(/[\/\s]+/g,'-').replace(/^-+|-+$/g,'');
+function suggestedEntryName(modelId) {
+  const parts=String(modelId || '').split('/');
+  const provider=parts.shift() || 'model';
+  const bare=safeEntryName(parts.join('/') || provider);
+  const aliases=state.config?.model_aliases || [];
+  if(!aliases.some(alias=>alias.id===bare)) return bare;
+  const prefixed=safeEntryName(`${provider}-${bare}`);
+  if(!aliases.some(alias=>alias.id===prefixed)) return prefixed;
+  let n=2;while(aliases.some(alias=>alias.id===`${prefixed}-${n}`))n++;
+  return `${prefixed}-${n}`;
+}
+function gatewayEntrySection(modelId) {
+  const routes=entriesForModel(modelId);
+  if(!routes.length) return `<h3 class="subheading">网关入口</h3>${notice('这个模型还没有网关入口。编程工具只选择网关入口，不直接选择原始模型编号。')}<div class="actions">${button('通过网关使用','gateway-entry-add',modelId,'primary','plus')}</div>`;
+  const rows=routes.map(alias=>{const status=gatewayEntryState(alias);return `<div class="list-row split"><div class="grow"><h3>${escapeHtml(alias.id)}</h3><small class="label-note">${escapeHtml(gatewayEntryState(alias).detail || status.label)}</small><div class="protocols">${(alias.protocols || []).map(protocol=>badge(protocolNames[protocol] || protocol)).join('')||badge('未声明')}</div></div><div class="actions">${button('状态与下一步','gateway-entry-status',JSON.stringify([alias.id,modelId]),'small')}${button('管理','alias-edit',JSON.stringify([alias.id]),'small soft')}</div></div>`;}).join('');
+  return `<h3 class="subheading">网关入口</h3>${notice('工具里选择的是入口名，不是原始模型编号。入口不会复制模型，也不会自动修改工具配置。')}<div class="panel"><div class="panel-body">${rows}</div></div>`;
+}
+const entryProtocols = modelId => {
+  const row=(state.models || []).find(item=>item.kind==='concrete' && item.id===modelId);
+  return (row?.published_protocols || []).filter(protocol=>Object.hasOwn(protocolNames,protocol));
+};
+
+
 async function http(path, payload, signal) {
   let response;
   try {
@@ -233,7 +316,7 @@ function navigate(area) {
 }
 function render() {
   if (!state.loaded) return;
-  const actions={overview:button('添加接入','provider-add','','primary','plus'),providers:button('添加接入','provider-add','','primary','plus'),models:button(state.modelKind==='alias'?'新建别名':'添加模型',state.modelKind==='alias'?'alias-add':'model-add','','primary','plus'),agents:button('添加工具配置','agent-add','','primary','plus'),gateway:button('网关设置','gateway-configure','','','settings')};
+  const actions={overview:button('添加接入','provider-add','','primary','plus'),providers:button('添加接入','provider-add','','primary','plus'),models:state.modelKind==='alias'?button('新建网关入口','gateway-entry-add','','primary','plus')+button('高级新建','alias-add','','','plus'):button('添加模型','model-add','','','plus'),agents:button('添加工具配置','agent-add','','primary','plus'),gateway:button('新建网关入口','gateway-entry-add','','primary','plus')+button('网关设置','gateway-configure','','','settings')};
   $('page-actions').innerHTML=actions[state.area];
   if (!state.config) { $('content').innerHTML=empty('暂时无法读取配置','请检查本地配置或使用高级操作查看校验结果。',button('校验配置','operation','config validate'),'info'); return; }
   ({overview:renderOverview,providers:renderProviders,models:renderModels,agents:renderAgents,gateway:renderGateway}[state.area])();
@@ -259,7 +342,7 @@ function renderOverview() {
   const agentsBody=agentTypes.map(([id,name,mark,tone])=>{const targets=(agents || []).filter(t=>t.agent===id);return `<div class="agent-row"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length?`${targets.length} 个已保存配置 · 原生状态需检查`:'添加配置后选择模型'}</p></div>${button(targets.length?'管理':'设置',targets.length?'navigate':'agent-add',targets.length?'agents':id,'small')}</div>`;}).join('');
   const renewals=upcoming.length?upcoming.map(([id,p])=>{const date=dateValue(p.subscription.renewal_date);const today=new Date().toLocaleDateString('en-CA');return `<div class="list-row split"><div><h3>${escapeHtml(providerName(id))}</h3><small>${escapeHtml(p.subscription.plan || '手动记录的日期')} · 计费结果未知</small></div>${badge(date+(date<today?' · 日期已过':''),date<today?'amber':'')}</div>`;}).join(''):'<p class="muted">暂无已知续费日期。可在接入详情中记录计划和日期。</p>';
   const issues=needsAuth.length?notice(`${needsAuth.length} 个接入尚未配置授权。可以继续管理模型，使用前请完成授权。`,'warning'):'';
-  $('content').innerHTML=`<div class="metrics">${metric('接入',providers===null?'—':upstreamProviders.length,'已添加的接入实例','providers')}${metric('模型',models?.filter(m=>m.kind==='concrete').length ?? '—',`${models?.filter(m=>m.kind==='alias').length ?? '—'} 个自定义别名`,'models')}${metric('工具配置',agents?.length ?? '—','已保存的工具配置','agents')}${metric('网关',!state.runtime?'未知':running?(ready?'运行中':'运行中 · 待就绪'):'未启动',running?'仅转发已支持的原生协议':'可在网关页面启动','gateway',true)}</div>`+issues+`<div class="grid-two">${panel('接入','授权和模型按接入实例配置',providerBody,button('查看全部','navigate','providers','text small','arrow'))}${panel('编程工具','查看配置或添加工具配置',agentsBody)}</div><div class="steps"><button class="step" data-action="provider-add"><span class="step-number">01</span><span><strong>添加接入</strong><small>选择集成类型并配置授权</small></span></button><button class="step" data-action="navigate" data-id="models"><span class="step-number">02</span><span><strong>配置模型与别名</strong><small>登记模型或设置别名候选</small></span></button><button class="step" data-action="navigate" data-id="agents"><span class="step-number">03</span><span><strong>配置编程工具</strong><small>选择模型并应用到工具</small></span></button></div><div class="section-label"><h2>订阅与续费</h2><p>来自已保存的信息</p></div>${panel('已知续费日期','不推断扣款、剩余额度或续费结果',renewals)}`;
+  $('content').innerHTML=`<div class="metrics">${metric('接入',providers===null?'—':upstreamProviders.length,'已添加的接入实例','providers')}${metric('模型',models?.filter(m=>m.kind==='concrete').length ?? '—',`${models?.filter(m=>m.kind==='alias').length ?? '—'} 个网关入口`,'models')}${metric('工具配置',agents?.length ?? '—','已保存的工具配置','agents')}${metric('网关',!state.runtime?'未知':running?(ready?'运行中':'运行中 · 待就绪'):'未启动',running?'仅转发已支持的原生协议':'可在网关页面启动','gateway',true)}</div>`+issues+`<div class="grid-two">${panel('接入','授权和模型按接入实例配置',providerBody,button('查看全部','navigate','providers','text small','arrow'))}${panel('编程工具','查看配置或添加工具配置',agentsBody)}</div><div class="steps"><button class="step" data-action="provider-add"><span class="step-number">01</span><span><strong>添加接入</strong><small>选择集成类型并配置授权</small></span></button><button class="step" data-action="navigate" data-id="models"><span class="step-number">02</span><span><strong>配置模型与网关入口</strong><small>登记模型，或让已有模型通过网关使用</small></span></button><button class="step" data-action="navigate" data-id="agents"><span class="step-number">03</span><span><strong>配置编程工具</strong><small>选择模型并应用到工具</small></span></button></div><div class="section-label"><h2>订阅与续费</h2><p>来自已保存的信息</p></div>${panel('已知续费日期','不推断扣款、剩余额度或续费结果',renewals)}`;
 }
 function searchBox(placeholder) { return `<div class="search">${icon('search')}<input id="search" type="search" aria-label="${placeholder}" placeholder="${placeholder}" value="${escapeHtml(state.query)}"></div>`; }
 function renderProviders() {
@@ -276,24 +359,45 @@ function renderProviderList() {
   $('provider-list').innerHTML=[...groups].map(([name,providers])=>`<div class="section-label"><h2>${escapeHtml(name)}</h2><p>${providers.length} 个独立实例</p></div><div class="cards">${providers.map(p=>{const config=state.config.providers[p.id];const observation=p.observations?.observations?.find(o=>o.scope==='quota');return `<article class="provider-card"><div class="card-top"><div class="avatar blue">${escapeHtml(name.slice(0,1))}</div><div class="grow"><h3>${escapeHtml(providerName(p.id))}</h3><p class="mono">${escapeHtml(p.id)}</p></div>${authBadge(p)}</div><div class="card-facts">${fact('模型',Object.keys(config.models || {}).length+' 个')}${fact('订阅计划',config.subscription?.plan || '未记录')}${(quotaCard(observation) + quotaSuspensionCard(p))}${fact('使用此接入的工具',p.affected_targets+' 个配置')}</div><div class="card-actions">${button('管理接入','provider-detail',p.id,'small','',`管理接入 ${providerName(p.id)}`)}${button(p.authentication==='not_configured'?'配置授权':'更新授权','provider-auth',p.id,'soft small','key',`${p.authentication==='not_configured'?'配置授权':'更新授权'} ${providerName(p.id)}`)}</div></article>`;}).join('')}</div>`).join('');
 }
 function renderModels() {
-  $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">模型别名</button></div>${searchBox('搜索模型或接入')}</div>${state.modelKind==='alias'?notice('模型别名是引用已有模型的命名配置。每条别名声明一个或多个原生协议，候选列表应用于全部已声明协议。每个候选是模型引用及别名内的局部设置，不是独立模型。可为每个候选设置推理强度覆盖；未设置时不改写客户端请求。别名仅用于网关，不自动改变工具的直接连接。'):''}<div id="model-list"></div>`;
+  $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="模型类型"><button class="tab" role="tab" aria-selected="${state.modelKind==='concrete'}" data-action="model-tab" data-id="concrete">具体模型</button><button class="tab" role="tab" aria-selected="${state.modelKind==='alias'}" data-action="model-tab" data-id="alias">网关入口</button></div>${searchBox('搜索模型、入口或接入')}</div>${state.modelKind==='alias'?notice('网关入口是工具和客户端能选择的名字，引用一个或多个已有模型。它不复制模型，也不会自动修改工具配置；多来源优先级、回退和推理强度可以在管理入口中设置。'):notice('需要让编程工具通过网关选择某个模型时，点击模型旁的“通过网关使用”。原始模型编号仍可由直接调用网关的客户端使用。')}<div id="model-list"></div>`;
   renderModelList(); $('search').addEventListener('input',e=>{state.query=e.target.value;renderModelList();});
 }
 function renderModelList() {
   if (!state.models) {$('model-list').innerHTML=empty('模型列表读取失败','刷新后重试。');return;}
   const rows=state.models.filter(m=>m.kind===state.modelKind && m.id.toLowerCase().includes(state.query.toLowerCase()));
-  if (!rows.length) {$('model-list').innerHTML=`<div class="panel">${empty(state.query?'没有匹配的模型':state.modelKind==='alias'?'还没有模型别名':'还没有登记模型',state.query?'试试其他关键词。':state.modelKind==='alias'?'创建别名并选择候选模型，供网关使用。':'添加接入后，登记要使用的上游模型。',state.query?'':button(state.modelKind==='alias'?'新建别名':'添加模型',state.modelKind==='alias'?'alias-add':'model-add','','primary','plus'))}</div>`;return;}
-  $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'候选模型':'接入'}</th><th>原生协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{const config=m.kind==='concrete'?modelConfig(m.id):modelAlias(m.id);const protocols=m.kind==='alias'?(m.protocols || []):(m.published_protocols || []);return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个候选模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${protocols.map(p=>badge(protocolNames[p] || p)).join('') || badge(m.kind==='alias'?'未声明':'未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td><div class="actions">${m.kind==='alias'?button('管理','alias-edit',JSON.stringify([m.id]),'small'):button('管理','model-edit',m.id,'small')+button('详情','model-detail',m.id,'small soft')}</div></td></tr>`;}).join('')}</tbody></table></div>`;
+  if (!rows.length) {$('model-list').innerHTML=`<div class="panel">${empty(state.query?'没有匹配的模型':state.modelKind==='alias'?'还没有网关入口':'还没有登记模型',state.query?'试试其他关键词。':state.modelKind==='alias'?'给已有模型起一个工具能选择的名字。':'添加接入后，登记要使用的上游模型。',state.query?'':(state.modelKind==='alias'?button('新建网关入口','gateway-entry-add','','primary','plus'):button('添加模型','model-add','','primary','plus')))}</div>`;return;}
+  $('model-list').innerHTML=`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>模型 / 名称</th><th>${state.modelKind==='alias'?'来源模型':'接入'}</th><th>原生协议</th><th>状态</th><th>网关</th><th>操作</th></tr></thead><tbody>${rows.map(m=>{
+    const config=m.kind==='concrete'?modelConfig(m.id):modelAlias(m.id);
+    const protocols=m.kind==='alias'?(m.protocols || []):(m.published_protocols || []);
+    const routes=m.kind==='concrete'?entriesForModel(m.id):[modelAlias(m.id)].filter(Boolean);
+    const gatewayCell=routes.length
+      ? `<div class="protocols">${routes.map(route=>badge(route.id,gatewayEntryState(route).tone)).join('')}</div><small class="label-note">${escapeHtml(gatewayEntryState(routes[0]).label)}</small>${m.kind==='concrete'?button('管理入口','gateway-entry-manage',m.id,'text small','settings'):''}`
+      : m.kind==='concrete'?button('通过网关使用','gateway-entry-add',m.id,'small','plus'):badge('未创建','amber');
+    return `<tr><td><strong>${escapeHtml(config?.overrides?.name || m.id)}</strong><small class="mono">${escapeHtml(m.id)}</small></td><td>${escapeHtml(m.kind==='alias'?`${config?.candidates?.length || 0} 个来源模型`:providerName(m.id.split('/')[0]))}</td><td><div class="protocols">${protocols.map(p=>badge(protocolNames[p] || p)).join('') || badge(m.kind==='alias'?'未声明':'未发布')}</div></td><td>${!m.enabled?badge('已停用'):m.availability==='authentication_missing'?badge('待授权','amber'):badge(m.kind==='alias'?'已配置':'待验证')}</td><td>${gatewayCell}</td><td><div class="actions">${m.kind==='alias'?button('管理','alias-edit',JSON.stringify([m.id]),'small'):button('管理','model-edit',m.id,'small')+button('详情','model-detail',m.id,'small soft')}</div></td></tr>`;
+  }).join('')}</tbody></table></div>`;
 }
 function renderAgents() {
   $('content').innerHTML=notice('保存工具配置后，可先预览影响，再主动应用。保存不会自动改写工具文件。')+`<div class="cards">${agentTypes.map(([id,name,mark,tone])=>{const targets=(state.agents || []).filter(a=>a.agent===id);return `<section class="agent-card"><div class="card-top"><div class="avatar ${tone}">${mark}</div><div class="grow"><h3>${name}</h3><p>${targets.length} 个已保存配置</p></div>${badge(targets.length?'已登记':'未配置',targets.length?'green':'')}</div>${targets.length?targets.map(t=>`<div class="list-row"><strong>${escapeHtml(t.target)}</strong><small class="label-note mono">${escapeHtml(t.path)}</small><div class="detail-facts">${fact('默认模型',defaultLabel(state.config.agents[t.target]?.default,id))}${fact('原生应用状态','需要检查')}</div>${button('模型与应用','agent-detail',t.target,'small soft','arrow')}</div>`).join(''):'<p class="muted">添加此工具的本地配置，为它选择模型。</p>'}<div class="actions">${button('添加配置','agent-add',id,'small','plus')}</div></section>`;}).join('')}</div>`;
 }
 function clearReveal() { revealGeneration++;const output=$('revealed'); if(output){output.textContent='';output.hidden=true;} }
+function gatewayEntryPanel() {
+  const aliases=state.config?.model_aliases || [];
+  const gateway=gatewayStatus();
+  const body=aliases.length?`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>网关入口</th><th>来源模型</th><th>协议</th><th>状态</th><th>操作</th></tr></thead><tbody>${aliases.map(alias=>{
+    const status=gatewayEntryState(alias);
+    const encoded=JSON.stringify([alias.id,(alias.candidates || [])[0] || '']);
+    const blocked=alias.enabled===false || status.label==='来源不可用';
+    const needsReload=status.label==='网关配置待重载';
+    const next=blocked?'':!gateway.configured?button('配置网关','gateway-entry-setup',encoded,'small primary'):!gateway.known?button('检查网关','refresh-page','','small primary'):!gateway.running?button('启动网关','gateway-entry-setup',encoded,'small primary'):!gateway.ready||needsReload?button('检查网关','refresh-page','','small primary'):button('在工具中使用','navigate','agents','small primary');
+    return `<tr><td><strong>${escapeHtml(alias.id)}</strong><small class="mono">工具里选择这个名字</small></td><td><div class="mono">${(alias.candidates || []).map(escapeHtml).join('<br>')}</div></td><td><div class="protocols">${(alias.protocols || []).map(protocol=>badge(protocolNames[protocol] || protocol)).join('') || badge('未声明')}</div></td><td>${badge(status.label,status.tone)}${status.detail?`<small class="label-note">${escapeHtml(status.detail)}</small>`:''}</td><td><div class="actions">${button('状态与下一步','gateway-entry-status',encoded,'small')}${next}${button('管理','alias-edit',JSON.stringify([alias.id]),'small soft')}</div></td></tr>`;
+  }).join('')}</tbody></table></div>`:empty('还没有网关入口','网关可以先提供原始模型编号；编程工具只选择网关入口。给已有模型起一个名字，工具里就能选择它。',button('新建网关入口','gateway-entry-add','','primary','plus'),'models');
+  return `<div class="section-label"><h2>工具可选的网关入口</h2><p>工具里显示的是入口名，不是原始模型编号</p></div>${panel('网关入口',aliases.length?`${aliases.length} 个入口；原始模型编号仍可由直接调用网关的客户端使用`:'还没有入口',body)}`;
+}
 function renderGateway() {
   const runtime=state.runtime; const gateway=state.config.gateway; const inference=runtime?.daemon?.inference;
   const running=inference?.state==='running'; const address=inference?.url || (gateway?.listen?'http://'+gateway.listen:null);
   const configured=!!gateway;
-  $('content').innerHTML=`<div class="grid-two">${panel('网关','供支持相同协议的应用连接',`<div class="service-status"><div class="status-symbol">${icon('gateway')}</div><div><h3>${!runtime?'状态未知':running?'网关运行中':configured?'已配置 · 未启动':'尚未配置'}</h3><p>${running?(runtime.gateway?.ready?'服务报告已就绪':'服务尚未就绪，请检查配置与授权'):'需要通过网关使用模型时，再启动服务。'}</p></div></div>${address?`<div class="big-address"><code>${escapeHtml(address)}</code>${button('复制','copy',address,'small','copy')}</div>`:notice('先设置本地监听地址，保存后会生成共享密钥。')}${`<div class="actions">${button(configured?(running?'停止网关':'启动网关'):'配置网关',configured?'operation':'gateway-configure',configured?(running?'gateway stop':'gateway start'):'','primary',running?'gateway':'arrow')}${configured?button('修改设置','gateway-configure','','','settings'):''}</div>`}`)}${panel('连接与授权','共享密钥仅在主动查看时显示',`<div class="detail-facts">${fact('已发布模型',runtime?.publication?.model_count ?? '未知')}${fact('进行中的请求',runtime?.active_requests ?? '未知')}${fact('登录时启动',runtime?.autostart?.login_enabled===true?'已注册':runtime?.autostart?.login_enabled===false?'未注册':'无法确认')}${fact('共享密钥状态',stateLabel(runtime?.shared_key?.loaded_state))}</div>${configured?`<div class="actions">${button('查看共享密钥','reveal','','','key')}${button('隐藏','hide-key','','small')}</div><div id="revealed" class="key-output mono" hidden></div>`:notice('配置网关后，可以在这里查看用于连接的共享密钥。')}`)}</div><div class="section-label"><h2>请求记录</h2>${button('读取记录','history','','small','history')}</div><div id="history-panel" class="panel">${empty('按需查看本地请求','仅记录经过此网关的请求，不包含直接连接流量，也不代表账户全部用量。',button('读取请求记录','history','','soft'),'history',true)}</div><div class="section-label"><h2>其他设置</h2></div><div class="actions">${button('登录时启动设置','autostart','','','settings')}${button('查看出站网络','operation','network show','','settings')}${button('网关高级操作','advanced','gateway','','settings')}</div>`;
+  $('content').innerHTML=`<div class="grid-two">${panel('网关','供支持相同协议的应用连接',`<div class="service-status"><div class="status-symbol">${icon('gateway')}</div><div><h3>${!runtime?'状态未知':running?'网关运行中':configured?'已配置 · 未启动':'尚未配置'}</h3><p>${running?(runtime.gateway?.ready?'服务报告已就绪':'服务尚未就绪，请检查配置与授权'):'需要通过网关使用模型时，再启动服务。'}</p></div></div>${address?`<div class="big-address"><code>${escapeHtml(address)}</code>${button('复制','copy',address,'small','copy')}</div>`:notice('先设置本地监听地址，保存后会生成共享密钥。')}${`<div class="actions">${button(configured?(running?'停止网关':'启动网关'):'配置网关',configured?'operation':'gateway-configure',configured?(running?'gateway stop':'gateway start'):'','primary',running?'gateway':'arrow')}${configured?button('修改设置','gateway-configure','','','settings'):''}</div>`}`)}${panel('连接与授权','共享密钥仅在主动查看时显示',`<div class="detail-facts">${fact('工具可选入口',(state.config?.model_aliases || []).length+' 个')}${fact('已启用模型',rawModelCount()+' 个')}${fact('进行中的请求',runtime?.active_requests ?? '未知')}${fact('登录时启动',runtime?.autostart?.login_enabled===true?'已注册':runtime?.autostart?.login_enabled===false?'未注册':'无法确认')}${fact('共享密钥状态',stateLabel(runtime?.shared_key?.loaded_state))}</div>${configured?`<div class="actions">${button('查看共享密钥','reveal','','','key')}${button('隐藏','hide-key','','small')}</div><div id="revealed" class="key-output mono" hidden></div>`:notice('配置网关后，可以在这里查看用于连接的共享密钥。')}`)}</div>${gatewayEntryPanel()}<div class="section-label"><h2>请求记录</h2>${button('读取记录','history','','small','history')}</div><div id="history-panel" class="panel">${empty('按需查看本地请求','仅记录经过此网关的请求，不包含直接连接流量，也不代表账户全部用量。',button('读取请求记录','history','','soft'),'history',true)}</div><div class="section-label"><h2>其他设置</h2></div><div class="actions">${button('登录时启动设置','autostart','','','settings')}${button('查看出站网络','operation','network show','','settings')}${button('网关高级操作','advanced','gateway','','settings')}</div>`;
   const supervision=runtime?.supervision;
   const supervisionNames={supervised:'已由系统托管',unsupervised:'当前进程未托管',starting:'正在启动',recovering:'正在自动恢复',stopped:'已停止',blocked:'需要处理',failed:'恢复失败',unavailable:'无法确认'};
   $('content').insertAdjacentHTML('beforeend',panel('系统托管','进程恢复、网关就绪和登录启动是独立状态',`<div class="detail-facts">${fact('托管状态',supervisionNames[supervision?.state] || '未知')}${fact('系统管理器',supervision?.manager || '未知')}${fact('退出登录后继续运行',supervision?.session?.survives_logout===true?'已确认支持':supervision?.session?.survives_logout===false?'当前会话不支持':'尚未确认')}${fact('最近阻塞原因',supervision?.reason_code || '无已报告阻塞')}</div>${running?`<div class="actions">${button('重启服务','operation','gateway restart','','refresh')}</div>`:''}${supervision?detail(supervision,'查看托管与恢复详情'):''}`));
@@ -382,8 +486,11 @@ function formDialog(title, description, fields, build, options={}) {
       if(!preview) await refresh();
       if(generation!==state.dialogGeneration)return;
       const needsAttention=response.body.warnings?.length || response.body.data?.warnings?.length || ['failed','blocked','unavailable'].includes(response.body.data?.activation?.activation || response.body.data?.activation?.state);
-      if(isSuccess(response)&&!preview&&!options.stayOpen&&!needsAttention){toast(options.success || '设置已保存');if(options.onSaved)await options.onSaved(request,response);else $('dialog').close();}
-      else if(isSuccess(response)&&!preview){$('action-form').dataset.saved='true';}
+      if(isSuccess(response)&&!preview&&!needsAttention){
+        if(options.onSaved)await options.onSaved(request,response);
+        if(!options.stayOpen){toast(options.success || '设置已保存');if(!options.onSaved)$('dialog').close();}
+      }
+      if(isSuccess(response)&&!preview && generation===state.dialogGeneration && $('action-form')){$('action-form').dataset.saved='true';}
     } catch(error) {if(generation===state.dialogGeneration)$('form-result').innerHTML=notice(escapeHtml(error.message),'error');}
     finally {request=null;optionsForRequest.key=null;state.busy=false;if(generation===state.dialogGeneration)$('action-form')?.querySelectorAll('button').forEach(b=>{b.disabled=b.value==='save' && $('action-form').dataset.saved==='true';});}
   });
@@ -678,12 +785,12 @@ function aliasForm(encoded='') {
   const supportsEffort=protocols=>protocols.some(protocol=>aliasEffortProtocols.includes(protocol));
   const effortDraft=new Map(Object.entries(currentEfforts));
   const captureEfforts=()=>document.querySelectorAll('[name=candidate-effort]').forEach(input=>{const effort=input.value.trim();if(effort)effortDraft.set(input.dataset.candidate,effort);else effortDraft.delete(input.dataset.candidate);});
-  formDialog(id?'编辑模型别名':'新建模型别名','设置调用名称并引用已有模型。每条别名声明一个或多个原生协议，候选列表应用于全部已声明协议；每个候选由模型引用和别名内的局部设置组成，可单独覆盖推理强度。留空表示不覆盖客户端请求，只能使用具体模型有效推理能力元数据列出的值。推理强度覆盖需要声明 Chat Completions 或 Responses。',
-    '<div class="form-grid">'+field('id','别名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+'<div class="field"><span>原生协议 <span class="required">*</span></span><div class="checklist" role="group" aria-label="原生协议">'+Object.entries(protocolNames).map(([protocol,label])=>`<label><input type="checkbox" name="protocol" value="${escapeHtml(protocol)}" ${declaredProtocols.has(protocol)?'checked':''}><span>${escapeHtml(label)}</span></label>`).join('')+'</div><small>一条路由可声明一个或多个原生协议；由客户端配置选择协议，网关不会自动切换或转换。优先选择上游已声明的 Responses。</small></div></div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+
+  formDialog(id?'编辑网关入口':'新建网关入口','网关入口是工具里能选择的名字，引用一个或多个已有模型。入口声明一个或多个原生协议，来源模型按顺序参与选择；高级选项可设置回退、连续性和每个来源的推理强度。',
+    '<div class="form-grid">'+field('id','入口名',id || '',{required:true,readonly:!!id,placeholder:'例如：coding'})+'<div class="field"><span>原生协议 <span class="required">*</span></span><div class="checklist" role="group" aria-label="原生协议">'+Object.entries(protocolNames).map(([protocol,label])=>`<label><input type="checkbox" name="protocol" value="${escapeHtml(protocol)}" ${declaredProtocols.has(protocol)?'checked':''}><span>${escapeHtml(label)}</span></label>`).join('')+'</div><small>一条路由可声明一个或多个原生协议；由客户端配置选择协议，网关不会自动切换或转换。优先选择上游已声明的 Responses。</small></div></div><h3 class="subheading">候选模型</h3><div id="candidates" class="checklist"></div>'+
     field('continuity','会话连续性',current?.continuity || '',{options:[['','默认会话连续性'],['session','会话连续性'],['stateless','无状态完整上下文']],help:'错误回退仅允许显式选择无状态，且请求必须携带完整上下文；不会迁移已经建立的会话或跨接入转发上游资源引用。'})+
     '<h3 class="subheading">请求错误回退</h3>'+field('fallback-mode','回退策略',current?.fallback?'configured':'absent',{options:[['absent','不配置 / 清除回退'],['configured','明确配置回退']]})+
     '<div id="fallback-fields">'+failureConditionFields('fallback',current?.fallback)+notice('仅在成功响应尚未开始时，按当前优先级选择下一个未尝试的接入；同一请求不会重复尝试同一接入。成功响应一旦开始（包括流式响应），后续中断也不会自动重试或切换。')+notice(failureAmbiguityWarning,'warning')+'</div>'+
-    (id?`<div class="actions">${button('查看共同能力','alias-detail',reference,'small')}${button('查看选择依据','alias-explain',reference,'small')}${button('移除别名','alias-remove',reference,'small danger')}</div>`:''),()=>{
+    (id?`<div class="actions">${button('查看共同能力','alias-detail',reference,'small')}${button('查看选择依据','alias-explain',reference,'small')}${button('移除入口','alias-remove',reference,'small danger')}</div>`:''),()=>{
       const protocols=checkedProtocols();if(!protocols.length)throw Error('请至少选择一个原生协议。');
       const candidates=[...document.querySelectorAll('[name=candidate]:checked')].map(i=>i.value);if(!candidates.length)throw Error('请至少选择一个候选模型。');
       captureEfforts();
@@ -718,6 +825,115 @@ function aliasForm(encoded='') {
   };
   protocolInputs().forEach(input=>input.addEventListener('change',update));update();
 }
+
+function gatewayEntryStatusRow(step) {
+  return `<div class="list-row split"><div class="grow"><strong>${step.done?'✓':'□'} ${escapeHtml(step.title)}</strong>${step.detail?`<small class="label-note">${escapeHtml(step.detail)}</small>`:''}</div>${step.action || ''}</div>`;
+}
+function gatewayEntryStatus(name, modelId='') {
+  const alias=modelAlias(name);
+  if(!alias) { toast('入口已不存在，请刷新后重试。'); return; }
+  const gateway=gatewayStatus();
+  const usage=routeUsage(name);
+  if(alias.enabled===false) {
+    openDialog(`网关入口：${name}`,`<p class="form-intro">这个入口已停用，不会被网关提供，也不会出现在工具的模型选择中。</p><div class="actions">${button('管理入口','alias-edit',JSON.stringify([name]),'small primary')}${gateway.configured?button('打开网关','navigate','gateway','small'):''}</div>`,'GATEWAY ENTRY');
+    return;
+  }
+  const steps=[];
+  steps.push({done:true,title:'网关入口已保存',detail:`${name} ← ${entrySources(alias).join('、')} · ${(alias.protocols || []).map(protocol=>protocolNames[protocol] || protocol).join('、') || '未声明协议'}`});
+  if(!gateway.configured) {
+    steps.push({done:false,title:'配置网关',detail:'还没有保存监听地址和共享密钥。',action:button('配置网关','gateway-entry-setup',JSON.stringify([name,modelId]),'small primary')});
+  } else if(!gateway.known) {
+    steps.push({done:false,title:'检查网关状态',detail:'网关已配置，但当前无法读取运行状态。',action:button('检查网关','gateway-entry-setup',JSON.stringify([name,modelId]),'small primary')});
+  } else if(!gateway.running) {
+    steps.push({done:false,title:'启动网关',detail:'网关已配置但还没有启动，入口暂时不能连接。',action:button('启动网关','gateway-entry-setup',JSON.stringify([name,modelId]),'small primary')});
+  } else {
+    steps.push({done:gateway.ready,title:'网关已启动',detail:gateway.ready?'服务报告已就绪':'服务已启动，但还没有报告就绪。',action:gateway.ready?'':button('检查网关','gateway-entry-setup',JSON.stringify([name,modelId]),'small')});
+  }
+  const loadedRevision=state.runtime?.gateway?.config_revision;
+  if(loadedRevision && state.revision && loadedRevision!==state.revision) {
+    steps.push({done:false,title:'网关配置待重载',detail:'网关进程还没有加载最新配置；请检查网关或重启。',action:button('检查网关','gateway-entry-refresh',JSON.stringify([name,modelId]),'small')});
+  }
+  if(usage.length) {
+    steps.push({done:true,title:'工具已配置此入口',detail:usage.map(item=>`${item.target}/${item.entry}`).join('、')});
+  } else {
+    steps.push({done:false,title:'在工具中使用',detail:'入口已经保存；是否修改工具配置是单独一步。',action:button('在工具中使用','navigate','agents','small')});
+  }
+  const blockers=entryBlockers(alias);
+  const body=`<p class="form-intro">入口是工具和客户端选择的名字；保存它不会启动网关，也不会修改工具配置。</p>`+
+    (blockers.length?notice('来源模型还不可用：'+blockers.map(escapeHtml).join('；'),'warning'):'')+
+    `<div class="panel"><div class="panel-body">${steps.map(gatewayEntryStatusRow).join('')}</div></div>`+
+    `<div class="actions">${button('管理入口','alias-edit',JSON.stringify([name]),'small')}${gateway.configured?button('打开网关','navigate','gateway','small soft'):''}</div>`;
+  openDialog(`网关入口：${name}`,body,'GATEWAY ENTRY');
+}
+function gatewayEntryManage(modelId) {
+  const entries=entriesForModel(modelId);
+  if(!entries.length) { gatewayEntryForm(modelId); return; }
+  const rows=entries.map(alias=>{
+    const status=gatewayEntryState(alias);
+    return `<div class="list-row split"><div class="grow"><h3>${escapeHtml(alias.id)}</h3><small class="label-note mono">${escapeHtml((alias.candidates || []).join('、'))}</small><div class="detail-facts">${fact('状态',status.label)}${fact('协议',(alias.protocols || []).map(protocol=>protocolNames[protocol] || protocol).join('、') || '未声明')}</div></div><div class="actions">${button('状态与下一步','gateway-entry-status',JSON.stringify([alias.id,modelId]),'small')}${button('管理','alias-edit',JSON.stringify([alias.id]),'small soft')}</div></div>`;
+  }).join('');
+  openDialog(`${modelId} 的网关入口`, `<p class="form-intro">这个模型已经通过以下入口提供。工具里选择的是入口名，不是原始模型编号。</p><div class="panel"><div class="panel-body">${rows}</div></div>`,'GATEWAY ENTRY');
+}
+function gatewayEntryForm(modelId='') {
+  const models=(state.models || []).filter(model=>model.kind==='concrete');
+  if(!models.length) {
+    openDialog('先添加模型',empty('还没有可用的具体模型','先添加接入并登记模型，再把它通过网关提供。',button('添加模型','model-add','','primary')),'GATEWAY ENTRY');
+    return;
+  }
+  if(modelId) {
+    const existing=entriesForModel(modelId);
+    if(existing.length) { gatewayEntryManage(modelId); return; }
+  }
+  const available=models.filter(model=>entryProtocols(model.id).length);
+  if(!available.length) {
+    openDialog('通过网关使用',empty('还没有支持协议的模型','请先检查接入端点和模型协议，再创建网关入口。',button('去接入','navigate','providers','primary')),'GATEWAY ENTRY');
+    return;
+  }
+  const fresh=available.find(model=>!entriesForModel(model.id).length);
+  if(!modelId && !fresh) {
+    openDialog('网关入口', `<p class="form-intro">所有可用的具体模型都已经有网关入口。工具里选择入口名即可；需要新增来源或另一个名字时，请从入口管理中编辑。</p><div class="actions">${button('打开网关','navigate','gateway','small primary')}</div>`,'GATEWAY ENTRY');
+    return;
+  }
+  const sourceOptions=available.filter(model=>!entriesForModel(model.id).length);
+  const selected=modelId || fresh.id;
+  const protocols=entryProtocols(selected);
+  if(!protocols.length) {
+    openDialog('通过网关使用',empty('这个模型还没有可用协议','请先检查接入端点和模型协议，再创建网关入口。',button('管理模型','model-edit',selected,'primary')),'GATEWAY ENTRY');
+    return;
+  }
+  const fields=`<div class="form-grid">${field('source','来源模型',selected,{required:true,options:sourceOptions.map(model=>[model.id,`${model.id} · ${(model.published_protocols || []).map(protocol=>protocolNames[protocol] || protocol).join('/') || '无协议'}`]),help:'只引用已有模型，不复制模型；已经有入口的模型不会重复列出。'})}${field('name','网关入口名',suggestedEntryName(selected),{required:true,help:'工具里显示的名字。默认使用模型名；重名时建议加接入前缀，可自行修改。'})}</div><div id="entry-existing"></div>`+
+    `<div class="field"><span>原生协议 <span class="required">*</span></span><div class="checklist" role="group" aria-label="网关入口协议">${protocols.map(protocol=>`<label><input type="checkbox" name="entry-protocol" value="${escapeHtml(protocol)}" checked><span>${escapeHtml(protocolNames[protocol] || protocol)}</span></label>`).join('')}</div><small>客户端和工具使用其中一种协议；网关不会在协议之间转换。</small></div>`+
+    notice('保存只创建网关入口；不会启动网关，也不会修改任何工具配置。')+
+    notice('原始模型编号仍可由知道地址和共享密钥的客户端直接调用，网关入口不是权限控制。')+
+    `<div class="actions">${button('高级：手动创建多来源入口','alias-add','','small')}</div>`;
+  formDialog('通过网关使用','给已有模型起一个工具能选择的名字。一个入口默认只指向这个模型；需要多个来源时，保存后可在管理入口中添加。',fields,()=>{
+    const source=value('source').trim();
+    const name=value('name').trim();
+    if(!name)throw Error('请填写网关入口名。');
+    if(modelAlias(name))throw Error(`网关入口名“${name}”已存在，请换一个名字。`);
+    if(entriesForModel(source).length)throw Error('这个模型已经有网关入口，请先打开已有入口管理，避免重复创建。');
+    const selectedProtocols=[...document.querySelectorAll('[name=entry-protocol]:checked')].map(input=>input.value);
+    if(!selectedProtocols.length)throw Error('请至少选择一个原生协议。');
+    return {operation:'model alias add',operands:[name],args:{protocol:selectedProtocols,candidate:[source]}};
+  },{submit:'保存入口',success:'网关入口已保存。',onSaved:async(request)=>{await gatewayEntryStatus(request.operands[0],request.args.candidate[0]);}});
+  let nameEdited=false;
+  const update=()=>{
+    const source=value('source');
+    const suggestions=entryProtocols(source);
+    const existing=$('entry-existing');
+    if(existing)existing.innerHTML=entriesForModel(source).length?notice(`这个模型已经有网关入口：${entriesForModel(source).map(alias=>escapeHtml(alias.id)).join('、')}。请先打开已有入口管理，避免重复创建。`,'warning'):'';
+    const group=document.querySelector('[aria-label="网关入口协议"]');
+    if(group)group.innerHTML=suggestions.length?suggestions.map(protocol=>`<label><input type="checkbox" name="entry-protocol" value="${escapeHtml(protocol)}" checked><span>${escapeHtml(protocolNames[protocol] || protocol)}</span></label>`).join(''):'<p class="muted">这个模型还没有可用协议。</p>';
+  };
+  $('f-name').addEventListener('input',()=>{nameEdited=true;});
+  $('f-source').addEventListener('change',()=>{
+    const source=value('source');
+    if(!nameEdited)$('f-name').value=suggestedEntryName(source);
+    update();
+  });
+  update();
+}
+
 function nativePathKey(path) {
   const text=String(path || '').replaceAll('\\','/').replace(/^\/\/\?\//,'').replace(/\/+$/,'');
   return /^[a-z]:\//i.test(text) || text.startsWith('//')?text.toLowerCase():text;
@@ -842,7 +1058,7 @@ async function modelDetail(id,protocol) {
     const declared=meta.overrides;
     const displayName=declared&&Object.hasOwn(declared,'name')?(declared.name===''?'（显式空名称）':declared.name):effective.name ?? '未声明';
     const matrix=data.native_projection&&typeof data.native_projection==='object'&&!Array.isArray(data.native_projection)?agentTypes.map(([agent,name])=>({name,projection:data.native_projection[agent]})).filter(entry=>entry.projection):[];
-    $('dialog-content').innerHTML=notice('此处只显示已保存的能力声明与期望映射，不代表工具当前生效状态。推理档位的默认值只在 Agent 目标默认显式配置时由 tmax 写入；未配置时沿用工具当前档位。')+
+    $('dialog-content').innerHTML=gatewayEntrySection(id)+notice('此处只显示已保存的能力声明与期望映射，不代表工具当前生效状态。推理档位的默认值只在 Agent 目标默认显式配置时由 tmax 写入；未配置时沿用工具当前档位。')+
       `<div class="detail-facts">${fact('模型引用',data.qualified_model)}${fact('显示名称',displayName)}${fact('模型状态',data.configuration?(data.configuration.enabled===false?'已停用':'已启用'):'未知')}${fact('基础优先级',data.configuration?String(data.configuration.priority ?? 0):'未知')}${fact('原生协议',(data.protocols||[]).map(p=>protocolNames[p]||p).join('、')||'未发布')}${fact('上下文上限',effective.limit?.context)}${fact('输出上限',effective.limit?.output)}${fact('目录状态',catalogState)}${fact('目录来源',meta.source)}${fact('目录修订',meta.metadata_revision)}${fact('目录引用',meta.catalog_reference)}</div>`+
       `<h3 class="subheading">推理能力（有效值）</h3><div class="detail-facts">${fact('推理支持',reasoning===true?'声明支持':reasoning===false?'声明不支持':'未声明')}${fact('推理声明来源',layer('reasoning'))}${fact('推理档位来源',layer('reasoning_options'))}${fact('effort 档位声明',efforts.join('、')||'无')}</div>`+
       (reasoning===false?notice('模型显式声明关闭推理（reasoning 为 false）。即使存在档位声明，也不会投影到编程工具。','warning'):'')+
@@ -864,12 +1080,22 @@ async function agentDetail(target) {
 }
 function agentSource(target) {
   const gatewayOption=state.config.gateway?[['@gateway','tmax 本地网关']]:[];
-  formDialog('添加模型来源','选择工具直接连接的接入，或通过 tmax 网关连接。',field('name','工具内的来源名称','',{required:true,placeholder:'例如：deepseek'})+field('source','连接来源','',{required:true,options:[['','请选择'],...Object.keys(state.config.providers).filter(p=>p!=='tmax').map(p=>[p,providerName(p)]),...gatewayOption]}),()=>({operation:'agent provider add',operands:[target,value('name').trim()],args:{provider:[value('source')==='@gateway'?'tmax':value('source')]}}));
+  const entries=state.config?.model_aliases || [];
+  const gatewayHint=!state.config.gateway?notice('通过网关使用之前，需要先创建网关入口并配置/启动网关。'+`<div class="actions">${button('去模型页创建入口','navigate','models','small')}${button('配置网关','gateway-configure','','small soft')}</div>`):entries.length?'':notice('网关已配置，但还没有工具可选的入口。'+`<div class="actions">${button('去模型页创建入口','navigate','models','small')}</div>`);
+  formDialog('添加模型来源','选择工具直接连接的接入，或通过 tmax 网关连接。',field('name','工具内的来源名称','',{required:true,placeholder:'例如：deepseek'})+field('source','连接来源','',{required:true,options:[['','请选择'],...Object.keys(state.config.providers).filter(p=>p!=='tmax').map(p=>[p,providerName(p)]),...gatewayOption]})+gatewayHint,()=>({operation:'agent provider add',operands:[target,value('name').trim()],args:{provider:[value('source')==='@gateway'?'tmax':value('source')]}}));
 }
 function agentModel(encoded) {
   const [target,name]=JSON.parse(encoded);const source=state.config.agents[target].providers[name];
   const relayed=source.provider==='tmax';
-  const candidates=Object.keys(protocolNames).flatMap(p=>(state.models || []).filter(m=>(relayed || (m.kind==='concrete'&&m.id.startsWith(source.provider+'/')))&&m.published_protocols?.includes(p)).map(m=>[JSON.stringify([relayed?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p]}`]));
+  if(relayed && !(state.models || []).some(model=>model.kind==='alias' && model.enabled && (model.published_protocols || []).length)) {
+    openDialog('先创建网关入口',empty('这个工具来源还没有可选的网关入口','编程工具只选择网关入口，不直接选择原始模型编号。先去模型页给模型起一个名字。',button('去创建网关入口','navigate','models','primary','plus'),'models'),'CODING TOOL');
+    return;
+  }
+  const candidates=Object.keys(protocolNames).flatMap(p=>(state.models || []).filter(m=>{
+    if(!m.enabled || !m.published_protocols?.includes(p)) return false;
+    if(relayed) return m.kind==='alias';
+    return m.kind==='concrete' && m.id.startsWith(source.provider+'/');
+  }).map(m=>[JSON.stringify([relayed?m.id:m.id.slice(source.provider.length+1),p]),`${m.id} · ${protocolNames[p]}`]));
   formDialog('添加可选模型',state.config.agents[target].agent==='codex'?'添加到此来源的模型列表后，可选择为默认模型。':'应用后可在工具中选择这些模型，保留当前默认模型。',field('model','模型与原生协议','',{required:true,options:[['','请选择'],...candidates],help:'仅列出上游已声明的协议，Responses 优先。选择后由工具使用该协议请求；网关不转换协议，已有设置不会自动更改。'}),()=>{const [id,protocol]=JSON.parse(value('model'));return {operation:'agent model add',operands:[target,name,id],args:{protocol:[protocol]}};});
 }
 function defaultEffortLabel(defaultRef) {
@@ -942,12 +1168,25 @@ async function agentDefault(target) {
     selection.addEventListener('change',update);
   }
 }
-function configureGateway() {
-  formDialog('网关设置','设置本地监听地址。首次配置会生成共享密钥；保存不会自动启动网关。',field('listen','监听地址',state.config.gateway?.listen || '127.0.0.1:8317',{required:true,help:'仅用于本机连接，例如 127.0.0.1:8317。'}),()=>({operation:'gateway configure',args:{listen:[value('listen').trim()]}}),{stayOpen:true});
+function configureGateway(afterSave) {
+  formDialog('网关设置','设置本地监听地址。首次配置会生成共享密钥；保存不会自动启动网关。',field('listen','监听地址',state.config.gateway?.listen || '127.0.0.1:8317',{required:true,help:'仅用于本机连接，例如 127.0.0.1:8317。'}),()=>({operation:'gateway configure',args:{listen:[value('listen').trim()]}}),{stayOpen:true,onSaved:afterSave?async()=>{await afterSave();}:undefined});
+}
+function startGateway(afterSave) {
+  formDialog('启动网关','启动本地网关；新进程由系统托管，确认就绪后才报告成功。不会修改工具配置。','',()=>({operation:'gateway start'}),{submit:'启动网关',stayOpen:true,onSaved:afterSave?async()=>{await afterSave();}:undefined});
 }
 
-const operandLabels={'Provider ID':'接入 ID','Qualified model':'具体模型引用','Alias ID':'别名','Target ID':'工具配置名称','Native provider entry':'工具内来源名称','Model ID':'模型 ID','Catalog provider ID':'目录提供商 ID','Request handle':'请求记录标识','Recovery handle':'恢复记录标识','Native role':'原生模型角色'};
-const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除接入','model remove':'移除模型','model alias remove':'移除模型别名','provider refresh':'查询上游信息','provider login':'登录接入','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
+async function gatewayEntrySetup(encoded) {
+  const [name,modelId]=JSON.parse(encoded);
+  const gateway=gatewayStatus();
+  if(!gateway.configured) configureGateway(()=>gatewayEntryStatus(name,modelId));
+  else if(!gateway.known) { await refresh(); gatewayEntryStatus(name,modelId); }
+  else if(!gateway.running) startGateway(()=>gatewayEntryStatus(name,modelId));
+  else if(!gateway.ready) { await refresh(); gatewayEntryStatus(name,modelId); }
+  else gatewayEntryStatus(name,modelId);
+}
+
+const operandLabels={'Provider ID':'接入 ID','Qualified model':'具体模型引用','Alias ID':'网关入口名','Target ID':'工具配置名称','Native provider entry':'工具内来源名称','Model ID':'模型 ID','Catalog provider ID':'目录提供商 ID','Request handle':'请求记录标识','Recovery handle':'恢复记录标识','Native role':'原生模型角色'};
+const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除接入','model remove':'移除模型','model alias remove':'移除网关入口','provider refresh':'查询上游信息','provider login':'登录接入','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
 const operationEffects={
   'skill install':'将 tmax 使用说明安装到本机技能目录，供编程工具读取。可先预览目标路径；不会修改模型配置。',
   'gateway start':'启动本地网关；新进程由系统托管，确认就绪后才报告成功。不会启用登录自启动。',
@@ -1047,6 +1286,7 @@ async function dispatch(action,id) {
   if(state.busy){toast('正在处理当前操作，请稍候。');return;}
   switch(action) {
     case 'retry': await initialize();break;
+    case 'refresh-page': await refresh();break;
     case 'navigate': location.hash=id;break;
     case 'close': $('dialog').close();break;
     case 'provider-add': await addProvider();break;
@@ -1084,6 +1324,12 @@ async function dispatch(action,id) {
     case 'agent-accept': openOperation('agent recovery accept',[id]);break;
     case 'agent-advanced': openOperation('agent inspect',[id]);break;
     case 'gateway-configure': configureGateway();break;
+    case 'gateway-start': startGateway();break;
+    case 'gateway-entry-add': gatewayEntryForm(id);break;
+    case 'gateway-entry-manage': gatewayEntryManage(id);break;
+    case 'gateway-entry-status': {const [name,modelId]=JSON.parse(id);gatewayEntryStatus(name,modelId);break;}
+    case 'gateway-entry-setup': gatewayEntrySetup(id);break;
+    case 'gateway-entry-refresh': { const [name,modelId]=JSON.parse(id); await refresh(); await gatewayEntryStatus(name,modelId); break; }
     case 'autostart': formDialog('登录时启动','登录时启动默认开启：下次登录会按已保存配置自动启动网关。关闭后下次登录不再自动启动；当前运行中的网关不受影响。',field('enabled','登录时启动',String(state.runtime?.autostart?.saved_intent ?? true),{options:[['false','关闭'],['true','启用']]}),()=>({operation:'gateway configure',args:{set:['autostart',value('enabled')]}}),{stayOpen:true});break;
     case 'reveal': await revealKey();break;
     case 'hide-key': clearReveal();break;
