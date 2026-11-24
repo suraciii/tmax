@@ -413,8 +413,6 @@ test('client registers one first-level page and its locale namespace', async () 
     'main',
     'sidebar.panellist.trailing',
     'settings.models.footer',
-    'conversation.input.model.options',
-    'conversation.input.model.pane',
     'tool.call.toolview',
   ])
   const byName = name => slots.find(entry => entry.options.name === name)
@@ -423,7 +421,7 @@ test('client registers one first-level page and its locale namespace', async () 
   assert.equal(byName('sidebar.panellist').options.locale, STATE_NS)
   assert.equal(byName('sidebar.panellist').options.label(), 'panel')
   assert.equal(byName('main').options.key, 'tmax')
-  // Phase 3 seats: one per DSH surface, addressed by the page's own key or id.
+  // Seats: one per DSH surface, addressed by the page's own key or id.
   const marker = byName('sidebar.panellist.trailing')
   assert.equal(marker.options.id, 'tmax')
   assert.equal(marker.options.order, 20)
@@ -432,12 +430,6 @@ test('client registers one first-level page and its locale namespace', async () 
   assert.equal(footer.options.id, 'tmax')
   assert.equal(footer.options.order, 100)
   assert.equal(footer.options.locale, STATE_NS)
-  const option = byName('conversation.input.model.options')
-  assert.equal(option.options.id, 'tmax-routing')
-  assert.equal(option.options.locale, STATE_NS)
-  const pane = byName('conversation.input.model.pane')
-  assert.equal(pane.options.key, 'tmax-routing')
-  assert.equal(pane.options.locale, STATE_NS)
   const toolview = byName('tool.call.toolview')
   assert.equal(toolview.options.key, 'tmax_status')
   assert.equal(toolview.options.locale, STATE_NS)
@@ -522,24 +514,16 @@ test('oldest reading is the oldest visible observation, not the newest', async (
   ]), '2026-11-23T06:26:05.000Z')
 })
 
-test('route identity is the exact provider name from state.routes', async () => {
-  const { tmaxSelection, routeReadiness, routeActiveState, usableRoutes } = (await moduleWith(inertReact())).__pure
+test('route readiness and liveness are read from each route record', async () => {
+  const { routeReadiness, routeActiveState, usableRoutes } = (await moduleWith(inertReact())).__pure
   const state = {
     ok: true,
     routes: [
-      { provider: 'custom-tmax', credentialConfigured: true, active: true, models: [{ id: 'm1' }] },
-      { provider: 'renamed', credentialConfigured: false, active: false, models: [{ id: 'm2' }] },
-      { provider: '', credentialConfigured: true },
-      { credentialConfigured: true },
+      { provider: 'custom-tmax', credentialConfigured: true, active: true },
+      { provider: 'renamed', credentialConfigured: false, active: true },
+      { provider: 'idle', credentialConfigured: true, active: false },
     ],
   }
-  // A selection is matched by the route's exact provider name, never a suffix:
-  // a route named "renamed" does not answer for provider "tmax".
-  assert.equal(tmaxSelection(state, { provider: 'custom-tmax', model: 'm1' }).route.provider, 'custom-tmax')
-  assert.equal(tmaxSelection(state, { provider: 'tmax', model: 'm1' }), undefined)
-  assert.equal(tmaxSelection(state, { provider: 'renamed', model: 'm2' }).route.provider, 'renamed')
-  // A model id is matched inside the route that actually provides it.
-  assert.equal(tmaxSelection(state, { provider: 'custom-tmax', model: 'm2' }), undefined)
   // Readiness and liveness come from the record, three-valued on each.
   assert.equal(routeReadiness({ credentialConfigured: true }), 'usable')
   assert.equal(routeReadiness({ credentialConfigured: false }), 'registered')
@@ -1045,7 +1029,7 @@ test('client reads one state route and carries no auto-observation path', async 
   const module = await moduleWith(inertReact())
   const pure = module.__pure
 
-  for (const helper of ['windowReading', 'oldestReading', 'verdict', 'nextAction', 'routeReadiness', 'routeActiveState', 'safeDashboard', 'clockOf', 'formatDate', 'providerActions', 'gatewayActions', 'managementAction', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'tmaxSelection', 'toolStatusSummary', 'historyCoverageLines', 'historyRows', 'historyRemaining', 'historyFailure', 'historyTone']) {
+  for (const helper of ['windowReading', 'oldestReading', 'verdict', 'nextAction', 'routeReadiness', 'routeActiveState', 'safeDashboard', 'clockOf', 'formatDate', 'providerActions', 'gatewayActions', 'managementAction', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'historyCoverageLines', 'historyRows', 'historyRemaining', 'historyFailure', 'historyTone']) {
     assert.equal(typeof pure[helper], 'function', `__pure.${helper} is exported`)
   }
 
@@ -2364,18 +2348,6 @@ test('gateway lifecycle offers only the verb the reported state allows', async (
   assert.deepEqual(pure.actionPayload({ action: 'gateway_stop' }, false), { action: 'gateway_stop', dryRun: false })
 })
 
-test('a tmax route model is matched only by its provider and exact model id', async () => {
-  const pure = (await moduleWith(inertReact())).__pure
-  const state = seatState()
-  const match = pure.tmaxSelection(state, { provider: 'tmax', model: 'deepseek-v4.1-flash' })
-  assert.equal(match.route.provider, 'tmax')
-  assert.equal(match.model.id, 'deepseek-v4.1-flash')
-  assert.equal(pure.tmaxSelection(state, { provider: 'other', model: 'deepseek-v4.1-flash' }), undefined)
-  assert.equal(pure.tmaxSelection(state, { provider: 'tmax', model: 'not-a-tmax-model' }), undefined)
-  assert.equal(pure.tmaxSelection(state, undefined), undefined)
-  assert.equal(pure.tmaxSelection(undefined, { provider: 'tmax', model: 'deepseek-v4.1-flash' }), undefined)
-})
-
 test('the tmax_status tool text is parsed as data, never as a success claim', async () => {
   const pure = (await moduleWith(inertReact())).__pure
   const value = {
@@ -2567,110 +2539,6 @@ test('a page jump the layout refuses disables itself instead of throwing', async
     assert.equal(closed.props.disabled, true, 'a refused jump disables the control')
     assert.equal(closed.props.title, 'footerPageUnavailable')
     assert.equal(page.calls.filter(call => call.method === 'POST').length, 0)
-  } finally {
-    page.restore()
-  }
-})
-
-test('the model-menu option appears only for a tmax-provided selection', async () => {
-  const opened = []
-  async function renderOption(selection) {
-    const page = await mountSeat(withState(seatState()), slot('conversation.input.model.options'), {
-      useProjection: () => selection,
-      openPane: pane => opened.push(pane),
-      locked: false,
-    })
-    try {
-      return await page.mount()
-    } finally {
-      page.restore()
-    }
-  }
-  const routingButton = tree => collectButtons(tree)
-    .find(button => button.props['data-model-menu-pane'] === 'tmax-routing')
-  // No projection, a non-tmax provider, and a tmax provider with an unknown
-  // model all render nothing at all.
-  assert.equal(routingButton(await renderOption(undefined)), undefined)
-  assert.equal(routingButton(await renderOption({ next: { provider: 'other', model: 'deepseek-v4.1-flash' }, lastUsed: null })), undefined)
-  assert.equal(routingButton(await renderOption({ next: { provider: 'tmax', model: 'not-a-tmax-model' }, lastUsed: null })), undefined)
-
-  // A tmax-provided selection offers exactly one routing option, and opening it
-  // never changes the selection.
-  const page = await mountSeat(withState(seatState()), slot('conversation.input.model.options'), {
-    useProjection: () => ({ next: null, lastUsed: { provider: 'tmax', model: 'deepseek-v4.1-flash' } }),
-    openPane: pane => opened.push(pane),
-    locked: false,
-  })
-  try {
-    const tree = await page.mount()
-    const option = routingButton(tree)
-    assert.ok(option, 'the routing option is shown for a tmax-provided model')
-    assert.match(textOf(option), /routingOption/)
-    assert.match(textOf(option), /deepseek-v4\.1-flash/)
-    assert.equal(option.props.role, 'menuitem')
-    assert.equal(option.props['data-model-menu-pane'], 'tmax-routing')
-    assert.equal(option.props.disabled, false)
-    option.props.onClick()
-    await page.settle()
-    assert.deepEqual(opened, [{ key: 'tmax-routing', title: 'routingPaneTitle' }])
-  } finally {
-    page.restore()
-  }
-
-  // A locked composer disables the option instead of opening a pane over it.
-  const lockedPage = await mountSeat(withState(seatState()), slot('conversation.input.model.options'), {
-    useProjection: () => ({ next: { provider: 'tmax', model: 'deepseek-v4.1-flash' }, lastUsed: null }),
-    openPane: pane => opened.push(pane),
-    locked: true,
-  })
-  try {
-    const locked = routingButton(await lockedPage.mount())
-    assert.ok(locked)
-    assert.equal(locked.props.disabled, true)
-  } finally {
-    lockedPage.restore()
-  }
-})
-
-test('the routing pane shows the selected model and reloads with one GET', async () => {
-  const dismissed = []
-  const page = await mountSeat(withState(seatState()), slot('conversation.input.model.pane'), {
-    useProjection: () => ({ next: { provider: 'tmax', model: 'deepseek-v4.1-flash' }, lastUsed: null }),
-    dismiss: () => dismissed.push(true),
-  })
-  try {
-    const tree = await page.mount()
-    assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
-    const text = textOf(tree)
-    assert.match(text, /routingPaneTitle/)
-    assert.match(text, /kindAlias/)
-    assert.match(text, /continuityStateless/)
-    assert.match(text, /routingSelected/)
-    assert.match(text, /opencode-go-2\/deepseek-v4.1-flash/)
-    assert.match(text, /routingCandidates/)
-
-    const reloaded = await page.click('routingReload')
-    assert.equal(page.calls.length, 2)
-    assert.equal(pathOf(page.calls[1]), '/_tmax/state')
-    assert.match(textOf(reloaded), /routingPaneTitle/)
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/observe').length, 0)
-    assert.equal(page.calls.filter(call => call.method === 'POST').length, 0)
-
-    await page.click('dismiss')
-    assert.deepEqual(dismissed, [true])
-  } finally {
-    page.restore()
-  }
-})
-
-test('the routing pane says a non-tmax selection is not the tmax routing model', async () => {
-  const page = await mountSeat(withState(seatState()), slot('conversation.input.model.pane'), {
-    useProjection: () => ({ next: { provider: 'other', model: 'x' }, lastUsed: null }),
-  })
-  try {
-    const tree = await page.mount()
-    assert.match(textOf(tree), /routingNotTmax/)
-    assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
   } finally {
     page.restore()
   }

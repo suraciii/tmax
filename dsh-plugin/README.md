@@ -1,7 +1,7 @@
 # tmax
 
 Use tmax-managed model access inside DeepSeek Harness. The plugin projects the
-DSH target tmax declares into DSH: a first-level page, four seats on DSH-owned
+DSH target tmax declares into DSH: a first-level page, three seats on DSH-owned
 pages, a read-only `/tmax` command, one read tool, and one skill. It reads
 tmax's effect-free inventory — `agent list`, `agent inspect`, `status`,
 `gateway status`, `provider list`/`provider inspect`, `config validate`, and
@@ -361,16 +361,13 @@ declared slot only when the DSH composition provides it; missing packages simply
 mean that seat is absent, and the plugin page keeps working. The bundle injects
 the DSH client packages it needs: `@deepseek-ai/dsh-client-locale`,
 `@deepseek-ai/dsh-client-ui-sidebar`, `@deepseek-ai/dsh-client-ui-layout`,
-`@deepseek-ai/dsh-client-ui-conversation`,
-`@deepseek-ai/dsh-client-ui-model-selection`,
-`@deepseek-ai/dsh-client-ui-settings-models`, and
+`@deepseek-ai/dsh-client-ui-conversation`, `@deepseek-ai/dsh-client-ui-settings-models`, and
 `@deepseek-ai/dsh-client-ui-tool`.
 
 | Seat | Where it appears | What it does |
 | --- | --- | --- |
 | Sidebar marker | Trailing slot of the **tmax** row in the sidebar panel list | A non-interactive dot with screen-reader text: an invalid configuration, `a blocker is reported`, `gateway not ready`, `quota suspended`, or `route conflict` as errors; an unavailable configuration, a failed section read, or no usable route as warnings; `unknown` when no state is readable. It never opens the page or runs an action. |
 | Models footer card | **Settings > Models**, below the model list | Gateway readiness, active and usable route counts, model count, and the reason tmax models are or are not usable. **Apply** appears only when the page's own next action is Apply, then previews and confirms the same native DSH write as the page; **Reload** appears when the read failed or the next action is retry; **Open tmax** opens the plugin page when that page exists. |
-| Model menu option and routing pane | The model menu, only when the current selection is a tmax-provided model, and its tmax pane | The option opens a pane showing the selected model's kind, continuity, candidate count, availability, capabilities, and routing evidence. It never changes the selected model. **Reload routing** re-reads the cached host state only; dismiss closes the pane. |
 | Tool card | The `tmax_status` tool call | A compact card of the result the tool already returned: target, routes, gateway, provider and model counts, and blockers, with pending, unreadable, and failed states. It never performs a new read. |
 
 Seat reads are GET-only and never observe a provider, apply, or mutate tmax.
@@ -381,9 +378,8 @@ add content on the slot they were given.
 Seat data is a one-shot GET taken when the seat mounts (seats mounted together
 share a short client cache). There is no subscription or timer, so an
 already-mounted marker or footer can lag a newer page read, an action result, or
-a state change until it remounts or the page reloads. The routing pane's
-**Reload routing**, the footer's **Reload**, and the footer's **Apply** are the
-only seat actions that read again.
+a state change until it remounts or the page reloads. The footer's
+**Reload** and **Apply** are the only seat actions that read again.
 
 A failed, unavailable, or non-ok read renders the affected seat counts as
 unknown, never as zero: unknown routes, models, or providers are not "none

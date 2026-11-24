@@ -321,7 +321,7 @@ window.__ModuleLoader__.load({
       actionStopGateway: 'Stop gateway',
       actionRestartGateway: 'Restart gateway',
       actionGatewayNote: 'Starting or stopping the gateway can take longer and affects every client that uses it.',
-      // Phase 3 seats: one marker, one settings card, one routing pane, one tool card.
+      // Seats: one marker, one settings card, one tool card.
       markerUnknown: 'tmax state unknown',
       markerReady: 'tmax ready',
       markerNoRoute: 'no tmax route projected',
@@ -355,12 +355,7 @@ window.__ModuleLoader__.load({
       footerPageUnavailable: 'The tmax page is not available in this composition.',
       footerReload: 'Reload',
       footerLoading: 'Reading tmax state…',
-      routingOption: 'tmax routing',
-      routingPaneTitle: 'tmax routing',
-      routingNotTmax: 'The selected model is not provided by tmax.',
-      routingReload: 'Reload routing',
       routingUnknown: 'The tmax routing evidence could not be read.',
-      dismiss: 'Dismiss',
       toolTitle: 'tmax status',
       toolPending: 'reading tmax state…',
       toolUnreadable: 'the tmax status result could not be read',
@@ -743,12 +738,7 @@ window.__ModuleLoader__.load({
       footerPageUnavailable: '当前组合中不可打开 tmax 页面。',
       footerReload: '重新读取',
       footerLoading: '正在读取 tmax 状态…',
-      routingOption: 'tmax 路由',
-      routingPaneTitle: 'tmax 路由',
-      routingNotTmax: '当前模型不是由 tmax 提供的。',
-      routingReload: '重新读取路由',
       routingUnknown: '无法读取 tmax 路由信息。',
-      dismiss: '关闭',
       toolTitle: 'tmax 状态',
       toolPending: '正在读取 tmax 状态…',
       toolUnreadable: '无法读取 tmax 状态结果',
@@ -1010,7 +1000,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
   .tmx-windowReset[data-empty='true'] { display: none; }
   .tmx-windowWide { grid-column: 1 / -1; grid-row: 1; text-align: end; }
 }
-/* Phase 3 seats: navigation marker, Settings > Models card, model-menu pane, tool card. */
+/* Seats: navigation marker, Settings > Models card, tool card. */
 .tmx-navMark { display: inline-flex; align-items: center; gap: 4px; }
 .tmx-navMark[data-tone='warn'] .tmx-dot { background: var(--dsw-alias-state-warn-primary); }
 .tmx-navMark[data-tone='error'] .tmx-dot { background: var(--dsw-alias-state-error-primary); }
@@ -1019,13 +1009,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 .tmx-seatHead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
 .tmx-seatFacts { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
 .tmx-seatActions { display: flex; flex-wrap: wrap; gap: 8px; }
-.tmx-modelOption { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--dsw-radius-md); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; text-align: start; cursor: pointer; }
-@media (hover: hover) { .tmx-modelOption:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); } }
-.tmx-modelOption:disabled { opacity: 0.5; cursor: default; }
-.tmx-modelOptionLabel { flex: 1; min-width: 0; }
-.tmx-pane { display: flex; flex-direction: column; gap: 10px; min-width: 280px; max-width: 420px; }
-.tmx-paneTitle { margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
-.tmx-paneActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .tmx-toolCard { display: flex; flex-direction: column; gap: 6px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-md); padding: 10px 12px; }
 .tmx-toolHead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; }
 .tmx-historyCard { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding: 12px 14px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
@@ -3514,8 +3497,8 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 
     // ------------------------------------------------------- Phase 3 seat data
     //
-    // The DSH-native seats (sidebar marker, Settings > Models card, model-menu
-    // option and pane, tool result card) read the same host read model as the
+    // The DSH-native seats (sidebar marker, Settings > Models card, tool result
+    // card) read the same host read model as the
     // page. They share one short-lived GET and never post, never observe, and
     // never run an action on mount.
 
@@ -3661,23 +3644,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return 'available'
     }
 
-    /** The tmax route model a session selection names, or undefined when it is not tmax-provided. */
-    function tmaxSelection(state, selection) {
-      if (state === null || typeof state !== 'object' || state.ok !== true) return undefined
-      if (selection === null || typeof selection !== 'object') return undefined
-      const provider = typeof selection.provider === 'string' ? selection.provider : ''
-      const modelId = typeof selection.model === 'string' ? selection.model : ''
-      if (provider === '' || modelId === '') return undefined
-      const routes = Array.isArray(state.routes) ? state.routes : []
-      for (const route of routes) {
-        if (route?.provider !== provider) continue
-        const models = Array.isArray(route.models) ? route.models : []
-        const model = models.find(item => item !== null && typeof item === 'object' && item.id === modelId)
-        if (model !== undefined) return { route, model }
-      }
-      return undefined
-    }
-
     /**
      * The tmax_status result as data, when its text blocks carry the JSON the
      * host renders. A parse failure keeps its bounded text and is never success.
@@ -3758,7 +3724,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       }
     }
 
-    // --------------------------------------------------- Phase 3 seat components
+    // ----------------------------------------------------------- Seat components
 
     /** The tmax sidebar row's marker: a dot, plus text that describes the row. */
     function SidebarTrailingMarker(props) {
@@ -3927,95 +3893,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return h('div', { className: 'tmx-seatCard', 'data-tmax-footer': '1', key: 'card' }, body)
     }
 
-    /** The model menu's tmax routing option: shown only when tmax provides the selected model. */
-    function TmaxModelOption(props) {
-      const t = props.t
-      // A session-scope slot always supplies the standard projection hook; call
-      // it unconditionally so hook order never depends on a prop check.
-      const projection = props.useProjection('modelSelection')
-      const selection = projection === null || projection === undefined
-        ? undefined
-        : projection.next ?? projection.lastUsed
-      const [load] = useSeatSnapshot(t)
-      const match = load.phase === 'ready' ? tmaxSelection(load.state, selection) : undefined
-      if (match === undefined) return null
-      const modelId = typeof match.model.id === 'string' && match.model.id !== ''
-        ? boundedText(match.model.id, 80)
-        : boundedText(match.model.name, 80)
-      return h('button', {
-        type: 'button',
-        role: 'menuitem',
-        className: 'tmx-modelOption',
-        'data-model-menu-pane': 'tmax-routing',
-        disabled: props.locked === true,
-        onClick: () => {
-          if (typeof props.openPane === 'function') props.openPane({ key: 'tmax-routing', title: t('routingPaneTitle') })
-        },
-      }, [
-        h('span', { className: 'tmx-modelOptionLabel', key: 'label' }, t('routingOption')),
-        h('span', { className: 'tmx-chipKind', key: 'model' }, modelId),
-        h('span', { className: 'tmx-chipKind', key: 'chevron', 'aria-hidden': 'true' }, '›'),
-      ])
-    }
-
-    /** The routing detail pane: what the selected tmax model is, and what tmax would route to. */
-    function TmaxRoutingPane(props) {
-      const t = props.t
-      const [load, snapshot] = useSeatSnapshot(t)
-      const projection = props.useProjection('modelSelection')
-      const selection = projection === null || projection === undefined
-        ? undefined
-        : projection.next ?? projection.lastUsed
-      const state = load.phase === 'ready' ? load.state : undefined
-      const match = state === undefined ? undefined : tmaxSelection(state, selection)
-      const routing = state !== undefined && match !== undefined && Array.isArray(state.routing)
-        ? state.routing.find(entry => entry !== null && typeof entry === 'object' && entry.model === match.model.id)
-        : undefined
-      const body = []
-      if (load.phase === 'failed') {
-        body.push(h('p', { className: 'tmx-errorText', key: 'error' },
-          `${t('hostError')}${t('colon')} ${describeError(load.message, t)}`))
-      } else if (state === undefined) {
-        body.push(h('p', { className: 'tmx-note', key: 'loading' }, t('loading')))
-      } else if (match === undefined) {
-        body.push(h('p', { className: 'tmx-note', key: 'notTmax' }, t('routingNotTmax')))
-      } else {
-        const model = match.model
-        const candidates = numeric(model.candidateCount)
-        body.push(h('dl', { className: 'tmx-facts', key: 'facts' }, [
-          fact(t('modelKind'), enumText(model.kind, KIND_STATES, t)),
-          fact(t('modelContinuity'), enumText(model.continuity, CONTINUITY_STATES, t)),
-          fact(t('modelCandidates'), candidates === undefined ? t('unknown') : String(candidates)),
-          fact(t('modelAvailability'), enumText(model.availability, AVAILABILITY_STATES, t)),
-        ]))
-        body.push(h('dl', { className: 'tmx-facts', key: 'capabilities' },
-          capabilityFacts(model.capabilities, t).map(item => fact(item.label, item.value))))
-        body.push(routingBlock(routing, t))
-      }
-      const actions = [
-        h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          key: 'reload',
-          onClick: () => snapshot.reload(),
-          disabled: load.phase === 'refreshing',
-        }, t('routingReload')),
-        typeof props.dismiss === 'function'
-          ? h('button', {
-            type: 'button',
-            className: 'tmx-button',
-            key: 'dismiss',
-            onClick: () => props.dismiss(),
-          }, t('dismiss'))
-          : null,
-      ]
-      return h('div', { className: 'tmx-pane', 'data-tmax-pane': 'tmax-routing', key: 'pane' }, [
-        h('h3', { className: 'tmx-paneTitle', key: 'title' }, t('routingPaneTitle')),
-        ...body,
-        h('div', { className: 'tmx-paneActions', key: 'actions' }, actions.filter(action => action !== null)),
-      ])
-    }
-
     /** The tmax_status tool card: the compact facts the tool already returned, never a new read. */
     function TmaxStatusCard(props) {
       const t = props.t
@@ -4120,17 +3997,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         openPage: () => openTmaxPage(context),
         hasLayout: () => hasTmaxPage(context),
       }))), 'tmax: settings footer')
-      context.effect(() => context.slots.inject('conversation.input.model.options', () => context.slots.register({
-        name: 'conversation.input.model.options',
-        id: 'tmax-routing',
-        order: 100,
-        locale: NS,
-      }, seat(TmaxModelOption))), 'tmax: model option')
-      context.effect(() => context.slots.inject('conversation.input.model.pane', () => context.slots.register({
-        name: 'conversation.input.model.pane',
-        key: 'tmax-routing',
-        locale: NS,
-      }, seat(TmaxRoutingPane))), 'tmax: routing pane')
       context.effect(() => context.slots.inject('tool.call.toolview', () => context.slots.register({
         name: 'tool.call.toolview',
         key: 'tmax_status',
@@ -4188,7 +4054,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       actionResultLines,
       markerStatus,
       modelsAvailability,
-      tmaxSelection,
       toolStatusSummary,
       historyCoverageLines,
       historyRows,

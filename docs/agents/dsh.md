@@ -135,10 +135,9 @@ and [native loader import](https://github.com/deepseek-ai/deepseek-harness/blob/
 ## Profile page plugin
 
 A separate bundle entry with id `tmax` may load in a DSH profile. It adds a
-first-level page (`sidebar.panellist` plus `main`), four seats on DSH-owned pages
-(`sidebar.panellist.trailing`, `settings.models.footer`,
-`conversation.input.model.options` and `.pane`, and `tool.call.toolview` keyed
-`tmax_status`), a read-only `/tmax` human command when the host exposes the
+first-level page (`sidebar.panellist` plus `main`), three seats on DSH-owned pages
+(`sidebar.panellist.trailing`, `settings.models.footer`, and
+`tool.call.toolview` keyed `tmax_status`), a read-only `/tmax` human command when the host exposes the
 optional `commands` service, a bounded retained-history area in Diagnostics, one
 read tool, one skill, and exact authenticated web routes. The page, seats, and
 command read one host model; the page reads the model composed from tmax's
@@ -171,7 +170,6 @@ Sources at the running revision:
 [human command registry](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/interaction/commands/src/index.ts#L30),
 [sidebar trailing slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-sidebar/src/client/index.ts#L95),
 [models footer slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-settings-models/src/client/index.ts#L151),
-[model selection slots](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-model-selection/src/client/slots.ts#L54-L64),
 and [tool view slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/client/ui-tool/src/client/apply.ts#L42).
 
 ## Protocol and model fields

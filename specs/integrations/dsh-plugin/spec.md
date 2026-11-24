@@ -82,7 +82,6 @@ part of the running composition; a missing slot needs no page change. The client
 half declares the DSH client packages it injects:
 `@deepseek-ai/dsh-client-locale`, `@deepseek-ai/dsh-client-ui-sidebar`,
 `@deepseek-ai/dsh-client-ui-layout`, `@deepseek-ai/dsh-client-ui-conversation`,
-`@deepseek-ai/dsh-client-ui-model-selection`,
 `@deepseek-ai/dsh-client-ui-settings-models`, and
 `@deepseek-ai/dsh-client-ui-tool`. A missing package simply leaves that seat
 unregistered; the plugin page and the other seats keep working.
@@ -91,7 +90,6 @@ unregistered; the plugin page and the other seats keep working.
 | --- | --- | --- |
 | Sidebar marker | `sidebar.panellist.trailing` | Non-interactive severity marker beside the plugin's sidebar row: one dot plus screen-reader text. Error names an invalid configuration, a suspension, an unready gateway, an ownership conflict, or a blocker; warn names an unavailable configuration, a failed section read, or a route or gateway that cannot serve yet; ok names an active, usable route with a ready gateway; unknown means no readable state. It never acts, never opens the page, and never claims readiness from unknown values. |
 | Settings models footer | `settings.models.footer` | One tmax card: gateway readiness, active and usable route counts, model count, a reason when tmax models are not usable, and the one control that helps. **Apply** appears only when the page's own next action is Apply (never for an invalid or unavailable configuration, a failed read, a pending reload, or an inert owner) and previews and then confirms the same native-application write as the page; **Reload** appears when the read failed or the page's next action is retry; **Open tmax** opens the plugin page only when that layout page is present. It reads the host state only. |
-| Model menu option and routing pane | `conversation.input.model.options` and `conversation.input.model.pane` | The option appears only when the current session selection names a tmax-provided model and opens the pane; it never selects, changes, or clears the model selection and never writes a setting. The pane shows the selected tmax model's kind, continuity, candidate count, availability, capabilities, and routing evidence; **Reload routing** performs a GET-only state read and dismiss closes it. |
 | Tool card | `tool.call.toolview` keyed `tmax_status` | A compact card rendered from the tool result already returned: target, routes, gateway, provider and model counts, blockers, and a failed/unreadable/pending state. It never performs a new read, observation, or action. |
 
 Seat rules:
@@ -103,8 +101,8 @@ Seat rules:
   shared client cache for seats mounted together. A seat has no subscription or
   timer: an already-mounted marker or footer can lag a newer page read, an action
   result, or a state change until that seat remounts or the page reloads. The
-  only seat actions that take a fresh read are the routing pane's and settings
-  footer's explicit Reload and the settings footer's explicit Apply.
+  only seat actions that take a fresh read are the settings footer's explicit
+  Reload and Apply.
 - A seat must not change a DSH-owned selection, setting, or route; it only adds
   content on its declared slot.
 - When the state is unavailable or a section read failed (including `ok: false`),
