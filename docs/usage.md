@@ -1324,22 +1324,25 @@ selectors or source schemas exit `2`; a precondition that prevents native effect
 exits `3`; a native write, registration, readback, or post-commit record failure
 exits `4`. A partial target scan still exits `0` and reports `coverage: partial`.
 
-## DSH target: home-wide native application
+## DSH target: profile-scoped native application
 
 DeepSeek Harness uses the same target/provider/model operations as the Pi example,
 with `--agent dsh` and the existing DSH home as its scope. Discovery uses nonblank
-`DSH_HOME`, otherwise the OS home directory's `.dsh`. DSH itself installs the
-`tmax` plugin into a profile (Plugins in Desktop, or `dsh plugin --profile
-<profile> add <repository>`); apply configures that entry in
-`cordis.patch.yml` — the home it serves and the absolute tmax executable it
-invokes — and hands the key to the adjacent native credential document. A home
-whose profiles carry no `tmax` bundle is reported as `dsh_plugin_not_installed`
-and blocks before any native write, because there is nothing there to configure.
-It does not install the plugin, run npm, or edit profiles, presets, bundles, or
-launcher-owned `cordis.yml`. User `llm-pi-ai` routes remain independent and
-untouched. tmax preserves unrelated HOME-level
-fields and expressions without enumerating, selecting, creating, or managing
-profiles. Provider configurations from all adapters share DSH's LLM runtime;
+`DSH_HOME`, otherwise the OS home directory's `.dsh`.
+
+A provider is a profile-level setting in DSH — its Models page writes into
+`profiles/<profile>/cordis.patch.yml`. Apply writes there too: one provider per
+target entry, named `tmax-<entry>`, with the endpoint, protocol, models, and a
+credential reference, and puts the referenced key in the credential document DSH
+already reads. Nothing has to be installed first, and the next DSH start serves
+the routes. Apply selects the profile by `--profile`, otherwise `desktop`, then
+`web`, and reports which one it used.
+
+Apply preserves the user's own providers in that row and every unrelated field
+and expression. It does not create or delete profiles, change bundle composition,
+run npm, or touch the launcher-owned `cordis.yml`. Provider configurations from
+all adapters share DSH's LLM runtime; native provider names must be globally
+unique, not automatically merged. Direct and relayed entries may coexist. Provider configurations from all adapters share DSH's LLM runtime;
 native provider names must be globally unique, not automatically merged. Direct
 and relayed entries may coexist. Runtime overlays remain outside
 tmax's ownership. The [DSH home boundary](../specs/integrations/spec.md#dsh-home-boundary)
@@ -1372,11 +1375,12 @@ Output capability is intentionally not projected because DSH's explicit
 `maxTokens` would also change a per-request default.
 
 Reload DSH instances using that home after apply/restore. Restoration covers the
-entry's owned fields and credential changes while preserving unrelated edits. A
-home an earlier release left the embedded `tmax-dsh.mjs` adapter in has that
-adapter and its `llm-tmax` entry retired by the next apply, and put back by
-recovery. The `tmax` entry is the only supported application format; tmax does not
-migrate an earlier shared-adapter layout.
+profile rows tmax wrote and its credential references while preserving unrelated
+edits. A home an earlier release left the embedded `tmax-dsh.mjs` adapter in has
+that adapter, its `llm-tmax` row, and that release's own `tmax` home row retired
+by the next apply, and put back by recovery. The profile's `llm-pi-ai` entry is
+the only supported application format; tmax does not migrate an earlier
+shared-adapter layout.
 File writes alone are not runtime or provider-access evidence. DSH 0.2.1-rc.2
 loaded the independent plugin and completed local synthetic image/tool requests
 through all three protocols, with direct and concrete gateway routes coexisting

@@ -13,8 +13,8 @@ import { join } from 'node:path'
 /** Ownership modes accepted from plugin configuration. */
 export function normalizeManageRoutes(value) {
   if (value === undefined || value === null || value === '' || value === 'auto') return 'auto'
-  if (value === true || value === 'true') return true
-  if (value === false || value === 'false') return false
+  if (value === true || value === 'true') return 'true'
+  if (value === false || value === 'false') return 'false'
   // An unrecognized value must not silently turn into either extreme.
   return 'auto'
 }
@@ -66,6 +66,17 @@ export function stripYamlComments(text) {
     lines.push(kept)
   }
   return lines.join('\n')
+}
+
+/**
+ * Whether an applied profile settings document declares one of tmax's own
+ * providers (`tmax-<entry>`), which DSH's built-in adapter serves by itself.
+ * @param {string[]} documents - profile `cordis.patch.yml` texts, if any
+ * @returns {boolean} true when at least one applied provider is present
+ */
+export function hasAppliedProviders(documents) {
+  return (documents || []).some(text =>
+    typeof text === 'string' && /(?:^|[\s,{[])\s*["']?tmax-[\w.-]+["']?\s*:/.test(text))
 }
 
 /** Whether a parsed DSH home patch declares the `llm-tmax` entry. */
@@ -153,7 +164,16 @@ export async function inspectHome(home) {
  *   disposePage: boolean,
  * }}
  */
-export function resolveOwnership({ mode, home, projection, liveNames = [], registeredNames = [], prefix = '' }) {
+export function resolveOwnership({
+  mode,
+  home,
+  projection,
+  liveNames = [],
+  registeredNames = [],
+  prefix = '',
+  // The applied profile settings already serve these providers.
+  settingsProviders = false,
+}) {
   const homeIntegration = {
     present: home?.present === true,
     entry: home?.entry === true,
@@ -180,7 +200,7 @@ export function resolveOwnership({ mode, home, projection, liveNames = [], regis
     disposePage: extras.disposePage === true,
   })
 
-  if (mode === false) {
+  if (mode === 'false') {
     // The page never registers either way; reporting the home owner (when it is
     // installed) keeps the state truthful instead of claiming no integration.
     if (homeIntegration.present) return decision('home', 'home_wide', null, { disposePage: pageRegistered })
@@ -197,7 +217,7 @@ export function resolveOwnership({ mode, home, projection, liveNames = [], regis
     return decision('none', null, 'route_management_disabled', { disposePage: pageRegistered })
   }
 
-  if (mode === true) {
+  if (mode === 'true') {
     if (homeIntegration.present) {
       return decision('page', 'profile_scoped', 'home_integration_present_forced', {
         shouldRegister: true,
@@ -231,6 +251,17 @@ export function resolveOwnership({ mode, home, projection, liveNames = [], regis
         'home_integration_partial',
         `The DSH home declares only part of the tmax home plugin (missing ${missing}); routes are not registered until it is complete`,
       ),
+    })
+  }
+  // Once `tmax agent apply` has written the providers into this profile's
+  // settings, DSH's own adapter serves them: the page lists them and registers
+  // nothing, so the same upstream is not offered twice.
+  if (settingsProviders) {
+    return decision('settings', 'profile_scoped', pageRegistered ? 'routes_moved_to_settings' : null, {
+      disposePage: pageRegistered,
+      ...(foreignLive.length === 0
+        ? {}
+        : { conflict: conflict('route_owner_conflict', `Projected routes are already registered by another provider: ${foreignLive.join(', ')}`, foreignLive) }),
     })
   }
   if (foreignLive.length > 0) {

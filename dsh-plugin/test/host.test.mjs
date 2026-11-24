@@ -856,7 +856,7 @@ test('state matches the reviewed fixture shape, registers profile routes, and ke
     settingsPath: ['providers', 'glm-coding-cn'],
     declared: true,
   }
-  const { fake, state } = await applied({
+  const { fake, state } = await applied({ config: { manageRoutes: 'true' },
     prefix: 'tmaxp-',
     context: {
       settingsDescribe: () => [{
@@ -1522,7 +1522,7 @@ test('the state cache serves repeated reads and single-flights cold ones', async
 })
 
 test('an unchanged route set does not churn the adapter registration', async () => {
-  const { fake, state } = await applied()
+  const { fake, state } = await applied({ config: { manageRoutes: 'true' } })
   const eventsOf = () => state.events.filter(([event]) => event === 'llm/models-updated').length
   const initialEvents = eventsOf()
   assert.equal(state.replaces, 0)
@@ -1545,7 +1545,7 @@ test('an unchanged route set does not churn the adapter registration', async () 
 })
 
 test('a model-only change replaces the route and announces it', async () => {
-  const { fake, state } = await applied()
+  const { fake, state } = await applied({ config: { manageRoutes: 'true' } })
   const eventsOf = () => state.events.filter(([event]) => event === 'llm/models-updated').length
   const initialEvents = eventsOf()
   assert.equal(state.replaces, 0)
@@ -1585,7 +1585,7 @@ test('a model-only change replaces the route and announces it', async () => {
 
 test('a failed registration replacement keeps the working route live', async () => {
   const scenario = withSecondRoute(baseScenario(), { name: 'other' })
-  const { fake, state } = await applied({ scenario })
+  const { fake, state } = await applied({ config: { manageRoutes: 'true' }, scenario })
   assert.deepEqual(state.routes, ['tmax', 'other'])
 
   state.replaceThrows = true
@@ -1611,7 +1611,7 @@ test('a failed registration replacement keeps the working route live', async () 
 })
 
 test('DUPLICATE_ADAPTER becomes a route_owner_conflict blocker and assigns no profiles', async () => {
-  const { state } = await applied({ context: { throwDuplicate: true } })
+  const { state } = await applied({ config: { manageRoutes: 'true' }, context: { throwDuplicate: true } })
   assert.equal(state.registrations.length, 1)
   assert.deepEqual(state.routes, [])
   assert.equal(state.adapterOptions.profiles().size, 0)
@@ -1622,7 +1622,7 @@ test('DUPLICATE_ADAPTER becomes a route_owner_conflict blocker and assigns no pr
 })
 
 test('teardown disposes routes and an in-flight refresh never re-registers', async () => {
-  const { fake, state } = await applied()
+  const { fake, state } = await applied({ config: { manageRoutes: 'true' } })
   assert.deepEqual(state.routes, ['tmax'])
   assert.equal(state.registrations.length, 1)
 
@@ -2245,7 +2245,7 @@ test('connect preview aliases can never execute a native write and execution nee
 
 test('a completed apply re-reads the home integration before returning state', async () => {
   const home = await emptyHome()
-  const { fake, state } = await applied({ config: { home } })
+  const { fake, state } = await applied({ config: { manageRoutes: 'true', home } })
   const before = (await getJson(state, '/_tmax/state')).body
   assert.equal(before.ownership.owner, 'page')
   assert.deepEqual(before.ownership.homeIntegration, { present: false, entry: false, artifact: false })
@@ -2263,8 +2263,8 @@ test('a completed apply re-reads the home integration before returning state', a
   assert.equal(appliedResult.statusCode, 200)
   const ownership = appliedResult.body.state.ownership
   assert.deepEqual(ownership.homeIntegration, { present: true, entry: true, artifact: true }, 'the response reflects the files the apply wrote')
-  assert.equal(ownership.owner, 'page', 'the working page route stays until DSH reloads')
-  assert.equal(ownership.reason, 'home_integration_pending_reload')
+  assert.equal(ownership.owner, 'page', 'the forced page route stays until DSH reloads')
+  assert.equal(ownership.reason, 'home_integration_present_forced')
 })
 
 // ---------------------------------------------------------------------------
@@ -2376,7 +2376,7 @@ test('manageRoutes=false never registers, and manageRoutes=true forces the page 
   const offBody = (await getJson(off.state, '/_tmax/state')).body
   assert.equal(offBody.ownership.owner, 'none')
   assert.equal(offBody.ownership.scope, null)
-  assert.equal(offBody.ownership.mode, false)
+  assert.equal(offBody.ownership.mode, 'false')
   assert.equal(offBody.ownership.reason, 'route_management_disabled')
   assert.equal(offBody.routes[0].active, false, 'nothing registered the route')
   assert.deepEqual(offBody.routes[0].blockers, [], 'the disabled page claims no route blockers')
@@ -2391,20 +2391,20 @@ test('manageRoutes=false never registers, and manageRoutes=true forces the page 
   assert.equal(offHomeBody.ownership.owner, 'home')
   assert.equal(offHomeBody.ownership.scope, 'home_wide')
   assert.equal(offHomeBody.ownership.conflict, null)
-  assert.equal(offHomeBody.ownership.mode, false)
+  assert.equal(offHomeBody.ownership.mode, 'false')
 
   const forced = await applied({ config: { home, manageRoutes: true } })
   assert.deepEqual(forced.state.routes, ['tmax'])
   const forcedBody = (await getJson(forced.state, '/_tmax/state')).body
   assert.equal(forcedBody.ownership.owner, 'page')
-  assert.equal(forcedBody.ownership.mode, true)
+  assert.equal(forcedBody.ownership.mode, 'true')
   assert.equal(forcedBody.ownership.conflict.code, 'home_integration_present')
   assert.equal(forcedBody.routes[0].active, true)
 })
 
 test('an installed home integration does not dispose the working page route', async () => {
   const home = await emptyHome()
-  const { state } = await applied({ config: { home } })
+  const { state } = await applied({ config: { manageRoutes: 'true', home } })
   assert.deepEqual(state.routes, ['tmax'])
   assert.equal(state.registrations.length, 1)
 
@@ -2414,19 +2414,21 @@ test('an installed home integration does not dispose the working page route', as
   await settle(300)
   const body = await freshState(state)
   assert.equal(body.ownership.owner, 'page')
-  assert.equal(body.ownership.reason, 'home_integration_pending_reload')
-  assert.deepEqual(state.routes, ['tmax'], 'the working route stays live until DSH reloads')
+  assert.equal(body.ownership.reason, 'home_integration_present_forced')
+  assert.deepEqual(state.routes, ['tmax'], 'the forced route stays live until DSH reloads')
   assert.equal(state.registrations.length, 1, 'no second registration')
   assert.equal(state.replaces, 0, 'an unchanged route set is not replaced')
 })
 
 test('manageRoutes is tri-state with auto as the default', () => {
+  // The reported mode is always a string, so a UI can render it without
+  // special-casing booleans the configuration accepted.
   assert.equal(normalizeManageRoutes(undefined), 'auto')
   assert.equal(normalizeManageRoutes('auto'), 'auto')
-  assert.equal(normalizeManageRoutes(true), true)
-  assert.equal(normalizeManageRoutes('true'), true)
-  assert.equal(normalizeManageRoutes(false), false)
-  assert.equal(normalizeManageRoutes('false'), false)
+  assert.equal(normalizeManageRoutes(true), 'true')
+  assert.equal(normalizeManageRoutes('true'), 'true')
+  assert.equal(normalizeManageRoutes(false), 'false')
+  assert.equal(normalizeManageRoutes('false'), 'false')
   assert.equal(normalizeManageRoutes('sometimes'), 'auto')
 })
 
@@ -2559,4 +2561,22 @@ test('the module exports the DSH plugin contract', async () => {
   assert.equal(module.name, 'tmax')
   assert.deepEqual(module.inject, ['llm', 'settings', 'credentials'])
   assert.equal(typeof module.apply, 'function')
+})
+
+test('applied profile settings own the routes, so the page registers nothing', async () => {
+  // A home whose profile settings already carry tmax's provider, as apply
+  // writes them: DSH's own adapter serves that route, so a second registration
+  // would offer the same upstream twice.
+  const home = await emptyHome()
+  await mkdir(join(home, 'profiles/desktop'), { recursive: true })
+  await writeFile(
+    join(home, 'profiles/desktop/cordis.patch.yml'),
+    '- id: llm-pi-ai\n  config:\n    providers:\n      tmax-opencode:\n        api: openai-completions\n        baseURL: https://example.invalid/v1\n        models:\n          - id: first\n',
+  )
+  const { state } = await applied({ config: { home } })
+  assert.deepEqual(state.routes, [])
+  assert.equal(state.registrations.length, 0)
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'settings')
+  assert.equal(body.ownership.scope, 'profile_scoped')
 })

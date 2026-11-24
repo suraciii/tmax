@@ -2,7 +2,7 @@
 use super::{
     adapters::{self, File, desired_fields_with_ownership, inline_credential},
     document::{self, Format},
-    installation::{INSTALL_TMAX_PLUGIN, dsh_plugin, schema_blocker, version},
+    installation::{schema_blocker, version},
     planning::{entries, fact_gap_warnings, projection_view},
     recovery::{
         Capture, Field, FileRecord, INDEX, Index, Payload, Record, baseline, conflicts,
@@ -109,9 +109,22 @@ pub async fn apply_request(store: &Store, config: &Config, request: &Request) ->
         .operands
         .first()
         .ok_or_else(|| Error::new("invalid_arguments", "An agent target is required"))?;
-    apply(store, config, id, request.dry_run).await
+    apply(
+        store,
+        config,
+        id,
+        request.dry_run,
+        crate::operations::arguments::arg(request, "profile"),
+    )
+    .await
 }
-pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> Result<Value> {
+pub async fn apply(
+    store: &Store,
+    config: &Config,
+    id: &str,
+    dry_run: bool,
+    profile: Option<&str>,
+) -> Result<Value> {
     let target = target(config, id)?;
     let path = scope(store, &target.scope)?;
     let _configuration = if dry_run {
@@ -153,7 +166,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
     };
     let (mut entries, secret_refs) = entries(store, config, id, target, &path, false).await?;
     let fact_gaps = fact_gap_warnings(target, &entries);
-    let files = adapters::build(target, &path, &entries);
+    let files = adapters::build_in_profile(target, &path, &entries, profile);
     for entry in &mut entries {
         if let Some(key) = &mut entry.key {
             key.zeroize();
@@ -170,6 +183,13 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
                 path: path.join(adapters::LEGACY_PLUGIN_FILE),
                 format: Format::Text,
                 desired: json!({"$text": ""}),
+            });
+            // The home patch is not where providers live any more, so it only
+            // enters this run to carry the retirement of the rows tmax wrote.
+            files.push(File {
+                path: path.join("cordis.patch.yml"),
+                format: Format::DshPatch,
+                desired: json!({}),
             });
             true
         } else {
@@ -325,19 +345,6 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             environment_blockers.push(blocker);
         }
     }
-    // The plugin installed into a DSH profile owns the routes and the page, so a
-    // home without it has nothing for apply to configure, in a dry run or not.
-    if target.agent == "dsh" {
-        let plugin = dsh_plugin(&path);
-        environment["plugin"] = plugin.clone();
-        if plugin["state"] != "installed" {
-            environment_blockers.push(json!({
-                "code": "dsh_plugin_not_installed",
-                "message": INSTALL_TMAX_PLUGIN,
-                "plugin": plugin["state"],
-            }));
-        }
-    }
     if !environment_blockers.is_empty() {
         let primary = environment_blockers[0]["code"].clone();
         return Ok(
@@ -423,6 +430,7 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
             desired_fields_with_ownership(&target.agent, &file.desired, &current, owned);
         if retire_legacy && file.format == Format::DshPatch {
             desired.push((vec!["llm-tmax".into()], None));
+            desired.push((vec!["tmax".into()], None));
         }
         // An absence tmax owns stays absent. The recorded after-state is the
         // desired state until a restore, so a later apply must not mistake it
@@ -818,7 +826,7 @@ mod tests {
             store
                 .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
                 .unwrap();
-            let preview = apply(&store, &config, "managed", true).await.unwrap();
+            let preview = apply(&store, &config, "managed", true, None).await.unwrap();
             assert!(preview["files"].as_array().unwrap().iter().any(|f| {
                 f["existing_provider_entries"]
                     .as_array()
@@ -925,7 +933,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
-        let applied = apply(&store, &config, "managed", false).await.unwrap();
+        let applied = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
         assert_eq!(applied["_code"], "awaiting_native_reload");
         assert_eq!(applied["written"], true);
         assert!(applied.get("installation").is_none());
@@ -1011,7 +1021,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
-        let applied = apply(&store, &config, "managed", false).await.unwrap();
+        let applied = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
         assert_eq!(applied["written"], true);
         assert!(!std::path::Path::new(&marker).exists());
     }
@@ -1073,7 +1085,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
-        let result = apply(&store, &config, "managed", false).await.unwrap();
+        let result = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
         assert_eq!(result["_code"], "native_schema_incompatible");
         assert_eq!(result["effects"]["native_writes"], false);
         assert!(path.read_dir().unwrap().next().is_none());
@@ -1114,7 +1128,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
-        let applied = apply(&store, &config, "managed", false).await.unwrap();
+        let applied = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
         assert_eq!(applied["_code"], "awaiting_native_reload");
         let gaps = applied["fact_gaps"].as_array().unwrap();
         assert!(gaps.iter().any(|gap| {
@@ -1155,7 +1171,7 @@ mod tests {
         .unwrap();
         fs::write(path.join(filename), &enriched).unwrap();
         assert_eq!(
-            apply(&store, &config, "managed", false)
+            apply(&store, &config, "managed", false, None)
                 .await
                 .unwrap_err()
                 .code,
@@ -1177,7 +1193,9 @@ mod tests {
         assert_eq!(accepted["state"], "accepted");
         assert_eq!(accepted["credential_ownership"], "retained");
         assert_eq!(accepted["native_writes"], false);
-        let reapplied = apply(&store, &config, "managed", false).await.unwrap();
+        let reapplied = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
         assert_eq!(reapplied["_code"], "awaiting_native_reload");
         assert!(path.read_dir().unwrap().any(|entry| {
             entry
@@ -1331,7 +1349,9 @@ mod tests {
             .unwrap();
 
         // An unconfigured effort must not be written or removed.
-        apply(&store, &config, "managed", false).await.unwrap();
+        apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
         let settings = fs::read_to_string(path.join("settings.json")).unwrap();
         assert!(
             settings.contains("\"defaultThinkingLevel\": \"low\"")
@@ -1352,7 +1372,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&managed).unwrap().as_bytes())
             .unwrap();
-        apply(&store, &managed, "managed", false).await.unwrap();
+        apply(&store, &managed, "managed", false, None)
+            .await
+            .unwrap();
         let settings = fs::read_to_string(path.join("settings.json")).unwrap();
         assert!(
             settings.contains("\"defaultThinkingLevel\": \"high\"")
@@ -1373,7 +1395,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&unmanaged).unwrap().as_bytes())
             .unwrap();
-        apply(&store, &unmanaged, "managed", false).await.unwrap();
+        apply(&store, &unmanaged, "managed", false, None)
+            .await
+            .unwrap();
         let settings = fs::read_to_string(path.join("settings.json")).unwrap();
         assert!(
             settings.contains("\"defaultThinkingLevel\": \"low\"")
@@ -1384,11 +1408,15 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&managed).unwrap().as_bytes())
             .unwrap();
-        apply(&store, &managed, "managed", false).await.unwrap();
+        apply(&store, &managed, "managed", false, None)
+            .await
+            .unwrap();
         let settings = fs::read_to_string(path.join("settings.json")).unwrap();
         let edited = settings.replace("\"high\"", "\"low\"");
         fs::write(path.join("settings.json"), edited).unwrap();
-        let error = apply(&store, &managed, "managed", false).await.unwrap_err();
+        let error = apply(&store, &managed, "managed", false, None)
+            .await
+            .unwrap_err();
         assert_eq!(error.code, "native_conflict");
     }
 
@@ -1445,7 +1473,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
             .unwrap();
-        apply(&store, &config, "managed", false).await.unwrap();
+        apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
         let applied = fs::read_to_string(&native_path).unwrap();
         assert!(applied.contains("\"local/first#high\""), "{applied}");
         assert!(applied.contains("native comment"), "{applied}");
@@ -1464,7 +1494,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&unmanaged).unwrap().as_bytes())
             .unwrap();
-        apply(&store, &unmanaged, "managed", false).await.unwrap();
+        apply(&store, &unmanaged, "managed", false, None)
+            .await
+            .unwrap();
         let settings = fs::read_to_string(&native_path).unwrap();
         assert!(settings.contains("\"local/first#high\""), "{settings}");
 
@@ -1474,7 +1506,9 @@ mod tests {
         store
             .write_raw("tmax.toml", toml::to_string(&cleared).unwrap().as_bytes())
             .unwrap();
-        apply(&store, &cleared, "managed", false).await.unwrap();
+        apply(&store, &cleared, "managed", false, None)
+            .await
+            .unwrap();
         let restored = fs::read_to_string(&native_path).unwrap();
         assert!(restored.contains("\"local/first\""), "{restored}");
         assert!(!restored.contains("#high"), "{restored}");

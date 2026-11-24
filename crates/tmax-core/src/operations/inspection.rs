@@ -660,7 +660,7 @@ mod tests {
             .unwrap();
         std::fs::create_dir(directory.path().join("native")).unwrap();
         assert_eq!(
-            crate::agent_integration::apply(&store, &config, "target", true)
+            crate::agent_integration::apply(&store, &config, "target", true, None)
                 .await
                 .unwrap_err()
                 .code,

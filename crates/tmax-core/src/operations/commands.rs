@@ -579,7 +579,7 @@ const COMMANDS: &[Command] = &[
         path: "agent inspect",
         min: 0,
         max: 1,
-        options: "agent path",
+        options: "agent path profile",
         mutation: false,
     },
     Command {
@@ -691,7 +691,7 @@ const COMMANDS: &[Command] = &[
         path: "agent apply",
         min: 1,
         max: 1,
-        options: "",
+        options: "profile",
         mutation: true,
     },
     Command {

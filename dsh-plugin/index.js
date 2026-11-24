@@ -6,13 +6,21 @@
 // `gateway status`, `status`), decides which plugin owns the routes, and
 // exposes exact HTTP routes, one read tool, one skill, and one read command.
 // No credential value ever enters this module, and no GET observes a provider.
+import { readdir, readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { createAdapter, RESOLVED_PROFILE_DEFAULTS, THINKING_LEVELS } from './adapter.js'
 import { createActionService } from './host/actions.js'
 import { CONNECT_TIMEOUT_MS, readEnvelope, resolveHome, usableBaseUrl, usableCredentialRef } from './host/cli.js'
 import { createHistoryService, HISTORY_READ_TIMEOUT_MS } from './host/history.js'
 import { readInventory, resolveTarget } from './host/inventory.js'
 import { createObservations } from './host/observations.js'
-import { inspectHome, liveProviderIds, normalizeManageRoutes, resolveOwnership } from './host/ownership.js'
+import {
+  hasAppliedProviders,
+  inspectHome,
+  liveProviderIds,
+  normalizeManageRoutes,
+  resolveOwnership,
+} from './host/ownership.js'
 import { createRoutes, deriveBlockers } from './host/routes.js'
 import { createSnapshotService } from './host/snapshot.js'
 
@@ -481,9 +489,14 @@ export async function apply(ctx, config = {}) {
   let disposed = false
   let timer
 
-  const adapter = manageMode === false
-    ? undefined
-    : createAdapter({ native, llm, credentials, pi, ctx, profiles: () => stagedProfiles ?? profiles, label: 'tmax', log })
+  // Routes are a profile setting DSH's own `llm-pi-ai` serves: `tmax agent apply`
+  // writes them into the settings document, so the page must not register a
+  // second copy of the same upstream. Registration remains available as an
+  // explicit legacy opt-in (`manageRoutes: true`) for a home whose providers
+  // were applied by an older release that owned its own adapter.
+  const adapter = manageMode === 'true'
+    ? createAdapter({ native, llm, credentials, pi, ctx, profiles: () => stagedProfiles ?? profiles, label: 'tmax', log })
+    : undefined
   const observations = createObservations({ ctx })
 
   function getOwnership() {
@@ -516,6 +529,33 @@ export async function apply(ctx, config = {}) {
    * decision; the periodic refresh would otherwise correct it a minute later.
    * A failed re-read keeps the previous decision.
    */
+  /**
+   * Whether this home already carries applied `tmax-<entry>` providers in a
+   * profile's settings. Once it does, DSH serves those routes itself and the
+   * page must not register a second copy of the same upstream.
+   * @returns {Promise<boolean>} true when an applied provider document exists
+   */
+  async function readAppliedProviders() {
+    const home = resolveHome(config)
+    const root = resolve(home, 'profiles')
+    let entries
+    try {
+      entries = await readdir(root, { withFileTypes: true })
+    } catch {
+      return false
+    }
+    const documents = []
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      try {
+        documents.push(await readFile(resolve(root, entry.name, 'cordis.patch.yml'), 'utf8'))
+      } catch {
+        // A profile without a settings document simply has no applied providers.
+      }
+    }
+    return hasAppliedProviders(documents)
+  }
+
   async function refreshOwnershipFacts() {
     if (disposed) return ownershipDecision
     try {
@@ -528,6 +568,7 @@ export async function apply(ctx, config = {}) {
         liveNames: liveProviderIds(ctx),
         registeredNames: registrationNames,
         prefix,
+        settingsProviders: await readAppliedProviders(),
       })
     } catch (error) {
       log(`ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -743,6 +784,7 @@ export async function apply(ctx, config = {}) {
         liveNames,
         registeredNames: registrationNames,
         prefix,
+        settingsProviders: await readAppliedProviders(),
       })
       ownershipDecision = decision
       if (disposed) return inventory

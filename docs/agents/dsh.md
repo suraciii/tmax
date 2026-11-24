@@ -85,7 +85,7 @@ Skill installation remains shared `.agents` or Hermes-only; `skill install
 | Home configuration | tmax edits the home's `cordis.patch.yml`, a YAML sequence of entry patches identified by `id`, and configures the `tmax` plugin entry there. It does not install the plugin or author a replacement root document. |
 | Profiles | tmax does not enumerate, select, create, or edit profiles or presets, inspect their bundles, or write launcher-owned `cordis.yml`. |
 | Precedence | Bundle patches → profile patch → home `cordis.patch.yml` → command-line `--patch` overlays → telemetry switch. A later entry `config` replaces that same entry's complete configuration, not an independent deep merge. |
-| Common configuration | The bundle is installed once per profile and its home entry keeps id `tmax`; the entry names the home and the absolute tmax executable, and the plugin projects the routes itself from `agent inspect`. It does not replace, copy, or merge user `llm-pi-ai` configuration. Runtime overlays can still change effective behavior and remain outside tmax's ownership. |
+| Common configuration | tmax writes the providers into the profile settings document DSH's own Models page writes — `profiles/<profile>/cordis.patch.yml`, row `llm-pi-ai`, path `config.providers.tmax-<entry>` — so the base bundle's adapter serves them with nothing else installed. Providers the user configured keep their own names and fields. Runtime overlays can still change effective behavior and remain outside tmax's ownership. |
 | Preservation | User `llm-pi-ai` configuration, unrelated HOME-level rows, comments, provider fields, and opaque `!!js` expressions remain native-owned. An owned branch that cannot be safely edited blocks rather than evaluating or reserializing arbitrary expressions. |
 | Legacy | `settings.yaml` is not the current configuration surface; tmax does not recreate it. |
 
@@ -98,18 +98,18 @@ and the dormant route in the
 
 ## Independent plugin and shared runtime
 
-There is one plugin: the `tmax` bundle, installed by DSH into a profile. Apply
-does not install it, run `npm install`, change a profile, or manage bundle
-composition; it confirms one profile carries the bundle and otherwise blocks with
-`dsh_plugin_not_installed`. A package directory that is not listed under
-`dsh.profile.bundles` or as a dependency is a partial installation, not evidence
-of an installed plugin.
+DSH's base bundle already composes `llm-pi-ai` (dormant until settings supply
+profiles) and the credential store, so tmax needs no plugin to make routes work:
+apply writes provider profiles into the profile's settings and the loader mounts
+them on the next start. The optional `tmax` bundle only adds the page.
 
-The plugin projects the target's routes from `agent inspect` and registers one
-native provider per relayed route. Provider configurations from all adapters
-register in the same LLM runtime. Provider route names are global across active
-adapters, not private to a plugin entry. Choose native names distinct from
-existing routes; tmax does not silently rename, merge, or omit colliding entries.
+Apply selects the profile: `--profile` if given, otherwise `desktop`, then `web`,
+then an error naming the profiles the home has. Two profiles may select the same
+entry differently, so each provider's credential reference includes the profile.
+
+Provider route names are global across active adapters, not private to an entry.
+tmax namespaces its own as `tmax-<entry>`, so they cannot collide with a provider
+the user configured, and never renames, merges, or omits a colliding entry.
 
 Mounting `llm-pi-ai` a second time is not isolation: each instance declares its
 whole installed catalog, so disjoint configured route names can still collide
@@ -147,11 +147,11 @@ fallback source: `diagnostics.readModel` reports `inventory`, and a failed read
 is a visible section error.
 
 The page's Apply action is the previewed `tmax agent apply TARGET [--dry-run]`
-operation: it writes the target's native DSH files (the `tmax` entry in the home
-`cordis.patch.yml` and the adjacent credential reference) and is the page's only
-DSH or native write. The installed plugin owns the routes; a home an earlier
-release left the embedded adapter in is retired by that apply, and the plugin's
-own ownership arbitration covers the reload in between, per the shared
+operation: it writes the target's native DSH files (the profile's `llm-pi-ai`
+provider settings and the credential reference) and is the page's only DSH or
+native write. A home an earlier release left the embedded adapter in has that
+adapter, its `llm-tmax` row, and a previous `tmax` home row retired by the same
+apply, per the shared
 [DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary).
 Seats are additive and non-authoritative. The page also performs only previewed,
 allowlisted tmax operations, including provider observation, quota resume,

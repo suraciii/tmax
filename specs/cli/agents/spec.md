@@ -154,18 +154,18 @@ existing entry, changed fields are captured for restore, and unrelated fields
 remain intact. It does not import native settings into desired configuration.
 Conflicting ownership by another tmax target and later edits to owned fields
 remain blockers.
-DSH uses the `tmax` plugin installed by DSH into a profile, under the
-[DSH home boundary](../../integrations/spec.md#dsh-home-boundary). Apply does not
-install or write that plugin: it confirms one profile of the selected home lists
-the bundle and otherwise blocks with `dsh_plugin_not_installed` before any native
-write, naming the installation action for Desktop and for the CLI. Apply then
-manages that entry's configuration in `cordis.patch.yml` — the home it serves and
-the absolute tmax executable it invokes — and the native credential document. It
-never edits profiles, presets, or launcher-owned `cordis.yml`. Discovery uses
-nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`; an explicit scope
-selects the home directly. A home an earlier release left the embedded adapter in
-has the adapter file and its inserted `llm-tmax` entry retired by apply, and put
-back by recovery.
+DSH uses the profile's own settings document, under the
+[DSH home boundary](../../integrations/spec.md#dsh-home-boundary). A provider is a
+profile-level setting in DSH, so apply writes `profiles/<profile>/cordis.patch.yml`
+row `llm-pi-ai`, path `config.providers.tmax-<entry>`, with the endpoint, the
+protocol's `api`, the model list, and a credential reference; the base bundle's
+adapter loads it, so nothing has to be installed first. Apply selects the profile
+by `--profile`, otherwise `desktop`, then `web`, and reports the choice. It never
+creates profiles, edits presets or bundle composition, or touches the launcher-owned
+`cordis.yml`. Discovery uses nonblank `DSH_HOME`, otherwise the OS home directory's
+`.dsh`; an explicit scope selects the home directly. A home an earlier release left
+the embedded adapter in has the adapter file, its `llm-tmax` row, and that release's
+own `tmax` home row retired by apply, and put back by recovery.
 User `llm-pi-ai` configuration stays independent and untouched. Every adapter's
 provider configurations register in DSH's common LLM runtime, so selected native
 names must be globally unique; tmax does not automatically merge colliding names.
@@ -176,9 +176,10 @@ Direct and relayed entries may coexist. Existing HOME-level fields and
 expressions remain preserved under the owning boundary. Model-only application
 writes no `agent-default-model` entry or reasoning preferences; an explicit
 default writes provider/model and, only when configured, one validated effort,
-while an absent effort retains the existing HOME-level setting. Credential handoff enables the native credential service in the HOME
-patch, including for headless consumption. Recovery covers the entry's own fields,
-credential references, and any legacy artifact it retires. The `tmax` entry is the
+while an absent effort retains the existing HOME-level setting. Credential handoff writes the referenced value into the credential document the
+base bundle's credential service already reads, so it resolves for headless
+consumption without further configuration. Recovery covers the profile rows tmax
+wrote, the credential references, and any legacy artifact it retires. The `tmax` entry is the
 only managed adapter entry; no earlier adapter application format is supported or
 automatically migrated. Runtime overlays remain outside tmax's ownership.
 
@@ -289,9 +290,9 @@ version floor. A positively detected OpenCode 1.x schema reports
 `native_schema_incompatible`, exit 3, and no native writes. A positively detected
 DSH older than the one qualified version reports `native_version_unqualified` with
 the detected and qualified versions, exit 3, and no native writes; a dry run
-reports the same blocker instead of ready. A DSH home whose profiles carry no
-`tmax` bundle reports `dsh_plugin_not_installed` with the installation action,
-exit 3, and no native writes, in a dry run as well. tmax supports only that qualified DSH
+reports the same blocker instead of ready. A DSH home with no `desktop` or `web`
+profile reports `unknown_resource` naming the profiles it has, exit 3, and no
+native writes, in a dry run as well. tmax supports only that qualified DSH
 version and newer; `package.json` `engines.dsh` refuses an older DSH at
 installation. Missing or unknown versions do not block application. Apply
 reports the environment facts it evaluated beside those blockers (`environment`,

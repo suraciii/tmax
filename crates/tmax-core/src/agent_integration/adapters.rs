@@ -164,6 +164,7 @@ mod codex;
 mod credentials;
 mod dsh;
 pub(crate) use dsh::dsh_credential_ref_for;
+pub(super) use dsh::profile as dsh_profile;
 pub(super) use dsh::{LEGACY_PLUGIN_FILE, legacy_row};
 mod hermes;
 mod opencode;
@@ -254,7 +255,19 @@ fn validate_default_effort(target: &AgentTarget, entries: &[Entry]) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Result<Vec<File>> {
+    build_in_profile(target, scope, entries, None)
+}
+
+/// Build the native files for one target, naming the DSH profile whose settings
+/// carry its providers when the caller asked for one.
+pub(super) fn build_in_profile(
+    target: &AgentTarget,
+    scope: &Path,
+    entries: &[Entry],
+    profile: Option<&str>,
+) -> Result<Vec<File>> {
     validate_default_effort(target, entries)?;
     for role in target.roles.keys() {
         if !supported_roles(&target.agent).contains(&role.as_str()) {
@@ -268,7 +281,9 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
     let mut files = match target.agent.as_str() {
         "codex" => codex::build(target, scope, entries),
         "pi" | "omp" => pi_omp::build(target, scope, entries),
-        "dsh" => dsh::build(target, scope, entries),
+        // A DSH provider is a profile-level setting, so the caller may name the
+        // profile; otherwise the home's own desktop/web profile answers.
+        "dsh" => dsh::build(target, scope, entries, &dsh::profile(scope, profile)?),
         "opencode" => opencode::build(target, scope, entries),
         "hermes" => hermes::build(target, scope, entries),
         _ => Err(Error::new(

@@ -216,13 +216,18 @@ integration waits for a DSH reload, and what the page reports and offers. The
 shared [DSH plugin boundary](../spec.md#dsh-plugin-boundary) owns the
 `manageRoutes` modes and the conflict blocker.
 
-- The page reports the active owner (`home`, `page`, `other`, `none`, `unknown`),
-  the scope (`home_wide`, `profile_scoped`), and the two home facts `entry` and
-  `artifact`. A commented-out home entry is not an installed entry.
-- When the home integration is installed but its routes are not live, the page
-  reports a pending DSH reload and names that reload as the next action. It must
-  not offer Apply, drop working fallback routes, or claim the home routes are
-  active.
+- The page reports the active owner (`settings`, `home`, `page`, `other`, `none`,
+  `unknown`), the scope (`home_wide`, `profile_scoped`), and the two home facts
+  `entry` and `artifact`. A commented-out home entry is not an installed entry.
+- `settings` is the normal owner: `tmax agent apply` writes the providers into a
+  profile's settings document, so the client's own adapter serves them and the
+  page registers nothing. A page that was registering routes for a home without
+  such settings gives them up once they appear, rather than serving the same
+  upstream twice.
+- When a home still carries the retired integration and its routes are not live
+  yet, the page reports a pending DSH reload and names that reload as the next
+  action. It must not offer Apply, drop working fallback routes, or claim those
+  routes are active.
 - A route ownership conflict, an incomplete home integration, or a duplicate
   adapter failure is rendered as a typed blocker, with the affected route names
   when known.
@@ -353,9 +358,9 @@ states neither is refused with `400` `invalid_dry_run` before any tmax call.
   secret, or resolve one, and it discloses the planned native writes, secret
   reads, processes started, locks created, and files it would change.
 - Execution runs one `tmax agent apply TARGET` operation and writes the target's
-  native DSH files: the `tmax` entry in the home `cordis.patch.yml` and the
-  adjacent `.credentials.yaml` credential reference. It does not install the
-  plugin, edit tmax configuration, or manage DSH profiles.
+  native DSH files: the `llm-pi-ai` providers in the profile's
+  `cordis.patch.yml` and the credential reference. It does not install anything,
+  edit tmax configuration, or create or rename DSH profiles.
 - `TARGET` is the configured target, or the one declared DSH target whose path
   matches the resolved home. An ambiguous or absent match is a `409` typed
   refusal, not an invented target.
@@ -496,7 +501,7 @@ row says otherwise; it is never a stand-in for zero or for an empty list.
 | `tmaxVersion` | string or null | Producing CLI version. |
 | `authority` | string or null | tmax data directory. |
 | `target` | object or null | Target dossier: `id` and `path` (string or null), `default` (object or null), `nativeDefault` (object or null), `effectiveDefault` (object or null), `appliedState` (string or null), `pendingNativeChanges` (object, array, or null), `blockers` (array of `{code, message}`), and `installation` (`{version, state, source}` with string or null members, or null). A failed target inventory yields a `projection` error and a null target; `ok` stays true when the provider-list or configuration-validation read answered and is false only when neither answered. A missing native default stays null and is not an error. |
-| `ownership` | object | `mode` (`"auto"`, `true`, or `false`), `owner` (`home`, `page`, `other`, `none`, or `unknown`), `scope` (`home_wide`, `profile_scoped`, or null), `reason` (string or null), `homeIntegration` (`present`, `entry`, `artifact` booleans), and `conflict` (`{code, message, routes?}` or null). With `mode` `false` and no home integration, `reason` is `route_management_disabled`: the page registers nothing and offers no Apply. |
+| `ownership` | object | `mode` (`"auto"`, `"true"`, or `"false"`), `owner` (`settings`, `home`, `page`, `other`, `none`, or `unknown`), `scope` (`home_wide`, `profile_scoped`, or null), `reason` (string or null), `homeIntegration` (`present`, `entry`, `artifact` booleans), and `conflict` (`{code, message, routes?}` or null). With `mode` `false` and no home integration, `reason` is `route_management_disabled`: the page registers nothing and offers no Apply. |
 | `gateway` | object or null | `configured` and three-valued `ready` (boolean or null), `listen` (string or null), `daemonDiscoveryState` (`identified`, `unidentified`, or `unknown`), `reasonCode` (string or null), `supervision` (`state`, `reasonCode` strings or null), `autostart` (`savedIntent` boolean or null; `registration` string or null; `unitMatches` boolean or null), and `sharedKey` (`loadedState` `loaded`, `absent`, or `unknown`; `reasonCode` string or null). |
 | `config` | object | `state` (`valid`, `invalid`, or `unavailable`), `revision` (string or null), and `errors` (array of `{code, message}`). An absent saved configuration is a valid empty configuration; a missing revision stays null rather than invented. |
 | `routes` | array | Per route: `name` and `provider` (string or null), `protocol` (string or null), `baseUrl` (string), `credentialRef` (string or null), `credentialConfigured` (`true`, `false`, or null), `scope` (`home_wide`, `profile_scoped`, or null), `models` (array; each `id`, `name`, `kind`, `continuity`, `availability` strings or null, `candidateCount` integer or null, and `capabilities` object; the target inspection currently reports no kind, continuity, or candidate count, so those stay null, and availability stays `unverified`), `active` (boolean), and `blockers` (array of `{code, message, models?}`). Route `blockers` describe only the profile-scoped fallback this plugin owns or attempts to register; they are empty when it registers nothing. |

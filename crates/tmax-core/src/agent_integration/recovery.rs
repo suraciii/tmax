@@ -139,10 +139,13 @@ pub(super) fn record_for<'a>(
     })
 }
 fn validate_record(record: &Record) -> Result<()> {
+    // A native file may live below the scope — a DSH provider belongs to one
+    // profile's settings — but never outside it.
     if !record.scope.is_absolute()
-        || record.files.iter().any(|f| {
-            f.path.parent() != Some(record.scope.as_path()) || f.path.file_name().is_none()
-        })
+        || record
+            .files
+            .iter()
+            .any(|f| !f.path.starts_with(record.scope.as_path()) || f.path.file_name().is_none())
     {
         return Err(Error::new(
             "recovery_invalid",

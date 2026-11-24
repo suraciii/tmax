@@ -1,4 +1,4 @@
-mod arguments;
+pub(crate) mod arguments;
 pub mod commands;
 mod configuration;
 mod edit;
@@ -328,7 +328,13 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
         return inspection::agent_list(config);
     }
     if path == "agent inspect" {
-        return crate::agent_integration::inspect(store, config, operand(r, 0)?).await;
+        return crate::agent_integration::inspect(
+            store,
+            config,
+            operand(r, 0)?,
+            crate::operations::arguments::arg(r, "profile"),
+        )
+        .await;
     }
     if path == "agent apply" {
         return crate::agent_integration::apply_request(store, config, r).await;

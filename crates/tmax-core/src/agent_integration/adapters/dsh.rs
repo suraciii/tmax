@@ -1,5 +1,5 @@
 use super::super::document::{self, Format};
-use super::capabilities::{ReasoningProjection, catalog_model_metadata};
+use super::capabilities::{ReasoningProjection, api, catalog_model_metadata};
 use super::{Entry, File, file};
 use crate::{Error, Result, config::AgentTarget};
 use serde_json::{Value, json};
@@ -9,15 +9,28 @@ use std::path::Path;
 // independently qualified from Pi's thinkingLevelMap carrier.
 const DSH_EFFORT_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-pub(in crate::agent_integration) fn dsh_credential_ref(scope: &Path, entry: &Entry) -> String {
-    dsh_credential_ref_for(scope, &entry.name, &entry.protocol)
+pub(in crate::agent_integration) fn dsh_credential_ref(
+    scope: &Path,
+    profile: &str,
+    entry: &Entry,
+) -> String {
+    dsh_credential_ref_for(scope, profile, &entry.name, &entry.protocol)
 }
 
-/// Stable DSH credential reference name for one native route and protocol.
-pub(crate) fn dsh_credential_ref_for(scope: &Path, name: &str, protocol: &str) -> String {
+/// Stable DSH credential reference name for one profile's route and protocol.
+/// The profile is part of the identity: two profiles may select the same entry
+/// differently, and a shared reference would make one overwrite the other.
+pub(crate) fn dsh_credential_ref_for(
+    scope: &Path,
+    profile: &str,
+    name: &str,
+    protocol: &str,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     digest.update(scope.as_os_str().as_encoded_bytes());
+    digest.update(b"\0");
+    digest.update(profile.as_bytes());
     digest.update(b"\0");
     digest.update(name.as_bytes());
     digest.update(b"\0");
@@ -74,21 +87,81 @@ pub(super) fn model_metadata(effective: &Value) -> Result<Value> {
     Ok(metadata)
 }
 
-pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Result<Vec<File>> {
-    // The plugin installed into a DSH profile owns both the routes and the page,
-    // so this home only carries that entry's configuration: the home it serves
-    // and the executable it invokes. A Desktop process does not inherit the PATH
-    // a terminal has, so the executable is absolute.
-    let executable = std::env::current_exe().map_err(|_| {
-        Error::new(
-            "native_executable_not_found",
-            "The running tmax executable path cannot be resolved",
-        )
-    })?;
-    let mut patch = json!({"tmax":{"config":{
-        "home":scope,
-        "tmaxPath":executable,
-    }}});
+/// The DSH profile whose settings carry this home's providers.
+///
+/// A provider is a profile-level setting in DSH: its Models page writes one into
+/// `profiles/<profile>/cordis.patch.yml`. tmax writes to that same place instead
+/// of inventing a home-wide mechanism, so applying produces working routes with
+/// no plugin to install. Desktop first, then web, then whatever the caller names.
+pub(in crate::agent_integration) fn profile(
+    scope: &Path,
+    requested: Option<&str>,
+) -> Result<String> {
+    let available = profiles(scope);
+    if let Some(name) = requested {
+        return available
+            .iter()
+            .find(|candidate| *candidate == name)
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(
+                    "unknown_resource",
+                    &format!(
+                        "No DSH profile named \"{name}\" in this home; available: {}",
+                        describe_profiles(&available)
+                    ),
+                )
+            });
+    }
+    for preferred in ["desktop", "web"] {
+        if let Some(found) = available.iter().find(|candidate| *candidate == preferred) {
+            return Ok(found.clone());
+        }
+    }
+    Err(Error::new(
+        "unknown_resource",
+        &format!(
+            "This DSH home declares no desktop or web profile; available: {}. Name one with --profile",
+            describe_profiles(&available)
+        ),
+    ))
+}
+
+fn describe_profiles(available: &[String]) -> String {
+    if available.is_empty() {
+        "none".to_owned()
+    } else {
+        available.join(", ")
+    }
+}
+
+fn profiles(scope: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(scope.join("profiles")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir() && entry.path().join("package.json").is_file())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The provider name tmax writes into DSH's own settings: recognizable, and
+/// namespaced so it cannot collide with a provider the user configured.
+pub(super) fn provider_name(entry: &Entry) -> String {
+    format!("tmax-{}", entry.name)
+}
+
+pub(super) fn build(
+    target: &AgentTarget,
+    scope: &Path,
+    entries: &[Entry],
+    profile: &str,
+) -> Result<Vec<File>> {
+    super::validate_default_effort(target, entries)?;
+    let mut providers = serde_json::Map::new();
     let mut refs = serde_json::Map::new();
     for entry in entries {
         if entry.login_provider.is_some() {
@@ -97,31 +170,48 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
                 "DSH native login authentication is not qualified; select an API-key provider",
             ));
         }
+        let mut models = Vec::new();
         for id in &entry.models {
             if let Some((protocol, base)) = entry.model_routes.get(id)
                 && (protocol != &entry.protocol || base != &entry.base)
             {
-                // Qualified modelFields has no api or baseURL; the
-                // provider route owns one protocol and endpoint.
                 return Err(Error::new(
                     "incompatible",
                     "DSH requires one protocol and endpoint per native provider entry; split mixed model routes into separate entries",
                 ));
             }
+            let mut model = json!({"id":id});
+            if let Some(metadata) = entry.model_metadata.get(id).and_then(Value::as_object) {
+                model
+                    .as_object_mut()
+                    .expect("native model object")
+                    .extend(metadata.clone());
+            }
+            models.push(model);
         }
-        let credential_ref = dsh_credential_ref(scope, entry);
+        let credential_ref = dsh_credential_ref(scope, profile, entry);
+        providers.insert(
+            provider_name(entry),
+            json!({
+                "apiKeyEnv":credential_ref,
+                "api":api(&entry.protocol)?,
+                "baseURL":entry.base,
+                "models":models,
+            }),
+        );
         if let Some(key) = &entry.key {
             refs.insert(credential_ref, json!(key));
         }
     }
+    let mut patch = json!({"llm-pi-ai":{"config":{"providers":providers}}});
     if let Some(default) = &target.default {
         let active = entries
             .iter()
             .find(|entry| entry.name == default.provider)
             .ok_or_else(|| Error::new("unresolved_reference", "Native default does not resolve"))?;
         let mut config = json!({
-            "provider":active.native_name(),
-            "model":default.id,
+            "provider": provider_name(active),
+            "model": default.id,
         });
         if let Some(effort) = &default.effort {
             config["reasoningEffort"] = json!(effort);
@@ -130,8 +220,8 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
     }
     let mut files = Vec::new();
     if !refs.is_empty() {
-        patch["credentials"] =
-            json!({"disabled":false,"config":{"path":scope.join(".credentials.yaml")}});
+        // The base bundle already composes DSH's own credential store at this
+        // path, so the reference resolves without any further configuration.
         files.push(file(
             scope,
             ".credentials.yaml",
@@ -139,7 +229,13 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
             json!({"version":1,"refs":refs}),
         ));
     }
-    files.push(file(scope, "cordis.patch.yml", Format::DshPatch, patch));
+    // The patch lives in the profile whose settings a provider belongs to.
+    files.push(file(
+        &scope.join("profiles").join(profile),
+        "cordis.patch.yml",
+        Format::DshPatch,
+        patch,
+    ));
     Ok(files)
 }
 
@@ -150,11 +246,20 @@ pub(in crate::agent_integration) const LEGACY_PLUGIN_FILE: &str = "tmax-dsh.mjs"
 /// that loads *this* home's artifact. A row that loads anything else belongs to
 /// the user, whatever its id, and is left alone.
 pub(in crate::agent_integration) fn legacy_row(current: &Value, scope: &Path) -> bool {
-    current
+    let artifact = current
         .get("llm-tmax")
         .and_then(|row| row.get("name"))
         .and_then(Value::as_str)
-        .is_some_and(|name| portable(Path::new(name)) == portable(&scope.join(LEGACY_PLUGIN_FILE)))
+        .is_some_and(|name| portable(Path::new(name)) == portable(&scope.join(LEGACY_PLUGIN_FILE)));
+    // A release may also have written a `tmax` row that named this home; that
+    // entry configured nothing else, so retiring it loses no user setting.
+    let home_entry = current
+        .get("tmax")
+        .and_then(|row| row.get("config"))
+        .and_then(|config| config.get("home"))
+        .and_then(Value::as_str)
+        .is_some_and(|home| portable(Path::new(home)) == portable(scope));
+    artifact || home_entry
 }
 
 /// Windows verbatim paths differ textually from the same path written plainly.
@@ -280,7 +385,7 @@ pub(super) fn validate_existing(file: &File, current: &Value) -> Result<()> {
 mod tests {
     use super::super::desired_fields;
     use super::super::test_support::target;
-    use super::super::{build, model_metadata, projection_view};
+    use super::super::{model_metadata, projection_view};
     use super::*;
     use std::collections::BTreeMap;
     fn dsh_entry(protocol: &str) -> Entry {
@@ -300,37 +405,55 @@ mod tests {
     }
 
     #[test]
-    fn dsh_model_only_handoff_configures_the_installed_plugin_and_never_installs_one() {
+    fn dsh_model_only_handoff_writes_profile_settings_and_never_installs_anything() {
         let scope = Path::new("/explicit/dsh");
         let mut target = target("dsh");
         target.default = None;
-        for protocol in ["chat-completions", "responses", "messages"] {
+        for (protocol, expected_api) in [
+            ("chat-completions", "openai-completions"),
+            ("responses", "openai-responses"),
+            ("messages", "anthropic-messages"),
+        ] {
             let entry = dsh_entry(protocol);
-            let credential_ref = dsh_credential_ref(scope, &entry);
-            let files = build(&target, scope, &[entry]).unwrap();
-            // The plugin is installed by DSH into a profile, so this home carries
-            // its configuration and the credential document, never the artifact.
+            let credential_ref = dsh_credential_ref(scope, "desktop", &entry);
+            let files = build(&target, scope, &[entry], "desktop").unwrap();
+            // A DSH provider is a profile setting, so tmax writes the profile's
+            // settings document and the credential value, nothing else.
             assert_eq!(files.len(), 2, "{files:?}");
-            assert_eq!(files[0].path, Path::new("/explicit/dsh/.credentials.yaml"));
+            assert_eq!(files[0].path, scope.join(".credentials.yaml"));
             assert_eq!(files[0].desired["version"], 1);
             assert_eq!(
                 files[0].desired["refs"][&credential_ref],
                 "protected-key-reference"
             );
-            assert_eq!(files[1].path, scope.join("cordis.patch.yml"));
+            assert_eq!(
+                files[1].path,
+                scope.join("profiles/desktop/cordis.patch.yml")
+            );
             assert!(matches!(files[1].format, Format::DshPatch));
+            let providers = &files[1].desired["llm-pi-ai"]["config"]["providers"];
+            let provider = &providers["tmax-local"];
+            assert_eq!(provider["api"], expected_api);
+            assert_eq!(provider["apiKeyEnv"], credential_ref);
+            assert_eq!(provider["baseURL"], "https://example.invalid/v1");
+            assert_eq!(provider["models"], json!([{"id":"m"}]));
             let patch = &files[1].desired;
             assert!(patch.get("llm-tmax").is_none(), "{patch}");
-            assert_eq!(patch["tmax"]["config"]["home"], "/explicit/dsh");
-            let executable = patch["tmax"]["config"]["tmaxPath"].as_str().unwrap();
-            assert!(Path::new(executable).is_absolute(), "{executable}");
+            assert!(patch.get("tmax").is_none(), "{patch}");
+            assert!(patch.get("credentials").is_none(), "{patch}");
             assert!(patch.get("agent-default-model").is_none());
             assert!(!patch.to_string().contains("protected-key-reference"));
         }
         let entry = dsh_entry("responses");
         assert_ne!(
-            dsh_credential_ref(scope, &entry),
-            dsh_credential_ref(Path::new("/another/dsh"), &entry)
+            dsh_credential_ref(scope, "desktop", &entry),
+            dsh_credential_ref(Path::new("/another/dsh"), "desktop", &entry)
+        );
+        // Two profiles may select the same entry differently, so the reference
+        // that carries its key cannot be shared across them.
+        assert_ne!(
+            dsh_credential_ref(scope, "desktop", &entry),
+            dsh_credential_ref(scope, "web", &entry)
         );
     }
 
@@ -346,14 +469,22 @@ mod tests {
                 .model_routes
                 .insert("m".into(), (route.0.into(), route.1.into()));
             assert_eq!(
-                build(&target("dsh"), scope, &[entry]).unwrap_err().code,
+                build(&target("dsh"), scope, &[entry], "desktop")
+                    .unwrap_err()
+                    .code,
                 "incompatible"
             );
         }
-        let files = build(&target("dsh"), scope, &[dsh_entry("chat-completions")]).unwrap();
+        let files = build(
+            &target("dsh"),
+            scope,
+            &[dsh_entry("chat-completions")],
+            "desktop",
+        )
+        .unwrap();
         assert_eq!(
             files[1].desired["agent-default-model"],
-            json!({"config":{"provider":"local","model":"m"}})
+            json!({"config":{"provider":"tmax-local","model":"m"}})
         );
     }
 
@@ -535,13 +666,19 @@ mod tests {
         );
         let mut target = target("dsh");
         effort(&mut target, "max");
-        let files = build(&target, scope, std::slice::from_ref(&model_entry)).unwrap();
+        let files = build(
+            &target,
+            scope,
+            std::slice::from_ref(&model_entry),
+            "desktop",
+        )
+        .unwrap();
         assert_eq!(
             files[1].desired["agent-default-model"]["config"]["reasoningEffort"],
             "max"
         );
         target.default.as_mut().unwrap().effort = None;
-        let files = build(&target, scope, &[model_entry]).unwrap();
+        let files = build(&target, scope, &[model_entry], "desktop").unwrap();
         assert!(
             files[1].desired["agent-default-model"]["config"]
                 .get("reasoningEffort")
@@ -559,7 +696,13 @@ mod tests {
         );
         let mut target = target("dsh");
         effort(&mut target, "high");
-        let error = build(&target, Path::new("/explicit/dsh"), &[model_entry]).unwrap_err();
+        let error = build(
+            &target,
+            Path::new("/explicit/dsh"),
+            &[model_entry],
+            "desktop",
+        )
+        .unwrap_err();
         assert_eq!(error.code, "native_default_effort_unrepresentable");
         assert!(error.message.contains("available: max"));
     }

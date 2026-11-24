@@ -7,7 +7,7 @@ use super::{
     compatibility,
     discovery::safe_files,
     document::{self, Format},
-    installation::{INSTALL_TMAX_PLUGIN, dsh_plugin, schema_blocker, version},
+    installation::{schema_blocker, version},
     recovery::{INDEX, Index, Record, field_drift, field_hash, owner, record_for, record_view},
     scope::{dsh_preflight, read_native, scope_evidence, target, unavailable},
 };
@@ -259,7 +259,12 @@ fn readiness_matrix(blockers: &[Value]) -> Value {
     })
 }
 
-pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> {
+pub async fn inspect(
+    store: &Store,
+    config: &Config,
+    id: &str,
+    profile: Option<&str>,
+) -> Result<Value> {
     let target = target(config, id)?;
     let (path, scope_reason) = scope_evidence(store, &target.scope)?;
     let available = scope_reason == "available";
@@ -297,7 +302,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
             Ok((entries, references)) => {
                 fact_gaps = fact_gap_warnings(target, &entries);
                 native_projection = Some(projection_view(target, &entries));
-                adapters::build(target, &path, &entries)
+                adapters::build_in_profile(target, &path, &entries, profile)
                     .and_then(|files| pending_native_changes(target, &files, &references, record))
             }
             Err(error) => Err(error),
@@ -327,12 +332,16 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     }
     // A home whose profiles carry no tmax plugin has nothing to apply into, so
     // inspection names the installation action rather than a pending write.
-    let plugin = if target.agent == "dsh" && available {
-        let plugin = dsh_plugin(&path);
-        if plugin["state"] != "installed" {
-            blockers.push(json!({"code":"dsh_plugin_not_installed","message":INSTALL_TMAX_PLUGIN}));
+    // A DSH provider lives in one profile's settings; name it so inspection and
+    // application describe the same file, and say so when none resolves.
+    let dsh_profile = if target.agent == "dsh" && available {
+        match adapters::dsh_profile(&path, profile) {
+            Ok(name) => Some(name),
+            Err(error) => {
+                blockers.push(json!({"code":error.code,"message":error.message}));
+                None
+            }
         }
-        Some(plugin)
     } else {
         None
     };
@@ -353,7 +362,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"plugin":plugin,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view(&target.agent,&path),"pending_native_changes":pending,"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,dsh_profile.as_deref().unwrap_or_default(),name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"dsh_profile":dsh_profile,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view(&target.agent,&path),"pending_native_changes":pending,"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -854,7 +863,7 @@ mod tests {
         config
             .agents
             .insert("managed".into(), inspection_target(path.clone()));
-        let inspected = inspect(&store, &config, "managed").await.unwrap();
+        let inspected = inspect(&store, &config, "managed", None).await.unwrap();
         assert_eq!(inspected["path"], json!(path));
         assert_eq!(inspected["scope_reason_code"], "absent");
         assert_eq!(inspected["default"]["id"], "first");
@@ -874,12 +883,14 @@ mod tests {
         ] {
             assert!(inspected.get(removed).is_none(), "{removed} is present");
         }
-        let error = apply(&store, &config, "managed", false).await.unwrap_err();
+        let error = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap_err();
         assert_eq!(error.code, "native_scope_unavailable");
         assert!(error.message.contains(path.to_str().unwrap()));
         assert!(!store.root.exists());
         fs::write(&path, b"not a directory").unwrap();
-        let inspected = inspect(&store, &config, "managed").await.unwrap();
+        let inspected = inspect(&store, &config, "managed", None).await.unwrap();
         assert_eq!(inspected["scope_reason_code"], "not_directory");
         assert_eq!(inspected["files"], json!([]));
     }
@@ -1382,7 +1393,7 @@ mod tests {
             .write_raw("tmax.toml", format!("{text}{target}").as_bytes())
             .unwrap();
         let config = config::load(&store).unwrap().config;
-        let inspected = inspect(&store, &config, "dsh-main").await.unwrap();
+        let inspected = inspect(&store, &config, "dsh-main", None).await.unwrap();
         let entry = &inspected["providers"][0];
         assert_eq!(entry["relayed"], true);
         assert_eq!(entry["base_url"], "http://127.0.0.1:17840");
