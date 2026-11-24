@@ -245,42 +245,6 @@ pub(super) fn build(
     Ok(files)
 }
 
-/// The adapter file an earlier release embedded beside the home patch.
-pub(in crate::agent_integration) const LEGACY_PLUGIN_FILE: &str = "tmax-dsh.mjs";
-
-/// Whether this home still declares that embedded plugin: the `llm-tmax` row
-/// that loads *this* home's artifact. A row that loads anything else belongs to
-/// the user, whatever its id, and is left alone.
-pub(in crate::agent_integration) fn legacy_row(current: &Value, scope: &Path) -> bool {
-    let artifact = current
-        .get("llm-tmax")
-        .and_then(|row| row.get("name"))
-        .and_then(Value::as_str)
-        .is_some_and(|name| portable(Path::new(name)) == portable(&scope.join(LEGACY_PLUGIN_FILE)));
-    // A release may also have written a `tmax` row that named this home; that
-    // entry configured nothing else, so retiring it loses no user setting.
-    let home_entry = current
-        .get("tmax")
-        .and_then(|row| row.get("config"))
-        .and_then(|config| config.get("home"))
-        .and_then(Value::as_str)
-        .is_some_and(|home| portable(Path::new(home)) == portable(scope));
-    artifact || home_entry
-}
-
-/// Windows verbatim paths differ textually from the same path written plainly.
-fn portable(path: &Path) -> String {
-    path.to_string_lossy()
-        .strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .unwrap_or_else(|| {
-            path.to_string_lossy()
-                .strip_prefix(r"\\?\")
-                .map(str::to_owned)
-                .unwrap_or_else(|| path.to_string_lossy().into_owned())
-        })
-}
-
 pub(super) fn inline_credential(path: &[String]) -> bool {
     path.len() == 2 && path[0] == "refs"
 }

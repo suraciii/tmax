@@ -68,32 +68,25 @@ fn home(directory: &Path) -> (PathBuf, PathBuf, String) {
     (home, profile, user)
 }
 
-/// The home an earlier release left: its embedded adapter, loaded by a row.
+/// A home patch of the user's own, which apply never touches.
 #[cfg(unix)]
-fn legacy(home: &Path) -> (String, Vec<u8>) {
-    let original = "# native policy\n- id: user-owned\n  config:\n    keep: true\n";
-    let bytes = b"export const name = 'llm-tmax'\n".to_vec();
-    fs::write(home.join("tmax-dsh.mjs"), &bytes).unwrap();
-    let text = format!(
-        "{original}- insert:\n    - id: llm-tmax\n      name: {}/tmax-dsh.mjs\n- id: tmax\n  config:\n    home: {}\n",
-        home.display(),
-        home.display()
-    );
+fn home_patch(home: &Path) -> String {
+    let text = "# native policy\n- id: user-owned\n  config:\n    keep: true\n".to_owned();
     fs::write(home.join("cordis.patch.yml"), &text).unwrap();
-    (text, bytes)
+    text
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn dsh_apply_writes_profile_providers_and_retires_the_home_plugin() {
-    if !isolated("dsh_apply_writes_profile_providers_and_retires_the_home_plugin") {
+async fn dsh_apply_writes_profile_providers_and_leaves_the_home_patch_alone() {
+    if !isolated("dsh_apply_writes_profile_providers_and_leaves_the_home_patch_alone") {
         return;
     }
     {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().join("authority"));
         let (home, profile, user_settings) = home(directory.path());
-        let (legacy_home, artifact_bytes) = legacy(&home);
+        let untouched_home = home_patch(&home);
         let credentials = home.join(".credentials.yaml");
         storage::atomic_write(
             &credentials,
@@ -137,10 +130,9 @@ async fn dsh_apply_writes_profile_providers_and_retires_the_home_plugin() {
         assert!(!preview.to_string().contains("synthetic-managed"));
         assert_eq!(
             fs::read_to_string(home.join("cordis.patch.yml")).unwrap(),
-            legacy_home
+            untouched_home
         );
         assert_eq!(fs::read(&credentials).unwrap(), before_credentials);
-        assert!(home.join("tmax-dsh.mjs").exists());
 
         // A foreign credentials lock blocks before any write.
         let lock = home.join(".credentials.yaml.lock");
@@ -154,7 +146,7 @@ async fn dsh_apply_writes_profile_providers_and_retires_the_home_plugin() {
         );
         assert_eq!(
             fs::read_to_string(home.join("cordis.patch.yml")).unwrap(),
-            legacy_home
+            untouched_home
         );
         fs::remove_file(&lock).unwrap();
 
@@ -179,12 +171,11 @@ async fn dsh_apply_writes_profile_providers_and_retires_the_home_plugin() {
         let reference_name = provider.1["apiKeyEnv"].as_str().unwrap();
         assert!(!settings.to_string().contains("synthetic-managed"));
 
-        let repaired =
-            dsh_patch::parse(&fs::read_to_string(home.join("cordis.patch.yml")).unwrap()).unwrap();
-        assert!(repaired.get("llm-tmax").is_none(), "legacy row retired");
-        assert!(repaired.get("tmax").is_none(), "home entry retired");
-        assert_eq!(repaired["user-owned"]["config"]["keep"], true);
-        assert!(!home.join("tmax-dsh.mjs").exists(), "legacy file retired");
+        assert_eq!(
+            fs::read_to_string(home.join("cordis.patch.yml")).unwrap(),
+            untouched_home,
+            "the home patch is the user's and stays as it was"
+        );
         let native_credentials =
             document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap();
         assert_eq!(native_credentials["refs"]["EXISTING"], "synthetic-existing");
@@ -198,17 +189,15 @@ async fn dsh_apply_writes_profile_providers_and_retires_the_home_plugin() {
         restore(&store, &index.records[0].id, false).await.unwrap();
         assert_eq!(
             fs::read_to_string(home.join("cordis.patch.yml")).unwrap(),
-            legacy_home
+            untouched_home
         );
         assert_eq!(fs::read(credentials).unwrap(), before_credentials);
-        assert_eq!(fs::read(home.join("tmax-dsh.mjs")).unwrap(), artifact_bytes);
         assert_eq!(
             fs::read_to_string(profile.join("cordis.patch.yml")).unwrap(),
             user_settings
         );
 
-        // Applying again reaches the same managed state and never brings the
-        // retired artifact back.
+        // Applying again reaches the same managed state.
         apply(&store, &config, "managed", false, None)
             .await
             .unwrap();
@@ -225,7 +214,6 @@ async fn dsh_apply_writes_profile_providers_and_retires_the_home_plugin() {
             fs::read_to_string(profile.join("cordis.patch.yml")).unwrap(),
             reapplied
         );
-        assert!(!home.join("tmax-dsh.mjs").exists());
     }
 }
 

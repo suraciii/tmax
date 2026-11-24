@@ -163,9 +163,8 @@ adapter loads it, so nothing has to be installed first. Apply selects the profil
 by `--profile`, otherwise `desktop`, then `web`, and reports the choice. It never
 creates profiles, edits presets or bundle composition, or touches the launcher-owned
 `cordis.yml`. Discovery uses nonblank `DSH_HOME`, otherwise the OS home directory's
-`.dsh`; an explicit scope selects the home directly. A home an earlier release left
-the embedded adapter in has the adapter file, its `llm-tmax` row, and that release's
-own `tmax` home row retired by apply, and put back by recovery.
+`.dsh`; an explicit scope selects the home directly. The home `cordis.patch.yml` is
+never written.
 User `llm-pi-ai` configuration stays independent and untouched. Every adapter's
 provider configurations register in DSH's common LLM runtime, so selected native
 names must be globally unique; tmax does not automatically merge colliding names.

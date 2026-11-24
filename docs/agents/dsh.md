@@ -149,9 +149,7 @@ is a visible section error.
 The page's Apply action is the previewed `tmax agent apply TARGET [--dry-run]`
 operation: it writes the target's native DSH files (the profile's `llm-pi-ai`
 provider settings and the credential reference) and is the page's only DSH or
-native write. A home an earlier release left the embedded adapter in has that
-adapter, its `llm-tmax` row, and a previous `tmax` home row retired by the same
-apply, per the shared
+native write. It never edits the home patch, per the shared
 [DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary).
 Seats are additive and non-authoritative. The page also performs only previewed,
 allowlisted tmax operations, including provider observation, quota resume,

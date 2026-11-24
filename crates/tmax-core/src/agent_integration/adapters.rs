@@ -164,7 +164,6 @@ mod codex;
 mod credentials;
 mod dsh;
 pub(crate) use dsh::dsh_credential_ref_for;
-pub(super) use dsh::{LEGACY_PLUGIN_FILE, legacy_row};
 pub(super) use dsh::{PROFILE_SETTINGS, profile as dsh_profile};
 mod hermes;
 mod opencode;

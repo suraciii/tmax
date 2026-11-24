@@ -1376,11 +1376,9 @@ Output capability is intentionally not projected because DSH's explicit
 
 Reload DSH instances using that home after apply/restore. Restoration covers the
 profile rows tmax wrote and its credential references while preserving unrelated
-edits. A home an earlier release left the embedded `tmax-dsh.mjs` adapter in has
-that adapter, its `llm-tmax` row, and that release's own `tmax` home row retired
-by the next apply, and put back by recovery. The profile's `llm-pi-ai` entry is
-the only supported application format; tmax does not migrate an earlier
-shared-adapter layout.
+edits. The profile's `llm-pi-ai` entry is the only application format tmax
+writes: it never edits the home `cordis.patch.yml`, so a row an earlier release
+put there is yours to remove.
 File writes alone are not runtime or provider-access evidence. DSH 0.2.1-rc.2
 loaded the independent plugin and completed local synthetic image/tool requests
 through all three protocols, with direct and concrete gateway routes coexisting

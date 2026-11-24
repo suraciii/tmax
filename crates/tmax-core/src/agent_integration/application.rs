@@ -173,31 +173,6 @@ pub async fn apply(
         }
     }
     let mut files = files?;
-    // One decision retires both halves of the embedded plugin an earlier release
-    // installed: the row that loads this home's artifact and the artifact itself.
-    let retire_legacy = if target.agent == "dsh" {
-        let before = read_native(&path.join("cordis.patch.yml"))?;
-        let current = document::parse(before.as_deref().unwrap_or(""), Format::DshPatch)?;
-        if adapters::legacy_row(&current, &path) {
-            files.push(File {
-                path: path.join(adapters::LEGACY_PLUGIN_FILE),
-                format: Format::Text,
-                desired: json!({"$text": ""}),
-            });
-            // The home patch is not where providers live any more, so it only
-            // enters this run to carry the retirement of the rows tmax wrote.
-            files.push(File {
-                path: path.join("cordis.patch.yml"),
-                format: Format::DshPatch,
-                desired: json!({}),
-            });
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    };
     conflicts(&index, identity.as_deref(), &files)?;
     if let Some(previous) = &previous {
         for f in &previous.files {
@@ -221,16 +196,12 @@ pub async fn apply(
     }
     let mut previews = Vec::new();
     let mut observed_inputs = Vec::new();
-    // A pending retirement is a change even when every other field already
-    // matches, so the no-op path must not answer for it.
-    let mut desired_unchanged = !retire_legacy
-        && previous
-            .as_ref()
-            .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
+    let mut desired_unchanged = previous
+        .as_ref()
+        .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
     for file in &files {
         if file.format == Format::Text
             && file.path.exists()
-            && !retire_legacy
             && !previous.as_ref().is_some_and(|record| {
                 record
                     .files
@@ -428,10 +399,6 @@ pub async fn apply(
             .unwrap_or_default();
         let mut desired =
             desired_fields_with_ownership(&target.agent, &file.desired, &current, owned);
-        if retire_legacy && file.format == Format::DshPatch {
-            desired.push((vec!["llm-tmax".into()], None));
-            desired.push((vec!["tmax".into()], None));
-        }
         // An absence tmax owns stays absent. The recorded after-state is the
         // desired state until a restore, so a later apply must not mistake it
         // for a field tmax stopped managing and put the old bytes back.

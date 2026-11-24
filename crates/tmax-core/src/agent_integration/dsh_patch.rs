@@ -271,12 +271,7 @@ fn render(id: &str, fields: &Value, indent: usize) -> Result<String> {
     let mut map = fields.as_object().ok_or_else(invalid)?.clone();
     map.insert("id".into(), json!(id));
     let entry = Value::Object(map);
-    let mapping = if id == "llm-tmax" {
-        serde_json::to_string(&json!({"insert":[entry]}))
-    } else {
-        serde_json::to_string(&entry)
-    }
-    .map_err(|_| invalid())?;
+    let mapping = serde_json::to_string(&entry).map_err(|_| invalid())?;
     Ok(format!("{}- {mapping}\n", " ".repeat(indent)))
 }
 
@@ -327,13 +322,13 @@ mod tests {
         );
     }
     #[test]
-    fn independent_plugin_insert_updates_without_changing_user_adapter() {
-        let original = "# user routes\n- id: llm-pi-ai\n  config: !!js process.env.USER_ROUTES\n";
+    fn profile_rows_update_in_place_without_rewriting_user_expressions() {
+        let original = "# user routes\n- id: user-route\n  config: !!js process.env.USER_ROUTES\n";
         let path = vec![
-            "llm-tmax".into(),
+            "llm-pi-ai".into(),
             "config".into(),
             "providers".into(),
-            "managed".into(),
+            "tmax-managed".into(),
         ];
         let first = set(
             original,
@@ -347,18 +342,48 @@ mod tests {
             Some(&json!({"api":"openai-responses","models":[{"id":"second"}]})),
         )
         .unwrap();
+        // The user's own row and its expression are not tmax's to rewrite.
         assert!(second.starts_with(original));
-        let patches: serde_yaml::Value = serde_yaml::from_str(&second).unwrap();
-        assert_eq!(patches[1]["insert"][0]["id"].as_str(), Some("llm-tmax"));
         assert_eq!(
-            parse(&second).unwrap()["llm-tmax"]["config"]["providers"]["managed"]["models"][0]["id"],
+            parse(&second).unwrap()["llm-pi-ai"]["config"]["providers"]["tmax-managed"]["models"]
+                [0]["id"],
             "second"
         );
-        assert_eq!(set(&second, &["llm-tmax".into()], None).unwrap(), original);
-        assert!(parse("- insert:\n    - id: llm-tmax\n    - id: user\n").is_err());
-        assert!(parse("- insert:\n    - id: llm-tmax\n- id: llm-tmax\n").is_err());
-        assert!(parse("- id: user-group\n  insert:\n    - id: llm-tmax\n").is_err());
+        let removed = set(
+            &second,
+            &[
+                "llm-pi-ai".into(),
+                "config".into(),
+                "providers".into(),
+                "tmax-managed".into(),
+            ],
+            None,
+        )
+        .unwrap();
+        assert!(
+            parse(&removed).unwrap()["llm-pi-ai"]["config"]["providers"]
+                .get("tmax-managed")
+                .is_none()
+        );
+        // The user's row survives the removal untouched.
+        assert_eq!(
+            parse(&removed).unwrap()["user-route"]["config"],
+            json!("process.env.USER_ROUTES")
+        );
+        // A route whose whole config is an expression cannot carry providers;
+        // refusing beats silently replacing the expression.
+        assert_eq!(
+            set(
+                "- id: llm-pi-ai\n  config: !!js process.env.USER_ROUTES\n",
+                &path,
+                Some(&json!({"api":"openai-completions"}))
+            )
+            .unwrap_err()
+            .code,
+            "native_config_invalid"
+        );
     }
+
     #[test]
     fn inserted_plugin_edits_refuse_unowned_expressions() {
         let original = "- insert:\n    - id: llm-tmax\n      name: /tmp/tmax-dsh.mjs\n      config:\n        custom: !!js process.env.USER_VALUE\n        providers:\n          managed: {api: openai-completions}\n";
