@@ -6,6 +6,7 @@ async page => {
   const id = 'web-smoke-' + Date.now();
   const model = id + '/test-model';
   const alias = id + '-alias';
+  const entryAlias = id + '-entry';
   const checks = [];
   const errors = [];
   const onError = error => errors.push(error.message);
@@ -127,6 +128,13 @@ async page => {
     await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
 
     await page.locator('[data-action="model-tab"][data-id="alias"]').click();
+    await page.locator('#page-actions [data-action="gateway-entry-add"]').click();
+    await page.locator('#f-source').selectOption(model);
+    await page.locator('#f-name').fill(entryAlias);
+    assert('Model-first gateway entry saves', (await submit('model alias add')).exit_code === 0);
+    await close();
+    const savedEntry = (await configuration()).model_aliases.find(a => a.id === entryAlias);
+    assert('Gateway entry references the selected model', savedEntry?.candidates?.[0] === model);
     await page.locator('#page-actions [data-action="alias-add"]').click();
     await page.locator('#f-id').fill(alias);
     await page.locator(`[name="candidate"][value="${model}"]`).check();
@@ -206,8 +214,10 @@ async page => {
   } finally {
     await close();
     const config = await configuration();
-    if (config.model_aliases.some(a => a.id === alias)) {
-      assert('Remove alias fixture', (await api('model alias remove', [alias])).exit_code === 0);
+    for (const aliasId of [alias, entryAlias]) {
+      if (config.model_aliases.some(a => a.id === aliasId)) {
+        assert('Remove alias fixture', (await api('model alias remove', [aliasId])).exit_code === 0);
+      }
     }
     if (config.providers[id]?.models['test-model']) {
       assert('Remove model fixture', (await api('model remove', [model])).exit_code === 0);

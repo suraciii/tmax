@@ -265,6 +265,12 @@ ID per protocol. It does not create a model, establish identical weights, or
 define an independently managed account pool.
 _Avoid_: Virtual model, provider alias, model entity
 
+**Gateway entry**:
+The local Web interface's presentation of one Model alias as a client-selectable
+public route name. It is the same persisted alias, not a second resource, a Model,
+a proxy, or a permission.
+_Avoid_: Proxy model, proxy, gateway model record, virtual model
+
 **Alias candidate configuration**:
 A model reference and optional alias-local settings within one model alias,
 shared by every protocol the route declares. It has no independent identity or

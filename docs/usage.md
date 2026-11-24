@@ -610,7 +610,9 @@ The independent outbound-network command remains `tmax network proxy URL`.
 
 The local gateway is independent of managed Pi/Codex targets. Direct clients do not
 need an `agent` declaration or native apply. A concrete qualified model can be
-used directly; aliases are optional.
+used directly by a client that knows its `provider-id/model-id` ID; a managed Agent
+entry that uses the gateway selects a public route name, which the Web calls a
+gateway entry.
 
 ### The gateway provider
 
@@ -641,6 +643,40 @@ path, `agent inspect TARGET` for each entry's `relayed` flag, `base_url`,
 discovery state, listener readiness, and listen address. Native application
 remains `tmax agent apply TARGET`; there is no separate projection or connect
 command.
+
+### Gateway entries
+
+A gateway entry is the Web interface's name for one model alias: a
+client-selectable name that references one or more existing concrete models. The
+Models page offers **通过网关使用** on each concrete model that does not already
+have an entry. The default entry name is the model ID part of the reference (for
+example `glm-5.4` from `z.ai/glm-5.4`), and the dialog asks the user to confirm it
+and the native protocols before saving. If that name is already taken, the form pre-fills a
+provider-prefixed suggestion and lets the user edit it; it never renames an
+existing entry. The accepted name is the client-facing route name.
+
+Saving an entry only writes the alias definition. It does not configure or start
+the gateway and does not modify Agent target files. The entry status therefore
+shows the remaining next step: configure the gateway, start it, reload a gateway
+that has not loaded the newest configuration, use the entry in a tool, or resolve
+a disabled entry or unavailable source. When the gateway is ready, follow the
+[gateway provider](#the-gateway-provider) section to make the entry a relayed
+Agent selection.
+
+```sh
+tmax model alias add glm-5.4 --protocol responses --candidate z.ai/glm-5.4
+tmax gateway configure --listen 127.0.0.1:17840
+tmax gateway start
+```
+
+The corresponding Web action is the same `model alias add` operation; it does
+not introduce a second gateway-model resource. The Gateway page lists entries,
+their source models, protocols, status, and next action instead of showing only a
+publication count. Raw `provider-id/model-id` IDs remain available to direct
+gateway clients; an entry is a convenient client name, not an access-control
+boundary. For a multi-model entry, use the advanced gateway-entry editor in the
+Models page or the CLI to add candidates, continuity, fallback, or per-candidate
+effort.
 
 ### Connecting an unmanaged client
 
