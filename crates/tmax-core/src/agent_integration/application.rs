@@ -283,19 +283,26 @@ pub async fn apply(store: &Store, config: &Config, id: &str, dry_run: bool) -> R
         previews.push(json!({"existing_provider_entries":existing_entries,"path":file.path,"revision":revision(before.as_deref()),"owned_fields":fields.iter().map(|(p,_)|p).collect::<Vec<_>>(),"credential_handoff":match target.agent.as_str() { "hermes" => "plaintext API key in current-user-restricted config.yaml; no token import", "dsh" => "plaintext API key in current-user-restricted DSH .credentials.yaml; home patch contains a native credential reference; no token import", _ => "native command/file reference to a private native-owned credential artifact; no inline config secret or token import" }}));
         observed_inputs.push((file.path.clone(), before));
     }
-    // A detected environment the adapter cannot serve blocks before any
-    // preview is called ready, so a dry run reports the same blocker.
+    // Environment facts are collected together, never one per run: a reader who
+    // fixes one obstacle and reruns must not meet the next only then.
+    let mut environment = json!({});
+    let mut environment_blockers = Vec::new();
     if matches!(target.agent.as_str(), "opencode" | "dsh") {
         let installed = version(&target.agent, &path).await;
+        environment["native"] = installed.clone();
         if let Some(blocker) = schema_blocker(&target.agent, &installed) {
-            return Ok(
-                json!({"_code":blocker["code"],"target":id,"agent":target.agent,"path":path,"dry_run":dry_run,"installation":installed,"blockers":[blocker],"effects":{"native_writes":false,"secret_reads":false}}),
-            );
+            environment_blockers.push(blocker);
         }
+    }
+    if !environment_blockers.is_empty() {
+        let primary = environment_blockers[0]["code"].clone();
+        return Ok(
+            json!({"_code":primary,"target":id,"agent":target.agent,"path":path,"dry_run":dry_run,"installation":environment.get("native").cloned(),"environment":environment,"blockers":environment_blockers,"effects":{"native_writes":false,"secret_reads":false}}),
+        );
     }
     if dry_run {
         return Ok(
-            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"credentials":{"resolved":false},"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false}}),
+            json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"credentials":{"resolved":false},"environment":environment,"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false}}),
         );
     }
     if desired_unchanged {

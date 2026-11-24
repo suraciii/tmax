@@ -3,6 +3,7 @@ use super::{
     application::apply,
     document::{self, Format},
     dsh_patch,
+    planning::inspect,
     recovery::{INDEX, Index, restore},
     test_support::inspection_target,
 };
@@ -478,4 +479,103 @@ async fn dsh_default_effort_is_field_scoped_and_restorable() {
             .code,
         "native_conflict"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn apply_reports_every_environment_obstacle_in_one_run() {
+    const CHILD: &str = "TMAX_DSH_ENVIRONMENT_CHILD";
+    const THIS: &str = "agent_integration::dsh_lifecycle_tests::apply_reports_every_environment_obstacle_in_one_run";
+    if std::env::var_os(CHILD).is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("dsh");
+        // An older client, below the version floor tmax generates for.
+        fs::write(
+            &executable,
+            "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf '0.1.0\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", THIS, "--nocapture"])
+            .env(CHILD, "1")
+            .env("PATH", directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated environment run failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::at(directory.path().join("authority"));
+    let home = directory.path().join("dsh");
+    fs::create_dir_all(&home).unwrap();
+    let mut target = inspection_target(home.clone());
+    target.agent = "dsh".into();
+    let mut config = Config::empty();
+    config.providers.insert(
+        "p".into(),
+        config::Provider {
+            integration: Some("custom".into()),
+            auth: Some(Auth::ApiKey {
+                key_ref: "secret:test-upstream".into(),
+            }),
+            endpoints: BTreeMap::from([
+                ("responses".into(), "https://example.invalid/v1".into()),
+                (
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                ),
+            ]),
+            models: BTreeMap::from([("first".into(), config::Model::default())]),
+            ..Default::default()
+        },
+    );
+    config.agents.insert("dsh-main".into(), target);
+    store
+        .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+        .unwrap();
+    // The environment is reported as facts beside the refusal, so the reader can
+    // see what was checked instead of inferring it from the blocker alone.
+    let answer = apply(&store, &config, "dsh-main", true).await.unwrap();
+    let codes: Vec<&str> = answer["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|blocker| blocker["code"].as_str())
+        .collect();
+    assert_eq!(codes, vec!["native_version_unqualified"], "{answer}");
+    assert_eq!(answer["_code"], "native_version_unqualified");
+    // Inspection names every obstacle with the dimension it belongs to, so a
+    // reader can act on the one they can act on now.
+    let inspected = inspect(&store, &config, "dsh-main").await.unwrap();
+    let readiness = &inspected["readiness"];
+    assert_eq!(readiness["ready"], false);
+    let blocked: Vec<(&str, &str)> = readiness["blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["dimension"].as_str().unwrap(),
+                row["next_action"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        blocked,
+        vec![(
+            "native_installation",
+            "update this client to the qualified version or newer"
+        )],
+        "{inspected}"
+    );
+    assert_eq!(answer["blockers"][0]["detected"], "0.1.0");
+    assert_eq!(answer["environment"]["native"]["state"], "detected");
+    assert_eq!(answer["effects"]["native_writes"], false);
 }

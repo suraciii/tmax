@@ -635,7 +635,7 @@ const COMMANDS: &[Command] = &[
         path: "agent model add",
         min: 3,
         max: 3,
-        options: "protocol",
+        options: "protocol force",
         mutation: true,
     },
     Command {

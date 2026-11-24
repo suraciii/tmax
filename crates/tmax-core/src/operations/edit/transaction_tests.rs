@@ -729,7 +729,13 @@ async fn relayed_entries_reference_the_derived_gateway_provider() {
     let add_model = Request {
         command: vec!["agent".into(), "model".into(), "add".into()],
         operands: vec!["t1".into(), "relayed".into(), "route".into()],
-        arguments: BTreeMap::from([("protocol".into(), vec!["responses".into()])]),
+        // This alias keeps session continuity, which omp has no qualified
+        // boundary for; the selection is forced so this test can still exercise
+        // the derived provider, not the refusal already covered elsewhere.
+        arguments: BTreeMap::from([
+            ("protocol".into(), vec!["responses".into()]),
+            ("force".into(), vec!["true".into()]),
+        ]),
         dry_run: false,
         if_revision: None,
     };
@@ -880,4 +886,78 @@ async fn key_rotation_names_applied_targets_and_unknown_records() {
         "{rotation}"
     );
     assert_eq!(rotation["next_action"], "tmax agent apply pi-main");
+}
+const CODEX_TARGET_CONFIG: &str = "version=2\n[providers.p]\nintegration='custom'\n[providers.p.endpoints]\nresponses='http://127.0.0.1:39999'\nchat-completions='http://127.0.0.1:39999'\n[providers.p.models.m]\n[providers.p.models.n]\n[agents.cx]\nagent='codex'\nscope='/tmp/cx'\n[agents.cx.providers.local]\nprovider='p'\nmodels=[{id='m',protocol='responses'}]\n";
+
+/// One add request shaped as the CLI builds it: an unset boolean flag is absent.
+fn model_add_request(model: &str, protocol: &str, force: bool) -> Request {
+    let mut arguments = BTreeMap::from([("protocol".into(), vec![protocol.into()])]);
+    if force {
+        arguments.insert("force".into(), vec!["true".into()]);
+    }
+    Request {
+        command: vec!["agent".into(), "model".into(), "add".into()],
+        operands: vec!["cx".into(), "local".into(), model.into()],
+        arguments,
+        dry_run: false,
+        if_revision: None,
+    }
+}
+
+#[tokio::test]
+async fn an_unqualified_selection_is_refused_where_it_is_chosen_and_forced_on_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    store
+        .write_raw("tmax.toml", CODEX_TARGET_CONFIG.as_bytes())
+        .unwrap();
+    // Codex has one native transport. Adding a Chat Completions selection would
+    // only fail later, at apply, so it is refused here with the way forward.
+    let refused = execute(&store, &model_add_request("m", "chat-completions", false))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "incompatible");
+    assert!(refused.message.contains("--force"), "{}", refused.message);
+    assert!(refused.message.contains("codex"), "{}", refused.message);
+    assert_eq!(
+        std::fs::read(store.root.join("tmax.toml")).unwrap(),
+        CODEX_TARGET_CONFIG.as_bytes(),
+        "a refused selection writes nothing"
+    );
+    // --force keeps the selection and states what application will refuse.
+    let forced = execute(&store, &model_add_request("m", "chat-completions", true))
+        .await
+        .unwrap();
+    assert_eq!(forced["forced_blocker"]["code"], "incompatible");
+    assert_eq!(forced["forced_blocker"]["apply"], "blocked");
+    assert_eq!(
+        forced["forced_blocker"]["next_action"],
+        "tmax agent model remove cx local m --protocol chat-completions"
+    );
+    let saved = config::load(&store).unwrap();
+    assert!(
+        saved.config.agents["cx"].providers["local"]
+            .models
+            .iter()
+            .any(|model| model.protocol == "chat-completions")
+    );
+}
+
+#[tokio::test]
+async fn a_selection_the_client_can_take_is_saved_without_a_forced_blocker() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().into());
+    store
+        .write_raw("tmax.toml", CODEX_TARGET_CONFIG.as_bytes())
+        .unwrap();
+    // The provider has no key yet. A selection is still addable: setting the key
+    // is its own step, and application reports a missing credential itself.
+    let saved = execute(&store, &model_add_request("n", "responses", false))
+        .await
+        .unwrap();
+    assert_eq!(saved.get("forced_blocker"), None);
+    assert_eq!(
+        config::load(&store).unwrap().config.agents["cx"].providers["local"].models[1].protocol,
+        "responses"
+    );
 }

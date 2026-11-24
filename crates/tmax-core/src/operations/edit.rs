@@ -240,6 +240,45 @@ pub async fn execute(store: &Store, r: &Request) -> Result<Json> {
     let candidate_text = toml::to_string(&root).map_err(|_| error())?;
     let mut candidate = config::parse(&candidate_text)?;
     crate::reasoning::validate_saved(store, &candidate)?;
+    // A selection that cannot reach its client natively is refused here, where
+    // the reader can still choose another protocol or model. --force keeps the
+    // selection and states what application will refuse, so the refusal never
+    // arrives later as a surprise.
+    if path == "agent model add" {
+        let (target, entry, id) = (operand(r, 0)?, operand(r, 1)?, operand(r, 2)?);
+        let protocol = required(r, "protocol")?;
+        if let Err(refusal) = crate::agent_integration::compatibility::selection(
+            &candidate, target, entry, id, protocol,
+        ) {
+            let subject = format!("`{id}` as {protocol} in `{entry}`");
+            let agent = candidate
+                .agents
+                .get(target)
+                .map(|declared| declared.agent.as_str())
+                .unwrap_or("this client");
+            // Only an explicit true counts: the CLI omits an unset flag, and a
+            // present-but-empty value is not permission.
+            let forced = arg(r, "force") == Some("true");
+            if !forced {
+                return Err(Error::new(
+                    &refusal.code,
+                    &format!(
+                        "{} cannot reach {agent} natively: {} Choose a protocol the client supports, or add it with --force to keep the selection and see application refuse it.",
+                        subject, refusal.message
+                    ),
+                )
+                .field(format!("agents.{target}.providers.{entry}.models")));
+            }
+            data["forced_blocker"] = json!({
+                "code": refusal.code,
+                "message": refusal.message,
+                "apply": "blocked",
+                "next_action": format!(
+                    "tmax agent model remove {target} {entry} {id} --protocol {protocol}"
+                ),
+            });
+        }
+    }
     if path == "model add" {
         let qualified = operand(r, 0)?;
         let (provider_id, model_id) = config::qualified(qualified)?;

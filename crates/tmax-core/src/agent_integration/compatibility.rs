@@ -183,3 +183,45 @@ impl Context<'_> {
         })
     }
 }
+
+/// Whether one declared selection can reach a native handoff, judged from the
+/// candidate configuration alone and exactly as application will judge it: a
+/// relayed entry by its public identity, a direct entry by its bare model ID
+/// under that entry's upstream provider.
+pub(crate) fn selection(
+    config: &Config,
+    target_id: &str,
+    entry: &str,
+    id: &str,
+    protocol: &str,
+) -> Result<()> {
+    let target = config
+        .agents
+        .get(target_id)
+        .ok_or_else(|| Error::new("unknown_resource", "The declared target does not resolve"))?;
+    let binding = target.providers.get(entry).ok_or_else(|| {
+        Error::new(
+            "unknown_resource",
+            "The native provider entry does not resolve",
+        )
+    })?;
+    let relayed = binding.is_relayed(config);
+    let context = Context {
+        agent: &target.agent,
+        target: Some(target_id),
+        provider: (!relayed).then_some(binding.provider.as_str()),
+        gateway: relayed,
+    };
+    let verdict = if relayed {
+        context.assess_public(config, id, protocol)
+    } else {
+        context.assess(config, &binding.provider, protocol, id)
+    };
+    match verdict {
+        // A missing credential is not a fact about the selection: configuring
+        // the key is its own explicit step, and application reports it there.
+        // Refusing here would make "add the model, then set the key" impossible.
+        Err(error) if error.code == "credential_unavailable" => Ok(()),
+        verdict => verdict,
+    }
+}

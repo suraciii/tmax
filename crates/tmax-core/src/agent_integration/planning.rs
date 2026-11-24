@@ -162,6 +162,103 @@ pub async fn delivery(store: &Store, config: &Config) -> Result<Value> {
     }))
 }
 
+/// The dimension one blocker code blocks, and the action that clears it.
+/// Ordered as a reader meets them: the scope exists, the client is installed,
+/// its plugin is present, the gateway answers, then the selections themselves.
+fn blocker_dimension(code: &str) -> (&'static str, Option<&'static str>) {
+    match code {
+        "native_scope_unavailable" => ("scope", None),
+        "native_schema_incompatible" => (
+            "native_installation",
+            Some("install a client version whose native schema tmax projects"),
+        ),
+        "native_version_unqualified" => (
+            "native_installation",
+            Some("update this client to the qualified version or newer"),
+        ),
+        "native_not_installed" => ("native_installation", Some("install the client")),
+        "native_version_probe_failed" | "native_version_unknown" => (
+            "native_installation",
+            Some("run the client once so its version resolves"),
+        ),
+        "dsh_plugin_not_installed" => (
+            "plugin",
+            Some("install the tmax bundle into a profile of this DSH home"),
+        ),
+        "gateway_not_configured" => ("gateway", Some("tmax gateway configure")),
+        "gateway_not_ready" => ("gateway", Some("tmax gateway start")),
+        "credential_unavailable" => (
+            "credential",
+            Some("tmax provider key set PROVIDER, or sign the client in"),
+        ),
+        "integration_unqualified"
+        | "unsupported_agent"
+        | "compatibility_unavailable"
+        | "incompatible"
+        | "model_unavailable" => (
+            "compatibility",
+            Some("choose a protocol, model, or client this native handoff supports"),
+        ),
+        "target_incomplete" => ("selection", Some("select providers and models")),
+        "native_conflict" | "unowned_settings" | "referenced_resource" => (
+            "native_settings",
+            Some("reconcile the reported native fields, then reapply"),
+        ),
+        _ => ("delivery", Some("inspect the blocker message")),
+    }
+}
+
+/// Every dimension a target's current blockers touch, plus the ones that are
+/// simply fine. `ready` is true only when nothing at all blocks.
+fn readiness_matrix(blockers: &[Value]) -> Value {
+    const DIMENSIONS: [&str; 7] = [
+        "scope",
+        "native_installation",
+        "plugin",
+        "gateway",
+        "credential",
+        "compatibility",
+        "selection",
+    ];
+    let mut rows: Vec<(String, Value)> = DIMENSIONS
+        .iter()
+        .map(|dimension| ((*dimension).to_owned(), json!({"state":"ready"})))
+        .collect();
+    for blocker in blockers {
+        let code = blocker.get("code").and_then(Value::as_str).unwrap_or("");
+        let (dimension, next_action) = blocker_dimension(code);
+        let row = json!({
+            "state": "blocked",
+            "code": code,
+            "message": blocker.get("message").cloned().unwrap_or(Value::Null),
+            "next_action": next_action,
+        });
+        match rows.iter_mut().find(|(name, _)| name == dimension) {
+            Some((_, existing)) if existing["state"] == "blocked" => {
+                // Two blockers on one dimension keep the first; the blocker
+                // list beside this matrix carries them all.
+            }
+            Some((_, existing)) => *existing = row,
+            None => rows.push((dimension.to_owned(), row)),
+        }
+    }
+    let ready = rows.iter().all(|(_, row)| row["state"] == "ready");
+    json!({
+        "ready": ready,
+        "blocked": rows
+            .iter()
+            .filter(|(_, row)| row["state"] == "blocked")
+            .map(|(dimension, row)| {
+                json!({"dimension":dimension,"code":row["code"],"message":row["message"],"next_action":row["next_action"]})
+            })
+            .collect::<Vec<_>>(),
+        "dimensions": rows
+            .into_iter()
+            .map(|(dimension, row)| json!({"dimension":dimension,"state":row["state"]}))
+            .collect::<Vec<_>>(),
+    })
+}
+
 pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> {
     let target = target(config, id)?;
     let (path, scope_reason) = scope_evidence(store, &target.scope)?;
@@ -229,6 +326,9 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         blockers.push(blocker);
     }
     let delivery = applied_delivery(config, target, record, readiness, native_conflict);
+    // One row per thing a reader can act on, so a blocked target names every
+    // obstacle at once instead of whichever check ran first.
+    let readiness_matrix = readiness_matrix(&blockers);
     let applied_state = match &pending {
         None => "unknown",
         Some(_) if record.is_none() => "not_applied",
@@ -236,7 +336,7 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
         Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view(&target.agent,&path),"pending_native_changes":pending,"blockers":blockers,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view(&target.agent,&path),"pending_native_changes":pending,"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
