@@ -163,9 +163,8 @@ async fn dsh_apply_writes_profile_providers_and_leaves_the_home_patch_alone() {
         let provider = providers
             .as_object()
             .unwrap()
-            .iter()
-            .find(|(name, _)| name.starts_with("tmax-"))
-            .expect("the target's provider");
+            .get_key_value("local")
+            .unwrap_or_else(|| panic!("the target's provider: {providers}"));
         assert_eq!(provider.1["api"], "openai-completions");
         assert_eq!(provider.1["models"][0]["id"], "first");
         let reference_name = provider.1["apiKeyEnv"].as_str().unwrap();

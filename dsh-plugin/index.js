@@ -404,14 +404,10 @@ export async function apply(ctx, config = {}) {
   const tree = ctx.fiber.entry?.parent.tree
   if (tree === undefined) throw new Error('tmax requires a DSH Loader entry')
 
-  const [, llm, credentials, , , , , toolsModule] = await Promise.all([
-    tree.import('@deepseek-ai/dsh-llm-pi-ai'),
-    tree.import('@deepseek-ai/dsh-llm'),
+  // Routes are DSH's own, so the page needs neither an LLM adapter nor the
+  // pi-ai packages: only the credential service and the tool registry remain.
+  const [credentials, toolsModule] = await Promise.all([
     tree.import('@deepseek-ai/dsh-credentials'),
-    tree.import('@earendil-works/pi-ai'),
-    tree.import('@earendil-works/pi-ai/api/openai-completions.lazy'),
-    tree.import('@earendil-works/pi-ai/api/openai-responses.lazy'),
-    tree.import('@earendil-works/pi-ai/api/anthropic-messages.lazy'),
     tree.import('@deepseek-ai/dsh-tools'),
   ])
   const log = message => ctx.logger?.warn?.(`tmax: ${message}`)

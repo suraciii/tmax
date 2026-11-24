@@ -1332,7 +1332,7 @@ with `--agent dsh` and the existing DSH home as its scope. Discovery uses nonbla
 
 A provider is a profile-level setting in DSH — its Models page writes into
 `profiles/<profile>/cordis.patch.yml`. Apply writes there too: one provider per
-target entry, named `tmax-<entry>`, with the endpoint, protocol, models, and a
+target entry, named after that entry, with the endpoint, protocol, models, and a
 credential reference, and puts the referenced key in the credential document DSH
 already reads. Nothing has to be installed first, and the next DSH start serves
 the routes. Apply selects the profile by `--profile`, otherwise `desktop`, then

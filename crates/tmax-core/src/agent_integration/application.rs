@@ -257,6 +257,49 @@ pub async fn apply(
         }
         let before = read_native(&file.path)?;
         let current = document::parse(before.as_deref().unwrap_or(""), file.format)?;
+        // A provider is named after its entry so every existing reference keeps
+        // working. Taking over a name the user already configured would edit
+        // their provider, so a name tmax does not own blocks instead.
+        if target.agent == "dsh"
+            && file.format == Format::DshPatch
+            && let Some(providers) = file
+                .desired
+                .pointer("/llm-pi-ai/config/providers")
+                .and_then(Value::as_object)
+        {
+            for name in providers.keys() {
+                let path = vec![
+                    adapters::PROFILE_SETTINGS.to_owned(),
+                    "config".into(),
+                    "providers".into(),
+                    name.clone(),
+                ];
+                // Owned fields are recorded per leaf, so any field below the
+                // provider path means the provider is this target's.
+                let owned = previous.as_ref().is_some_and(|record| {
+                    record.files.iter().any(|owned| {
+                        owned.path == file.path
+                            && owned
+                                .fields
+                                .iter()
+                                .any(|field| field.path.starts_with(&path))
+                    })
+                });
+                let matches = document::get(&current, &path) == Some(&providers[name]);
+                if !owned
+                    && !matches
+                    && document::get(&current, &path).is_some_and(|value| !value.is_null())
+                {
+                    return Err(Error::new(
+                        "native_namespace_conflict",
+                        &format!(
+                            "The DSH profile already configures a provider named \"{name}\" that tmax does not own; rename this entry or remove that provider before applying"
+                        ),
+                    )
+                    .field(path.join(".")));
+                }
+            }
+        }
         adapters::validate_existing(&target.agent, file, &current)?;
         if let Some(old) = previous
             .as_ref()

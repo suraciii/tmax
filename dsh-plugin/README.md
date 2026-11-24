@@ -109,7 +109,7 @@ is reported as unsupported, with the next action being to update tmax.
 ## Route ownership
 
 `tmax agent apply` writes the providers into a profile's `cordis.patch.yml`
-(row `llm-pi-ai`, path `config.providers.tmax-<entry>`), and DSH's own adapter
+(row `llm-pi-ai`, path `config.providers.<entry>`), and DSH's own adapter
 serves them. The page therefore registers no route of its own: it reads the
 target inventory, lists what apply wrote, and reports each route's blockers.
 The state's `ownership.owner` is `settings` when those providers are present,

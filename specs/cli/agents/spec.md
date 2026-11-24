@@ -157,7 +157,7 @@ remain blockers.
 DSH uses the profile's own settings document, under the
 [DSH home boundary](../../integrations/spec.md#dsh-home-boundary). A provider is a
 profile-level setting in DSH, so apply writes `profiles/<profile>/cordis.patch.yml`
-row `llm-pi-ai`, path `config.providers.tmax-<entry>`, with the endpoint, the
+row `llm-pi-ai`, path `config.providers.<entry>`, with the endpoint, the
 protocol's `api`, the model list, and a credential reference; the base bundle's
 adapter loads it, so nothing has to be installed first. Apply selects the profile
 by `--profile`, otherwise `desktop`, then `web`, and reports the choice. It never

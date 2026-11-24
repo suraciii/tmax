@@ -151,10 +151,14 @@ fn profiles(scope: &Path) -> Vec<String> {
     names
 }
 
-/// The provider name tmax writes into DSH's own settings: recognizable, and
-/// namespaced so it cannot collide with a provider the user configured.
+/// The provider name tmax writes into DSH's own settings.
+///
+/// It is the entry's own name, which is what every existing reference already
+/// says (`agent-default-model`, subagent and tool model choices). A collision
+/// with a provider the user configured is reported by the caller instead of
+/// being renamed away, because renaming would break those references.
 pub(super) fn provider_name(entry: &Entry) -> String {
-    format!("tmax-{}", entry.name)
+    entry.name.clone()
 }
 
 pub(super) fn build(
@@ -402,7 +406,7 @@ mod tests {
             );
             assert!(matches!(files[1].format, Format::DshPatch));
             let providers = &files[1].desired["llm-pi-ai"]["config"]["providers"];
-            let provider = &providers["tmax-local"];
+            let provider = &providers["local"];
             assert_eq!(provider["api"], expected_api);
             assert_eq!(provider["apiKeyEnv"], credential_ref);
             assert_eq!(provider["baseURL"], "https://example.invalid/v1");
@@ -456,7 +460,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             files[1].desired["agent-default-model"],
-            json!({"config":{"provider":"tmax-local","model":"m"}})
+            json!({"config":{"provider":"local","model":"m"}})
         );
     }
 

@@ -85,7 +85,7 @@ Skill installation remains shared `.agents` or Hermes-only; `skill install
 | Home configuration | tmax edits the home's `cordis.patch.yml`, a YAML sequence of entry patches identified by `id`, and configures the `tmax` plugin entry there. It does not install the plugin or author a replacement root document. |
 | Profiles | tmax does not enumerate, select, create, or edit profiles or presets, inspect their bundles, or write launcher-owned `cordis.yml`. |
 | Precedence | Bundle patches → profile patch → home `cordis.patch.yml` → command-line `--patch` overlays → telemetry switch. A later entry `config` replaces that same entry's complete configuration, not an independent deep merge. |
-| Common configuration | tmax writes the providers into the profile settings document DSH's own Models page writes — `profiles/<profile>/cordis.patch.yml`, row `llm-pi-ai`, path `config.providers.tmax-<entry>` — so the base bundle's adapter serves them with nothing else installed. Providers the user configured keep their own names and fields. Runtime overlays can still change effective behavior and remain outside tmax's ownership. |
+| Common configuration | tmax writes the providers into the profile settings document DSH's own Models page writes — `profiles/<profile>/cordis.patch.yml`, row `llm-pi-ai`, path `config.providers.<entry>` — so the base bundle's adapter serves them with nothing else installed. Providers the user configured keep their own names and fields. Runtime overlays can still change effective behavior and remain outside tmax's ownership. |
 | Preservation | User `llm-pi-ai` configuration, unrelated HOME-level rows, comments, provider fields, and opaque `!!js` expressions remain native-owned. An owned branch that cannot be safely edited blocks rather than evaluating or reserializing arbitrary expressions. |
 | Legacy | `settings.yaml` is not the current configuration surface; tmax does not recreate it. |
 
@@ -108,12 +108,14 @@ then an error naming the profiles the home has. Two profiles may select the same
 entry differently, so each provider's credential reference includes the profile.
 
 Provider route names are global across active adapters, not private to an entry.
-tmax namespaces its own as `tmax-<entry>`, so they cannot collide with a provider
-the user configured, and never renames, merges, or omits a colliding entry.
+tmax keeps the entry's own name, so every reference that already names it
+(`agent-default-model`, subagent and tool model choices) keeps resolving. A name
+the user configured that tmax does not own blocks application rather than being
+overwritten, and tmax never renames, merges, or omits a colliding entry.
 
 tmax writes into the same `providers` mapping the Models page edits, so its
 entries appear there beside the user's own. That is the point — DSH serves them
-with no further step — and it means a user edit to a `tmax-<entry>` provider is
+with no further step — and it means a user edit to a provider tmax wrote is
 drift: apply reports the conflicting field rather than overwriting it, and
 restore puts back the value it recorded. Mounting `llm-pi-ai` a second time
 would not be isolation: each instance declares its whole installed catalog, so
