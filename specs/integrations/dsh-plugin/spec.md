@@ -353,10 +353,9 @@ states neither is refused with `400` `invalid_dry_run` before any tmax call.
   secret, or resolve one, and it discloses the planned native writes, secret
   reads, processes started, locks created, and files it would change.
 - Execution runs one `tmax agent apply TARGET` operation and writes the target's
-  native DSH files: the home `cordis.patch.yml` `llm-tmax` entry, the
-  `tmax-dsh.mjs` artifact, and the adjacent `.credentials.yaml` credential
-  reference. It does not edit tmax configuration and does not manage DSH
-  profiles.
+  native DSH files: the `tmax` entry in the home `cordis.patch.yml` and the
+  adjacent `.credentials.yaml` credential reference. It does not install the
+  plugin, edit tmax configuration, or manage DSH profiles.
 - `TARGET` is the configured target, or the one declared DSH target whose path
   matches the resolved home. An ambiguous or absent match is a `409` typed
   refusal, not an invented target.
@@ -563,8 +562,8 @@ Consumers:
   `engines.dsh` `>=0.2.3-alpha.2 <0.3.0`. The
   [DSH reference](../../../docs/agents/dsh.md#evidence-and-runtime-limits)
   records the evidence and its limits. Only a tested version is qualified; a
-  declared engine range is not evidence. The independent `llm-tmax` home plugin
-  has a separate, older source qualification in that reference.
+  declared engine range is not evidence. The home configuration tmax writes has a
+  separate, older source qualification in that reference.
 - The read model is composed from the effect-free commands named in
   [Reads](#reads); no snapshot command is required. An older tmax whose
   inspection lacks the relayed-entry or native-capability fields is reported as

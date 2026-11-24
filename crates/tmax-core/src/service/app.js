@@ -945,7 +945,7 @@ function agentForm(agent='') {
   const generation=formDialog('添加工具配置','选择编程工具和配置目录，保存后继续选择模型。此处只登记配置；应用到工具时才会修改文件。',
     field('agent','编程工具',agent || 'codex',{required:true,options:agentTypes.map(a=>[a[0],a[1]])})+
     '<section class="tool-discovery" aria-label="本地配置检测"><div class="actions"><h3 class="grow">本地配置目录</h3><button type="button" class="btn text small" id="agent-rescan">重新检测</button></div><div id="agent-discovery" aria-live="polite"></div></section>'+
-    field('path','配置目录','',{required:true,placeholder:'选择检测结果，或直接填写配置目录',help:'DSH 须选择已有的 DSH_HOME 根目录（默认使用环境变量 DSH_HOME，否则为系统用户的 ~/.dsh），无需选择 profile。应用时在根目录交付独立的 llm-tmax 插件及其配置和凭证，不修改用户的 llm-pi-ai，不管理 profile。其他目录可直接填写；相对路径以 tmax 配置目录为基准。'})+
+    field('path','配置目录','',{required:true,placeholder:'选择检测结果，或直接填写配置目录',help:'DSH 须选择已有的 DSH_HOME 根目录（默认使用环境变量 DSH_HOME，否则为系统用户的 ~/.dsh），无需选择 profile。tmax 插件需由 DSH 自行安装到某个 profile；应用时只配置该插件在 home 补丁中的条目并交付凭证，插件缺失会先报告 dsh_plugin_not_installed 而不会写入任何文件，也不会安装插件、不修改用户的 llm-pi-ai，不管理 profile。其他目录可直接填写；相对路径以 tmax 配置目录为基准。'})+
     field('target','配置名称','',{required:true,placeholder:'例如：codex-main',help:'用于区分同一个工具的不同配置，可自行修改。'}),()=>{
       const duplicate=registered(value('agent'),value('path').trim());
       if(duplicate)throw Error('此目录已添加为“'+duplicate.target+'”，请打开已有配置。');

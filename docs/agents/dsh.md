@@ -82,10 +82,10 @@ Skill installation remains shared `.agents` or Hermes-only; `skill install
 | Surface | Native behavior and tmax boundary |
 | --- | --- |
 | Home | The target scope is the existing DSH home itself. Discovery uses nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`; an explicit target path selects that home directly. It is never inferred from a profile path. |
-| Home configuration | tmax edits the home's `cordis.patch.yml`, a YAML sequence of entry patches identified by `id`, and installs the embedded plugin as the direct-child `tmax-dsh.mjs`. It does not author a replacement root document. |
+| Home configuration | tmax edits the home's `cordis.patch.yml`, a YAML sequence of entry patches identified by `id`, and configures the `tmax` plugin entry there. It does not install the plugin or author a replacement root document. |
 | Profiles | tmax does not enumerate, select, create, or edit profiles or presets, inspect their bundles, or write launcher-owned `cordis.yml`. |
 | Precedence | Bundle patches → profile patch → home `cordis.patch.yml` → command-line `--patch` overlays → telemetry switch. A later entry `config` replaces that same entry's complete configuration, not an independent deep merge. |
-| Common configuration | The independent home entry has id `llm-tmax` and `name` equal to the absolute path of `tmax-dsh.mjs`. Its routes are common to profiles using that home. It does not replace, copy, or merge user `llm-pi-ai` configuration. Runtime overlays can still change effective behavior and remain outside tmax's ownership. |
+| Common configuration | The bundle is installed once per profile and its home entry keeps id `tmax`; the entry names the home and the absolute tmax executable, and the plugin projects the routes itself from `agent inspect`. It does not replace, copy, or merge user `llm-pi-ai` configuration. Runtime overlays can still change effective behavior and remain outside tmax's ownership. |
 | Preservation | User `llm-pi-ai` configuration, unrelated HOME-level rows, comments, provider fields, and opaque `!!js` expressions remain native-owned. An owned branch that cannot be safely edited blocks rather than evaluating or reserializing arbitrary expressions. |
 | Legacy | `settings.yaml` is not the current configuration surface; tmax does not recreate it. |
 
@@ -98,19 +98,18 @@ and the dormant route in the
 
 ## Independent plugin and shared runtime
 
-Apply installs tmax's embedded plugin artifact; it does not run `npm install`,
-change a profile, or manage bundle composition. DSH's native loader loads the
-absolute artifact path. During `apply`, the plugin imports installed DSH
-dependencies through the native Loader tree rather than static package imports
-resolved from the home directory. The plugin exports `name = 'llm-tmax'` and
-`inject = ['llm']` and reuses the public root `PiAiAdapter` export for protocol
-handling rather than maintaining another wire implementation.
+There is one plugin: the `tmax` bundle, installed by DSH into a profile. Apply
+does not install it, run `npm install`, change a profile, or manage bundle
+composition; it confirms one profile carries the bundle and otherwise blocks with
+`dsh_plugin_not_installed`. A package directory that is not listed under
+`dsh.profile.bundles` or as a dependency is a partial installation, not evidence
+of an installed plugin.
 
-The plugin registers only the provider routes explicitly configured under
-`llm-tmax.config.providers`. Provider configurations from all adapters register
-in the same LLM runtime. Provider route names are global across active adapters,
-not private to a plugin entry. Choose native names distinct from existing routes;
-tmax does not silently rename, merge, or omit colliding entries.
+The plugin projects the target's routes from `agent inspect` and registers one
+native provider per relayed route. Provider configurations from all adapters
+register in the same LLM runtime. Provider route names are global across active
+adapters, not private to a plugin entry. Choose native names distinct from
+existing routes; tmax does not silently rename, merge, or omit colliding entries.
 
 Mounting `llm-pi-ai` a second time is not isolation: each instance declares its
 whole installed catalog, so disjoint configured route names can still collide
@@ -148,12 +147,12 @@ fallback source: `diagnostics.readModel` reports `inventory`, and a failed read
 is a visible section error.
 
 The page's Apply action is the previewed `tmax agent apply TARGET [--dry-run]`
-operation: it writes the target's native DSH files (the home `cordis.patch.yml`
-`llm-tmax` entry, the `tmax-dsh.mjs` artifact, and the adjacent credential
-reference) and is the page's only DSH or native write. When the home integration
-is installed, that integration owns the provider routes and the page does not
-register a second copy; the profile-scoped fallback is the transitional
-exception in the shared [DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary).
+operation: it writes the target's native DSH files (the `tmax` entry in the home
+`cordis.patch.yml` and the adjacent credential reference) and is the page's only
+DSH or native write. The installed plugin owns the routes; a home an earlier
+release left the embedded adapter in is retired by that apply, and the plugin's
+own ownership arbitration covers the reload in between, per the shared
+[DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary).
 Seats are additive and non-authoritative. The page also performs only previewed,
 allowlisted tmax operations, including provider observation, quota resume,
 failure reset, management-listener open, and gateway start, stop, and restart; it
@@ -176,7 +175,7 @@ and [tool view slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c
 
 ## Protocol and model fields
 
-`llm-tmax.config.providers.<name>` contains the provider route, with `api`,
+Each route the plugin projects carries `api`,
 `baseURL`, `apiKeyEnv`, and the selected `models`. Protocol and base URL belong
 to the route, not to each model. Selections that need different APIs or bases
 cannot share one native route; split them into distinct provider entries with
@@ -222,7 +221,7 @@ version-compatibility fallbacks.
 
 For a Chat Completions gateway route whose upstream does not accept the
 `developer` role, explicitly set
-`llm-tmax.config.providers.<name>.compat.supportsDeveloperRole: false` in the
+`compat.supportsDeveloperRole: false` on that native provider in the plugin's own
 home patch. A loopback URL cannot convey the upstream's dialect to the native
 adapter. The installed OpenCode Go run below required this route setting;
 tmax does not rewrite message roles or infer it for every gateway model.
@@ -299,7 +298,7 @@ enablement under the [owning recovery contract](../../specs/integrations/spec.md
 Restoration removes a newly owned insertion or artifact only when its captured
 baseline and subsequent edits permit that operation. It preserves unrelated
 later edits and reports conflicts instead of overwriting them. The independent
-`llm-tmax` entry is the only supported application format; no earlier shared
+`tmax` entry is the only supported application format; no earlier shared
 `llm-pi-ai` adapter layout is maintained or automatically migrated. User-owned
 `llm-pi-ai` entries and providers remain untouched.
 Reapplying after a native provider entry is removed or renamed also removes the
@@ -329,7 +328,7 @@ and [`headless` bundle](https://github.com/deepseek-ai/deepseek-harness/blob/687
 
 | Evidence class | What this reference establishes |
 | --- | --- |
-| Configuration contract | Native home target declaration, selection, explicit apply/restore, independent `llm-tmax` artifact and patch ownership, unchanged credential handoff, and the safety boundaries in the owning specification. |
+| Configuration contract | Native home target declaration, selection, explicit apply/restore, the installed `tmax` bundle and its entry ownership, unchanged credential handoff, and the safety boundaries in the owning specification. |
 | Source inspection | The pinned 0.2.1-rc.2 checkout implements the cited patch layers, whole-entry configuration replacement, shared runtime and provider directory, reusable protocol adapter, model schema, credential service, and headless disablement. Source inspection is not a native parser or inference run. |
 | Profile plugin API fit, 2026-11-23 | The running DSH 0.2.3-alpha.2 (source launch, profile `web`) and the installed tmax 0.1.0 were inspected through `cordis_inspect` and source reads. The plugin's host and client rely on the exact authenticated web-route API (`auth` defaults to `required`), the provider registry, credential `describe`, redacted settings and the configurable-provider directory, client slots and locale registration, the optional `commands` service, and effective default-model selection that this version provides. This establishes API fit; the actual temporary-profile loads are recorded in the pre-port and ported render rows below. |
 | Profile plugin inventory, actions, command, and tests, 2026-11-24 | The ported host composes one `/_tmax/state` contract from `agent list` (when no target is configured), `agent inspect TARGET`, `status`, `gateway status`, `provider list`/`provider inspect`, `config validate`, and `model explain`; no host path runs `tmax dsh`, and `diagnostics.readModel` reports `inventory`. Connect is the previewed `tmax agent apply TARGET [--dry-run]` native write. Host, action, command, history, and observation tests cover route ownership and liveness, credential readiness, section `errors`, allowlist validation, exact argv, preview versus execute, gateway guards and deadlines, busy, typed 409 refusals, 502 transport, secret-free results, every `/tmax` subcommand and its bounded output, the 45 s history read and its typed-unavailable split, and the page's explicit load state and unknown-count handling. The full plugin Node suite passed, including its host, actions, command, client, history, observations, quota, adapter, and package tests. |

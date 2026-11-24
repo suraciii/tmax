@@ -14,11 +14,11 @@ precedence, or runtime behavior.
 | [Hermes Agent](hermes.md) | 0.22.1+683.g848fc0a | Profile `config.yaml` | Native `auth.json`, credential pools, `.env`, provider key sources |
 | [DeepSeek Harness (DSH)](dsh.md) | 0.2.1-rc.2 (native integration reference); 0.2.3-alpha.2 (profile plugin) | HOME `cordis.patch.yml`, common to profiles; launcher-owned `cordis.yml` is never edited | Adjacent home `.credentials.yaml` reference store; no native login qualification |
 
-The DSH page also ships as a DSH profile bundle. Its version claim is separate
-from the native integration reference: the native `llm-tmax` home plugin is
-source-qualified at 0.2.1-rc.2, while the profile bundle is qualified against
-0.2.3-alpha.2 because it uses that version's client slots, locale, command, and
-credential services. Neither claim establishes the other.
+The DSH page ships as the profile bundle that also registers the routes. Its
+version claim is separate from the native integration reference: the home
+configuration tmax writes is source-qualified at 0.2.1-rc.2, while the bundle is
+qualified against 0.2.3-alpha.2 because it uses that version's client slots,
+locale, command, and credential services. Neither claim establishes the other.
 
 The [shared integration contract](../../specs/integrations/spec.md#agent-boundaries)
 owns observable behavior. The [routing request-parameter contract](../../specs/model-routing/spec.md#request-parameters)

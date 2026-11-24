@@ -87,11 +87,11 @@ page makes no external font, image, or script requests.
   written only when the target default explicitly declares one, and the tool's
   current effort is preserved otherwise.
   DSH requires an existing home directory (`DSH_HOME`, otherwise the OS home's
-  `.dsh`); application installs the independent `tmax-dsh.mjs` plugin, declares
-  its `llm-tmax` entry in `cordis.patch.yml`, and hands keys to the adjacent native
+  `.dsh`) whose profiles carry the `tmax` plugin DSH installs; application
+  configures that entry in `cordis.patch.yml` and hands keys to the adjacent native
   `.credentials.yaml`. It enables the credential service for headless consumption
-  without bundle inspection and preserves user `llm-pi-ai` routes. It does not
-  enumerate, select, create, or manage profiles. The managed home entry shadows
+  and preserves user `llm-pi-ai` routes. It does not install the plugin, enumerate,
+  select, create, or manage profiles, or reorder bundles. The managed home entry shadows
   lower entries with the same identity. Model-only application writes no
   `agent-default-model` entry; an explicit default changes provider/model and,
   only when configured, one validated effort, while an absent effort preserves

@@ -154,13 +154,18 @@ existing entry, changed fields are captured for restore, and unrelated fields
 remain intact. It does not import native settings into desired configuration.
 Conflicting ownership by another tmax target and later edits to owned fields
 remain blockers.
-DSH uses the independent `llm-tmax` plugin under the
-[DSH home boundary](../../integrations/spec.md#dsh-home-boundary). Apply installs
-the embedded `tmax-dsh.mjs` as a direct child of the existing home and manages
-its entry in `cordis.patch.yml`; native loader resolution uses installed DSH
-dependencies without npm installation. It never edits profiles, presets, bundles,
-or launcher-owned `cordis.yml`. Discovery uses nonblank `DSH_HOME`, otherwise
-the OS home directory's `.dsh`; an explicit scope selects the home directly.
+DSH uses the `tmax` plugin installed by DSH into a profile, under the
+[DSH home boundary](../../integrations/spec.md#dsh-home-boundary). Apply does not
+install or write that plugin: it confirms one profile of the selected home lists
+the bundle and otherwise blocks with `dsh_plugin_not_installed` before any native
+write, naming the installation action for Desktop and for the CLI. Apply then
+manages that entry's configuration in `cordis.patch.yml` — the home it serves and
+the absolute tmax executable it invokes — and the native credential document. It
+never edits profiles, presets, or launcher-owned `cordis.yml`. Discovery uses
+nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`; an explicit scope
+selects the home directly. A home an earlier release left the embedded adapter in
+has the adapter file and its inserted `llm-tmax` entry retired by apply, and put
+back by recovery.
 User `llm-pi-ai` configuration stays independent and untouched. Every adapter's
 provider configurations register in DSH's common LLM runtime, so selected native
 names must be globally unique; tmax does not automatically merge colliding names.
@@ -172,9 +177,9 @@ expressions remain preserved under the owning boundary. Model-only application
 writes no `agent-default-model` entry or reasoning preferences; an explicit
 default writes provider/model and, only when configured, one validated effort,
 while an absent effort retains the existing HOME-level setting. Credential handoff enables the native credential service in the HOME
-patch, including for headless consumption. Recovery covers the artifact, plugin
-insertion, and owned provider and credential fields. `llm-tmax` is the only
-managed adapter entry; no earlier adapter application format is supported or
+patch, including for headless consumption. Recovery covers the entry's own fields,
+credential references, and any legacy artifact it retires. The `tmax` entry is the
+only managed adapter entry; no earlier adapter application format is supported or
 automatically migrated. Runtime overlays remain outside tmax's ownership.
 
 Direct entries use their referenced endpoints/auth and need no running tmax
@@ -284,7 +289,9 @@ version floor. A positively detected OpenCode 1.x schema reports
 `native_schema_incompatible`, exit 3, and no native writes. A positively detected
 DSH older than the one qualified version reports `native_version_unqualified` with
 the detected and qualified versions, exit 3, and no native writes; a dry run
-reports the same blocker instead of ready. tmax supports only that qualified DSH
+reports the same blocker instead of ready. A DSH home whose profiles carry no
+`tmax` bundle reports `dsh_plugin_not_installed` with the installation action,
+exit 3, and no native writes, in a dry run as well. tmax supports only that qualified DSH
 version and newer; `package.json` `engines.dsh` refuses an older DSH at
 installation. Missing or unknown versions do not block application. Apply
 results contain no installation evidence or version warnings beyond these

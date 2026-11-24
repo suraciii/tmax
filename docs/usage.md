@@ -1328,11 +1328,16 @@ exits `4`. A partial target scan still exits `0` and reports `coverage: partial`
 
 DeepSeek Harness uses the same target/provider/model operations as the Pi example,
 with `--agent dsh` and the existing DSH home as its scope. Discovery uses nonblank
-`DSH_HOME`, otherwise the OS home directory's `.dsh`. Apply installs the embedded
-`tmax-dsh.mjs` as a direct child of that home and manages its independent
-`llm-tmax` entry in `cordis.patch.yml`. It does not run npm installation or edit
-profiles, presets, bundles, or launcher-owned `cordis.yml`. User `llm-pi-ai`
-routes remain independent and untouched. tmax preserves unrelated HOME-level
+`DSH_HOME`, otherwise the OS home directory's `.dsh`. DSH itself installs the
+`tmax` plugin into a profile (Plugins in Desktop, or `dsh plugin --profile
+<profile> add <repository>`); apply configures that entry in
+`cordis.patch.yml` — the home it serves and the absolute tmax executable it
+invokes — and hands the key to the adjacent native credential document. A home
+whose profiles carry no `tmax` bundle is reported as `dsh_plugin_not_installed`
+and blocks before any native write, because there is nothing there to configure.
+It does not install the plugin, run npm, or edit profiles, presets, bundles, or
+launcher-owned `cordis.yml`. User `llm-pi-ai` routes remain independent and
+untouched. tmax preserves unrelated HOME-level
 fields and expressions without enumerating, selecting, creating, or managing
 profiles. Provider configurations from all adapters share DSH's LLM runtime;
 native provider names must be globally unique, not automatically merged. Direct
@@ -1367,9 +1372,11 @@ Output capability is intentionally not projected because DSH's explicit
 `maxTokens` would also change a per-request default.
 
 Reload DSH instances using that home after apply/restore. Restoration covers the
-plugin artifact, patch insertion, and owned provider and credential changes while
-preserving unrelated edits. The independent `llm-tmax` entry is the only supported
-application format; tmax does not migrate an earlier shared-adapter layout.
+entry's owned fields and credential changes while preserving unrelated edits. A
+home an earlier release left the embedded `tmax-dsh.mjs` adapter in has that
+adapter and its `llm-tmax` entry retired by the next apply, and put back by
+recovery. The `tmax` entry is the only supported application format; tmax does not
+migrate an earlier shared-adapter layout.
 File writes alone are not runtime or provider-access evidence. DSH 0.2.1-rc.2
 loaded the independent plugin and completed local synthetic image/tool requests
 through all three protocols, with direct and concrete gateway routes coexisting
