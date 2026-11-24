@@ -336,6 +336,12 @@ pub async fn inspect(store: &Store, config: &Config, id: &str) -> Result<Value> 
     } else {
         None
     };
+    // A relayed target reaches inference through the gateway, so a stopped
+    // listener blocks application and inspection says so rather than reporting
+    // readiness from the facts around it.
+    if relayed_entry_present && readiness == Some(false) {
+        blockers.push(json!({"code":"gateway_not_ready","message":"Explicitly start the configured gateway and activate the matching complete snapshot and shared key before native application"}));
+    }
     let delivery = applied_delivery(config, target, record, readiness, native_conflict);
     // One row per thing a reader can act on, so a blocked target names every
     // obstacle at once instead of whichever check ran first.
@@ -1390,7 +1396,15 @@ mod tests {
             inspected["native_projection"].is_array(),
             "desired projection is reported even without a ready gateway: {inspected}"
         );
-        assert!(inspected["blockers"].as_array().is_some_and(Vec::is_empty));
+        // Inspection still describes the desire; it also names the stopped
+        // listener that application will refuse on.
+        let codes: Vec<&str> = inspected["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|blocker| blocker["code"].as_str())
+            .collect();
+        assert_eq!(codes, vec!["gateway_not_ready"], "{inspected}");
     }
 
     fn delivery_config(listen: &str, key_ref: &str, routes: &[&str]) -> Config {

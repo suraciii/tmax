@@ -345,6 +345,9 @@ fn read_json(path: &Path) -> Option<Value> {
 /// sorts below a longer one with the same prefix.
 pub(super) fn version_at_least(found: &str, floor: &str) -> bool {
     fn split(version: &str) -> (Vec<u64>, Vec<String>) {
+        // Semver build metadata never affects precedence, and leaving it in the
+        // core would make `0.2.3+abc` parse as 0.2.0.
+        let version = version.split_once('+').map_or(version, |(rest, _)| rest);
         let (core, pre) = version.split_once('-').unwrap_or((version, ""));
         let core = core
             .split('.')
@@ -486,6 +489,11 @@ mod tests {
             ("0.2.3-alpha.1", "0.2.3-beta.1", false),
             ("0.2.3-1", "0.2.3-alpha", false),
             ("0.2.3-alpha", "0.2.3-1", true),
+            // Build metadata never changes precedence.
+            ("0.2.3+abc", "0.2.3-alpha.2", true),
+            ("0.2.3-alpha.2+abc", "0.2.3-alpha.2", true),
+            ("0.2.3-alpha.1+abc", "0.2.3-alpha.2", false),
+            ("0.2.3-alpha.2", "0.2.3-alpha.2+build.7", true),
         ] {
             assert_eq!(
                 version_at_least(found, floor),

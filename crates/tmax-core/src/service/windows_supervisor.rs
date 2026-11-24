@@ -91,11 +91,18 @@ fn conflict() -> Error {
         "A Windows task or legacy Run value is not owned by this authority; it was not changed",
     )
 }
-fn unverified(observed: &str, expected: &str) -> Error {
+fn unverified(observed: &str, expected: &str, registered: bool) -> Error {
+    let effect = if registered {
+        // The definition was just written; claiming otherwise would send a
+        // reader into a retry that meets an already changed scheduler.
+        "the task was registered or updated first, then read back; inspect it before retrying"
+    } else {
+        "it was not changed"
+    };
     Error::new(
         "service_registration_unverified",
         &format!(
-            "The Windows task carries this authority's marker but its principal could not be confirmed as this logon session (expected {expected}, observed {observed}); it was not changed"
+            "The Windows task carries this authority's marker but its principal could not be confirmed as this logon session (expected {expected}, observed {observed}); {effect}"
         ),
     )
 }
@@ -260,7 +267,7 @@ const IDENTITY_POLICY: &str = r#"
 function Resolve-PrincipalSid($id) {
   if ($null -eq $id) { return $null }
   $text = [string]$id
-  if ($text -match '^S-1-\d(-\d)+$') { return $text }
+  if ($text -match '^S-1(-\d+)+$') { return $text }
   try { return ([System.Security.Principal.NTAccount]::new($text)).Translate([System.Security.Principal.SecurityIdentifier]).Value }
   catch { return $null }
 }
@@ -354,7 +361,7 @@ try {
       # operation must not discover that as a registration conflict.
       $identity = Get-TaskIdentity $task.Definition $sid
       if ($identity -ne 'owned') {
-        @{ result=$identity; expected=$sid; observed=$script:UnresolvedPrincipal } | ConvertTo-Json -Compress; exit 0
+        @{ result=$identity; expected=$sid; observed=$script:UnresolvedPrincipal; registered=$true } | ConvertTo-Json -Compress; exit 0
       }
       $registration = 'owned'; $enabled = $want; $matches = $true
     }
@@ -466,6 +473,7 @@ fn invoke(store: &Store, op: &str, login: bool, legacy: bool) -> Result<Value> {
         Some("unverified") => Err(unverified(
             value["observed"].as_str().unwrap_or_default(),
             value["expected"].as_str().unwrap_or_default(),
+            value["registered"].as_bool().unwrap_or(false),
         )),
         Some("running_drift" | "not_prepared") => Err(failed()),
         _ if op == "inspect" || op == "probe" => Err(unavailable()),

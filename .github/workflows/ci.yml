@@ -68,3 +68,9 @@ jobs:
         run: |
           ./target/release/tmax --help
           ./target/release/tmax --version
+      # The service layer embeds PowerShell that only Windows can execute, and a
+      # path that never runs there is a path nobody can trust. These tests are
+      # the ones that exercise it; the rest of the suite stays on the Linux gate.
+      - name: Exercise Windows service identity
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p tmax-core --lib -- service::windows_supervisor::
