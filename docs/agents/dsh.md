@@ -111,14 +111,15 @@ Provider route names are global across active adapters, not private to an entry.
 tmax namespaces its own as `tmax-<entry>`, so they cannot collide with a provider
 the user configured, and never renames, merges, or omits a colliding entry.
 
-Mounting `llm-pi-ai` a second time is not isolation: each instance declares its
-whole installed catalog, so disjoint configured route names can still collide
-with `DUPLICATE_DIRECTORY`. The independent plugin registers no configurable-
-provider directory: its configuration remains tmax-owned. Live provider and model
-lists make these routes selectable alongside native user routes, but tmax routes
-are not editable through native Models settings. Change their desired state in
-tmax and explicitly apply it. The existing adapter and its configuration remain
-intact.
+tmax writes into the same `providers` mapping the Models page edits, so its
+entries appear there beside the user's own. That is the point — DSH serves them
+with no further step — and it means a user edit to a `tmax-<entry>` provider is
+drift: apply reports the conflicting field rather than overwriting it, and
+restore puts back the value it recorded. Mounting `llm-pi-ai` a second time
+would not be isolation: each instance declares its whole installed catalog, so
+disjoint configured route names can still collide with `DUPLICATE_DIRECTORY`.
+tmax therefore never adds a mount, an adapter, or a configurable-provider
+directory of its own.
 
 Sources at the pinned revision:
 [official adapter cookbook](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/docs/cookbook/adding-an-llm-adapter.md#L7-L35),
