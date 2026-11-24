@@ -1,297 +1,32 @@
-// Host half: project tmax's declared DSH target into the live LLM registry.
+// Host half: project tmax's DSH gateway access into the live LLM registry, and
+// serve the page's read model and explicit operations.
 //
 // The plugin is deliberately thin: tmax owns provider/model/alias/quota facts;
-// this module reads `tmax agent list`, `tmax agent inspect`, and
-// `tmax gateway status`, then maps the target's relayed entries onto DSH's
-// adapter, tool, and skill surfaces. No credential value ever enters this module.
-import { execFile } from 'node:child_process'
-import { realpathSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { promisify } from 'node:util'
-
-import { observeProvider, vendorFor, vendorForKey } from './quota.js'
+// this module reads the target inventory (`tmax agent list`/`agent inspect`,
+// `gateway status`, `status`), decides which plugin owns the routes, and
+// exposes exact HTTP routes, one read tool, one skill, and one read command.
+// No credential value ever enters this module, and no GET observes a provider.
 import { createAdapter, RESOLVED_PROFILE_DEFAULTS, THINKING_LEVELS } from './adapter.js'
+import { createActionService } from './host/actions.js'
+import { CONNECT_TIMEOUT_MS, readEnvelope, resolveHome, usableBaseUrl, usableCredentialRef } from './host/cli.js'
+import { createHistoryService, HISTORY_READ_TIMEOUT_MS } from './host/history.js'
+import { readInventory, resolveTarget } from './host/inventory.js'
+import { createObservations } from './host/observations.js'
+import { inspectHome, liveProviderIds, normalizeManageRoutes, resolveOwnership } from './host/ownership.js'
+import { createRoutes, deriveBlockers } from './host/routes.js'
+import { createSnapshotService } from './host/snapshot.js'
 
 export const name = 'tmax'
 export const inject = ['llm', 'settings', 'credentials']
 
-const execFileAsync = promisify(execFile)
 const API_NAMES = {
   'chat-completions': 'openai-completions',
   'responses': 'openai-responses',
   'messages': 'anthropic-messages',
 }
 
-/** Run one tmax command and parse its JSON envelope. Never logs a key. */
-async function runTmax(config, args, timeout = 20_000) {
-  const tmax = config.tmaxPath || 'tmax'
-  let stdout
-  try {
-    ({ stdout } = await execFileAsync(tmax, args, {
-      timeout,
-      maxBuffer: 2 * 1024 * 1024,
-      env: process.env,
-    }))
-  } catch (error) {
-    // tmax writes its failure envelope to stdout with a nonzero exit status;
-    // keep that code and message instead of the exec error.
-    if (typeof error?.stdout !== 'string' || error.stdout.trim() === '') throw error
-    stdout = error.stdout
-  }
-  return JSON.parse(stdout)
-}
-
-/** One user-actionable failure: the next action is a tmax or configuration change. */
-function actionableError(code, message) {
-  const error = new Error(message)
-  error.code = code
-  error.actionable = true
-  return error
-}
-
-/** The error for one rejected tmax command, carrying its own code and message. */
-function envelopeError(command, envelope) {
-  const blocker = Array.isArray(envelope.blockers) ? envelope.blockers[0] : undefined
-  const message = envelope.message || blocker?.message
-  return actionableError(envelope.code || 'unknown',
-    `tmax ${command} failed: ${envelope.code || 'unknown'}${message ? ` (${message})` : ''}`)
-}
-
-/** Run one read command and return its data, or fail with tmax's code and message. */
-async function readCommand(config, args) {
-  const envelope = await runTmax(config, args, 10_000)
-  if (envelope.code !== 'ok' || envelope.status !== 'success') {
-    throw envelopeError(args.slice(0, 2).join(' '), envelope)
-  }
-  return envelope.data || {}
-}
-
-/** One comparable path: the real path when it exists, else separators and trailing slashes removed. */
-function normalizePath(value) {
-  let path = String(value)
-  // Only an existing home can be resolved; an absent one stays comparable by spelling.
-  try { path = realpathSync(path) } catch {}
-  return path.replaceAll('\\', '/').replace(/\/+$/u, '')
-}
-
-/** Resolve the declared DSH target: config.target, or the one target matching the DSH home. */
-async function resolveTarget(config) {
-  if (config.target) return String(config.target)
-  const home = config.home || process.env.DSH_HOME || join(homedir(), '.dsh')
-  const listed = await readCommand(config, ['agent', 'list'])
-  const wanted = normalizePath(home)
-  const matches = (Array.isArray(listed.agents) ? listed.agents : []).filter(agent =>
-    agent?.agent === 'dsh' && typeof agent.path === 'string' && normalizePath(agent.path) === wanted)
-  const [match] = matches
-  if (match === undefined) {
-    throw actionableError('unknown_resource',
-      `tmax agent list failed: unknown_resource (No declared DSH target matches the DSH home ${home})`)
-  }
-  if (matches.length > 1) {
-    throw actionableError('invalid_arguments',
-      'tmax agent list failed: invalid_arguments (Multiple DSH targets match the DSH home; set target or home)')
-  }
-  return String(match.target)
-}
-
-/** One route's model rows: tmax's native projection when inspect carries it, else bare selections. */
-function projectModels(projected, selected) {
-  const models = Array.isArray(projected?.models)
-    ? projected.models
-    : selected.map(model => ({ id: model.id, protocol: model.protocol, capabilities: null }))
-  return models.map(model => ({
-    id: model.id,
-    protocol: model.protocol,
-    display_name: model.display_name || model.id,
-    capabilities: model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : null,
-    availability: 'unverified',
-  }))
-}
-
-/**
- * Compose the target inventory from `tmax agent list`, `tmax agent inspect`,
- * and `tmax gateway status`. The adapter and page read the same fields they
- * always have, so only the source of the data changed.
- */
-async function readInventory(config) {
-  const target = await resolveTarget(config)
-  const [inspect, statusEnvelope] = await Promise.all([
-    readCommand(config, ['agent', 'inspect', target]),
-    runTmax(config, ['gateway', 'status'], 10_000).catch(() => undefined),
-  ])
-  if (inspect.agent !== 'dsh') {
-    throw actionableError('invalid_arguments',
-      'tmax agent inspect failed: invalid_arguments (The selected target is not a DSH target)')
-  }
-  // A missing or failing gateway status leaves gateway facts unknown; it must
-  // not erase the routes that the desired configuration already describes.
-  const status = statusEnvelope?.code === 'ok' && statusEnvelope.status === 'success'
-    ? statusEnvelope.data || {}
-    : undefined
-  const daemonState = status?.daemon?.discovery_state ?? null
-  const daemonReason = status?.daemon?.reason_code
-  const reported = status?.gateway !== null && typeof status?.gateway === 'object' ? status.gateway : undefined
-  const providers = Array.isArray(inspect.providers) ? inspect.providers : []
-  const projected = Array.isArray(inspect.native_projection) ? inspect.native_projection : []
-  // An older tmax predates the relayed source and native capability fields.
-  // Fail loudly instead of projecting a target whose routes cannot be read.
-  const outdated = providers.some(entry => typeof entry?.relayed !== 'boolean')
-    || projected.some(entry => (Array.isArray(entry?.models) ? entry.models : []).some(model =>
-      model === null || typeof model !== 'object' || !('capabilities' in model)))
-  if (outdated) {
-    throw actionableError('unsupported_tmax',
-      'tmax agent inspect failed: unsupported_tmax (inspect does not report relayed provider entries and native model capabilities; update tmax)')
-  }
-  const relayed = providers.filter(entry => entry?.relayed === true)
-  const configured = relayed.length > 0 || reported?.key_ref != null || reported?.listen != null
-  let ready = null
-  let reasonCode = null
-  if (!configured) {
-    reasonCode = 'gateway_unconfigured'
-  } else if (daemonState === 'compatible') {
-    ready = reported?.ready === true
-    reasonCode = ready ? null : 'gateway_not_ready'
-  } else if (daemonState === 'absent') {
-    // A configured gateway with no running daemon is not ready, not unknown:
-    // tmax status reports readiness false for the same state.
-    ready = false
-    reasonCode = 'gateway_not_ready'
-  } else {
-    reasonCode = daemonReason || 'daemon_identity_unavailable'
-  }
-  const blockers = []
-  const routes = []
-  const names = []
-  if (!configured) {
-    blockers.push({
-      code: 'gateway_unconfigured',
-      message: 'Configure and explicitly start the tmax gateway before this target can use it',
-    })
-  }
-  for (const entry of relayed) {
-    const name = String(entry.name)
-    const selected = Array.isArray(entry.models) ? entry.models : []
-    const protocols = [...new Set(selected.map(model => model?.protocol).filter(Boolean))]
-    if (selected.length === 0) {
-      blockers.push({ code: 'target_incomplete', message: `Gateway route "${name}" has no selected models` })
-      continue
-    }
-    if (protocols.length !== 1) {
-      blockers.push({ code: 'incompatible', message: `Gateway route "${name}" mixes protocols; split it into one route per protocol` })
-      continue
-    }
-    names.push(name)
-    routes.push({
-      name,
-      protocol: protocols[0],
-      base_url: entry.base_url ?? null,
-      credential_ref: entry.credential_ref ?? null,
-      models: projectModels(projected.find(item => item?.name === name), selected),
-    })
-  }
-  if (routes.length === 0 && blockers.length === 0) {
-    blockers.push({ code: 'gateway_entry_missing', message: 'This DSH target has no gateway provider entry' })
-  }
-  if (Array.isArray(inspect.blockers)) blockers.push(...inspect.blockers)
-  return {
-    schema_version: 1,
-    configuration_revision: inspect.configuration_revision ?? null,
-    generated_at: new Date().toISOString(),
-    target: {
-      id: String(inspect.target ?? target),
-      path: inspect.path,
-      default: inspect.default ?? null,
-      routes: names,
-    },
-    gateway: {
-      configured,
-      ready,
-      listen: reported?.listen ?? null,
-      daemon_discovery_state: daemonState,
-      reason_code: reasonCode,
-    },
-    routes,
-    blockers,
-  }
-}
-
-/** One JSON request body; a preview request is the only body this plugin reads. */
-function readJsonBody(req) {
-  if (req === null || typeof req.on !== 'function') return Promise.resolve({})
-  return new Promise(resolve => {
-    let body = ''
-    req.setEncoding?.('utf8')
-    req.on('data', chunk => { if (body.length <= 64 * 1024) body += chunk })
-    req.on('end', () => {
-      try {
-        const value = JSON.parse(body === '' ? '{}' : body)
-        resolve(value !== null && typeof value === 'object' ? value : {})
-      } catch { resolve({}) }
-    })
-    req.on('error', () => resolve({}))
-  })
-}
-
-/** Whether one connect request asks for a dry run instead of a native write. */
-function previewRequested(req, body) {
-  if (body?.preview === true || body?.dryRun === true) return true
-  return req.url !== undefined && /[?&](?:preview|dry-run)=1(&|$)/u.test(req.url)
-}
-
-/** Read compact, secret-free provider usage for the Models card. */
-async function readUsage(config) {
-  const listed = await runTmax(config, ['provider', 'list'])
-  if (listed.code !== 'ok' || listed.status !== 'success') {
-    throw new Error(`${listed.code || 'provider_list_failed'}: ${listed.message || 'tmax provider list failed'}`)
-  }
-  const candidates = (listed.data?.providers || []).filter(provider =>
-    provider.observations?.billing_state === 'observed'
-    || provider.quota_suspension?.state === 'available'
-    || provider.quota_suspension?.state === 'suspended')
-  const providers = await Promise.all(candidates.map(async provider => {
-    const inspected = await runTmax(config, ['provider', 'inspect', String(provider.id)])
-    if (inspected.code !== 'ok' || inspected.status !== 'success') {
-      return { id: provider.id, name: provider.name, error: inspected.code || 'inspect_failed' }
-    }
-    const data = inspected.data || {}
-    const billing = data.observations?.billing
-    return {
-      id: provider.id,
-      name: provider.name || provider.id,
-      enabled: provider.enabled,
-      quota: {
-        state: data.quota_suspension?.state,
-        reason: data.quota_suspension?.reason_code,
-        resetAt: data.quota_suspension?.reset_at,
-        source: data.quota_suspension?.source,
-        window: data.quota_suspension?.window,
-      },
-      observedAt: data.observations?.billing?.observation?.observed_at,
-      // The vendor an account belongs to is a stable identity; the readings are
-      // not, because the two sources observe at different moments.
-      integration: data.provider?.integration,
-      billing: billing === undefined ? undefined : {
-        kind: billing.kind,
-        state: billing.state,
-        dashboard: billing.dashboard,
-        freshness: billing.freshness,
-        rows: (billing.display?.rows || []).map(row => ({
-          label: row.label,
-          basis: row.basis,
-          percent: row.percent,
-          counters: row.counters,
-          reset: row.reset,
-          status: row.status,
-        })),
-      },
-    }
-  }))
-  return { providers }
-}
-
 /** Map tmax's DSH capabilities to the pi-ai model shape the adapter consumes. */
-function modelFromProjection(route, model, providerName = route.name) {
+function modelFromProjection(route, model, providerName) {
   const caps = model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : {}
   const efforts = caps.reasoningEfforts
   let thinkingLevelMap
@@ -323,6 +58,389 @@ function modelFromProjection(route, model, providerName = route.name) {
   }
 }
 
+/** Whether a registration failure means another plugin owns the route names. */
+function isDuplicateAdapter(error) {
+  if (error === undefined || error === null) return false
+  return error.code === 'DUPLICATE_ADAPTER' || /DUPLICATE_ADAPTER/.test(String(error.message ?? ''))
+}
+
+// ---------------------------------------------------------------------------
+// `/tmax` read command.
+//
+// A human-facing read surface, never a model turn: the handler reads the host
+// snapshot (or `tmax history list`) and formats bounded text. It does not
+// observe, refresh, connect, or mutate tmax. The formatting is pure and
+// exported so the wording contract can be unit tested without a loader.
+
+export const COMMAND_SUBCOMMANDS = Object.freeze(['status', 'providers', 'routing', 'gateway', 'diagnostics', 'history'])
+export const COMMAND_ROUTE_LIMIT = 20
+export const COMMAND_PROVIDER_LIMIT = 40
+export const COMMAND_ROUTING_LIMIT = 40
+export const COMMAND_ERROR_LIMIT = 20
+export const HISTORY_RECORD_LIMIT = 10
+
+// The `/tmax history` command and GET /_tmax/history share one bounded read
+// deadline; it is owned by the history service.
+export { HISTORY_READ_TIMEOUT_MS }
+
+const COMMAND_CELL_LIMIT = 120
+const COMMAND_BLOCKER_LIMIT = 10
+const COMMAND_USAGE = `usage: /tmax [${COMMAND_SUBCOMMANDS.join('|')}]`
+
+/** One bounded, single-line cell; empty and unreadable values fall back later. */
+function commandText(value, limit = COMMAND_CELL_LIMIT) {
+  if (typeof value !== 'string') return ''
+  const text = value.replace(/\s+/gu, ' ').trim()
+  if (text === '') return ''
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text
+}
+
+/** One human-readable cell that distinguishes unknown from zero. */
+function commandCell(value, fallback = 'not reported') {
+  if (value === null || value === undefined || value === '') return fallback
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'boolean') return value ? 'yes' : 'no'
+  return commandText(String(value)) || fallback
+}
+
+function commandTriState(value) {
+  return value === true ? 'yes' : value === false ? 'no' : 'unknown'
+}
+
+function commandObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+function commandRows(value) {
+  return Array.isArray(value) ? value : []
+}
+
+/** The first state error for one section, or null. */
+function sectionError(state, section) {
+  const errors = commandRows(commandObject(state).errors)
+  return errors.find(error => commandObject(error).section === section) ?? null
+}
+
+/** A bounded `unavailable (code: message)` line instead of a zero/success claim. */
+function unavailableLine(label, error, fallbackCode) {
+  const row = commandObject(error)
+  return `${label}: unavailable (${commandCell(row.code, fallbackCode)}: ${commandCell(row.message, 'not reported')})`
+}
+
+/** Parse one closed `/tmax` subcommand; unknown input never reaches a read. */
+export function parseTmaxCommand(rawInput) {
+  const text = typeof rawInput === 'string' ? rawInput.trim() : ''
+  if (text === '') return { ok: true, subcommand: 'status' }
+  const words = text.split(/\s+/u)
+  if (words.length !== 1 || !COMMAND_SUBCOMMANDS.includes(words[0])) {
+    return {
+      ok: false,
+      code: 'unknown_subcommand',
+      message: `unknown /tmax subcommand "${commandText(text, 40) || '?'}"; ${COMMAND_USAGE}`,
+    }
+  }
+  return { ok: true, subcommand: words[0] }
+}
+
+function effectiveDefaultText(value) {
+  const selection = commandObject(value)
+  if (Object.keys(selection).length === 0) return 'not reported'
+  const source = commandText(selection.source ?? '')
+  return `${commandCell(selection.provider, 'unknown')}/${commandCell(selection.model, 'unknown')}${source === '' ? '' : ` (${source})`}`
+}
+
+function pendingText(value) {
+  if (value === null || value === undefined) return 'none reported'
+  if (typeof value === 'object') return commandText(JSON.stringify(value)) || 'reported'
+  return commandCell(value, 'reported')
+}
+
+/** Summary: target, route/credential readiness, gateway, provider counts, blockers. */
+export function formatTmaxStatus(state, { blockers = [] } = {}) {
+  const source = commandObject(state)
+  const target = commandObject(source.target)
+  const gateway = commandObject(source.gateway)
+  const providers = commandObject(source.providers)
+  const projectionError = sectionError(source, 'projection')
+  const providersError = sectionError(source, 'providers')
+  const routes = Array.isArray(source.routes) ? source.routes : undefined
+  const lines = [
+    `tmax state: ${source.ok === true ? 'readable' : 'unavailable'}; generated: ${commandCell(source.generatedAt, 'not reported')}; revision: ${commandCell(source.configurationRevision, 'not reported')}`,
+    `target: ${commandCell(target.id, 'not reported')}${typeof target.path === 'string' && target.path !== '' ? ` (${commandText(target.path)})` : ''}`,
+    `  effective default: ${effectiveDefaultText(target.effectiveDefault)}`,
+    `  applied: ${commandCell(target.appliedState, 'unknown')}; pending native changes: ${pendingText(target.pendingNativeChanges)}`,
+  ]
+  // A failed section is never rendered as a successful zero count.
+  if (projectionError !== null) {
+    lines.push(unavailableLine('routes', projectionError, 'projection_unavailable'))
+  } else if (routes === undefined) {
+    lines.push('routes: unavailable (projection_unavailable: the routes section was not reported)')
+  } else {
+    lines.push(`routes: ${routes.length}`)
+    for (const route of routes.slice(0, COMMAND_ROUTE_LIMIT)) {
+      const row = commandObject(route)
+      const credential = row.credentialConfigured === true
+        ? 'credential configured'
+        : row.credentialConfigured === false ? 'credential missing' : 'credential unknown'
+      lines.push(`  - ${commandCell(row.provider ?? row.name, 'unnamed route')}: ${row.active === true ? 'active' : 'not active'}; ${credential}; ${commandRows(row.models).length} model(s)`)
+    }
+    if (routes.length > COMMAND_ROUTE_LIMIT) lines.push(`  ${routes.length - COMMAND_ROUTE_LIMIT} more route(s) omitted`)
+  }
+  lines.push(`gateway: configured ${commandTriState(gateway.configured)}; ready ${commandTriState(gateway.ready)}`)
+  if (providersError !== null) {
+    lines.push(unavailableLine('providers', providersError, 'providers_unavailable'))
+  } else if (!Array.isArray(providers.tmax) || !Array.isArray(providers.agent)) {
+    lines.push('providers: unavailable (providers_unavailable: the providers section was not reported)')
+  } else {
+    lines.push(`providers: ${providers.tmax.length} tmax, ${providers.agent.length} agent-configured`)
+  }
+  const blockerRows = commandRows(blockers)
+  lines.push(`blockers: ${blockerRows.length}`)
+  for (const blocker of blockerRows.slice(0, COMMAND_BLOCKER_LIMIT)) {
+    const row = commandObject(blocker)
+    lines.push(`  - ${commandCell(row.source, 'unknown')}/${commandCell(row.code, 'unknown')}: ${commandCell(row.message, 'not reported')}`)
+  }
+  if (blockerRows.length > COMMAND_BLOCKER_LIMIT) lines.push(`  ${blockerRows.length - COMMAND_BLOCKER_LIMIT} more blocker(s) omitted`)
+  return lines.join('\n')
+}
+
+/** A quota row label may be a plain string or the projected `{key}` object. */
+function quotaLabelText(label) {
+  if (label === null || label === undefined) return ''
+  if (typeof label === 'string') return commandText(label)
+  if (typeof label === 'number') return String(label)
+  const row = commandObject(label)
+  return commandText(row.label ?? row.key ?? '')
+}
+
+function appendProvider(lines, value) {
+  const provider = commandObject(value)
+  const id = commandCell(provider.id, 'unknown provider')
+  const name = commandText(provider.name ?? '')
+  lines.push(`- ${id}${name === '' || name === id ? '' : ` (${name})`}`)
+  lines.push(`  enabled: ${commandTriState(provider.enabled)}; authentication: ${commandCell(provider.authentication, 'unknown')}; integration: ${commandCell(provider.integration, 'unknown')}`)
+  const billing = commandObject(provider.billing)
+  lines.push(`  quota: ${commandCell(billing.state, 'unknown')}; kind: ${commandCell(billing.kind, 'unknown')}; freshness: ${commandCell(billing.freshness, 'missing')}; observed: ${commandCell(billing.observedAt, 'not observed')}`)
+  if (typeof billing.reasonCode === 'string' && billing.reasonCode !== '') lines.push(`  quota reason: ${commandText(billing.reasonCode)}`)
+  if (typeof billing.lastAttempt === 'string' && billing.lastAttempt !== '' && billing.lastAttempt !== 'completed') {
+    lines.push(`  last attempt: ${commandText(billing.lastAttempt)}`)
+  }
+  const rows = commandRows(billing.rows)
+  if (rows.length > 0) {
+    const first = commandObject(rows[0])
+    const counters = commandObject(first.counters)
+    if (typeof first.percent === 'number') {
+      const label = quotaLabelText(first.label)
+      lines.push(`  quota reading: ${first.percent}%${label === '' ? '' : ` (${label})`}`)
+    } else if (typeof counters.remaining === 'string' || typeof counters.remaining === 'number') {
+      lines.push(`  quota reading: remaining ${commandCell(counters.remaining)} of ${commandCell(counters.limit, 'unknown limit')}`)
+    } else {
+      lines.push(`  quota reading: ${rows.length} row(s) reported`)
+    }
+  }
+  const suspension = commandObject(provider.suspension)
+  const suspensionDetails = []
+  if (typeof suspension.reasonCode === 'string' && suspension.reasonCode !== '') suspensionDetails.push(commandText(suspension.reasonCode))
+  if (typeof suspension.resetAt === 'string' && suspension.resetAt !== '') suspensionDetails.push(`reset ${commandText(suspension.resetAt)}`)
+  lines.push(`  suspension: ${commandCell(suspension.state, 'unknown')}${suspensionDetails.length === 0 ? '' : ` (${suspensionDetails.join(', ')})`}`)
+  const failure = commandObject(provider.failure)
+  const failureDetails = []
+  if (Number.isInteger(failure.consecutiveFailures) && failure.consecutiveFailures > 0) failureDetails.push(`${failure.consecutiveFailures} consecutive failure(s)`)
+  if (typeof failure.expiresAt === 'string' && failure.expiresAt !== '') failureDetails.push(`until ${commandText(failure.expiresAt)}`)
+  if (typeof failure.reasonCode === 'string' && failure.reasonCode !== '') failureDetails.push(commandText(failure.reasonCode))
+  lines.push(`  failure: ${commandCell(failure.state, 'unknown')}${failureDetails.length === 0 ? '' : ` (${failureDetails.join(', ')})`}`)
+  if (provider.error !== null && provider.error !== undefined) {
+    const error = commandObject(provider.error)
+    lines.push(`  error: ${commandCell(error.code, 'provider_unavailable')}: ${commandCell(error.message, 'provider inspect failed')}`)
+  }
+  if (typeof provider.accountIdentity === 'string' && provider.accountIdentity !== '') lines.push(`  account: ${commandText(provider.accountIdentity)}`)
+}
+
+/** One line per provider with explicit unknown-vs-zero quota and repair state. */
+export function formatTmaxProviders(state) {
+  const source = commandObject(state)
+  const providers = commandObject(source.providers)
+  const providersError = sectionError(source, 'providers')
+  const tmaxRows = Array.isArray(providers.tmax) ? providers.tmax : undefined
+  const lines = []
+  // A failed providers read is stated, never counted as zero providers.
+  if (providersError !== null) {
+    lines.push(unavailableLine('tmax providers', providersError, 'providers_unavailable'))
+  } else if (tmaxRows === undefined) {
+    lines.push('tmax providers: unavailable (providers_unavailable: the providers section was not reported)')
+  } else {
+    lines.push(`tmax providers: ${tmaxRows.length}`)
+    for (const row of tmaxRows.slice(0, COMMAND_PROVIDER_LIMIT)) appendProvider(lines, row)
+    if (tmaxRows.length > COMMAND_PROVIDER_LIMIT) lines.push(`${tmaxRows.length - COMMAND_PROVIDER_LIMIT} more provider(s) omitted`)
+  }
+  const agentRows = Array.isArray(providers.agent) ? providers.agent : []
+  const agentError = commandObject(providersError).code === 'agent_settings_unavailable' ? providersError : null
+  if (agentRows.length > 0) {
+    lines.push(`agent-configured providers: ${agentRows.length}`)
+    for (const row of agentRows.slice(0, COMMAND_PROVIDER_LIMIT)) {
+      const provider = commandObject(row)
+      const details = [`state ${commandCell(provider.state, 'unknown')}`]
+      if (typeof provider.reasonCode === 'string' && provider.reasonCode !== '') details.push(commandText(provider.reasonCode))
+      if (typeof provider.observedAt === 'string' && provider.observedAt !== '') details.push(`observed ${commandText(provider.observedAt)}`)
+      lines.push(`- ${commandCell(provider.provider, 'unknown provider')}: ${details.join('; ')}`)
+    }
+    if (agentRows.length > COMMAND_PROVIDER_LIMIT) lines.push(`${agentRows.length - COMMAND_PROVIDER_LIMIT} more agent provider(s) omitted`)
+  } else if (agentError !== null) {
+    lines.push(unavailableLine('agent-configured providers', agentError, 'agent_settings_unavailable'))
+  }
+  return lines.join('\n')
+}
+
+/** One row per projected model with its selection, candidate count, and errors. */
+export function formatTmaxRouting(state) {
+  const source = commandObject(state)
+  const routingError = sectionError(source, 'routing')
+  const rows = Array.isArray(source.routing) ? source.routing : undefined
+  if (routingError !== null) return unavailableLine('routing', routingError, 'routing_unavailable')
+  if (rows === undefined) return 'routing: unavailable (routing_unavailable: the routing section was not reported)'
+  const lines = [`routing: ${rows.length} projected model(s)`]
+  for (const row of rows.slice(0, COMMAND_ROUTING_LIMIT)) {
+    const routing = commandObject(row)
+    lines.push(`- ${commandCell(routing.model, 'unknown model')} (${commandCell(routing.protocol, 'unknown protocol')}; ${commandCell(routing.kind, 'unknown kind')}; availability ${commandCell(routing.availability, 'unknown')}; candidate count ${commandCell(routing.candidateCount, 'unknown')})`)
+    if (routing.selection === null || routing.selection === undefined) {
+      lines.push('  selection: none reported')
+    } else {
+      const selection = commandObject(routing.selection)
+      lines.push(`  selection: ${commandCell(selection.qualifiedModel, 'unknown')} (priority ${commandCell(selection.priority, 'unknown')})`)
+    }
+    const candidates = commandRows(routing.candidates)
+    const selected = candidates.filter(candidate => commandObject(candidate).selected === true).length
+    lines.push(`  candidates: ${candidates.length} (${selected} selected); excluded: ${commandRows(routing.excluded).length}`)
+    if (routing.error !== null && routing.error !== undefined) {
+      const error = commandObject(routing.error)
+      lines.push(`  error: ${commandCell(error.code, 'model_explain_unavailable')}: ${commandCell(error.message, 'not reported')}`)
+    }
+  }
+  if (rows.length > COMMAND_ROUTING_LIMIT) lines.push(`${rows.length - COMMAND_ROUTING_LIMIT} more model(s) omitted`)
+  return lines.join('\n')
+}
+
+/** Gateway readiness and supervision facts, unknown when not reported. */
+export function formatTmaxGateway(state) {
+  const source = commandObject(state)
+  if (source.gateway === null || source.gateway === undefined) return 'gateway: unavailable (no gateway section was reported)'
+  const gateway = commandObject(source.gateway)
+  const supervision = commandObject(gateway.supervision)
+  const autostart = commandObject(gateway.autostart)
+  const sharedKey = commandObject(gateway.sharedKey)
+  return [
+    `gateway: configured ${commandTriState(gateway.configured)}; ready ${commandTriState(gateway.ready)}`,
+    `listen: ${commandCell(gateway.listen, 'not reported')}`,
+    `daemon: ${commandCell(gateway.daemonDiscoveryState, 'unknown')}${typeof gateway.reasonCode === 'string' && gateway.reasonCode !== '' ? ` (${commandText(gateway.reasonCode)})` : ''}`,
+    `supervision: ${commandCell(supervision.state, 'unknown')}${typeof supervision.reasonCode === 'string' && supervision.reasonCode !== '' ? ` (${commandText(supervision.reasonCode)})` : ''}`,
+    `autostart: saved intent ${commandTriState(autostart.savedIntent)}; registration ${commandCell(autostart.registration, 'unknown')}; unit matches ${commandTriState(autostart.unitMatches)}`,
+    `shared key: ${commandCell(sharedKey.loadedState, 'unknown')}${typeof sharedKey.reasonCode === 'string' && sharedKey.reasonCode !== '' ? ` (${commandText(sharedKey.reasonCode)})` : ''}`,
+  ].join('\n')
+}
+
+/** Read-model provenance, history availability, and every section error. */
+export function formatTmaxDiagnostics(state) {
+  const source = commandObject(state)
+  const diagnostics = commandObject(source.diagnostics)
+  const history = commandObject(diagnostics.history)
+  const errors = commandRows(source.errors)
+  const lines = [
+    `read model: ${commandCell(diagnostics.readModel, 'unknown')}`,
+    `generated: ${commandCell(source.generatedAt, 'not reported')}; revision: ${commandCell(source.configurationRevision, 'not reported')}; tmax version: ${commandCell(source.tmaxVersion, 'not reported')}`,
+    `history: ${commandCell(history.state, 'unavailable')}${typeof history.reasonCode === 'string' && history.reasonCode !== '' ? ` (${commandText(history.reasonCode)})` : ''}`,
+    `last inventory read at: ${commandCell(diagnostics.lastProjectionAt, 'not reported')}`,
+    `last error: ${commandCell(diagnostics.lastError, 'none reported')}`,
+    `errors: ${errors.length}`,
+  ]
+  for (const error of errors.slice(0, COMMAND_ERROR_LIMIT)) {
+    const row = commandObject(error)
+    lines.push(`  - ${commandCell(row.section, 'unknown')}/${commandCell(row.code, 'unknown')}: ${commandCell(row.message, 'not reported')}`)
+  }
+  if (errors.length > COMMAND_ERROR_LIMIT) lines.push(`  ${errors.length - COMMAND_ERROR_LIMIT} more error(s) omitted`)
+  return lines.join('\n')
+}
+
+function appendHistoryCoverage(lines, value) {
+  const coverage = commandObject(value)
+  if (Object.keys(coverage).length === 0) {
+    lines.push('coverage: not reported')
+    return
+  }
+  if (typeof coverage.process_instance === 'string' && coverage.process_instance !== '') lines.push(`process: ${commandText(coverage.process_instance)}`)
+  const oldest = commandText(coverage.oldest ?? '') || 'unknown'
+  const newest = commandText(coverage.newest ?? '') || 'unknown'
+  lines.push(`retained: ${commandCell(coverage.retained_count, 'unknown')}; oldest: ${oldest}; newest: ${newest}`)
+  const limits = commandObject(coverage.limits)
+  if (limits.records !== undefined) lines.push(`limits: ${commandCell(limits.records, 'unknown')} record(s)`)
+  if (coverage.evicted !== undefined) lines.push(`evicted: ${commandCell(coverage.evicted, 'unknown')}; incomplete capture: ${commandCell(coverage.incomplete_capture, 'unknown')}`)
+  lines.push(`prior process coverage: ${commandCell(coverage.prior_process_coverage, 'unknown')}; direct traffic coverage: ${commandCell(coverage.direct_traffic_coverage, 'unknown')}`)
+}
+
+/**
+ * Format one `tmax history list` read. An unavailable daemon/history is stated
+ * with its reason, never rendered as an empty history.
+ */
+export function formatTmaxHistory(read) {
+  const envelope = read !== null && typeof read === 'object' ? read.envelope : undefined
+  if (envelope === null || envelope === undefined) {
+    return `history unavailable: ${commandCell(read?.message, 'tmax did not answer')}`
+  }
+  const result = commandObject(read)
+  const data = commandObject(result.data)
+  if (result.ok !== true) {
+    const lines = [`history unavailable: ${commandCell(result.code, 'unknown')}${typeof result.message === 'string' && result.message !== '' ? ` — ${commandText(result.message)}` : ''}`]
+    if (typeof data.reason_code === 'string' && data.reason_code !== '') lines.push(`reason: ${commandText(data.reason_code)}`)
+    appendHistoryCoverage(lines, data.coverage)
+    return lines.join('\n')
+  }
+  // A completed read may still report that no daemon history exists; that is
+  // an availability fact, not a zero-record claim.
+  if (data.reason_code === 'no_daemon_history' || data.snapshot_state === 'absent') {
+    const lines = ['history unavailable: no retained daemon history']
+    if (typeof data.reason_code === 'string' && data.reason_code !== '') lines.push(`reason: ${commandText(data.reason_code)}`)
+    appendHistoryCoverage(lines, data.coverage)
+    return lines.join('\n')
+  }
+  if (data.records === undefined && data.coverage === undefined && data.matched_retained_count === undefined) {
+    return 'history unavailable: tmax returned no history data'
+  }
+  const lines = []
+  appendHistoryCoverage(lines, data.coverage)
+  const range = commandObject(data.requested_range)
+  const rangeParts = []
+  if (typeof range.since === 'string' && range.since !== '') rangeParts.push(`since ${commandText(range.since)}`)
+  if (typeof range.until === 'string' && range.until !== '') rangeParts.push(`until ${commandText(range.until)}`)
+  lines.push(`requested range: ${rangeParts.length === 0 ? 'no explicit bounds' : rangeParts.join(', ')}`)
+  lines.push(`records: ${commandCell(data.matched_retained_count, 'unknown')} matched; ${commandCell(data.omitted_by_limit, '0')} omitted by limit; in-progress included ${commandTriState(data.includes_in_progress)}`)
+  const records = commandRows(data.records)
+  lines.push(`retained records listed: ${Math.min(records.length, HISTORY_RECORD_LIMIT)}${records.length > HISTORY_RECORD_LIMIT ? ` of ${records.length}` : ''}`)
+  for (const record of records.slice(0, HISTORY_RECORD_LIMIT)) {
+    const row = commandObject(record)
+    const details = [
+      `${commandCell(row.time, 'time unknown')} (${commandCell(row.time_basis, 'basis unknown')})`,
+      commandCell(row.outcome, 'outcome unknown'),
+      `${commandCell(row.provider, 'provider unknown')}/${commandCell(row.model, 'model unknown')} [${commandCell(row.protocol, 'protocol unknown')}]`,
+    ]
+    if (typeof row.target === 'string' && row.target !== '') details.push(`target ${commandText(row.target)}`)
+    if (typeof row.agent_provider === 'string' && row.agent_provider !== '') details.push(`agent ${commandText(row.agent_provider)}`)
+    if (typeof row.reason_code === 'string' && row.reason_code !== '') details.push(`reason ${commandText(row.reason_code)}`)
+    lines.push(`- ${details.join('; ')}`)
+  }
+  return lines.join('\n')
+}
+
+/** Format one non-history subcommand; history has its own read path. */
+export function formatTmaxSection(subcommand, state, { blockers = [] } = {}) {
+  switch (subcommand) {
+    case 'status': return formatTmaxStatus(state, { blockers })
+    case 'providers': return formatTmaxProviders(state)
+    case 'routing': return formatTmaxRouting(state)
+    case 'gateway': return formatTmaxGateway(state)
+    case 'diagnostics': return formatTmaxDiagnostics(state)
+    default: return `unsupported /tmax subcommand; ${COMMAND_USAGE}`
+  }
+}
+
 export async function apply(ctx, config = {}) {
   const tree = ctx.fiber.entry?.parent.tree
   if (tree === undefined) throw new Error('tmax requires a DSH Loader entry')
@@ -343,37 +461,237 @@ export async function apply(ctx, config = {}) {
     'messages': messages.anthropicMessagesApi,
   }
 
+  const log = message => ctx.logger?.warn?.(`tmax: ${message}`)
+  const prefix = typeof config.providerPrefix === 'string' ? config.providerPrefix : ''
+  const manageMode = normalizeManageRoutes(config.manageRoutes)
+
   let profiles = new Map()
+  // The live map above is published only after registration succeeds; the
+  // adapter reads this staged view during the synchronous registration call so
+  // its metadata is complete without exposing unregistered profiles afterwards.
+  let stagedProfiles
   let registration
+  let registrationNames = []
+  let routeSignatures = new Map()
+  let ownershipDecision
+  let skippedBlockers = []
   let refreshing
   let lastInventory
   let lastError
+  let disposed = false
+  let timer
 
-  const manageRoutes = config.manageRoutes !== false
-  const log = message => ctx.logger?.warn?.(`tmax: ${message}`)
+  const adapter = manageMode === false
+    ? undefined
+    : createAdapter({ native, llm, credentials, pi, ctx, profiles: () => stagedProfiles ?? profiles, label: 'tmax', log })
+  const observations = createObservations({ ctx })
 
+  function getOwnership() {
+    return ownershipDecision
+  }
+
+  const snapshot = createSnapshotService({
+    config,
+    ctx,
+    observations,
+    getOwnership,
+    getRouteBlockers: () => skippedBlockers,
+    getLiveNames: () => liveProviderIds(ctx),
+  })
+
+  /** Teardown: stop timers and release routes exactly once. */
+  function cleanup() {
+    disposed = true
+    if (timer !== undefined) {
+      clearInterval(timer)
+      timer = undefined
+    }
+    disposeRegistration()
+  }
+
+  /**
+   * Re-read the home integration and the ownership decision without re-reading
+   * tmax. An explicit native apply can install or repair the home integration,
+   * so the state returned with its result must not reuse the pre-apply
+   * decision; the periodic refresh would otherwise correct it a minute later.
+   * A failed re-read keeps the previous decision.
+   */
+  async function refreshOwnershipFacts() {
+    if (disposed) return ownershipDecision
+    try {
+      const home = await inspectHome(resolveHome(config))
+      if (disposed) return ownershipDecision
+      ownershipDecision = resolveOwnership({
+        mode: manageMode,
+        home,
+        projection: lastInventory,
+        liveNames: liveProviderIds(ctx),
+        registeredNames: registrationNames,
+        prefix,
+      })
+    } catch (error) {
+      log(`ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return ownershipDecision
+  }
+
+  function disposeRegistration() {
+    if (registration !== undefined) {
+      try {
+        registration()
+      } catch (error) {
+        log(`route disposal failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    registration = undefined
+    registrationNames = []
+    routeSignatures = new Map()
+    stagedProfiles = undefined
+    profiles = new Map()
+  }
+
+  function stableStringify(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value)
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+    const keys = Object.keys(value).sort()
+    return `{${keys.map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`
+  }
+
+  /**
+   * One route's identity for change detection: the provider metadata the
+   * registry exposes plus every served model descriptor. A model added,
+   * removed, or re-described changes this signature even while the route name
+   * stays the same, so DSH's model picker can be told to refresh.
+   */
+  function routeSignature(providerName, route, models) {
+    return stableStringify({
+      displayName: providerName,
+      baseUrl: route.base_url,
+      protocol: route.protocol,
+      models: models.map(model => ({
+        id: model.id ?? null,
+        name: model.display_name ?? model.id ?? null,
+        capabilities: model.capabilities ?? {},
+      })),
+    })
+  }
+
+  /**
+   * Map the inventory onto adapter profiles. A route whose protocol, model
+   * capabilities, credential reference, or base URL is unusable is skipped
+   * with a declared blocker; the route stays visible in the state read model,
+   * but it is never registered with a null credential reference. One unusable
+   * route never drops the others.
+   */
   function rebuild(inventory) {
     const next = new Map()
-    const prefix = typeof config.providerPrefix === 'string' ? config.providerPrefix : ''
+    const skipped = []
+    const signatures = new Map()
+    const targetId = typeof inventory?.target?.id === 'string' && inventory.target.id !== ''
+      ? inventory.target.id
+      : null
+    const applyHint = targetId === null
+      ? 'run `tmax agent apply` for this DSH target'
+      : `run \`tmax agent apply ${targetId}\` for this DSH target`
     for (const route of inventory.routes || []) {
       const factory = protocolApis[route.protocol]
       if (factory === undefined) {
         log(`route "${route.name}" uses unsupported protocol "${route.protocol}"`)
+        skipped.push({
+          code: 'route_protocol_unsupported',
+          message: `Route "${route.name}" uses unsupported protocol "${route.protocol}"`,
+          route: route.name,
+          models: [],
+        })
         continue
       }
       const providerName = `${prefix}${route.name}`
-      const models = (route.models || []).filter(model => {
+      const declaredModels = Array.isArray(route.models) ? route.models : []
+      const hiddenModels = []
+      const usableModels = declaredModels.filter(model => {
         const contextWindow = model.capabilities?.contextWindow
         if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
+          hiddenModels.push(typeof model.id === 'string' ? model.id : String(model.id))
           log(`hiding model "${model.id}" on route "${route.name}": contextWindow is unknown`)
           return false
         }
         return true
-      }).map(model => modelFromProjection(route, model, providerName))
-      if (models.length === 0) continue
+      })
+      if (hiddenModels.length > 0) {
+        skipped.push({
+          code: 'route_model_context_window_unknown',
+          message: `Route "${providerName}" hides ${hiddenModels.length} model(s) with an unknown context capacity: ${hiddenModels.join(', ')}`,
+          route: route.name,
+          models: hiddenModels,
+        })
+      }
+      const models = usableModels.map(model => modelFromProjection(route, model, providerName))
+      const signature = routeSignature(providerName, route, usableModels)
+      if (models.length === 0) {
+        skipped.push({
+          code: 'route_no_usable_models',
+          message: `Route "${providerName}" declares no model the adapter can serve`,
+          route: route.name,
+          models: declaredModels.map(model => (typeof model.id === 'string' ? model.id : String(model.id))),
+        })
+        continue
+      }
+      const credentialRef = usableCredentialRef(route)
+      if (credentialRef === undefined) {
+        const blocker = {
+          code: 'route_credential_missing',
+          message: `Route "${providerName}" declares no credential reference; ${applyHint} before it can serve models`,
+          route: route.name,
+          models: models.map(model => model.id),
+        }
+        log(blocker.message)
+        skipped.push(blocker)
+        continue
+      }
+      const baseUrl = usableBaseUrl(route)
+      if (baseUrl === undefined) {
+        const blocker = {
+          code: 'route_base_url_missing',
+          message: `Route "${providerName}" declares no base URL; ${applyHint} before it can serve models`,
+          route: route.name,
+          models: models.map(model => model.id),
+        }
+        log(blocker.message)
+        skipped.push(blocker)
+        continue
+      }
+      // The DSH credentials service throws for a reference outside its
+      // grammar. A stale or malformed reference skips only this route with a
+      // declared blocker; it must never drop every route from the profile.
+      let apiKeyEnv
+      try {
+        apiKeyEnv = credentials.credentialRef(credentialRef)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        const blocker = {
+          code: 'route_credential_invalid',
+          message: `Route "${providerName}" declares a credential reference DSH cannot use; ${applyHint} to regenerate it`,
+          route: route.name,
+          models: models.map(model => model.id),
+        }
+        log(`${blocker.message} (${detail})`)
+        skipped.push(blocker)
+        continue
+      }
+      if (typeof apiKeyEnv !== 'string' || apiKeyEnv === '') {
+        const blocker = {
+          code: 'route_credential_invalid',
+          message: `Route "${providerName}" declares a credential reference DSH cannot use; ${applyHint} to regenerate it`,
+          route: route.name,
+          models: models.map(model => model.id),
+        }
+        log(blocker.message)
+        skipped.push(blocker)
+        continue
+      }
       const displayName = route.name
       const api = factory()
-      const apiKeyEnv = credentials.credentialRef(route.credential_ref)
+      signatures.set(providerName, signature)
       next.set(providerName, {
         ...RESOLVED_PROFILE_DEFAULTS,
         apiKeyEnv,
@@ -386,7 +704,7 @@ export async function apply(ctx, config = {}) {
         piProvider: {
           id: providerName,
           name: displayName,
-          baseUrl: route.base_url,
+          baseUrl,
           auth: {
             apiKey: {
               name: displayName,
@@ -399,35 +717,116 @@ export async function apply(ctx, config = {}) {
         },
       })
     }
-    return next
+    return { profiles: next, skipped, signatures }
   }
 
-  const adapter = manageRoutes
-    ? createAdapter({ native, llm, credentials, pi, ctx, profiles: () => profiles, label: 'tmax', log })
-    : undefined
-
+  /**
+   * Read the inventory, re-evaluate ownership, and register or keep routes.
+   * Profiles are assigned only after registration succeeds; a disposed plugin
+   * never registers, even when a read completes after teardown.
+   */
   async function refresh() {
-    if (refreshing) return refreshing
+    if (disposed) return lastInventory
+    if (refreshing !== undefined) return refreshing
     refreshing = (async () => {
       const inventory = await readInventory(config)
+      if (disposed) return inventory
       lastInventory = inventory
       lastError = undefined
-      const next = manageRoutes ? rebuild(inventory) : new Map()
-      profiles = next
-      const routes = [...next.keys()]
-      if (!manageRoutes || routes.length === 0) {
-        if (registration) {
-          registration()
-          registration = undefined
-        }
+      const liveNames = liveProviderIds(ctx)
+      const home = await inspectHome(resolveHome(config))
+      if (disposed) return inventory
+      const decision = resolveOwnership({
+        mode: manageMode,
+        home,
+        projection: inventory,
+        liveNames,
+        registeredNames: registrationNames,
+        prefix,
+      })
+      ownershipDecision = decision
+      if (disposed) return inventory
+      if (decision.disposePage) {
+        // The page owns nothing: its fallback blockers would be claims about
+        // routes it never attempted.
+        skippedBlockers = []
+        disposeRegistration()
         return inventory
       }
-      if (registration === undefined) {
-        registration = ctx.llm.registerAdapter(routes, adapter)
-      } else {
-        registration.replace(routes)
+      if (!decision.shouldRegister) {
+        skippedBlockers = []
+        return inventory
       }
-      for (const route of routes) ctx.emit('llm/models-updated', route)
+      const rebuilt = rebuild(inventory)
+      skippedBlockers = rebuilt.skipped
+      if (disposed) return inventory
+      const next = rebuilt.profiles
+      if (next.size === 0) {
+        disposeRegistration()
+        return inventory
+      }
+      const nextNames = [...next.keys()]
+      const nextSignatures = rebuilt.signatures
+      const hadRegistration = registration !== undefined
+      const namesChanged = !hadRegistration
+        || nextNames.length !== registrationNames.length
+        || nextNames.some((route, index) => route !== registrationNames[index])
+      const changedRoutes = namesChanged
+        ? nextNames
+        : nextNames.filter(route => routeSignatures.get(route) !== nextSignatures.get(route))
+      const changed = changedRoutes.length > 0
+      try {
+        stagedProfiles = next
+        if (!hadRegistration) {
+          registration = ctx.llm.registerAdapter(nextNames, adapter)
+        } else if (changed) {
+          registration.replace(nextNames)
+        }
+        // Only a successful registration makes these profiles live.
+        stagedProfiles = undefined
+        profiles = next
+        registrationNames = nextNames
+        routeSignatures = nextSignatures
+        // An unchanged route set and unchanged route content need no registry
+        // event; the profile map itself is already updated for the next request.
+        for (const route of changedRoutes) ctx.emit('llm/models-updated', route)
+      } catch (error) {
+        stagedProfiles = undefined
+        const message = error instanceof Error ? error.message : String(error)
+        if (hadRegistration) {
+          // Keep the working registration: a failed replacement must not strand
+          // the profile. Publish the conflict and leave the old names live.
+          ownershipDecision = {
+            ...decision,
+            conflict: {
+              code: isDuplicateAdapter(error) ? 'route_owner_conflict' : 'route_registration_failed',
+              message: isDuplicateAdapter(error)
+                ? `Another LLM plugin already registered these route names: ${message}`
+                : `Route replacement failed; the previous routes stay live: ${message}`,
+            },
+          }
+          lastError = `${ownershipDecision.conflict.code}: ${message}`
+          log(lastError)
+          return inventory
+        }
+        disposeRegistration()
+        if (isDuplicateAdapter(error)) {
+          ownershipDecision = {
+            ...decision,
+            owner: 'other',
+            scope: null,
+            reason: null,
+            conflict: {
+              code: 'route_owner_conflict',
+              message: `Another LLM plugin already registered these route names: ${message}`,
+            },
+          }
+          lastError = `route_owner_conflict: ${message}`
+          log(lastError)
+          return inventory
+        }
+        throw error
+      }
       return inventory
     })().catch(error => {
       lastError = error instanceof Error ? error.message : String(error)
@@ -438,223 +837,134 @@ export async function apply(ctx, config = {}) {
     return refreshing
   }
 
+  ctx.effect(() => () => cleanup(), 'tmax: adapter and refresh')
+
   try {
     await refresh()
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error)
     log(`initial inventory unavailable: ${lastError}`)
   }
+  // The plugin was unloaded while the initial read was in flight.
+  if (disposed) return
+
   const seconds = Number(config.refreshSeconds)
   const interval = Number.isFinite(seconds) && seconds >= 10 ? seconds : 60
-  const timer = setInterval(() => {
+  timer = setInterval(() => {
     refresh().catch(error => log(error instanceof Error ? error.message : String(error)))
   }, interval * 1000)
   timer.unref?.()
 
-  ctx.effect(() => () => {
-    clearInterval(timer)
-    registration?.()
-    registration = undefined
-    profiles = new Map()
-  }, 'tmax: adapter and refresh')
-
-  const webServer = ctx.get('webServer')
-  if (webServer !== undefined) {
-    const send = (res, status, payload) => {
-      res.statusCode = status
-      res.setHeader('content-type', 'application/json; charset=utf-8')
-      res.setHeader('cache-control', 'no-store')
-      res.end(JSON.stringify(payload))
-    }
-    const summary = () => ({
-      target: lastInventory?.target,
-      gateway: lastInventory?.gateway,
-      routes: (lastInventory?.routes || []).map(route => ({
-        name: route.name,
-        protocol: route.protocol,
-        models: (route.models || []).map(model => ({
-          id: model.id,
-          name: model.display_name || model.id,
-          availability: model.availability,
-        })),
-      })),
-      blockers: lastInventory?.blockers || [],
-      lastError,
-    })
-    /**
-   * The providers the agent itself is configured with, read through the live
-   * settings and credential services. `apiKeyEnv` is a reference; the value
-   * never leaves the resolver below.
-   */
-  const discoverAgentProviders = () => {
-    const settings = ctx.get('settings')
-    const credentials = ctx.get('credentials')
-    if (settings === undefined || credentials === undefined) return undefined
-    let descriptors
-    try {
-      descriptors = settings.describe({ redactSecrets: true })
-    } catch {
-      return undefined
-    }
-    const byNs = new Map()
-    for (const descriptor of descriptors ?? []) byNs.set(String(descriptor.ns), descriptor.value)
-    const providers = []
-    for (const entry of ctx.llm.listConfigurableProviders()) {
-      let node = byNs.get(String(entry.settingsNs))
-      for (const key of entry.settingsPath) {
-        node = node !== null && typeof node === 'object' ? Reflect.get(node, key) : undefined
+  if (typeof ctx.on === 'function') {
+    // Another adapter appearing or leaving is a fresh ownership fact.
+    ctx.effect(() => {
+      const off = ctx.on('llm/adapters-updated', () => {
+        refresh().catch(error => log(error instanceof Error ? error.message : String(error)))
+      })
+      return () => {
+        if (typeof off === 'function') off()
       }
-      const profile = node !== null && typeof node === 'object' ? node : {}
-      // The directory lists every route the adapter *could* activate, including
-      // vendor presets nobody configured. Only a provider this profile names is
-      // the user's business.
-      const declared = entry.declared === true
-        || typeof profile.apiKeyEnv === 'string'
-        || typeof profile.baseURL === 'string'
-        || (Array.isArray(profile.models) && profile.models.length > 0)
-      if (!declared) continue
-      const baseURL = typeof profile.baseURL === 'string' ? profile.baseURL : entry.defaultBaseURL
-      providers.push({
-        provider: entry.provider,
-        displayName: entry.displayName ?? entry.provider,
-        vendor: (vendorFor(baseURL) ?? vendorForKey(entry.provider))?.id,
-        baseURL,
-        providerKey: entry.provider,
-        apiKeyEnv: typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : undefined,
-        models: Array.isArray(profile.models) ? profile.models.map(model => model?.id).filter(Boolean) : [],
-        defaultBaseURL: entry.defaultBaseURL,
-      })
-    }
-    return { providers, credentials }
+    }, 'tmax: ownership re-evaluation')
   }
 
-  // Reading a provider the agent configures costs the same live request it
-  // costs tmax, so it obeys the same rule: serve the cache until it is older
-  // than the stale mark, and let a deliberate Refresh bypass it.
-  const AGENT_CACHE_MS = 5 * 60 * 1000
-  let agentCache = { at: 0, value: undefined }
-  const readAgentQuota = async ({ force = false } = {}) => {
-    if (!force && agentCache.value !== undefined && Date.now() - agentCache.at < AGENT_CACHE_MS) {
-      return { ...agentCache.value, cached: true }
+  /**
+   * Apply the target's native configuration through `tmax agent apply`. The
+   * target is resolved the same way the inventory resolves it; a preview uses
+   * `--dry-run` and returns `dry_run_ready` as a completed preview.
+   */
+  async function connectTmax({ dryRun }) {
+    const target = await resolveTarget(config)
+    const args = ['agent', 'apply', target]
+    if (dryRun) args.push('--dry-run')
+    const result = await readEnvelope(config, args, { timeoutMs: CONNECT_TIMEOUT_MS })
+    const envelope = result.envelope
+    if (envelope !== undefined && (envelope.status === 'success' || (dryRun && envelope.status === 'dry_run'))) {
+      return { ...result, ok: true }
     }
-    const discovered = discoverAgentProviders()
-    if (discovered === undefined) return { ok: true, providers: [], reason: 'agent-settings-unavailable' }
-    const { providers, credentials } = discovered
-    const byAccount = new Map()
-    const records = await Promise.all(providers.map(async provider => {
-      const identity = `${provider.vendor ?? 'unknown'}::${provider.apiKeyEnv ?? provider.provider}`
-      const shared = byAccount.get(identity)
-      // The reading is shared; the identity is not — two configuration entries
-      // remain two cards, each with its own id.
-      if (shared !== undefined) return { ...shared, id: `dsh:${provider.provider}` }
-      const record = await observeProvider({
-        provider: provider.provider,
-        baseURL: provider.baseURL,
-        apiKeyEnv: provider.apiKeyEnv,
-        resolveKey: async ref => (await credentials.resolve(ref))?.value,
-      })
-      byAccount.set(identity, record)
-      return record
-    }))
-    const value = {
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      providers: records.map((record, index) => ({
-        ...record,
-        displayName: providers[index].displayName,
-        models: providers[index].models,
+    return result
+  }
+
+  // The allowlisted action service shares the snapshot service, so every action
+  // validates against the same state the page reads and returns fresh state.
+  // One lock set spans the legacy routes and the action service: a connect or
+  // an observation is the same operation whichever form requested it.
+  const locks = new Set()
+  const actions = createActionService({ config, snapshot, locks, log, refreshOwnership: refreshOwnershipFacts })
+  // The history service answers GET /_tmax/history; the `/tmax history` command
+  // uses the same bounded `history list` read.
+  const history = createHistoryService({ config, log })
+
+  // Optional services are acquired through `ctx.inject`, not `ctx.get`: the
+  // callback runs when the service exists, is torn down when it goes away, and
+  // runs again for a replacement, so a late web server, tool registry, skill
+  // registry, or command registry still receives its registration.
+  ctx.inject(['webServer'], webCtx => {
+    const routes = createRoutes({
+      config,
+      snapshot,
+      observations,
+      actions,
+      history,
+      locks,
+      connectTmax,
+      refreshOwnership: refreshOwnershipFacts,
+      getDeclaredBlockers: () => skippedBlockers,
+      log,
+    })
+    for (const route of routes) {
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: route.path,
+        handler: route.handler,
+      }), `tmax: ${route.method} ${route.path}`)
+    }
+  })
+
+  /** Compact, read-only state for the model-facing tool. Never observes. */
+  function compactStatus(state) {
+    return {
+      ok: state.ok,
+      generatedAt: state.generatedAt,
+      configurationRevision: state.configurationRevision,
+      errors: state.errors ?? [],
+      target: state.target,
+      ownership: state.ownership,
+      gateway: state.gateway,
+      routes: (state.routes ?? []).map(route => ({
+        name: route.name,
+        provider: route.provider,
+        protocol: route.protocol,
+        scope: route.scope,
+        credentialConfigured: route.credentialConfigured,
+        models: (route.models ?? []).map(model => model.id),
       })),
+      providers: {
+        tmax: (state.providers?.tmax ?? []).map(provider => ({
+          id: provider.id,
+          name: provider.name,
+          enabled: provider.enabled,
+          authentication: provider.authentication,
+          affectedTargets: provider.affectedTargets,
+          accountIdentity: provider.accountIdentity,
+          subscription: provider.subscription,
+          integration: provider.integration,
+          billing: provider.billing,
+          suspension: provider.suspension,
+          failure: provider.failure,
+          error: provider.error,
+        })),
+        agent: state.providers?.agent ?? [],
+      },
+      routing: state.routing,
+      diagnostics: state.diagnostics,
+      blockers: deriveBlockers(state, skippedBlockers),
     }
-    agentCache = { at: Date.now(), value }
-    return value
   }
 
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
-    path: '/_tmax/dsh-usage',
-    handler: async (req, res) => {
-      if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
-      const force = req.url !== undefined && /[?&]force=1(&|$)/.test(req.url)
-      try { send(res, 200, await readAgentQuota({ force })) }
-      catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
-    },
-  }), 'tmax: GET /_tmax/dsh-usage')
-  ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/_tmax/status',
-      handler: (req, res) => {
-        if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
-        send(res, 200, summary())
-      },
-    }), 'tmax: GET /_tmax/status')
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/_tmax/usage',
-      handler: async (req, res) => {
-        if (req.method !== 'GET') { send(res, 405, { code: 'method-not-allowed' }); return }
-        try { send(res, 200, { ok: true, ...(await readUsage(config)) }) }
-        catch (error) { send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
-      },
-    }), 'tmax: GET /_tmax/usage')
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/_tmax/usage/refresh',
-      handler: async (req, res) => {
-        if (req.method !== 'POST') { send(res, 405, { code: 'method-not-allowed' }); return }
-        try {
-          const before = await readUsage(config)
-          // Quota checks reach the provider, so only providers that already
-          // report a billing observation are asked; the rest have nothing to
-          // refresh and would only cost a failed round trip.
-          const candidates = before.providers.filter(provider =>
-            provider.billing?.state === 'observed' && provider.error === undefined)
-          await Promise.all(candidates.map(provider =>
-            runTmax(config, ['provider', 'refresh', String(provider.id), '--scope', 'quota'])
-              .catch(error => log(`quota refresh failed for "${provider.id}": ${error instanceof Error ? error.message : String(error)}`))))
-          send(res, 200, { ok: true, ...(await readUsage(config)) })
-        } catch (error) {
-          send(res, 502, { ok: false, error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    }), 'tmax: POST /_tmax/usage/refresh')
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/_tmax/connect',
-      handler: async (req, res) => {
-        if (req.method !== 'POST') { send(res, 405, { code: 'method-not-allowed' }); return }
-        try {
-          const body = await readJsonBody(req)
-          const preview = previewRequested(req, body)
-          const target = await resolveTarget(config)
-          const envelope = await runTmax(config, ['agent', 'apply', target, ...(preview ? ['--dry-run'] : [])])
-          if (envelope.status !== 'success' && envelope.status !== 'dry_run') {
-            const blocker = Array.isArray(envelope.blockers) ? envelope.blockers[0] : undefined
-            send(res, 409, {
-              ok: false,
-              code: envelope.code || 'connect_failed',
-              message: envelope.message || blocker?.message || 'tmax agent apply failed',
-              ...summary(),
-            })
-            return
-          }
-          if (!preview) await refresh()
-          send(res, 200, { ok: true, connect: envelope.data, ...summary() })
-        } catch (error) {
-          if (error instanceof Error && error.actionable === true) {
-            send(res, 409, { ok: false, code: error.code || 'connect_failed', message: error.message, ...summary() })
-            return
-          }
-          send(res, 502, { ok: false, code: 'connect_unavailable', message: error instanceof Error ? error.message : String(error), ...summary() })
-        }
-      },
-    }), 'tmax: POST /_tmax/connect')
-  }
-
-  const tools = ctx.get('tools')
-  if (tools) {
-    ctx.effect(() => tools.register(toolsModule.defineTool({
+  ctx.inject(['tools'], toolsCtx => {
+    toolsCtx.effect(() => toolsCtx.tools.register(toolsModule.defineTool({
       name: 'tmax_status',
-      description: 'Read tmax model-access state: the DSH target, gateway readiness, route models, and blockers. Use it before changing model access or explaining a tmax failure.',
+      description: 'Read tmax model-access state: target, route ownership, gateway readiness, every provider (including unknown quota), routing explanations, diagnostics, and blockers. Reads the host state, composing effect-free tmax reads on a cache miss; it never contacts a provider or refreshes observations.',
       parameters: {},
       output: {
         schema: { type: 'object', additionalProperties: true },
@@ -662,50 +972,75 @@ export async function apply(ctx, config = {}) {
       },
       async execute() {
         try {
-          const inventory = await refresh()
-          return {
-            target: inventory.target?.id,
-            gateway: inventory.gateway,
-            routes: (inventory.routes || []).map(route => ({
-              name: route.name,
-              protocol: route.protocol,
-              models: route.models.map(model => model.id),
-            })),
-            blockers: inventory.blockers || [],
-          }
+          return compactStatus(await snapshot.state())
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
           return {
-            target: undefined,
-            gateway: undefined,
+            ok: false,
+            target: null,
+            ownership: null,
+            gateway: null,
             routes: [],
-            blockers: [{
-              code: 'tmax_unavailable',
-              message: error instanceof Error ? error.message : String(error),
-            }],
+            providers: { tmax: [], agent: [] },
+            routing: [],
+            diagnostics: { history: { state: 'unavailable', reasonCode: 'tmax_unavailable' }, lastProjectionAt: null, lastError: message, readModel: 'inventory' },
+            errors: [{ section: 'projection', code: 'tmax_unavailable', message }],
+            blockers: [{ source: 'section', code: 'tmax_unavailable', message }],
           }
         }
       },
       presentCall: () => ({ card: 'generic', title: 'tmax status', kind: 'read', rawInput: {} }),
     })), 'tmax: status tool')
-  }
+  })
 
-  const skills = ctx.get('skills')
-  if (skills) {
-    ctx.effect(() => skills.register({
+  ctx.inject(['skills'], skillsCtx => {
+    skillsCtx.effect(() => skillsCtx.skills.register({
       name: 'tmax',
       description: 'Use tmax-managed model access and inspect tmax status, subscriptions, quotas, aliases, and routing evidence.',
       content: [
         'When the user asks about model access, subscriptions, quotas, accounts, aliases, routing, or tmax configuration, start with `tmax_status`.',
-        'tmax CLI help is authoritative for syntax and operands. Prefer explicit operations; use `--dry-run` before mutations.',
-        'Never put keys or tokens in tool arguments, commands, logs, or chat. Credentials remain a user action through tmax protected input or sign-in; this plugin only uses DSH credential references.',
-        'Do not infer quota or availability from a missing value. Report observed values with their source and time; say unknown when unknown.',
-        'If tmax is unavailable or the gateway is not ready, report the blocker and the next action; do not claim success or silently switch models.',
+        'The tool reads tmax\'s local state through the host read model. It never contacts a provider, never resolves a credential, and never refreshes an observation.',
+        'A quota reading is a timestamped observation. Report it with its observation time and source; when there is no reading, say unknown or not observed yet instead of zero, absent, or unlimited.',
+        'Only an explicit user action may observe providers or apply the DSH target. If the user asks for that, name the operation and its effect; the page offers Refresh (observe) and Apply (native target application through `tmax agent apply`). Never claim either happened unless a result confirmed it.',
+        'tmax CLI help is authoritative for syntax and operands. Prefer explicit single operations; preview with the same command\'s `--dry-run` when the user asks to change something.',
+        'Never put keys or tokens in tool arguments, commands, logs, or chat. Credentials stay a user action through tmax protected input or sign-in; this plugin only uses DSH credential references, and a reference name is not a secret.',
+        'Do not infer quota or availability from a missing value. If tmax is unavailable or the gateway is not ready, report the blocker and the next action; do not claim success or silently switch models.',
       ].join('\n'),
       invocation: { modelInvocable: true, userInvocable: true },
     }), 'tmax: tmax skill')
-  }
+  })
+
+  // `/tmax` is an optional human-facing read command: registered once when the
+  // commands service exists, it reads the host state or `tmax history list`
+  // and never observes, refreshes, connects, or mutates tmax.
+  ctx.inject(['commands'], commandsCtx => {
+    commandsCtx.effect(() => commandsCtx.commands.register({
+      name: 'tmax',
+      description: 'Inspect tmax model access: target, providers, routing, gateway, diagnostics, and retained request history. Read-only.',
+      input: { hint: '[status|providers|routing|gateway|diagnostics|history]' },
+      async handler(invocation) {
+        const parsed = parseTmaxCommand(invocation?.rawInput)
+        if (!parsed.ok) return { kind: 'error', text: parsed.message }
+        try {
+          if (parsed.subcommand === 'history') {
+            // A read-only retained-metadata read; it never starts a service.
+            const read = await readEnvelope(config, ['history', 'list'], { timeoutMs: HISTORY_READ_TIMEOUT_MS })
+            return { kind: 'success', text: formatTmaxHistory(read) }
+          }
+          const state = await snapshot.state({ force: true })
+          const blockers = deriveBlockers(state, skippedBlockers)
+          return { kind: 'success', text: formatTmaxSection(parsed.subcommand, state, { blockers }) }
+        } catch (error) {
+          return {
+            kind: 'error',
+            text: `tmax ${parsed.subcommand} failed: ${commandText(error instanceof Error ? error.message : String(error))}`,
+          }
+        }
+      },
+    }), 'tmax: /tmax command')
+  })
 
   ctx.logger?.info?.(
-    `tmax: ${lastInventory?.routes?.length || 0} route(s), ${lastInventory?.routes?.reduce((count, route) => count + route.models.length, 0) || 0} model(s)${lastError ? `; last error: ${lastError}` : ''}`,
+    `tmax: ${lastInventory?.routes?.length || 0} route(s), ${lastInventory?.routes?.reduce((count, route) => count + (route.models?.length ?? 0), 0) || 0} model(s)${lastError ? `; last error: ${lastError}` : ''}`,
   )
 }

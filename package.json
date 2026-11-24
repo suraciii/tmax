@@ -15,6 +15,7 @@
     "dsh-plugin/adapter.js",
     "dsh-plugin/client.js",
     "dsh-plugin/quota.js",
+    "dsh-plugin/host/",
     "dsh-plugin/cordis.patch.yml",
     "dsh-plugin/icon.svg",
     "dsh-plugin/README.md",
@@ -22,7 +23,7 @@
     "LICENSE"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.3 <0.3.0"
+    "dsh": ">=0.2.3-alpha.2 <0.3.0"
   },
   "dsh": {
     "bundle": {
@@ -32,9 +33,12 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-api-remotes",
-        "@deepseek-ai/dsh-client-ui-settings-models"
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-settings-models",
+        "@deepseek-ai/dsh-client-ui-tool"
       ]
     }
   },

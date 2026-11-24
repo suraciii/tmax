@@ -12,7 +12,13 @@ precedence, or runtime behavior.
 | [Codex CLI](codex.md) | 0.162.1 | `config.toml`, adjacent profile configuration | Native file/keyring/automatic credential store |
 | [OpenCode V2](opencode.md) | 2.0.28 | `opencode.jsonc` / `opencode.json` | Server-scoped SQLite accounts; legacy file migration is separate |
 | [Hermes Agent](hermes.md) | 0.22.1+683.g848fc0a | Profile `config.yaml` | Native `auth.json`, credential pools, `.env`, provider key sources |
-| [DeepSeek Harness (DSH)](dsh.md) | 0.2.1-rc.2 | HOME `cordis.patch.yml`, common to profiles; launcher-owned `cordis.yml` is never edited | Adjacent home `.credentials.yaml` reference store; no native login qualification |
+| [DeepSeek Harness (DSH)](dsh.md) | 0.2.1-rc.2 (native integration reference); 0.2.3-alpha.2 (profile plugin) | HOME `cordis.patch.yml`, common to profiles; launcher-owned `cordis.yml` is never edited | Adjacent home `.credentials.yaml` reference store; no native login qualification |
+
+The DSH page also ships as a DSH profile bundle. Its version claim is separate
+from the native integration reference: the native `llm-tmax` home plugin is
+source-qualified at 0.2.1-rc.2, while the profile bundle is qualified against
+0.2.3-alpha.2 because it uses that version's client slots, locale, command, and
+credential services. Neither claim establishes the other.
 
 The [shared integration contract](../../specs/integrations/spec.md#agent-boundaries)
 owns observable behavior. The [routing request-parameter contract](../../specs/model-routing/spec.md#request-parameters)
@@ -62,6 +68,19 @@ consumed the same home configuration and credentials through all three protocols
 against synthetic loopback endpoints. Apply/restore preserved profile files and
 unrelated home state. DSH is not part of the earlier five-agent acceptance, and
 local runtime success does not establish hosted-provider entitlement.
+
+The DSH profile bundle has separate 2026-11-23 and 2026-11-24 qualifications at
+DSH 0.2.3-alpha.2. The 2026-11-23 rows record host and client API fit and a
+pre-port temporary-profile page render of the earlier snapshot-backed read model.
+The 2026-11-24 rows record the ported inventory read model, the action, command,
+history, and observation test contracts, and a temporary-profile page render of
+the ported root package with a synthetic inventory executable (`GET
+/_tmax/state` 200, `diagnostics.readModel` `inventory`, page rendered). That
+render did not use a real format-2 tmax store and did not exercise browser
+clicks, non-dry-run operations, the settings footer, the model option and pane,
+the tool card, or a successful history-table load. Its [reference](dsh.md)
+records the exact browser surfaces that were and were not verified; none of this
+evidence qualifies native inference or hosted-provider access.
 
 ## Safe scope and credential boundaries
 

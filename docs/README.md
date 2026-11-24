@@ -16,6 +16,8 @@ Contracts live in [../specs/](../specs/AGENTS.md). Engineering practices live in
 - [Native agent configuration references](agents/README.md) — version-qualified
   model fields, native authentication ownership, scopes, and isolated evidence
   for stock pi, omp, Codex CLI, OpenCode V2, Hermes Agent, and DeepSeek Harness.
+- [DSH plugin](../dsh-plugin/README.md) — install the tmax page into DeepSeek
+  Harness, its read model, route ownership, actions, seats, command, and limits.
 
 ## Evidence
 

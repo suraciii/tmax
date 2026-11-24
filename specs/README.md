@@ -29,6 +29,7 @@ and the invariants it protects.
   - [Domestic GLM Coding Plan](integrations/glm-coding-plan/spec.md) — plan-key categories, approved clients, domestic protocol bases, and monitor evidence limits.
   - [StepFun Token Plan](integrations/stepfun-token-plan/spec.md) — dedicated plan paths, `step-5-preview`, truthful native clients, and Credit/quota boundaries.
   - [MiniMax M Plan](integrations/minimax-m-plan/spec.md) — Subscription Key product boundaries, two regional Messages bases, and display-only quota observation limits.
+  - [DSH plugin page](integrations/dsh-plugin/spec.md) — inventory-backed read model composed from effect-free tmax commands, home-preferred route ownership, cache-only reads, DSH-native seats, a read-only `/tmax` command, explicit retained-history read with a bounded page table and coverage/gaps, explicit observation, allowlisted previewed actions (apply, observe, resume quota, reset failure, open management, gateway start/stop/restart), evidence semantics, and authenticated web routes.
 - [CLI](cli/spec.md) — common invocation, help, protected input, and dry runs.
   Command syntax and detailed results live with their owning capability:
   - [Configuration](cli/configuration/spec.md) — saved settings, reload, and invalid-file recovery.

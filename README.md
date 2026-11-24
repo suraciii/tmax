@@ -69,6 +69,7 @@ dsh plugin --profile web remove tmax
 ## 文档
 
 - [CLI 使用指南](docs/usage.md) — 接入和模型设置、原生配置及本地网关。
+- [DSH 插件](dsh-plugin/README.md) — 安装、页面、操作与限制。
 - [文档索引](docs/README.md) — 用户指南。
 - [产品规范](specs/product/spec.md) — 产品范围和边界。
 - [构建与验证](docs/building.md) — 依赖和项目检查。
