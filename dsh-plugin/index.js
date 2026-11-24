@@ -453,7 +453,12 @@ export async function apply(ctx, config = {}) {
    * @returns {Promise<boolean>} true when an applied provider document exists
    */
   async function readAppliedProviders() {
-    return hasAppliedProviders(await readProfileDocuments(resolveHome(config)))
+    const documents = await readProfileDocuments(resolveHome(config))
+    const names = (lastInventory?.routes ?? [])
+      .filter(route => route !== null && typeof route === 'object')
+      .map(route => `${prefix}${route.name ?? ''}`)
+      .filter(name => name !== '')
+    return hasAppliedProviders(documents, names)
   }
 
   /** Re-read the ownership facts without re-reading tmax. */

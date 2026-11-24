@@ -10,12 +10,23 @@ import { join } from 'node:path'
 
 /**
  * Whether the given settings documents declare one of tmax's providers.
+ *
+ * A provider carries its entry's name, so the names come from the inventory
+ * rather than from a naming convention: a name that appears as a mapping key
+ * in the profile's settings is a provider the client already serves.
  * @param {string[]} documents - profile `cordis.patch.yml` texts, if any
+ * @param {string[]} names - provider names the target declares
  * @returns {boolean} true when at least one applied provider is present
  */
-export function hasAppliedProviders(documents) {
-  return (documents || []).some(text =>
-    typeof text === 'string' && /(?:^|[\s,{[])\s*["']?tmax-[\w.-]+["']?\s*:/.test(text))
+export function hasAppliedProviders(documents, names) {
+  const texts = (documents || []).filter(text => typeof text === 'string')
+  if (texts.length === 0) return false
+  return (names || []).some(name => {
+    if (typeof name !== 'string' || name === '') return false
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    const key = new RegExp(`(?:^|[\\s,{[])\\s*["']?${escaped}["']?\\s*:`, 'u')
+    return texts.some(text => key.test(text))
+  })
 }
 
 /** Route ids the registry reports, from either strings or `{id}` objects. */

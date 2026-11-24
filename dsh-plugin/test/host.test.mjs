@@ -2100,9 +2100,11 @@ test('applied profile settings own the routes, so the page registers nothing', a
   // would offer the same upstream twice.
   const home = await emptyHome()
   await mkdir(join(home, 'profiles/desktop'), { recursive: true })
+  // The provider carries its entry's name, so this is the route the target
+  // declares as well.
   await writeFile(
     join(home, 'profiles/desktop/cordis.patch.yml'),
-    '- id: llm-pi-ai\n  config:\n    providers:\n      tmax-opencode:\n        api: openai-completions\n        baseURL: https://example.invalid/v1\n        models:\n          - id: first\n',
+    '- id: llm-pi-ai\n  config:\n    providers:\n      tmax:\n        api: openai-completions\n        baseURL: https://example.invalid/v1\n        models:\n          - id: first\n',
   )
   const { state } = await applied({ config: { home } })
   assert.deepEqual(state.routes, [])
