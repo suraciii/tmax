@@ -347,17 +347,6 @@ fn restore_text(
     }
     // User-added fields survive; comments force a conflict rather than deletion.
     prune_empty_parents(&mut text, file.format, &original, &file.fields)?;
-    if file.format == Format::DshPatch
-        && original.get("llm-tmax").is_none()
-        && document::parse(&text, file.format)?
-            .get("llm-tmax")
-            .is_some()
-    {
-        return Err(Error::new(
-            "native_conflict",
-            "Later edits keep the newly inserted llm-tmax plugin in use; restoration stopped before removing its entry or artifact",
-        ));
-    }
     if capture.before.is_none()
         && document::parse(&text, file.format)?
             .as_object()

@@ -6,9 +6,6 @@
 // `gateway status`, `status`), decides which plugin owns the routes, and
 // exposes exact HTTP routes, one read tool, one skill, and one read command.
 // No credential value ever enters this module, and no GET observes a provider.
-import { readdir, readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
-import { createAdapter, RESOLVED_PROFILE_DEFAULTS, THINKING_LEVELS } from './adapter.js'
 import { createActionService } from './host/actions.js'
 import { CONNECT_TIMEOUT_MS, readEnvelope, resolveHome, usableBaseUrl, usableCredentialRef } from './host/cli.js'
 import { createHistoryService, HISTORY_READ_TIMEOUT_MS } from './host/history.js'
@@ -16,9 +13,8 @@ import { readInventory, resolveTarget } from './host/inventory.js'
 import { createObservations } from './host/observations.js'
 import {
   hasAppliedProviders,
-  inspectHome,
   liveProviderIds,
-  normalizeManageRoutes,
+  readProfileDocuments,
   resolveOwnership,
 } from './host/ownership.js'
 import { createRoutes, deriveBlockers } from './host/routes.js'
@@ -26,51 +22,6 @@ import { createSnapshotService } from './host/snapshot.js'
 
 export const name = 'tmax'
 export const inject = ['llm', 'settings', 'credentials']
-
-const API_NAMES = {
-  'chat-completions': 'openai-completions',
-  'responses': 'openai-responses',
-  'messages': 'anthropic-messages',
-}
-
-/** Map tmax's DSH capabilities to the pi-ai model shape the adapter consumes. */
-function modelFromProjection(route, model, providerName) {
-  const caps = model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : {}
-  const efforts = caps.reasoningEfforts
-  let thinkingLevelMap
-  if (efforts && typeof efforts === 'object' && !Array.isArray(efforts)) {
-    thinkingLevelMap = {}
-    for (const level of THINKING_LEVELS) {
-      const wire = efforts[level]
-      thinkingLevelMap[level] = wire === undefined ? null : wire
-    }
-  }
-  // pi-ai requires every model descriptor to carry a concrete modality list;
-  // `PiAiAdapter.listModels()` spreads it unconditionally. Unknown modalities
-  // fall back to text-only, which is conservative and does not claim vision.
-  const input = Array.isArray(caps.input) && caps.input.length > 0 ? [...caps.input] : ['text']
-  return {
-    id: model.id,
-    name: model.display_name || model.id,
-    provider: providerName,
-    api: API_NAMES[route.protocol],
-    baseUrl: route.base_url,
-    input,
-    ...(typeof caps.contextWindow === 'number' ? { contextWindow: caps.contextWindow } : {}),
-    // Output capacity is intentionally unmanaged: a model maxTokens becomes a
-    // per-request default in DSH and would change generation budgets.
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    reasoning: thinkingLevelMap !== undefined,
-    ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),
-    compat: {},
-  }
-}
-
-/** Whether a registration failure means another plugin owns the route names. */
-function isDuplicateAdapter(error) {
-  if (error === undefined || error === null) return false
-  return error.code === 'DUPLICATE_ADAPTER' || /DUPLICATE_ADAPTER/.test(String(error.message ?? ''))
-}
 
 // ---------------------------------------------------------------------------
 // `/tmax` read command.
@@ -453,7 +404,7 @@ export async function apply(ctx, config = {}) {
   const tree = ctx.fiber.entry?.parent.tree
   if (tree === undefined) throw new Error('tmax requires a DSH Loader entry')
 
-  const [native, llm, credentials, pi, chat, responses, messages, toolsModule] = await Promise.all([
+  const [, llm, credentials, , , , , toolsModule] = await Promise.all([
     tree.import('@deepseek-ai/dsh-llm-pi-ai'),
     tree.import('@deepseek-ai/dsh-llm'),
     tree.import('@deepseek-ai/dsh-credentials'),
@@ -463,24 +414,10 @@ export async function apply(ctx, config = {}) {
     tree.import('@earendil-works/pi-ai/api/anthropic-messages.lazy'),
     tree.import('@deepseek-ai/dsh-tools'),
   ])
-  const protocolApis = {
-    'chat-completions': chat.openAICompletionsApi,
-    'responses': responses.openAIResponsesApi,
-    'messages': messages.anthropicMessagesApi,
-  }
-
   const log = message => ctx.logger?.warn?.(`tmax: ${message}`)
+  /** The protocols the qualified DSH adapter serves. */
+  const DSH_PROTOCOLS = new Set(['chat-completions', 'responses', 'messages'])
   const prefix = typeof config.providerPrefix === 'string' ? config.providerPrefix : ''
-  const manageMode = normalizeManageRoutes(config.manageRoutes)
-
-  let profiles = new Map()
-  // The live map above is published only after registration succeeds; the
-  // adapter reads this staged view during the synchronous registration call so
-  // its metadata is complete without exposing unregistered profiles afterwards.
-  let stagedProfiles
-  let registration
-  let registrationNames = []
-  let routeSignatures = new Map()
   let ownershipDecision
   let skippedBlockers = []
   let refreshing
@@ -489,14 +426,6 @@ export async function apply(ctx, config = {}) {
   let disposed = false
   let timer
 
-  // Routes are a profile setting DSH's own `llm-pi-ai` serves: `tmax agent apply`
-  // writes them into the settings document, so the page must not register a
-  // second copy of the same upstream. Registration remains available as an
-  // explicit legacy opt-in (`manageRoutes: true`) for a home whose providers
-  // were applied by an older release that owned its own adapter.
-  const adapter = manageMode === 'true'
-    ? createAdapter({ native, llm, credentials, pi, ctx, profiles: () => stagedProfiles ?? profiles, label: 'tmax', log })
-    : undefined
   const observations = createObservations({ ctx })
 
   function getOwnership() {
@@ -519,54 +448,25 @@ export async function apply(ctx, config = {}) {
       clearInterval(timer)
       timer = undefined
     }
-    disposeRegistration()
   }
 
   /**
-   * Re-read the home integration and the ownership decision without re-reading
-   * tmax. An explicit native apply can install or repair the home integration,
-   * so the state returned with its result must not reuse the pre-apply
-   * decision; the periodic refresh would otherwise correct it a minute later.
-   * A failed re-read keeps the previous decision.
-   */
-  /**
    * Whether this home already carries applied `tmax-<entry>` providers in a
-   * profile's settings. Once it does, DSH serves those routes itself and the
-   * page must not register a second copy of the same upstream.
+   * profile's settings. DSH serves those itself, so this is what the page
+   * reports as the route owner.
    * @returns {Promise<boolean>} true when an applied provider document exists
    */
   async function readAppliedProviders() {
-    const home = resolveHome(config)
-    const root = resolve(home, 'profiles')
-    let entries
-    try {
-      entries = await readdir(root, { withFileTypes: true })
-    } catch {
-      return false
-    }
-    const documents = []
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      try {
-        documents.push(await readFile(resolve(root, entry.name, 'cordis.patch.yml'), 'utf8'))
-      } catch {
-        // A profile without a settings document simply has no applied providers.
-      }
-    }
-    return hasAppliedProviders(documents)
+    return hasAppliedProviders(await readProfileDocuments(resolveHome(config)))
   }
 
+  /** Re-read the ownership facts without re-reading tmax. */
   async function refreshOwnershipFacts() {
     if (disposed) return ownershipDecision
     try {
-      const home = await inspectHome(resolveHome(config))
-      if (disposed) return ownershipDecision
       ownershipDecision = resolveOwnership({
-        mode: manageMode,
-        home,
         projection: lastInventory,
         liveNames: liveProviderIds(ctx),
-        registeredNames: registrationNames,
         prefix,
         settingsProviders: await readAppliedProviders(),
       })
@@ -576,58 +476,15 @@ export async function apply(ctx, config = {}) {
     return ownershipDecision
   }
 
-  function disposeRegistration() {
-    if (registration !== undefined) {
-      try {
-        registration()
-      } catch (error) {
-        log(`route disposal failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    registration = undefined
-    registrationNames = []
-    routeSignatures = new Map()
-    stagedProfiles = undefined
-    profiles = new Map()
-  }
-
-  function stableStringify(value) {
-    if (value === null || typeof value !== 'object') return JSON.stringify(value)
-    if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-    const keys = Object.keys(value).sort()
-    return `{${keys.map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`
-  }
-
   /**
-   * One route's identity for change detection: the provider metadata the
-   * registry exposes plus every served model descriptor. A model added,
-   * removed, or re-described changes this signature even while the route name
-   * stays the same, so DSH's model picker can be told to refresh.
-   */
-  function routeSignature(providerName, route, models) {
-    return stableStringify({
-      displayName: providerName,
-      baseUrl: route.base_url,
-      protocol: route.protocol,
-      models: models.map(model => ({
-        id: model.id ?? null,
-        name: model.display_name ?? model.id ?? null,
-        capabilities: model.capabilities ?? {},
-      })),
-    })
-  }
-
   /**
-   * Map the inventory onto adapter profiles. A route whose protocol, model
-   * capabilities, credential reference, or base URL is unusable is skipped
-   * with a declared blocker; the route stays visible in the state read model,
-   * but it is never registered with a null credential reference. One unusable
-   * route never drops the others.
+   * Report every route tmax cannot serve as the applied settings declare it: an
+   * unsupported protocol, an unknown context capacity, no usable model, a
+   * missing or malformed credential reference, or a missing base URL. The state
+   * read model stays complete; these are the blockers a reader acts on.
    */
-  function rebuild(inventory) {
-    const next = new Map()
+  function projectRoutes(inventory) {
     const skipped = []
-    const signatures = new Map()
     const targetId = typeof inventory?.target?.id === 'string' && inventory.target.id !== ''
       ? inventory.target.id
       : null
@@ -635,8 +492,7 @@ export async function apply(ctx, config = {}) {
       ? 'run `tmax agent apply` for this DSH target'
       : `run \`tmax agent apply ${targetId}\` for this DSH target`
     for (const route of inventory.routes || []) {
-      const factory = protocolApis[route.protocol]
-      if (factory === undefined) {
+      if (!DSH_PROTOCOLS.has(route.protocol)) {
         log(`route "${route.name}" uses unsupported protocol "${route.protocol}"`)
         skipped.push({
           code: 'route_protocol_unsupported',
@@ -666,9 +522,8 @@ export async function apply(ctx, config = {}) {
           models: hiddenModels,
         })
       }
-      const models = usableModels.map(model => modelFromProjection(route, model, providerName))
-      const signature = routeSignature(providerName, route, usableModels)
-      if (models.length === 0) {
+      const modelIds = usableModels.map(model => model.id)
+      if (modelIds.length === 0) {
         skipped.push({
           code: 'route_no_usable_models',
           message: `Route "${providerName}" declares no model the adapter can serve`,
@@ -679,92 +534,47 @@ export async function apply(ctx, config = {}) {
       }
       const credentialRef = usableCredentialRef(route)
       if (credentialRef === undefined) {
-        const blocker = {
+        skipped.push({
           code: 'route_credential_missing',
           message: `Route "${providerName}" declares no credential reference; ${applyHint} before it can serve models`,
           route: route.name,
-          models: models.map(model => model.id),
-        }
-        log(blocker.message)
-        skipped.push(blocker)
+          models: modelIds,
+        })
         continue
       }
-      const baseUrl = usableBaseUrl(route)
-      if (baseUrl === undefined) {
-        const blocker = {
+      if (usableBaseUrl(route) === undefined) {
+        skipped.push({
           code: 'route_base_url_missing',
           message: `Route "${providerName}" declares no base URL; ${applyHint} before it can serve models`,
           route: route.name,
-          models: models.map(model => model.id),
-        }
-        log(blocker.message)
-        skipped.push(blocker)
+          models: modelIds,
+        })
         continue
       }
-      // The DSH credentials service throws for a reference outside its
-      // grammar. A stale or malformed reference skips only this route with a
-      // declared blocker; it must never drop every route from the profile.
-      let apiKeyEnv
+      // The DSH credentials service throws for a reference outside its grammar.
+      // A stale or malformed reference is reported against that route alone; it
+      // must never hide every other route.
       try {
-        apiKeyEnv = credentials.credentialRef(credentialRef)
+        const apiKeyEnv = credentials.credentialRef(credentialRef)
+        if (typeof apiKeyEnv !== 'string' || apiKeyEnv === '') throw new Error('empty reference')
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        const blocker = {
+        log(`route "${providerName}" declares an unusable credential reference (${detail})`)
+        skipped.push({
           code: 'route_credential_invalid',
           message: `Route "${providerName}" declares a credential reference DSH cannot use; ${applyHint} to regenerate it`,
           route: route.name,
-          models: models.map(model => model.id),
-        }
-        log(`${blocker.message} (${detail})`)
-        skipped.push(blocker)
-        continue
+          models: modelIds,
+        })
       }
-      if (typeof apiKeyEnv !== 'string' || apiKeyEnv === '') {
-        const blocker = {
-          code: 'route_credential_invalid',
-          message: `Route "${providerName}" declares a credential reference DSH cannot use; ${applyHint} to regenerate it`,
-          route: route.name,
-          models: models.map(model => model.id),
-        }
-        log(blocker.message)
-        skipped.push(blocker)
-        continue
-      }
-      const displayName = route.name
-      const api = factory()
-      signatures.set(providerName, signature)
-      next.set(providerName, {
-        ...RESOLVED_PROFILE_DEFAULTS,
-        apiKeyEnv,
-        api: API_NAMES[route.protocol],
-        provider: providerName,
-        displayName,
-        configuredMaxTokens: new Map(),
-        modelErrors: new Map(),
-        retryPolicy: llm.resolveRetryPolicy({ mode: 'normal', maxRetries: 0 }, `tmax: route "${providerName}" retryPolicy`),
-        piProvider: {
-          id: providerName,
-          name: displayName,
-          baseUrl,
-          auth: {
-            apiKey: {
-              name: displayName,
-              resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: name }),
-            },
-          },
-          getModels: () => models,
-          stream: (model, context, request) => api.stream(model, context, request),
-          streamSimple: (model, context, request) => api.streamSimple(model, context, request),
-        },
-      })
     }
-    return { profiles: next, skipped, signatures }
+    return { skipped }
   }
 
   /**
-   * Read the inventory, re-evaluate ownership, and register or keep routes.
-   * Profiles are assigned only after registration succeeds; a disposed plugin
-   * never registers, even when a read completes after teardown.
+   * Read the inventory and report what it declares. The providers themselves
+   * are a profile setting DSH serves; this service only says which routes exist
+   * and what is wrong with them.
    */
   async function refresh() {
     if (disposed) return lastInventory
@@ -774,101 +584,10 @@ export async function apply(ctx, config = {}) {
       if (disposed) return inventory
       lastInventory = inventory
       lastError = undefined
-      const liveNames = liveProviderIds(ctx)
-      const home = await inspectHome(resolveHome(config))
-      if (disposed) return inventory
-      const decision = resolveOwnership({
-        mode: manageMode,
-        home,
-        projection: inventory,
-        liveNames,
-        registeredNames: registrationNames,
-        prefix,
-        settingsProviders: await readAppliedProviders(),
-      })
-      ownershipDecision = decision
-      if (disposed) return inventory
-      if (decision.disposePage) {
-        // The page owns nothing: its fallback blockers would be claims about
-        // routes it never attempted.
-        skippedBlockers = []
-        disposeRegistration()
-        return inventory
-      }
-      if (!decision.shouldRegister) {
-        skippedBlockers = []
-        return inventory
-      }
-      const rebuilt = rebuild(inventory)
-      skippedBlockers = rebuilt.skipped
-      if (disposed) return inventory
-      const next = rebuilt.profiles
-      if (next.size === 0) {
-        disposeRegistration()
-        return inventory
-      }
-      const nextNames = [...next.keys()]
-      const nextSignatures = rebuilt.signatures
-      const hadRegistration = registration !== undefined
-      const namesChanged = !hadRegistration
-        || nextNames.length !== registrationNames.length
-        || nextNames.some((route, index) => route !== registrationNames[index])
-      const changedRoutes = namesChanged
-        ? nextNames
-        : nextNames.filter(route => routeSignatures.get(route) !== nextSignatures.get(route))
-      const changed = changedRoutes.length > 0
-      try {
-        stagedProfiles = next
-        if (!hadRegistration) {
-          registration = ctx.llm.registerAdapter(nextNames, adapter)
-        } else if (changed) {
-          registration.replace(nextNames)
-        }
-        // Only a successful registration makes these profiles live.
-        stagedProfiles = undefined
-        profiles = next
-        registrationNames = nextNames
-        routeSignatures = nextSignatures
-        // An unchanged route set and unchanged route content need no registry
-        // event; the profile map itself is already updated for the next request.
-        for (const route of changedRoutes) ctx.emit('llm/models-updated', route)
-      } catch (error) {
-        stagedProfiles = undefined
-        const message = error instanceof Error ? error.message : String(error)
-        if (hadRegistration) {
-          // Keep the working registration: a failed replacement must not strand
-          // the profile. Publish the conflict and leave the old names live.
-          ownershipDecision = {
-            ...decision,
-            conflict: {
-              code: isDuplicateAdapter(error) ? 'route_owner_conflict' : 'route_registration_failed',
-              message: isDuplicateAdapter(error)
-                ? `Another LLM plugin already registered these route names: ${message}`
-                : `Route replacement failed; the previous routes stay live: ${message}`,
-            },
-          }
-          lastError = `${ownershipDecision.conflict.code}: ${message}`
-          log(lastError)
-          return inventory
-        }
-        disposeRegistration()
-        if (isDuplicateAdapter(error)) {
-          ownershipDecision = {
-            ...decision,
-            owner: 'other',
-            scope: null,
-            reason: null,
-            conflict: {
-              code: 'route_owner_conflict',
-              message: `Another LLM plugin already registered these route names: ${message}`,
-            },
-          }
-          lastError = `route_owner_conflict: ${message}`
-          log(lastError)
-          return inventory
-        }
-        throw error
-      }
+      skippedBlockers = projectRoutes(inventory).skipped
+      // The state reports who serves these routes, so the decision is part of
+      // the same read rather than a later correction.
+      await refreshOwnershipFacts()
       return inventory
     })().catch(error => {
       lastError = error instanceof Error ? error.message : String(error)
@@ -879,7 +598,7 @@ export async function apply(ctx, config = {}) {
     return refreshing
   }
 
-  ctx.effect(() => () => cleanup(), 'tmax: adapter and refresh')
+  ctx.effect(() => () => cleanup(), 'tmax: refresh')
 
   try {
     await refresh()

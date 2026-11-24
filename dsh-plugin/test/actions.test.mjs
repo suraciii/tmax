@@ -1223,27 +1223,18 @@ test('a provider action uses readable provider evidence and refuses only an unre
   )
 })
 
-test('a completed action-form connect re-reads the home integration before returning state', async () => {
-  const { fake, state, home } = await applied()
+test('a completed action-form connect never claims settings the write did not make', async () => {
+  const { state } = await applied()
   const before = (await getJson(state, '/_tmax/state')).body
-  assert.equal(before.ownership.owner, 'page')
-  assert.deepEqual(before.ownership.homeIntegration, { present: false, entry: false, artifact: false })
+  assert.equal(before.ownership.owner, 'unapplied')
 
-  // The native apply installs the home plugin while the action is in flight.
-  await fake.patch(current => {
-    current.writeFiles = {
-      'agent apply dsh-main': [
-        { path: join(home, 'cordis.patch.yml'), content: '- id: llm-tmax\n' },
-        { path: join(home, 'tmax-dsh.mjs'), content: 'export const name = "llm-tmax"\n' },
-      ],
-    }
-  })
   const result = await postJson(state, '/_tmax/action', { action: 'connect', dryRun: false })
   assert.equal(result.statusCode, 200)
-  const ownership = result.body.state.ownership
-  assert.deepEqual(ownership.homeIntegration, { present: true, entry: true, artifact: true }, 'the response reflects the files the apply wrote')
-  assert.equal(ownership.owner, 'page', 'the working page route stays until DSH reloads')
-  assert.equal(ownership.reason, 'home_integration_pending_reload')
+  assert.equal(
+    result.body.state.ownership.owner,
+    'unapplied',
+    'the page reports the settings it can see, not the ones it asked for',
+  )
 })
 
 test('the action-form connect resolves the target from the DSH home when none is configured', async () => {

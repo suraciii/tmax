@@ -9,15 +9,32 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 pub(super) fn view(agent: &str, scope: &Path) -> Value {
-    match read(agent, scope) {
+    view_in(agent, scope, None)
+}
+
+/// The same view for a target whose selection lives in one profile's settings.
+pub(super) fn view_in(agent: &str, scope: &Path, profile: Option<&str>) -> Value {
+    match read(agent, scope, profile) {
         Ok(fields) => json!({"state": "available", "fields": fields}),
         Err(error) => json!({"state": "unavailable", "reason_code": error.code}),
     }
 }
 
-fn read(agent: &str, scope: &Path) -> Result<Value> {
+fn read(agent: &str, scope: &Path, profile: Option<&str>) -> Result<Value> {
     let (path, format) = match agent {
-        "dsh" => (scope.join("cordis.patch.yml"), Format::DshPatch),
+        // A DSH default model is a profile setting, beside the providers.
+        "dsh" => (
+            profile.map_or_else(
+                || scope.join("cordis.patch.yml"),
+                |profile| {
+                    scope
+                        .join("profiles")
+                        .join(profile)
+                        .join("cordis.patch.yml")
+                },
+            ),
+            Format::DshPatch,
+        ),
         "pi" => (scope.join("settings.json"), Format::Json),
         "omp" => (scope.join(omp_main_settings(scope)), Format::Yaml),
         "opencode" => {

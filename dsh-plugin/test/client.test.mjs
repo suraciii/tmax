@@ -683,20 +683,6 @@ test('projection failures are recognized in both host section spellings', async 
     { kind: 'retry', reason: 'projection' })
 })
 
-test('ownership mode and both pending-reload spellings are recognized', async () => {
-  const pure = (await moduleWith(inertReact())).__pure
-  assert.equal(pure.pendingReload({ reason: 'home_integration_pending_reload' }), true)
-  assert.equal(pure.pendingReload({ reason: 'home_integration_reload_pending' }), true)
-  assert.equal(pure.pendingReload({ reason: 'something_else' }), false)
-  assert.equal(pure.pendingReload({}), false)
-  assert.equal(pure.ownershipMode({ mode: 'auto' }), 'auto')
-  assert.equal(pure.ownershipMode({ mode: true }), true)
-  assert.equal(pure.ownershipMode({ mode: false }), false)
-  assert.equal(pure.ownershipMode({ mode: 'forced' }), 'unknown')
-  assert.equal(pure.ownershipMode({ mode: 'false' }), false)
-  assert.equal(pure.ownershipMode({ mode: 'true' }), true)
-  assert.equal(pure.ownershipMode({}), 'unknown')
-})
 
 test('unknown quota names an unsupported source and its last attempt', async () => {
   const pure = (await moduleWith(inertReact())).__pure
@@ -762,22 +748,19 @@ test('unqualified reset times are marked, never dated', async () => {
 test('verdict answers reachability, never a catalog group name', async () => {
   const { verdict } = (await moduleWith(inertReact())).__pure
   const route = { provider: 'renamed-tmax', credentialConfigured: true, active: true }
-  const page = { owner: 'page', homeIntegration: { present: false } }
-  const home = { owner: 'home', homeIntegration: { present: true } }
+  const applied = { owner: 'settings', scope: 'profile_scoped' }
+  const unapplied = { owner: 'unapplied', reason: 'apply_not_run' }
 
   assert.deepEqual(verdict({ phase: 'loading' }, t), { tone: 'idle', text: 'checking' })
   assert.deepEqual(verdict({ phase: 'failed' }, t), { tone: 'error', text: 'stateUnreadable' })
   assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [] } }, t), { tone: 'idle', text: 'stateDisconnected' })
 
-  // Routes that exist but are not live are not connected.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }], ownership: home } }, t),
+  // Declared but not live: DSH has not loaded the applied settings yet.
+  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }], ownership: applied } }, t),
     { tone: 'idle', text: 'stateReload' })
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }], ownership: page } }, t),
-    { tone: 'warn', text: 'stateInactive' })
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }], ownership: { ...page, conflict: { code: 'route_owner_conflict' } } } }, t),
-    { tone: 'error', text: 'stateConflict' })
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }] } }, t),
-    { tone: 'idle', text: 'stateUnknown' })
+  // Declared but never applied: applying is the missing step.
+  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }], ownership: unapplied } }, t),
+    { tone: 'warn', text: 'stateNotApplied' })
 
   // A live route with a known-missing credential is registered, not usable.
   assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, credentialConfigured: false }], gateway: {} } }, t),
@@ -785,9 +768,10 @@ test('verdict answers reachability, never a catalog group name', async () => {
   // Readiness that was never reported stays unknown.
   assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, credentialConfigured: null }], gateway: {} } }, t),
     { tone: 'idle', text: 'stateUnknown' })
-  // Liveness that was never reported stays unknown too.
+  // Liveness that was never reported cannot be called live; the reload hint is
+  // the only honest reading.
   assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: null }] } }, t),
-    { tone: 'idle', text: 'stateUnknown' })
+    { tone: 'idle', text: 'stateReload' })
 
   assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [route], gateway: { ready: true } } }, t),
     { tone: 'ok', text: 'stateReady' })
@@ -797,11 +781,8 @@ test('verdict answers reachability, never a catalog group name', async () => {
     { tone: 'idle', text: 'stateUnknown' })
 
   // A failed projection read cannot support a "not connected" claim.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [], errors: [{ section: 'projection', code: 'x', message: 'y' }], ownership: page } }, t),
+  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [], errors: [{ section: 'projection', code: 'x', message: 'y' }], ownership: applied } }, t),
     { tone: 'error', text: 'stateProjection' })
-  // manageRoutes=false with no home integration is an explained dead end.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [], ownership: { owner: 'none', mode: false, homeIntegration: { present: false } } } }, t),
-    { tone: 'warn', text: 'stateRouteDisabled' })
   // An unsupported schema is a visible failure.
   assert.deepEqual(verdict({ phase: 'failed', schemaUnsupported: true }, t),
     { tone: 'error', text: 'stateSchemaUnsupported' })
@@ -812,156 +793,44 @@ test('verdict answers reachability, never a catalog group name', async () => {
 
 test('next action is the one step that can change the reported state', async () => {
   const { nextAction } = (await moduleWith(inertReact())).__pure
-  const home = { owner: 'home', homeIntegration: { present: true } }
-  const page = { owner: 'page', homeIntegration: { present: false } }
+  const applied = { owner: 'settings', scope: 'profile_scoped' }
+  const unapplied = { owner: 'unapplied', reason: 'apply_not_run' }
   const live = { provider: 'tmax', credentialConfigured: true, active: true }
   const inactive = { provider: 'tmax', credentialConfigured: true, active: false }
   const unconfigured = { provider: 'tmax', credentialConfigured: false, active: false }
 
+  // A failed read never offers a write, even with a last-known good state.
   assert.deepEqual(nextAction({ phase: 'failed' }), { kind: 'retry' })
-  // A failed read never offers a write, even with a last-known good state: the
-  // evidence on screen is stale, so the one honest next step is a fresh read.
   assert.deepEqual(
-    nextAction({ phase: 'failed', value: { ok: true, routes: [], ownership: page } }),
+    nextAction({ phase: 'failed', value: { ok: true, routes: [], ownership: applied } }),
     { kind: 'retry' })
-  assert.deepEqual(
-    nextAction({ phase: 'failed', value: { ok: true, routes: [{ provider: 'tmax', credentialConfigured: false, active: false }], ownership: page } }),
-    { kind: 'retry' })
-  assert.deepEqual(
-    nextAction({ phase: 'failed', value: { ok: true, routes: [live], ownership: page, gateway: { ready: false }, config: { state: 'valid' } } }),
-    { kind: 'retry' })
-  // No ownership evidence is not a reason to offer a write.
-  assert.equal(nextAction({ phase: 'ready', value: { ok: true, routes: [] } }), undefined)
-  assert.deepEqual(nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: page } }), { kind: 'connect' })
-  assert.deepEqual(nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: home } }), { kind: 'reload' })
-  assert.equal(nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: { owner: 'home', homeIntegration: { present: false } } } }),
-    undefined)
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: { ...page, conflict: { code: 'route_owner_conflict', names: ['tmax'] } } } }),
-    { kind: 'conflict', code: 'route_owner_conflict', message: 'tmax' })
 
-  // Home integration installed but not live: reload, even when a credential is
-  // also missing, and even though Apply would otherwise be applicable.
+  // Nothing declared: applying is the step that gives DSH something.
+  assert.deepEqual(nextAction({ phase: 'ready', value: { ok: true, routes: [] } }), { kind: 'connect' })
+  // Declared but not loaded by DSH: the reload is the non-writing step.
   assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], ownership: home } }),
+    nextAction({ phase: 'ready', value: { ok: true, routes: [inactive], ownership: applied } }),
     { kind: 'reload' })
   assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [{ ...inactive, credentialConfigured: false }], ownership: { ...page, reason: 'home_integration_reload_pending' } } }),
-    { kind: 'reload' })
-  // A conflict with no usable route is surfaced instead of Apply.
+    nextAction({ phase: 'ready', value: { ok: true, routes: [{ ...inactive, credentialConfigured: false }], ownership: unapplied } }),
+    { kind: 'connect' })
+  // A conflict is surfaced instead of Apply.
   assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], ownership: { ...page, conflict: { code: 'route_owner_conflict', message: 'taken' } } } }),
+    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], ownership: { ...applied, conflict: { code: 'route_owner_conflict', message: 'taken' } } } }),
     { kind: 'conflict', code: 'route_owner_conflict', message: 'taken' })
-
-  // Page-owned fallback: Apply repairs a credential only when one is missing.
+  // Apply repairs a credential only when one is known to be missing, and never
+  // for a route that is already live.
   assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], ownership: page } }),
+    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], ownership: applied } }),
     { kind: 'connect' })
-  assert.equal(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [inactive], ownership: page, config: { state: 'valid' } } }),
+  assert.deepEqual(
+    nextAction({ phase: 'ready', value: { ok: true, routes: [live], ownership: applied } }),
     undefined)
+  // An unreported credential is unknown, so no write is offered for it; the
+  // non-writing reload is the only step left.
   assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [{ ...unconfigured, active: true }], ownership: home } }),
-    { kind: 'connect' })
-  // An unreported credential is unknown; the page offers no write for it.
-  assert.equal(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [{ ...inactive, credentialConfigured: null }], ownership: page, config: { state: 'valid' } } }),
-    undefined)
-  // No ownership evidence, or a different owner, never turns into Apply.
-  assert.equal(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], config: { state: 'valid' } } }),
-    undefined)
-  assert.equal(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], ownership: { owner: 'other' }, config: { state: 'valid' } } }),
-    undefined)
-
-  // A broken config blocks every write and is named before Apply.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: page, config: { state: 'invalid' } } }),
-    { kind: 'config', reason: 'invalid' })
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [unconfigured], ownership: page, config: { state: 'unavailable' } } }),
-    { kind: 'config', reason: 'unavailable' })
-
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [live], ownership: page, gateway: { ready: false, reasonCode: 'daemon_identity_unavailable' }, config: { state: 'valid' } } }),
-    { kind: 'gateway', code: 'daemon_identity_unavailable' })
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [live], ownership: page, gateway: {}, config: { state: 'valid' }, target: { blockers: [{ code: 'gateway_not_ready', message: 'start it' }] } } }),
-    { kind: 'blocker', code: 'gateway_not_ready', message: 'start it' })
-  assert.equal(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [live], ownership: page, gateway: {}, config: { state: 'valid' } } }),
-    undefined)
-  // A conflict is not a repair while a usable route is live.
-  assert.equal(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [live], ownership: { ...page, conflict: { code: 'route_owner_conflict' } }, gateway: {}, config: { state: 'valid' } } }),
-    undefined)
-
-  // manageRoutes=false with no home integration explains itself.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: { owner: 'none', mode: false, homeIntegration: { present: false } }, config: { state: 'valid' } } }),
-    { kind: 'mode' })
-  // A failed projection read offers a retry, not an Apply.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [], errors: [{ section: 'projection', code: 'x', message: 'y' }], ownership: page, config: { state: 'valid' } } }),
-    { kind: 'retry', reason: 'projection' })
-  // A page-owned pending transition asks for a reload even while its routes work.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [live], ownership: { owner: 'page', reason: 'home_integration_pending_reload', homeIntegration: { present: true } }, gateway: {}, config: { state: 'valid' } } }),
+    nextAction({ phase: 'ready', value: { ok: true, routes: [{ ...inactive, credentialConfigured: null }], ownership: applied, config: { state: 'valid' } } }),
     { kind: 'reload' })
-  // Config still blocks every write before mode/projection/reload.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [], ownership: { owner: 'none', mode: false, homeIntegration: { present: false } }, config: { state: 'invalid' } } }),
-    { kind: 'config', reason: 'invalid' })
-
-  // A section read failure with otherwise usable routes is a non-observing
-  // retry, not Refresh.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: {
-      ok: true,
-      routes: [live],
-      ownership: page,
-      gateway: { ready: true },
-      config: { state: 'valid' },
-      errors: [{ section: 'providers', code: 'provider_list_unavailable', message: 'provider list failed' }],
-    } }),
-    { kind: 'retry', reason: 'section' })
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: {
-      ok: true,
-      routes: [live],
-      ownership: page,
-      gateway: { ready: true },
-      config: { state: 'valid' },
-      errors: [{ section: 'gateway', code: 'gateway_unavailable', message: 'gateway read failed' }],
-    } }),
-    { kind: 'retry', reason: 'section' })
-  // Nothing failed and nothing is wrong: no retry action.
-  assert.equal(
-    nextAction({ phase: 'ready', value: { ok: true, routes: [live], ownership: page, gateway: { ready: true }, config: { state: 'valid' }, errors: [] } }),
-    undefined)
-  // An explicit projection error stays the stronger projection retry.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: {
-      ok: true,
-      routes: [live],
-      ownership: page,
-      gateway: { ready: true },
-      config: { state: 'valid' },
-      errors: [{ section: 'projection', code: 'projection_unavailable', message: 'projection failed' }],
-    } }),
-    { kind: 'retry', reason: 'projection' })
-  // A live gateway failure is still the stronger gateway action.
-  assert.deepEqual(
-    nextAction({ phase: 'ready', value: {
-      ok: true,
-      routes: [live],
-      ownership: page,
-      gateway: { ready: false, reasonCode: 'daemon_identity_unavailable' },
-      config: { state: 'valid' },
-      errors: [{ section: 'gateway', code: 'gateway_unavailable', message: 'gateway read failed' }],
-    } }),
-    { kind: 'gateway', code: 'daemon_identity_unavailable' })
 })
 
 test('defaults, dashboard URLs, capabilities and provider limit states stay distinct', async () => {
@@ -1268,9 +1137,9 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     // Unknown quota names the unsupported source and its last attempt.
     assert.match(text, /unknownQuotaUnsupported/)
     assert.match(text, /lastAttempt unavailable/)
-    // Ownership mode is evidence, and the fixture has no section read failures.
-    assert.match(text, /ownershipMode/)
-    assert.match(text, /modeAuto/)
+    // Ownership is evidence: who serves the routes, and where they live.
+    assert.match(text, /ownership/)
+    assert.match(text, /ownership/)
     assert.doesNotMatch(text, /readFailed/)
     assert.match(text, /GLM Coding CN/)
     // The fixture's agent reset is unqualified, so it is marked, not dated.
@@ -1372,8 +1241,8 @@ test('route cards show not-registered routes and route-level blockers', async ()
   const page = await mountPage(withState(state))
   try {
     const text = textOf(await page.mount())
-    assert.match(text, /stateInactive/)
-    assert.match(text, /routeNotRegistered/)
+    assert.match(text, /stateReload/)
+    assert.match(text, /routeNotApplied/)
     assert.doesNotMatch(text, /routeLive/)
     assert.match(text, /routeBlockers/)
     assert.match(text, /model_hidden: glm-5.4 excluded: no eligible candidate/)
@@ -1384,30 +1253,6 @@ test('route cards show not-registered routes and route-level blockers', async ()
   }
 })
 
-test('an installed home integration with no live route offers reload, not Apply', async () => {
-  const state = {
-    ...connected,
-    ownership: {
-      owner: 'home',
-      scope: 'home_wide',
-      reason: 'home_integration_reload_pending',
-      homeIntegration: { present: true, entry: true, artifact: true },
-      conflict: null,
-    },
-    routes: [{ ...connected.routes[0], active: false, credentialConfigured: false }],
-  }
-  const page = await mountPage(withState(state))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    assert.match(text, /stateReload/)
-    assert.match(text, /nextReload/)
-    assert.equal(buttonByText(tree, 'connect'), undefined)
-    assert.equal(page.calls.some(call => call.method === 'POST'), false)
-  } finally {
-    page.restore()
-  }
-})
 
 test('an unsupported state schema is a visible failure, not a payload', async () => {
   const page = await mountPage(withState({ ...connected, schemaVersion: 2 }))
@@ -1596,50 +1441,7 @@ test('readable empty provider lists say none instead of unknown or not reported'
   }
 })
 
-test('manageRoutes=false with no home integration explains itself', async () => {
-  const state = {
-    ...connected,
-    routes: [],
-    ownership: { owner: 'none', scope: null, reason: null, mode: false, homeIntegration: { present: false, entry: false, artifact: false }, conflict: null },
-  }
-  const page = await mountPage(withState(state))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    assert.match(text, /stateRouteDisabled/)
-    assert.match(text, /nextModeDisabled/)
-    assert.match(text, /modeDisabled/)
-    assert.equal(buttonByText(tree, 'connect'), undefined)
-    assert.equal(page.calls.some(call => call.method === 'POST'), false)
-  } finally {
-    page.restore()
-  }
-})
 
-test('a page-owned pending reload asks for a reload while its routes still work', async () => {
-  const state = {
-    ...connected,
-    ownership: {
-      owner: 'page',
-      scope: 'profile_scoped',
-      reason: 'home_integration_pending_reload',
-      mode: 'auto',
-      homeIntegration: { present: true, entry: true, artifact: true },
-      conflict: null,
-    },
-  }
-  const page = await mountPage(withState(state))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    assert.match(text, /nextReload/)
-    assert.equal(buttonByText(tree, 'connect'), undefined)
-    assert.match(text, /Kimi Coding Plan/)
-    assert.equal(page.calls.some(call => call.method === 'POST'), false)
-  } finally {
-    page.restore()
-  }
-})
 
 test('an invalid or unreadable config is the next action before Apply', async () => {
   const ownership = { owner: 'page', scope: 'profile_scoped', reason: null, homeIntegration: { present: false, entry: false, artifact: false }, conflict: null }
@@ -2467,7 +2269,7 @@ test('Settings > Models availability names why tmax models are absent', async ()
   const route = { active: true, credentialConfigured: true, blockers: [] }
   assert.equal(pure.modelsAvailability(undefined), 'unknown')
   assert.equal(pure.modelsAvailability({ ok: false }), 'unknown')
-  assert.equal(pure.modelsAvailability({ ok: true, ownership: { reason: 'home_integration_reload_pending' }, routes: [], errors: [] }), 'reload')
+  assert.equal(pure.modelsAvailability({ ok: true, ownership: { reason: 'apply_not_run' }, routes: [], errors: [] }), 'none')
   assert.equal(pure.modelsAvailability({ ok: true, ownership: {}, routes: [], errors: [] }), 'none')
   assert.equal(pure.modelsAvailability({ ok: true, ownership: {}, routes: [{ ...route, active: false }], errors: [] }), 'inactive')
   assert.equal(pure.modelsAvailability({ ok: true, ownership: {}, routes: [{ ...route, credentialConfigured: false }], errors: [] }), 'credential')
@@ -3068,13 +2870,9 @@ test('the Settings footer offers Apply only when the page next action is Apply',
       connect: false,
       state: seatState({ routes: [], target: null, errors: [{ section: 'projection', code: 'projection_unavailable', message: 'no projection' }] }),
     },
-    // The base state is home-owned, so an empty route list means "reload pending".
-    { name: 'home-owned no routes', connect: false, state: seatState({ routes: [] }) },
-    {
-      name: 'ownership disabled',
-      connect: false,
-      state: seatState({ routes: [], ownership: { ...pageOwnership, owner: 'none', mode: 'false', reason: 'route_management_disabled' } }),
-    },
+    // Nothing declared yet: Apply is exactly the step that declares something.
+    { name: 'no routes yet', connect: true, state: seatState({ routes: [] }) },
+
     { name: 'unknown credential', connect: false, state: seatState({ routes: [{ ...route, credentialConfigured: null }] }) },
     { name: 'page-owned no routes', connect: true, state: seatState({ routes: [], ownership: pageOwnership }) },
     { name: 'known missing credential', connect: true, state: seatState({ routes: [{ ...route, credentialConfigured: false }] }) },

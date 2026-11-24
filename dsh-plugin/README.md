@@ -18,8 +18,8 @@ tested. The contract is owned by the
 [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits) records what
 was and was not exercised, including the browser surfaces that remain
 unverified. That reference also carries the older source qualification of the
-independent `llm-tmax` home plugin (DSH 0.2.1-rc.2); it is separate from this
-profile bundle's evidence.
+home configuration tmax writes (DSH 0.2.1-rc.2), which is separate from this
+bundle's evidence.
 
 ## Install or update
 
@@ -69,8 +69,7 @@ home when `target` is empty.
 | --- | --- |
 | `home` | DSH home to inspect. Defaults to `DSH_HOME`, then `~/.dsh`. |
 | `target` | Declared tmax target ID. When empty, the one DSH target whose path matches the home is used. |
-| `manageRoutes` | `auto` (default), `true`, or `false`; see [Route ownership](#route-ownership). |
-| `providerPrefix` | Prefix for the provider route names this plugin registers when it serves the profile-scoped fallback. Empty by default; it does not rename the home integration's routes. |
+| `providerPrefix` | Prefix reported in front of each route name the state lists. Empty by default; it never renames a provider DSH already has. |
 | `refreshSeconds` | Inventory refresh interval in seconds; an integer of at least 10, default `60`. It only re-reads tmax; it never observes a provider. |
 | `tmaxPath` | `tmax` executable to run. Defaults to `tmax` on `PATH`. |
 
@@ -109,30 +108,96 @@ is reported as unsupported, with the next action being to update tmax.
 
 ## Route ownership
 
-`tmax agent apply` can install the independent `llm-tmax` home plugin (the
-`llm-tmax` entry in the home `cordis.patch.yml` plus the `tmax-dsh.mjs`
-artifact), which owns the tmax provider routes for that DSH home. Those routes
-are common to every profile using that home.
+`tmax agent apply` writes the providers into a profile's `cordis.patch.yml`
+(row `llm-pi-ai`, path `config.providers.tmax-<entry>`), and DSH's own adapter
+serves them. The page therefore registers no route of its own: it reads the
+target inventory, lists what apply wrote, and reports each route's blockers.
+The state's `ownership.owner` is `settings` when those providers are present,
+`unapplied` when apply has not written them, and `other` when something else is
+already serving the same names.
 
-Normal use requires no `manageRoutes` setting: `auto` inspects the resolved home
-and defers to an installed home integration, otherwise the page registers the
-same routes for the running profile only (profile-scoped fallback). If a home
-integration is installed while the page still serves the fallback, the page
-keeps its routes until a DSH restart loads the home entry, and the page's next
-action is that reload.
+The bundle declares `index.js`, `client.js`, and this document from those fixed
+package paths. It is not published to npm, so DSH installs it straight from
+GitHub.
 
-| Value | Effect |
+In DSH Web, open **Plugins** > **Add plugin** and paste the repository address:
+
+```text
+https://github.com/suraciii/tmax
+```
+
+The CLI installs and selects the same bundle in one step:
+
+```sh
+dsh plugin --profile web add https://github.com/suraciii/tmax
+```
+
+Restart or refresh DSH Web, then open **tmax** in the sidebar panel list, beside
+Plugins and Schedules. The plugin needs a `tmax` executable on `PATH` and a
+configured DSH target; a configured gateway is needed to serve models, not to
+load or read the page. Updates follow the repository's default branch; uninstall
+removes the profile dependency:
+
+```sh
+dsh plugin --profile web update tmax
+dsh plugin --profile web remove tmax
+```
+
+Working from a checkout instead, `just dsh-install` links this repository into
+the profile, so source edits reach DSH at its next recomposition; `just dsh-remove`
+uninstalls it. The plugin used to be the `dsh-plugin/` directory; a profile that
+still links it needs one more `just dsh-install`, because that directory no
+longer carries a manifest.
+
+## Configuration
+
+Configuration is optional. The plugin resolves the DSH home from `home`, then
+`DSH_HOME`, then `~/.dsh`, and selects the tmax target from `target`, or by that
+home when `target` is empty.
+
+| Key | Meaning |
 | --- | --- |
-| `auto` (default) | Home integration when installed; otherwise the profile-scoped fallback. Keeps working fallback routes until the reload that activates the home entry. |
-| `true` | Force the profile-scoped fallback even when a home integration is installed. This is a diagnostic override: duplicate registration can result, and the page reports that risk. |
-| `false` | Never register routes; read-only page. With no home integration the page reports route management as disabled and offers no Apply. |
+| `home` | DSH home to inspect. Defaults to `DSH_HOME`, then `~/.dsh`. |
+| `target` | Declared tmax target ID. When empty, the one DSH target whose path matches the home is used. |
+| `providerPrefix` | Prefix reported in front of each route name the state lists. Empty by default; it never renames a provider DSH already has. |
+| `refreshSeconds` | Inventory refresh interval in seconds; an integer of at least 10, default `60`. It only re-reads tmax; it never observes a provider. |
+| `tmaxPath` | `tmax` executable to run. Defaults to `tmax` on `PATH`. |
 
-A route conflict, an incomplete home integration (entry without artifact, or the
-reverse), or a duplicate-adapter failure is reported as a blocker. The page
-keeps working instead of crashing or registering a partial route set. Route
-blockers describe only the profile-scoped fallback this plugin owns or tries to
-register; when the home integration owns the routes, the page claims no route
-blocker.
+```yaml
+- id: tmax
+  config:
+    home: /home/you/.dsh
+    target: dsh-main
+```
+
+## Inventory source
+
+The host half composes one read model from effect-free tmax reads, each with a
+bounded deadline:
+
+| Command | Facts it owns |
+|---|---|
+| `tmax agent list` | Which declared target matches the DSH home, when the plugin has no explicit `target`. |
+| `tmax agent inspect <TARGET>` | The target's relayed provider entries, their selected models and native projection, applied and pending state, configuration revision, and tmax's own blockers. |
+| `tmax status` | The tmax data directory (reported as the state's authority) and the caller's tmax version. |
+| `tmax gateway status` | Daemon discovery state, gateway readiness, listen address, supervision, autostart, and shared-key load state. |
+| `tmax provider list` | The tmax provider rows: authentication, affected targets, integration, quota state, and suspension/failure summaries. |
+| `tmax provider inspect <ID>` | One provider's billing observations, freshness, quota suspension, and failure detail. |
+| `tmax config validate` | Whether the saved configuration is valid, its revision, and its errors. |
+| `tmax model explain <MODEL> --protocol <P>` | The selected route candidate, priorities, exclusions, and availability for one projected model. |
+
+A failing inspect is reported as an error, with tmax's own code and message,
+rather than as an empty page. A configured gateway whose daemon is absent or
+stopped is reported as `ready: false` with `gateway_not_ready`, not as unknown;
+readiness stays unreported only when the `gateway status` read itself fails. The
+routes the target already declares stay visible either way. There is no
+`tmax dsh` command and no snapshot contract: the plugin composes these reads
+directly, and `diagnostics.readModel` reports the source as `inventory`. An
+older tmax whose inspect predates the relayed-entry or native capability fields
+is reported as unsupported, with the next action being to update tmax.
+
+## Route ownership
+
 
 ## Apply
 
@@ -142,9 +207,9 @@ On the **tmax** page, select **Apply**. This first requests a preview
 writes nothing; the preview discloses the planned native writes, secret reads,
 started processes, created locks, and the files it would change. **Apply** then
 sends `{"dryRun": false}` (or `{"preview": false}`) and runs
-`tmax agent apply TARGET`, writing the target's native DSH files: the home
-`cordis.patch.yml` entry, the `tmax-dsh.mjs` artifact, and the credential
-reference in the adjacent `.credentials.yaml`. A request that states neither a
+`tmax agent apply TARGET`, writing the target's native DSH files: the providers
+in the profile's `cordis.patch.yml` and the credential reference in the
+adjacent `.credentials.yaml`. A request that states neither a
 preview nor an execution boolean is refused before any tmax call, and a preview
 query never executes. The result reports changed and unchanged files, applied
 state, recovery, blockers, next actions, and effects. The key never enters the

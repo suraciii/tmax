@@ -237,25 +237,16 @@ export function normalizeSharedKeyState(value) {
   return 'unknown'
 }
 
-/** The default ownership view used before the first ownership decision exists. */
+/** The ownership view exposed by the state; absent decisions read as unknown. */
 export function ownershipSection(decision) {
   if (decision === undefined) {
-    return {
-      mode: 'auto',
-      owner: 'unknown',
-      scope: null,
-      reason: null,
-      homeIntegration: { present: false, entry: false, artifact: false },
-      conflict: null,
-    }
+    return { owner: 'unknown', scope: null, reason: null, conflict: null }
   }
   return {
-    mode: decision.mode ?? 'auto',
     owner: decision.owner,
-    scope: decision.scope,
-    reason: decision.reason,
-    homeIntegration: decision.homeIntegration,
-    conflict: decision.conflict,
+    scope: decision.scope ?? null,
+    reason: decision.reason ?? null,
+    conflict: decision.conflict ?? null,
   }
 }
 

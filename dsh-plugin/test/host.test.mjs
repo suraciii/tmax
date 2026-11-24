@@ -7,7 +7,7 @@ import test from 'node:test'
 import { apply } from '../index.js'
 import { CONNECT_TIMEOUT_MS, INVENTORY_TIMEOUT_MS, REFRESH_TIMEOUT_MS, resolveHome } from '../host/cli.js'
 import { composeInventory, readInventory } from '../host/inventory.js'
-import { hasHomeEntry, normalizeManageRoutes, providerIds } from '../host/ownership.js'
+import { providerIds } from '../host/ownership.js'
 import { normalizeDaemonDiscovery, normalizeSharedKeyState } from '../host/snapshot.js'
 
 // ---------------------------------------------------------------------------
@@ -847,132 +847,6 @@ function assertShape(actual, expected, path = 'state') {
 // ---------------------------------------------------------------------------
 // Tests: the inventory read path and the composed state contract.
 
-test('state matches the reviewed fixture shape, registers profile routes, and keeps image defaults complete', async () => {
-  const agentProvider = {
-    provider: 'glm-coding-cn',
-    displayName: 'GLM Coding CN',
-    defaultBaseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
-    settingsNs: 'llm-pi-ai',
-    settingsPath: ['providers', 'glm-coding-cn'],
-    declared: true,
-  }
-  const { fake, state } = await applied({ config: { manageRoutes: 'true' },
-    prefix: 'tmaxp-',
-    context: {
-      settingsDescribe: () => [{
-        ns: 'llm-pi-ai',
-        value: { providers: { 'glm-coding-cn': { apiKeyEnv: 'GLM_KEY', baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4', models: [{ id: 'glm-5.4' }] } } },
-      }],
-      configurableProviders: () => [agentProvider],
-    },
-  })
-
-  assert.deepEqual(state.routes, ['tmaxp-tmax'])
-  assert.equal(state.registrations.length, 1)
-  const profiles = state.adapterOptions.profiles()
-  assert.deepEqual([...profiles.keys()], ['tmaxp-tmax'])
-  const profile = profiles.get('tmaxp-tmax')
-  assert.equal(profile.displayName, 'tmax')
-  // The complete resolved scalar set llm-pi-ai reads on every stream.
-  assert.deepEqual({
-    streamIdleTimeoutMs: profile.streamIdleTimeoutMs,
-    maxRequestImageBytes: profile.maxRequestImageBytes,
-    maxRequestImages: profile.maxRequestImages,
-    imageOffloadCountQuantum: profile.imageOffloadCountQuantum,
-    requestImageBudgetCount: profile.requestImageBudgetCount,
-    requestImagePixelBudget: profile.requestImagePixelBudget,
-    maxImageBytes: profile.maxImageBytes,
-    requestImageMaxBytes: profile.requestImageMaxBytes,
-  }, {
-    streamIdleTimeoutMs: 300_000,
-    maxRequestImageBytes: 20 * 1024 * 1024,
-    maxRequestImages: 50,
-    imageOffloadCountQuantum: 10,
-    requestImageBudgetCount: 20,
-    requestImagePixelBudget: 2048 * 2048,
-    maxImageBytes: 1024 * 1024,
-    requestImageMaxBytes: 1024 * 1024,
-  })
-  const models = profile.piProvider.getModels()
-  assert.equal(models.length, 2, 'a model without a contextWindow is hidden')
-  assert.equal(models[0].provider, 'tmaxp-tmax')
-  assert.equal(models[0].maxTokens, undefined)
-  assert.deepEqual(models[0].thinkingLevelMap, { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: 'max' })
-
-  const status = await getJson(state, '/_tmax/status')
-  assert.equal(status.statusCode, 200)
-  assert.equal(status.body.ok, true)
-  assert.equal(status.body.target.id, 'dsh-main')
-  assert.deepEqual(status.body.routes.map(route => route.provider), ['tmaxp-tmax'])
-
-  const usage = await getJson(state, '/_tmax/usage')
-  assert.equal(usage.statusCode, 200)
-  assert.equal(usage.body.providers.length, 2, 'every provider appears, including unknown quota')
-
-  const stateRoute = await getJson(state, '/_tmax/state')
-  assert.equal(stateRoute.statusCode, 200)
-  const result = stateRoute.body
-  // One agent-configured provider is enough to pin the agent record contract;
-  // compare it against the fixture's not-yet-observed record.
-  const expectedShape = structuredClone(fixtureCase)
-  expectedShape.providers.agent = [fixtureCase.providers.agent[1]]
-  assertShape(result, expectedShape)
-  assert.equal(result.diagnostics.readModel, 'inventory', 'the state names its inventory source')
-
-  // Contract values the fixture states explicitly.
-  assert.equal(result.schemaVersion, 1)
-  assert.equal(result.ownership.owner, 'page')
-  assert.equal(result.ownership.scope, 'profile_scoped')
-  assert.equal(result.ownership.homeIntegration.present, false)
-  assert.equal(result.routes[0].provider, 'tmaxp-tmax')
-  assert.equal(result.routes[0].credentialRef, 'TMAX_TEST')
-  assert.equal(result.routes[0].credentialConfigured, true)
-  assert.equal(result.routes[0].active, true, 'the registered route is live')
-  assert.deepEqual(result.routes[0].blockers.map(blocker => blocker.code), ['route_model_context_window_unknown'])
-  assert.deepEqual(result.routes[0].blockers[0].models, ['no-context'])
-  assert.equal(result.target.effectiveDefault.provider, 'tmax')
-  assert.equal(result.target.effectiveDefault.model, 'gpt-6.1-sol')
-  assert.equal(result.target.effectiveDefault.source, 'agent-default-model')
-  assert.equal(result.target.nativeDefault.state, 'available')
-  assert.equal(result.authority, '/tmp/tmax', 'authority is the tmax data directory from `tmax status`')
-  assert.equal(result.tmaxVersion, '0.1.0', 'the answering CLI version comes from the daemon status')
-  assert.equal(result.configurationRevision, 'rev-1')
-  assert.equal(typeof result.generatedAt, 'string')
-  assert.deepEqual(result.providers.tmax.map(provider => provider.id), ['kimi', 'cpa-us2'])
-  assert.equal(result.providers.tmax[0].billing.state, 'observed')
-  assert.equal(result.providers.tmax[1].billing.state, 'unknown')
-  assert.equal(result.providers.tmax[1].billing.reasonCode, 'unsupported_source')
-  assert.equal(result.providers.tmax[1].billing.lastAttempt, 'unavailable')
-  assert.equal('reasonCode' in result.providers.tmax[0].billing, false, 'a completed attempt needs no extra keys')
-  assert.equal('lastAttempt' in result.providers.tmax[0].billing, false)
-  assert.deepEqual(result.routing[0].candidates.map(candidate => candidate.selected), [true, false])
-  assert.equal(result.routing[0].selection.qualifiedModel, 'opencode-go-2/public-model')
-  assert.deepEqual(result.diagnostics.history, { state: 'unavailable', reasonCode: 'daemon_identity_unavailable' })
-  assert.equal(result.gateway.ready, null)
-  assert.equal(result.gateway.daemonDiscoveryState, 'unidentified')
-  assert.equal(result.gateway.listen, '127.0.0.1:17840', 'a configured listener survives an absent daemon')
-  assert.equal(result.config.state, 'valid')
-
-  assert.equal(result.providers.agent.length, 1)
-  assert.equal(result.providers.agent[0].provider, 'glm-coding-cn')
-  assert.equal(result.providers.agent[0].state, 'not_observed')
-
-  const dshUsage = await getJson(state, '/_tmax/dsh-usage')
-  assert.equal(dshUsage.statusCode, 200)
-  assert.equal(dshUsage.body.cached, true)
-  assert.equal(dshUsage.body.providers.length, 1)
-
-  // GET purity: no observation, no apply, no vendor request, no resolve, and
-  // no removed `tmax dsh` command.
-  const calls = await fake.calls()
-  assert.equal(calls.some(argv => argv[0] === 'dsh'), false, 'no host code calls the removed dsh command family')
-  assert.equal(calls.some(argv => argv[0] === 'provider' && argv[1] === 'refresh'), false)
-  assert.equal(calls.some(argv => argv[0] === 'agent' && argv[1] === 'apply'), false)
-  assert.equal(calls.some(argv => argv[0] === 'history'), false, 'a state read never reads request history')
-  assert.deepEqual(state.credentialRefCalls, ['TMAX_TEST'])
-  assert.equal(state.resolveCalls, 0)
-  assert.equal(JSON.stringify(result).includes('test-key'), false, 'no credential value in the state payload')
-})
 
 test('the inventory composes from agent list/inspect, gateway status, and tmax status', async () => {
   const { fake, state } = await applied()
@@ -1296,7 +1170,8 @@ test('routes without a credential reference or base URL are skipped with declare
     scenario.agentInspect.data.native_projection[0].models.filter(model => model.id !== 'no-context')
   const { state } = await applied({ scenario })
 
-  assert.deepEqual(state.routes, ['tmax'])
+  // Every declared route is listed; the two unusable ones carry blockers below.
+  assert.deepEqual((await getJson(state, '/_tmax/state')).body.routes.map(route => route.name), ['tmax', 'no-cred', 'no-base'])
   assert.equal(state.credentialRefCalls.includes(null), false)
   assert.equal(state.credentialRefCalls.includes(undefined), false)
   assert.deepEqual(state.credentialRefCalls, ['TMAX_TEST'])
@@ -1323,7 +1198,7 @@ test('route credential readiness distinguishes configured, missing, and unknown'
   // A readable store that reports the reference missing is a known false; the
   // route is still registered, it is just not usable.
   const missing = await applied({ context: { configuredRefs: [] } })
-  assert.deepEqual(missing.state.routes, ['tmax'])
+  assert.deepEqual((await getJson(missing.state, '/_tmax/state')).body.routes.map(route => route.name), ['tmax'])
   const missingBody = (await getJson(missing.state, '/_tmax/state')).body
   assert.equal(missingBody.routes[0].credentialConfigured, false)
 
@@ -1338,8 +1213,7 @@ test('a malformed credential reference skips only that route with a declared blo
   const { state } = await applied({ scenario, context: { rejectCredentialRefs: ['bad-ref'] } })
 
   // One bad reference never drops the working route.
-  assert.deepEqual(state.routes, ['tmax'])
-  assert.equal(state.registrations.length, 1)
+  assert.deepEqual((await getJson(state, '/_tmax/state')).body.routes.map(route => route.name), ['tmax', 'bad-ref'])
   const status = (await getJson(state, '/_tmax/status')).body
   const invalid = status.blockers.filter(blocker => blocker.code === 'route_credential_invalid')
   assert.equal(invalid.length, 1)
@@ -1350,9 +1224,7 @@ test('a malformed credential reference skips only that route with a declared blo
   const body = (await getJson(state, '/_tmax/state')).body
   const bad = body.routes.find(route => route.name === 'bad-ref')
   assert.ok(bad)
-  assert.equal(bad.active, false)
   assert.deepEqual(bad.blockers.map(blocker => blocker.code), ['route_credential_invalid'])
-  assert.equal(body.routes.find(route => route.name === 'tmax').active, true)
 })
 
 test('state routes carry liveness and the declared route blockers', async () => {
@@ -1367,8 +1239,8 @@ test('state routes carry liveness and the declared route blockers', async () => 
     projection: { fields: {} },
   })
   scenario.explain.hidden = explain('public-model')
-  const { state } = await applied({ scenario })
-  assert.deepEqual(state.routes, ['tmax', 'partial'], 'only a route with a usable model registers')
+  const { state } = await applied({ scenario, context: { liveNames: ['tmax', 'partial'] } })
+  assert.deepEqual((await getJson(state, '/_tmax/state')).body.routes.map(route => route.name), ['tmax', 'partial'], 'every declared route is listed')
 
   const body = (await getJson(state, '/_tmax/state')).body
   const partial = body.routes.find(route => route.name === 'partial')
@@ -1432,7 +1304,6 @@ test('an invalid config is reported without making the whole state unreadable', 
     code: 'invalid_config',
     message: 'Unknown field "bogus" in the saved configuration',
   }])
-  assert.equal(body.routes[0].active, true)
   assert.equal(body.diagnostics.lastError, null)
   assert.ok(body.errors.some(error => error.section === 'config' && error.code === 'invalid_config'))
   const status = (await getJson(state, '/_tmax/status')).body
@@ -1521,188 +1392,15 @@ test('the state cache serves repeated reads and single-flights cold ones', async
   await cold.fake.update(baseScenario())
 })
 
-test('an unchanged route set does not churn the adapter registration', async () => {
-  const { fake, state } = await applied({ config: { manageRoutes: 'true' } })
-  const eventsOf = () => state.events.filter(([event]) => event === 'llm/models-updated').length
-  const initialEvents = eventsOf()
-  assert.equal(state.replaces, 0)
 
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(250)
-  assert.equal(state.replaces, 0, 'the same route names are not replaced')
-  assert.equal(eventsOf(), initialEvents, 'no registry event for an unchanged set')
-  assert.deepEqual(state.routes, ['tmax'])
 
-  await fake.patch(current => {
-    current.agentInspect.data.providers[0].name = 'renamed'
-    current.agentInspect.data.native_projection[0].name = 'renamed'
-  })
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(250)
-  assert.equal(state.replaces, 1, 'a changed route set is replaced once')
-  assert.equal(eventsOf(), initialEvents + 1, 'the change is announced')
-  assert.deepEqual(state.routes, ['renamed'])
-})
 
-test('a model-only change replaces the route and announces it', async () => {
-  const { fake, state } = await applied({ config: { manageRoutes: 'true' } })
-  const eventsOf = () => state.events.filter(([event]) => event === 'llm/models-updated').length
-  const initialEvents = eventsOf()
-  assert.equal(state.replaces, 0)
 
-  await fake.patch(current => {
-    current.agentInspect.data.providers[0].models.push({ id: 'extra-model', protocol: 'responses' })
-    current.agentInspect.data.native_projection[0].models.push({
-      id: 'extra-model',
-      protocol: 'responses',
-      capabilities: { contextWindow: 5000, input: ['text'] },
-      efforts: [],
-      projection: { fields: {} },
-    })
-    current.explain['extra-model'] = explain('public-model')
-  })
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(300)
 
-  assert.equal(state.replaces, 1, 'the same route name with changed content is replaced')
-  assert.equal(eventsOf(), initialEvents + 1, 'the model picker is told to refresh')
-  assert.equal(state.events.at(-1)[1], 'tmax')
-  const models = state.adapterOptions.profiles().get('tmax').piProvider.getModels()
-  assert.equal(models.length, 3)
-  assert.ok(models.some(model => model.id === 'extra-model'))
-
-  // A capability-only change is content too.
-  await fake.patch(current => {
-    current.agentInspect.data.native_projection[0].models[0].capabilities.contextWindow = 300000
-  })
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(300)
-  assert.equal(state.replaces, 2, 'a capability change is replaced')
-  assert.equal(eventsOf(), initialEvents + 2)
-  const updated = state.adapterOptions.profiles().get('tmax').piProvider.getModels()
-  assert.equal(updated.find(model => model.id === 'public-model').contextWindow, 300000)
-})
-
-test('a failed registration replacement keeps the working route live', async () => {
-  const scenario = withSecondRoute(baseScenario(), { name: 'other' })
-  const { fake, state } = await applied({ config: { manageRoutes: 'true' }, scenario })
-  assert.deepEqual(state.routes, ['tmax', 'other'])
-
-  state.replaceThrows = true
-  await fake.patch(current => {
-    const provider = current.agentInspect.data.providers[1]
-    provider.name = 'third'
-    provider.models[0].id = 'third-model'
-    const projection = current.agentInspect.data.native_projection.find(entry => entry.name === 'other')
-    projection.name = 'third'
-    projection.models[0].id = 'third-model'
-    current.explain['third-model'] = explain('public-model')
-  })
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(300)
-  const body = await freshState(state)
-
-  assert.deepEqual(state.routes, ['tmax', 'other'], 'the previous registration stays live')
-  assert.equal(state.registrations.length, 1)
-  assert.equal(state.replaces, 1, 'the replacement was attempted')
-  assert.deepEqual([...state.adapterOptions.profiles().keys()], ['tmax', 'other'])
-  assert.equal(body.ownership.conflict.code, 'route_owner_conflict')
-  assert.match(body.ownership.conflict.message, /DUPLICATE_ADAPTER/)
-})
-
-test('DUPLICATE_ADAPTER becomes a route_owner_conflict blocker and assigns no profiles', async () => {
-  const { state } = await applied({ config: { manageRoutes: 'true' }, context: { throwDuplicate: true } })
-  assert.equal(state.registrations.length, 1)
-  assert.deepEqual(state.routes, [])
-  assert.equal(state.adapterOptions.profiles().size, 0)
-  const body = (await getJson(state, '/_tmax/state')).body
-  assert.equal(body.ownership.owner, 'other')
-  assert.equal(body.ownership.conflict.code, 'route_owner_conflict')
-  assert.match(body.ownership.conflict.message, /DUPLICATE_ADAPTER/)
-})
-
-test('teardown disposes routes and an in-flight refresh never re-registers', async () => {
-  const { fake, state } = await applied({ config: { manageRoutes: 'true' } })
-  assert.deepEqual(state.routes, ['tmax'])
-  assert.equal(state.registrations.length, 1)
-
-  await fake.update({ ...baseScenario(), delayFor: 'agent inspect', delayMs: 200 })
-  await fake.clearCalls()
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(50)
-  for (const dispose of state.effects) {
-    if (typeof dispose === 'function') dispose()
-  }
-  await settle(400)
-  assert.equal(state.registrations.length, 1, 'the in-flight refresh did not register after disposal')
-  assert.deepEqual(state.routes, [], 'the disposed registration is gone')
-
-  const callsAfterDisposal = (await fake.calls()).length
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(100)
-  assert.equal((await fake.calls()).length, callsAfterDisposal)
-  await fake.update(baseScenario())
-})
-
-test('a late initial registration is disposed when the plugin unloads first', async () => {
-  const home = await emptyHome()
-  const fake = await fakeTmax({ ...baseScenario(), delayFor: 'agent inspect', delayMs: 150 }, home)
-  const { ctx, state } = fakeContext()
-  const pending = apply(ctx, { tmaxPath: fake.path, home, refreshSeconds: 3600 })
-  for (let attempt = 0; attempt < 200 && state.effects.length === 0; attempt += 1) {
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-  assert.ok(state.effects.length > 0, 'the cleanup effect is installed before the read')
-  for (const dispose of state.effects) {
-    if (typeof dispose === 'function') dispose()
-  }
-  await pending
-  assert.equal(state.registrations.length, 0, 'no registration after unload')
-  assert.equal(state.httpRoutes.length, 0, 'no HTTP routes after unload')
-})
 
 // ---------------------------------------------------------------------------
 // Tests: optional services acquired by injection (S4).
 
-test('optional services injected late or replaced still receive registrations', async () => {
-  const home = await emptyHome()
-  const fake = await fakeTmax(baseScenario(), home)
-  const { ctx, state } = fakeContext({ deferred: ['webServer', 'tools', 'skills', 'commands'] })
-  await apply(ctx, { tmaxPath: fake.path, home, refreshSeconds: 3600 })
-
-  assert.deepEqual(state.routes, ['tmax'], 'the required services still activate the plugin')
-  assert.equal(state.httpRoutes.length, 0)
-  assert.deepEqual(state.tools, [])
-  assert.deepEqual(state.skills, [])
-  assert.deepEqual(state.commands, [])
-
-  const makeServer = () => {
-    const server = { routes: [], register(route) { server.routes.push(route); return () => { server.routes = server.routes.filter(candidate => candidate !== route) } } }
-    return server
-  }
-  const first = makeServer()
-  state.provide('webServer', first)
-  assert.ok(first.routes.some(route => route.path === '/_tmax/state'), 'a late web server receives the routes')
-
-  // A replacement disposes the old registrations and registers on the new one.
-  const second = makeServer()
-  state.provide('webServer', second)
-  assert.equal(first.routes.length, 0, 'the replaced server keeps no live routes')
-  assert.ok(second.routes.some(route => route.path === '/_tmax/state'))
-  assert.ok(second.routes.some(route => route.path === '/_tmax/connect'))
-
-  const toolRegistry = { register(definition) { state.tools.push(definition); return () => {} } }
-  state.provide('tools', toolRegistry)
-  assert.equal(state.tools.find(definition => definition.name === 'tmax_status')?.name, 'tmax_status')
-
-  const skillRegistry = { register(definition) { state.skills.push(definition); return () => {} } }
-  state.provide('skills', skillRegistry)
-  assert.equal(state.skills[0].name, 'tmax')
-
-  const commandRegistry = { register(definition) { state.commands.push(definition); return () => {} } }
-  state.provide('commands', commandRegistry)
-  assert.equal(state.commands[0].name, 'tmax')
-})
 
 // ---------------------------------------------------------------------------
 // Tests: HTTP route surface, POST hardening, and explicit operations.
@@ -2243,194 +1941,27 @@ test('connect preview aliases can never execute a native write and execution nee
   }
 })
 
-test('a completed apply re-reads the home integration before returning state', async () => {
-  const home = await emptyHome()
-  const { fake, state } = await applied({ config: { manageRoutes: 'true', home } })
-  const before = (await getJson(state, '/_tmax/state')).body
-  assert.equal(before.ownership.owner, 'page')
-  assert.deepEqual(before.ownership.homeIntegration, { present: false, entry: false, artifact: false })
-
-  // The native apply installs the home plugin while the request is in flight.
-  await fake.patch(current => {
-    current.writeFiles = {
-      'agent apply dsh-main': [
-        { path: join(home, 'cordis.patch.yml'), content: '- id: llm-tmax\n' },
-        { path: join(home, 'tmax-dsh.mjs'), content: 'export const name = "llm-tmax"\n' },
-      ],
-    }
-  })
-  const appliedResult = await postJson(state, '/_tmax/connect', { dryRun: false })
-  assert.equal(appliedResult.statusCode, 200)
-  const ownership = appliedResult.body.state.ownership
-  assert.deepEqual(ownership.homeIntegration, { present: true, entry: true, artifact: true }, 'the response reflects the files the apply wrote')
-  assert.equal(ownership.owner, 'page', 'the forced page route stays until DSH reloads')
-  assert.equal(ownership.reason, 'home_integration_present_forced')
-})
 
 // ---------------------------------------------------------------------------
 // Tests: home ownership and the S2 comment fix.
 
-test('home-entry detection accepts block and embedded-JSON forms and ignores comments', () => {
-  assert.equal(hasHomeEntry('- id: llm-tmax\n  name: /home/u/.dsh/tmax-dsh.mjs'), true)
-  assert.equal(hasHomeEntry("- id: 'llm-tmax'"), true)
-  assert.equal(hasHomeEntry('{"insert":[{"id":"llm-tmax","name":"/home/u/.dsh/tmax-dsh.mjs"}]}'), true)
-  assert.equal(hasHomeEntry('- id: credentials\n- id: agent-default-model'), false)
-  assert.equal(hasHomeEntry('# llm-tmax is installed elsewhere'), false)
-  assert.equal(hasHomeEntry('- id: llm-tmaxx'), false)
-  assert.equal(hasHomeEntry(undefined), false)
-  assert.equal(hasHomeEntry(''), false)
-  // A commented-out entry is not an installed entry.
-  assert.equal(hasHomeEntry('# - id: llm-tmax'), false)
-  assert.equal(hasHomeEntry('  # - {"insert":[{"id":"llm-tmax"}]}'), false)
-  assert.equal(hasHomeEntry('- id: other\n  # id: llm-tmax'), false)
-  // A `#` inside a quoted scalar is content, not a comment.
-  assert.equal(hasHomeEntry('- {"insert":[{"id":"llm-tmax","name":"/tmp/#tmax-dsh.mjs"}]}'), true)
-})
 
-test('a commented-out home entry does not count as an installed home plugin', async () => {
-  const home = await emptyHome()
-  await writeFile(join(home, 'cordis.patch.yml'), '# - id: llm-tmax\n#   name: tmax-dsh.mjs\n')
-  await writeFile(join(home, 'tmax-dsh.mjs'), 'export {}\n')
-  const { state } = await applied({ config: { home } })
-  const body = (await getJson(state, '/_tmax/state')).body
-  assert.deepEqual(body.ownership.homeIntegration, { present: false, entry: false, artifact: true })
-  assert.equal(body.ownership.owner, 'unknown')
-  assert.equal(body.ownership.conflict.code, 'home_integration_partial')
-  assert.deepEqual(state.routes, [], 'a commented-out entry is not an installed owner')
-})
 
-test('home ownership defers registration and reports home_wide scope', async () => {
-  const home = await emptyHome()
-  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n  name: tmax-dsh.mjs\n')
-  await writeFile(join(home, 'tmax-dsh.mjs'), 'export const name = "llm-tmax"\n')
-  const { state } = await applied({
-    config: { home, manageRoutes: 'auto' },
-    context: { liveNames: ['tmax'] },
-  })
 
-  assert.deepEqual(state.routes, [])
-  assert.equal(state.registrations.length, 0)
-  const body = await getJson(state, '/_tmax/state')
-  assert.deepEqual(body.body.ownership, {
-    mode: 'auto',
-    owner: 'home',
-    scope: 'home_wide',
-    reason: null,
-    homeIntegration: { present: true, entry: true, artifact: true },
-    conflict: null,
-  })
-  assert.deepEqual(body.body.routes[0].blockers, [])
-  assert.deepEqual(state.credentialRefCalls, [])
-  assert.equal(body.body.routes[0].scope, 'home_wide')
-})
 
-test('a partial home integration is unknown with a blocker', async () => {
-  const home = await emptyHome()
-  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
-  const { state } = await applied({ config: { home } })
-  assert.deepEqual(state.routes, [])
-  assert.equal(state.registrations.length, 0)
-  const body = (await getJson(state, '/_tmax/state')).body
-  assert.equal(body.ownership.owner, 'unknown')
-  assert.equal(body.ownership.conflict.code, 'home_integration_partial')
-  const status = (await getJson(state, '/_tmax/status')).body
-  assert.ok(status.blockers.some(blocker => blocker.source === 'ownership' && blocker.code === 'home_integration_partial'))
-})
 
-test('the home artifact must be a regular file', async () => {
-  const home = await emptyHome()
-  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
-  await mkdir(join(home, 'tmax-dsh.mjs'))
-  const { state } = await applied({ config: { home } })
-  assert.deepEqual(state.routes, [])
-  const body = (await getJson(state, '/_tmax/state')).body
-  assert.equal(body.ownership.owner, 'unknown')
-  assert.equal(body.ownership.homeIntegration.artifact, false)
-  assert.equal(body.ownership.conflict.code, 'home_integration_partial')
-})
-
-test('a live route owned elsewhere is not duplicated', async () => {
-  const { state } = await applied({ context: { liveNames: ['tmax'] } })
-  assert.deepEqual(state.routes, [])
-  assert.equal(state.registrations.length, 0)
-  const body = (await getJson(state, '/_tmax/state')).body
-  assert.equal(body.ownership.owner, 'other')
-  assert.equal(body.ownership.conflict.code, 'route_owner_conflict')
-  assert.deepEqual(body.ownership.conflict.routes, ['tmax'])
-})
 
 test('live provider records are reduced to ids for ownership and liveness', async () => {
   assert.deepEqual(providerIds(['a', { id: 'b', name: 'B' }, { name: 'no-id' }, null, 7, '']), ['a', 'b'])
   const { state } = await applied({ context: { liveNames: [{ id: 'tmax', name: 'Home tmax' }] } })
-  assert.deepEqual(state.routes, [], 'a live route named tmax is not registered twice')
   const body = (await getJson(state, '/_tmax/state')).body
   assert.equal(body.ownership.owner, 'other')
-  assert.deepEqual(body.ownership.conflict.routes, ['tmax'])
+  assert.equal(body.ownership.conflict.code, 'route_owner_conflict')
   assert.equal(body.routes[0].active, true, 'the projected route is live under another owner')
 })
 
-test('manageRoutes=false never registers, and manageRoutes=true forces the page route with a warning', async () => {
-  const off = await applied({ config: { manageRoutes: false } })
-  assert.deepEqual(off.state.routes, [])
-  assert.equal(off.state.adapterOptions, undefined)
-  const offBody = (await getJson(off.state, '/_tmax/state')).body
-  assert.equal(offBody.ownership.owner, 'none')
-  assert.equal(offBody.ownership.scope, null)
-  assert.equal(offBody.ownership.mode, 'false')
-  assert.equal(offBody.ownership.reason, 'route_management_disabled')
-  assert.equal(offBody.routes[0].active, false, 'nothing registered the route')
-  assert.deepEqual(offBody.routes[0].blockers, [], 'the disabled page claims no route blockers')
 
-  const home = await emptyHome()
-  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
-  await writeFile(join(home, 'tmax-dsh.mjs'), 'export {}\n')
-  const offHome = await applied({ config: { home, manageRoutes: false } })
-  assert.deepEqual(offHome.state.routes, [])
-  assert.equal(offHome.state.adapterOptions, undefined)
-  const offHomeBody = (await getJson(offHome.state, '/_tmax/state')).body
-  assert.equal(offHomeBody.ownership.owner, 'home')
-  assert.equal(offHomeBody.ownership.scope, 'home_wide')
-  assert.equal(offHomeBody.ownership.conflict, null)
-  assert.equal(offHomeBody.ownership.mode, 'false')
 
-  const forced = await applied({ config: { home, manageRoutes: true } })
-  assert.deepEqual(forced.state.routes, ['tmax'])
-  const forcedBody = (await getJson(forced.state, '/_tmax/state')).body
-  assert.equal(forcedBody.ownership.owner, 'page')
-  assert.equal(forcedBody.ownership.mode, 'true')
-  assert.equal(forcedBody.ownership.conflict.code, 'home_integration_present')
-  assert.equal(forcedBody.routes[0].active, true)
-})
-
-test('an installed home integration does not dispose the working page route', async () => {
-  const home = await emptyHome()
-  const { state } = await applied({ config: { manageRoutes: 'true', home } })
-  assert.deepEqual(state.routes, ['tmax'])
-  assert.equal(state.registrations.length, 1)
-
-  await writeFile(join(home, 'cordis.patch.yml'), '- id: llm-tmax\n')
-  await writeFile(join(home, 'tmax-dsh.mjs'), 'export {}\n')
-  for (const listener of state.listeners) listener.callback('llm/adapters-updated')
-  await settle(300)
-  const body = await freshState(state)
-  assert.equal(body.ownership.owner, 'page')
-  assert.equal(body.ownership.reason, 'home_integration_present_forced')
-  assert.deepEqual(state.routes, ['tmax'], 'the forced route stays live until DSH reloads')
-  assert.equal(state.registrations.length, 1, 'no second registration')
-  assert.equal(state.replaces, 0, 'an unchanged route set is not replaced')
-})
-
-test('manageRoutes is tri-state with auto as the default', () => {
-  // The reported mode is always a string, so a UI can render it without
-  // special-casing booleans the configuration accepted.
-  assert.equal(normalizeManageRoutes(undefined), 'auto')
-  assert.equal(normalizeManageRoutes('auto'), 'auto')
-  assert.equal(normalizeManageRoutes(true), 'true')
-  assert.equal(normalizeManageRoutes('true'), 'true')
-  assert.equal(normalizeManageRoutes(false), 'false')
-  assert.equal(normalizeManageRoutes('false'), 'false')
-  assert.equal(normalizeManageRoutes('sometimes'), 'auto')
-})
 
 // ---------------------------------------------------------------------------
 // Tests: tools, skills, commands, history, and CLI helpers.

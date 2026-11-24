@@ -47,23 +47,21 @@ window.__ModuleLoader__.load({
       stateUnreadable: 'Read failed',
       stateDisconnected: 'Not connected',
       stateNotUsable: 'Registered, not usable',
+      stateNotApplied: 'Not applied yet',
       stateReload: 'Reload pending',
-      stateInactive: 'Configured, not active',
       stateConflict: 'Route conflict',
       stateProjection: 'Routes unavailable',
-      stateRouteDisabled: 'Route management disabled',
       stateSchemaUnsupported: 'Unsupported state schema',
       stateLastKnown: 'Last known',
       // Next action: only an action that can change the reported state is offered.
       nextActionTitle: 'Next action',
       nextConnect: 'Apply the tmax routes and credential reference to this profile so DSH can use them.',
-      nextReload: 'The home integration is installed but its routes are not live. Reload DSH to activate them.',
+      nextReload: 'The routes are applied but DSH has not loaded them yet. Restart DSH to activate them.',
       nextConflict: 'A route ownership conflict is reported; resolve it before changing access.',
       nextGateway: 'The tmax gateway is not ready; inspect it in the tmax CLI.',
       nextBlocker: 'tmax reports a blocker that prevents access.',
       nextConfig: 'The tmax configuration is invalid; fix it in the tmax CLI.',
       nextConfigUnavailable: 'The tmax configuration could not be validated; inspect it in the tmax CLI.',
-      nextModeDisabled: 'Route management is disabled by manageRoutes=false; install the home integration or set it to auto.',
       nextProjectionRetry: 'The route projection could not be read; retry the host read.',
       nextSectionRetry: 'A section of the host state could not be read; retry the state read.',
       nextRetry: 'The tmax host state could not be read.',
@@ -74,19 +72,10 @@ window.__ModuleLoader__.load({
       authority: 'tmax authority',
       dshInstallation: 'DSH install',
       ownership: 'Route ownership',
-      ownerHome: 'home integration',
-      ownerPage: 'this page',
+      ownerSettings: 'applied settings',
+      ownerUnapplied: 'not applied yet',
       ownerNone: 'none',
-      ownerOther: 'another integration',
-      ownerUnknown: 'unknown',
-      scopeHomeWide: 'home-wide',
       scopeProfileScoped: 'profile-scoped',
-      ownershipMode: 'Mode',
-      modeAuto: 'auto',
-      modeEnabled: 'enabled',
-      modeDisabled: 'disabled',
-      homeEntry: 'entry',
-      homeArtifact: 'artifact',
       present: 'present',
       absent: 'absent',
       conflict: 'Conflict',
@@ -114,7 +103,7 @@ window.__ModuleLoader__.load({
       noRoutes: 'The host reported no routes.',
       routeActive: 'Active',
       routeLive: 'live',
-      routeNotRegistered: 'not registered',
+      routeNotApplied: 'not applied',
       routeBlockers: 'Route blockers',
       // Gateway detail.
       gatewayTitle: 'Gateway',
@@ -448,10 +437,9 @@ window.__ModuleLoader__.load({
       stateDisconnected: '未连接',
       stateNotUsable: '已注册，但不可用',
       stateReload: '待重新加载',
-      stateInactive: '已配置，未生效',
       stateConflict: '路由冲突',
+      stateNotApplied: '尚未应用',
       stateProjection: '路由不可用',
-      stateRouteDisabled: '路由管理已禁用',
       stateSchemaUnsupported: '状态 schema 不受支持',
       stateLastKnown: '上次已知',
       // Next action.
@@ -463,7 +451,6 @@ window.__ModuleLoader__.load({
       nextBlocker: 'tmax 上报了阻止访问的阻塞项。',
       nextConfig: 'tmax 配置无效；请在 tmax CLI 中修复。',
       nextConfigUnavailable: '无法校验 tmax 配置；请在 tmax CLI 中检查。',
-      nextModeDisabled: 'manageRoutes=false 已禁用路由管理；请安装 home 集成或设为 auto。',
       nextProjectionRetry: '无法读取路由投影；请重试 host 读取。',
       nextSectionRetry: 'host 状态中有部分内容读取失败；请重新读取状态。',
       nextRetry: '无法读取 tmax host 状态。',
@@ -474,19 +461,10 @@ window.__ModuleLoader__.load({
       authority: 'tmax 数据目录',
       dshInstallation: 'DSH 安装',
       ownership: '路由归属',
-      ownerHome: 'home 集成',
-      ownerPage: '本页',
+      ownerSettings: '已应用的设置',
+      ownerUnapplied: '尚未应用',
       ownerNone: '无',
-      ownerOther: '其他集成',
-      ownerUnknown: '未知',
-      scopeHomeWide: '整个 home',
       scopeProfileScoped: '仅当前 profile',
-      ownershipMode: '模式',
-      modeAuto: '自动',
-      modeEnabled: '启用',
-      modeDisabled: '禁用',
-      homeEntry: '入口',
-      homeArtifact: '产物',
       present: '存在',
       absent: '缺失',
       conflict: '冲突',
@@ -514,7 +492,7 @@ window.__ModuleLoader__.load({
       noRoutes: 'Host 未报告任何路由。',
       routeActive: '生效状态',
       routeLive: '已生效',
-      routeNotRegistered: '未注册',
+      routeNotApplied: '未应用',
       routeBlockers: '路由阻塞项',
       // Gateway detail.
       gatewayTitle: '网关',
@@ -822,9 +800,9 @@ window.__ModuleLoader__.load({
     // Enum tables: the host reports machine values; the page translates the
     // ones it knows and shows any other value verbatim (bounded) rather than
     // inventing a word for it.
-    const OWNER_STATES = { home: 'ownerHome', page: 'ownerPage', none: 'ownerNone', other: 'ownerOther', unknown: 'ownerUnknown' }
-    const ROUTE_STATES = { active: 'routeLive', inactive: 'routeNotRegistered' }
-    const SCOPES = { home_wide: 'scopeHomeWide', profile_scoped: 'scopeProfileScoped' }
+    const OWNER_STATES = { settings: 'ownerSettings', unapplied: 'ownerUnapplied', none: 'ownerNone' }
+    const ROUTE_STATES = { active: 'routeLive', inactive: 'routeNotApplied' }
+    const SCOPES = { profile_scoped: 'scopeProfileScoped' }
     const APPLIED_STATES = { applied: 'appliedApplied', pending: 'appliedPending', unknown: 'unknown' }
     // `compatible` is tmax's real token for an identified daemon; `identified` is
     // the host's normalized word for the same fact.
@@ -861,7 +839,6 @@ window.__ModuleLoader__.load({
       counters_unit_unqualified: 'noteCountersUnitUnqualified',
       usage_and_limits_may_overlap: 'noteUsageMayOverlap',
     }
-    const MODE_STATES = { auto: 'modeAuto', true: 'modeEnabled', false: 'modeDisabled' }
     // Host section names are its own; the page recognizes the spellings it can
     // route and shows anything else in Diagnostics only.
     const SECTION_ALIASES = {
@@ -872,7 +849,6 @@ window.__ModuleLoader__.load({
       config: ['config', 'config_read', 'config_validate'],
       agentSettings: ['agent_settings', 'agent-settings', 'agent_providers', 'observations'],
     }
-    const PENDING_RELOAD_REASONS = ['home_integration_pending_reload', 'home_integration_reload_pending']
     const OBSERVE_STATUS = {
       refreshed: 'observeStatusRefreshed',
       blocked: 'observeStatusBlocked',
@@ -1376,14 +1352,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       }
       const routes = Array.isArray(state.routes) ? state.routes : []
       const ownership = state.ownership ?? {}
-      if (routes.length === 0) {
-        // manageRoutes=false with no home integration is a configured dead end,
-        // not a disconnected accident.
-        if (ownershipMode(ownership) === false && ownership.homeIntegration?.present !== true) {
-          return { tone: 'warn', text: t('stateRouteDisabled') }
-        }
-        return { tone: 'idle', text: t('stateDisconnected') }
-      }
+      if (routes.length === 0) return { tone: 'idle', text: t('stateDisconnected') }
       const usable = usableRoutes(state)
       if (usable.length > 0) {
         const ready = state.gateway?.ready
@@ -1392,16 +1361,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         return { tone: 'idle', text: t('stateUnknown') }
       }
       const active = routes.filter(route => route?.active === true)
+      // Routes are declared but DSH has not loaded the settings that carry
+      // them: the next start is the reload that makes them live.
       if (active.length === 0) {
-        if (ownership.conflict !== null && ownership.conflict !== undefined) {
-          return { tone: 'error', text: t('stateConflict') }
-        }
-        if (pendingReload(ownership)
-          || (ownership.owner === 'home' && ownership.homeIntegration?.present === true)) {
-          return { tone: 'idle', text: t('stateReload') }
-        }
-        if (ownership.owner === 'page') return { tone: 'warn', text: t('stateInactive') }
-        return { tone: 'idle', text: t('stateUnknown') }
+        if (ownership.reason === 'apply_not_run') return { tone: 'warn', text: t('stateNotApplied') }
+        return { tone: 'idle', text: t('stateReload') }
       }
       // A live route with a known-missing credential is registered, not usable;
       // readiness that was never reported stays unknown.
@@ -1426,14 +1390,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const routes = Array.isArray(state.routes) ? state.routes : []
       const ownership = state.ownership ?? {}
       const config = state.config ?? {}
-      const owner = ownership.owner
       const conflict = ownership.conflict
-      const homePresent = ownership.homeIntegration?.present === true
       const usable = usableRoutes(state)
       const active = routes.filter(route => route !== null && typeof route === 'object' && route.active === true)
       const missing = routes.filter(route => route !== null && typeof route === 'object' && route.credentialConfigured === false)
-      const pending = pendingReload(ownership)
-      const homePending = pending || (owner === 'home' && homePresent && active.length === 0)
       const readFailures = sectionErrors(state)
       const sectionRetry = readFailures.length > 0 ? { kind: 'retry', reason: 'section' } : undefined
 
@@ -1441,23 +1401,20 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       // named before Apply can be offered.
       if (config.state === 'invalid') return { kind: 'config', reason: 'invalid' }
       if (config.state === 'unavailable') return { kind: 'config', reason: 'unavailable' }
-      // manageRoutes=false with no home integration means no route manager.
-      if (ownershipMode(ownership) === false && !homePresent && usable.length === 0) return { kind: 'mode' }
       // A failed projection read leaves routes unknown; only a retry is honest.
       if (projectionFailed(state)) return { kind: 'retry', reason: 'projection' }
-      // Page routes keep working until DSH reloads; the reload is non-writing.
-      if (pending) return { kind: 'reload' }
 
       if (usable.length === 0) {
-        // The home plugin's routes are not live until DSH reloads.
-        if (homePending) return { kind: 'reload' }
         if (conflict !== null && conflict !== undefined) {
           return { kind: 'conflict', code: conflictCode(conflict), message: conflictMessage(conflict) }
         }
-        if (routes.length === 0) return owner === 'page' ? { kind: 'connect' } : sectionRetry
-        // Routes exist but DSH serves none: Apply repairs a credential only
-        // when one is known to be missing; an unknown readiness stays unknown.
-        if ((owner === 'page' || owner === 'home') && missing.length > 0) return { kind: 'connect' }
+        // Nothing is declared: applying is the step that gives DSH something.
+        if (routes.length === 0) return { kind: 'connect' }
+        // A credential tmax knows is missing is the one thing Apply repairs;
+        // an unknown readiness never justifies a write.
+        if (missing.length > 0) return { kind: 'connect' }
+        // Declared but not loaded by DSH yet: a reload is the non-writing step.
+        if (active.length === 0) return { kind: 'reload' }
         return sectionRetry
       }
 
@@ -1568,17 +1525,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     }
 
     /** Ownership mode from the host: 'auto', true, false, or unknown. */
-    function ownershipMode(ownership) {
-      const mode = ownership?.mode
-      if (mode === 'true') return true
-      if (mode === 'false') return false
-      return mode === 'auto' || mode === true || mode === false ? mode : 'unknown'
-    }
-
-    /** Both host spellings of the pending reload transition mean one thing. */
-    function pendingReload(ownership) {
-      return typeof ownership?.reason === 'string' && PENDING_RELOAD_REASONS.includes(ownership.reason)
-    }
 
     /** The unknown-quota sentence for one provider, with its last attempt. */
     function limitMessage(provider, t) {
@@ -2429,12 +2375,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return effort === undefined ? base : `${base} (${boundedText(effort, 16)})`
     }
 
-    function homeIntegrationNote(home, t) {
-      if (home === null || typeof home !== 'object') return t('unknown')
-      const state = value => value === true ? t('present') : value === false ? t('absent') : t('unknown')
-      return `${t('homeEntry')} ${state(home.entry)} · ${t('homeArtifact')} ${state(home.artifact)}`
-    }
-
     function pendingText(value, t) {
       if (value === null) return t('pendingNone')
       if (value === undefined) return t('unknown')
@@ -2485,9 +2425,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         fact(t('dshInstallation'), target.installation === undefined || target.installation === null
           ? t('unknown')
           : `${textValue(target.installation.version, t)} (${textValue(target.installation.state, t)})`),
-        fact(t('ownership'), `${enumText(ownership.owner, OWNER_STATES, t)} · ${enumText(ownership.scope, SCOPES, t)}`,
-          homeIntegrationNote(ownership.homeIntegration, t)),
-        fact(t('ownershipMode'), enumText(ownershipMode(ownership), MODE_STATES, t)),
+        fact(t('ownership'), `${enumText(ownership.owner, OWNER_STATES, t)} · ${enumText(ownership.scope, SCOPES, t)}`),
         fact(t('applied'), enumText(target.appliedState, APPLIED_STATES, t)),
         fact(t('pending'), pendingText(target.pendingNativeChanges, t)),
         fact(t('tmaxDefault'), defaultIdentity(target.default, 'id', 'effort', t)),
@@ -2535,7 +2473,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const liveness = activeState === 'active'
         ? chip(t('routeLive'), 'ok')
         : activeState === 'inactive'
-          ? chip(t('routeNotRegistered'), 'idle')
+          ? chip(t('routeNotApplied'), 'idle')
           : h('span', null, t('unknown'))
       const ref = typeof route?.credentialRef === 'string' && route.credentialRef !== ''
         ? h('p', { className: 'tmx-factNote', key: 'ref' }, `${t('credentialRef')}${t('colon')} ${boundedText(route.credentialRef, 96)}`)
@@ -3479,7 +3417,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
             ? t('nextProjectionRetry')
             : action.reason === 'section' ? t('nextSectionRetry') : t('nextRetry')
           break
-        case 'mode': text = t('nextModeDisabled'); break
         default: text = t('unknown')
       }
       const code = action.kind === 'blocker' || action.kind === 'conflict'
@@ -3503,7 +3440,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
           }, t('retry'))
           : null
       const pendingKind = action.kind === 'connect' || action.kind === 'reload'
-        || action.kind === 'retry' || action.kind === 'mode'
+        || action.kind === 'retry'
       return h('div', { className: 'tmx-next', key: 'next' }, [
         h('p', { className: 'tmx-nextHead', key: 'head' }, [
           dot(pendingKind ? 'warn' : 'error'),
@@ -3710,8 +3647,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       // unknown: it must never read as "no models".
       if (projectionFailed(state)) return 'unknown'
       if (sectionErrors(state).length > 0) return 'unknown'
-      const ownership = state.ownership !== null && typeof state.ownership === 'object' ? state.ownership : {}
-      if (pendingReload(ownership)) return 'reload'
       // A state without a route list has nothing to count; it is not "no models".
       if (!Array.isArray(state.routes)) return 'unknown'
       const routes = state.routes
@@ -4226,8 +4161,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       projectionFailed,
       projectionErrors,
       sectionErrorText,
-      ownershipMode,
-      pendingReload,
       limitMessage,
       billingNoteTexts,
       resetQualified,

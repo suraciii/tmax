@@ -267,7 +267,12 @@ pub(super) fn configuration_files(agent: &str, path: &Path) -> Vec<PathBuf> {
         ],
         "opencode" => &["opencode.jsonc", "opencode.json"],
         "hermes" => &["config.yaml"],
-        "dsh" => &["cordis.patch.yml", "tmax-dsh.mjs"],
+        // A DSH provider is a profile setting; the fallback names a home that
+        // carries no profile yet so an empty answer is never mistaken for one.
+        "dsh" => &[
+            "profiles/desktop/cordis.patch.yml",
+            "profiles/web/cordis.patch.yml",
+        ],
         _ => &[],
     };
     names.iter().map(|n| path.join(n)).collect()

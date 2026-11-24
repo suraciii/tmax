@@ -12,7 +12,6 @@
   },
   "files": [
     "dsh-plugin/index.js",
-    "dsh-plugin/adapter.js",
     "dsh-plugin/client.js",
     "dsh-plugin/quota.js",
     "dsh-plugin/host/",
