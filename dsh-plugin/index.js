@@ -12,7 +12,7 @@ import { createHistoryService, HISTORY_READ_TIMEOUT_MS } from './host/history.js
 import { readInventory, resolveTarget } from './host/inventory.js'
 import { createObservations } from './host/observations.js'
 import {
-  hasAppliedProviders,
+  appliedProviderNames,
   liveProviderIds,
   readProfileDocuments,
   resolveOwnership,
@@ -410,6 +410,15 @@ export async function apply(ctx, config = {}) {
     tree.import('@deepseek-ai/dsh-credentials'),
     tree.import('@deepseek-ai/dsh-tools'),
   ])
+  // DSH's own entry-list parser reads the profile settings structurally. When
+  // this composition does not expose it, ownership is reported as unreadable
+  // rather than guessed from the document's text.
+  let parseEntryYaml
+  try {
+    ;({ parseEntryYaml } = await tree.import('@deepseek-ai/cordis-plugin-include'))
+  } catch {
+    parseEntryYaml = undefined
+  }
   const log = message => ctx.logger?.warn?.(`tmax: ${message}`)
   /** The protocols the qualified DSH adapter serves. */
   const DSH_PROTOCOLS = new Set(['chat-completions', 'responses', 'messages'])
@@ -447,29 +456,29 @@ export async function apply(ctx, config = {}) {
   }
 
   /**
-   * Whether this home already carries applied `tmax-<entry>` providers in a
-   * profile's settings. DSH serves those itself, so this is what the page
+   * The provider names the home's profile settings declare under `llm-pi-ai`,
+   * read structurally; DSH serves those itself, so this is what the page
    * reports as the route owner.
-   * @returns {Promise<boolean>} true when an applied provider document exists
+   * @returns {Promise<{applied: Set<string>, parsed: boolean}>}
    */
   async function readAppliedProviders() {
     const documents = await readProfileDocuments(resolveHome(config))
-    const names = (lastInventory?.routes ?? [])
-      .filter(route => route !== null && typeof route === 'object')
-      .map(route => `${prefix}${route.name ?? ''}`)
-      .filter(name => name !== '')
-    return hasAppliedProviders(documents, names)
+    return {
+      applied: appliedProviderNames(documents, parseEntryYaml),
+      parsed: typeof parseEntryYaml === 'function',
+    }
   }
 
   /** Re-read the ownership facts without re-reading tmax. */
   async function refreshOwnershipFacts() {
     if (disposed) return ownershipDecision
     try {
+      const { applied, parsed } = await readAppliedProviders()
       ownershipDecision = resolveOwnership({
         projection: lastInventory,
         liveNames: liveProviderIds(ctx),
-        prefix,
-        settingsProviders: await readAppliedProviders(),
+        applied,
+        parsed,
       })
     } catch (error) {
       log(`ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)

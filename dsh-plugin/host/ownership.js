@@ -9,24 +9,35 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /**
- * Whether the given settings documents declare one of tmax's providers.
+ * Provider names the profile settings declare under the `llm-pi-ai` row.
  *
- * A provider carries its entry's name, so the names come from the inventory
- * rather than from a naming convention: a name that appears as a mapping key
- * in the profile's settings is a provider the client already serves.
+ * The document is a YAML list of loader patch entries, so the row and its
+ * `config.providers` mapping are read structurally with DSH's own parser: a
+ * comment, a field of another row, or a substring is never mistaken for a
+ * provider, and a document that fails to parse contributes nothing.
  * @param {string[]} documents - profile `cordis.patch.yml` texts, if any
- * @param {string[]} names - provider names the target declares
- * @returns {boolean} true when at least one applied provider is present
+ * @param {(text: string) => unknown} parse - DSH's entry-list parser
+ * @returns {Set<string>} every provider name any document declares
  */
-export function hasAppliedProviders(documents, names) {
-  const texts = (documents || []).filter(text => typeof text === 'string')
-  if (texts.length === 0) return false
-  return (names || []).some(name => {
-    if (typeof name !== 'string' || name === '') return false
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-    const key = new RegExp(`(?:^|[\\s,{[])\\s*["']?${escaped}["']?\\s*:`, 'u')
-    return texts.some(text => key.test(text))
-  })
+export function appliedProviderNames(documents, parse) {
+  const names = new Set()
+  if (typeof parse !== 'function') return names
+  for (const text of documents || []) {
+    if (typeof text !== 'string') continue
+    let rows
+    try {
+      rows = parse(text)
+    } catch {
+      continue
+    }
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const config = row !== null && typeof row === 'object' && row.id === 'llm-pi-ai' ? row.config : null
+      const providers = config !== null && typeof config === 'object' ? config.providers : null
+      if (providers === null || typeof providers !== 'object' || Array.isArray(providers)) continue
+      for (const name of Object.keys(providers)) if (name !== '') names.add(name)
+    }
+  }
+  return names
 }
 
 /** Route ids the registry reports, from either strings or `{id}` objects. */
@@ -55,34 +66,51 @@ export function liveProviderIds(ctx) {
 /**
  * The state's ownership section.
  *
- * `settings` means the applied profile settings carry tmax's providers and DSH
- * serves them; `none` means apply has not written them yet, which is the same
- * thing the state's route list reports as not live.
+ * `settings` means the applied profile settings carry every route the target
+ * declares and DSH serves them; `unapplied` means apply has not written them
+ * all; `none` means the target declares no route. Ownership and conflict are
+ * decided per route: a route that is live without being in the applied
+ * settings is served by someone else, whatever the other routes say.
  * @param {object} input
  * @param {object} [input.projection] - the target inventory, when one was read
- * @param {boolean} [input.settingsProviders] - applied providers exist
+ * @param {string[]} [input.liveNames] - provider ids the registry reports
+ * @param {Set<string>} [input.applied] - provider names the settings declare
+ * @param {boolean} [input.parsed] - false when no parser was available
  * @returns {object} the ownership decision the state exposes
  */
-export function resolveOwnership({ projection, liveNames = [], prefix = '', settingsProviders = false } = {}) {
-  const declared = Array.isArray(projection?.routes)
-    ? projection.routes.filter(route => route !== null && typeof route === 'object' && typeof route.name === 'string')
-    : []
+export function resolveOwnership({ projection, liveNames = [], applied, parsed = true } = {}) {
+  const declared = []
+  for (const route of Array.isArray(projection?.routes) ? projection.routes : []) {
+    // The registry names providers as the settings keys spell them, without
+    // the page's display prefix.
+    if (route !== null && typeof route === 'object' && typeof route.name === 'string' && route.name !== '' && !declared.includes(route.name)) {
+      declared.push(route.name)
+    }
+  }
+  if (parsed !== true || !(applied instanceof Set)) {
+    return { owner: 'unknown', scope: null, reason: 'settings_unreadable', conflict: null }
+  }
   const live = new Set(Array.isArray(liveNames) ? liveNames : [])
-  // Another plugin serving these names while tmax's own settings carry none is
-  // a real duplicate-route risk, not an empty state.
-  const foreign = settingsProviders
-    ? []
-    : declared.map(route => `${prefix}${route.name}`).filter(name => live.has(name))
-  const owner = foreign.length > 0 ? 'other' : settingsProviders ? 'settings' : declared.length === 0 ? 'none' : 'unapplied'
+  const inSettings = declared.filter(name => applied.has(name))
+  const foreign = declared.filter(name => live.has(name) && !applied.has(name))
+  const allApplied = declared.length > 0 && inSettings.length === declared.length
+  // A target whose every route is served by someone else, with nothing of its
+  // own applied, belongs to that other owner outright.
+  const owner = allApplied
+    ? 'settings'
+    : declared.length === 0
+      ? 'none'
+      : inSettings.length === 0 && foreign.length === declared.length ? 'other' : 'unapplied'
   return {
     owner,
-    scope: settingsProviders ? 'profile_scoped' : null,
-    reason: owner === 'unapplied' ? 'apply_not_run' : null,
+    scope: allApplied ? 'profile_scoped' : null,
+    reason: owner === 'unapplied' && inSettings.length === 0 ? 'apply_not_run' : null,
     conflict: foreign.length === 0
       ? null
       : {
         code: 'route_owner_conflict',
-        message: `These routes are already registered by another provider: ${foreign.join(', ')}`,
+        message: `These routes are live but not in the applied settings, so another owner serves them: ${foreign.join(', ')}`,
+        routes: foreign,
       },
   }
 }

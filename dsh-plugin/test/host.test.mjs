@@ -1,3 +1,4 @@
+import { parseBlocks } from './fake-yaml.mjs'
 import assert from 'node:assert/strict'
 import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
@@ -506,6 +507,7 @@ async function fakeTmax(scenario, home = '') {
 
 function fakeContext({
   credential = 'test-key',
+  parserUnavailable = false,
   resolveCredential,
   configuredRefs = ['TMAX_TEST'],
   rejectCredentialRefs = [],
@@ -538,6 +540,10 @@ function fakeContext({
     replaceThrows: throwOnReplace,
   }
   const modules = {
+    // DSH's entry-list parser, as a small block-YAML reader: a list of mappings
+    // whose nested mappings and sequences follow indentation, which is every
+    // shape these fixtures write.
+    '@deepseek-ai/cordis-plugin-include': { parseEntryYaml: parseBlocks },
     '@deepseek-ai/dsh-llm-pi-ai': {
       PiAiAdapter: class {
         constructor(options) {
@@ -579,6 +585,7 @@ function fakeContext({
     '@earendil-works/pi-ai/api/anthropic-messages.lazy': { anthropicMessagesApi: () => ({ stream() {}, streamSimple() {} }) },
     '@deepseek-ai/dsh-tools': { defineTool: definition => definition },
   }
+  if (parserUnavailable === true) delete modules['@deepseek-ai/cordis-plugin-include']
   const credentialsService = {
     credentialRef(ref) {
       state.credentialRefCalls.push(ref)
@@ -2112,4 +2119,54 @@ test('applied profile settings own the routes, so the page registers nothing', a
   const body = (await getJson(state, '/_tmax/state')).body
   assert.equal(body.ownership.owner, 'settings')
   assert.equal(body.ownership.scope, 'profile_scoped')
+})
+
+test('a comment or another row\'s field is never read as an applied provider', async () => {
+  const home = await emptyHome()
+  await mkdir(join(home, 'profiles/desktop'), { recursive: true })
+  // The target's route is `tmax`; nothing here declares it under `llm-pi-ai`.
+  await writeFile(
+    join(home, 'profiles/desktop/cordis.patch.yml'),
+    '# tmax: applied elsewhere\n- id: other\n  config:\n    tmax: true\n    nested:\n      tmax: 1\n',
+  )
+  const { state } = await applied({ config: { home } })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'unapplied')
+  assert.equal(body.ownership.conflict, null)
+})
+
+test('conflicts are decided per route against the settings keys, whatever the display prefix', async () => {
+  // Route `tmax` is applied and served by the settings; route `other` is live
+  // under a foreign owner. One applied route must not hide the other's conflict.
+  const home = await emptyHome()
+  await mkdir(join(home, 'profiles/desktop'), { recursive: true })
+  await writeFile(
+    join(home, 'profiles/desktop/cordis.patch.yml'),
+    '- id: llm-pi-ai\n  config:\n    providers:\n      tmax:\n        api: openai-completions\n',
+  )
+  const scenario = withSecondRoute(baseScenario(), { name: 'other', credentialRef: 'TMAX_OTHER' })
+  const { state } = await applied({
+    scenario,
+    config: { home },
+    context: { liveNames: ['tmax', 'other'] },
+    prefix: 'preview-',
+  })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'unapplied', 'one of two routes applied is not fully applied')
+  assert.equal(body.ownership.reason, null, 'something was applied, so it is not "never applied"')
+  assert.deepEqual(body.ownership.conflict.routes, ['other'])
+})
+
+test('without the entry-list parser, ownership is unreadable rather than guessed', async () => {
+  const home = await emptyHome()
+  await mkdir(join(home, 'profiles/desktop'), { recursive: true })
+  await writeFile(
+    join(home, 'profiles/desktop/cordis.patch.yml'),
+    '- id: llm-pi-ai\n  config:\n    providers:\n      tmax:\n        api: openai-completions\n',
+  )
+  const { state } = await applied({ config: { home }, context: { parserUnavailable: true } })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'unknown')
+  assert.equal(body.ownership.reason, 'settings_unreadable')
+  assert.equal(body.ownership.conflict, null)
 })

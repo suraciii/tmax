@@ -379,6 +379,46 @@ mod tests {
     }
 
     #[test]
+    fn dsh_profile_prefers_desktop_then_web_then_the_named_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("dsh");
+        let declare = |name: &str| {
+            let dir = home.join("profiles").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("package.json"), "{}").unwrap();
+        };
+        std::fs::create_dir_all(&home).unwrap();
+        // No profile at all: the error names the remedy and nothing else.
+        let none = profile(&home, None).unwrap_err();
+        assert_eq!(none.code, "unknown_resource");
+        assert!(none.message.contains("--profile"), "{}", none.message);
+        // A directory without a manifest is not a profile.
+        std::fs::create_dir_all(home.join("profiles/desktop")).unwrap();
+        assert_eq!(profile(&home, None).unwrap_err().code, "unknown_resource");
+        declare("web");
+        assert_eq!(profile(&home, None).unwrap(), "web");
+        declare("desktop");
+        assert_eq!(
+            profile(&home, None).unwrap(),
+            "desktop",
+            "desktop wins over web"
+        );
+        declare("custom");
+        assert_eq!(
+            profile(&home, Some("custom")).unwrap(),
+            "custom",
+            "an explicit name wins"
+        );
+        let missing = profile(&home, Some("missing")).unwrap_err();
+        assert_eq!(missing.code, "unknown_resource");
+        assert!(
+            missing.message.contains("custom, desktop, web"),
+            "{}",
+            missing.message
+        );
+    }
+
+    #[test]
     fn dsh_model_only_handoff_writes_profile_settings_and_never_installs_anything() {
         let scope = Path::new("/explicit/dsh");
         let mut target = target("dsh");

@@ -175,8 +175,7 @@ basis, outcome, requested model and model kind, protocol, qualified model,
 provider, target, agent-configured provider, and reason code. `qualifiedModel`
 and `durationMs` appear only when the source record carries them; the current
 `tmax history list` projection does not emit them (they belong to the
-record/inspect surfaces), so the page's selected-model cell is unknown for list
-rows. The allowlist is the whole contract: a body, header, URL, credential, or
+record/inspect surfaces), so a list row's selected model is unknown. The allowlist is the whole contract: a body, header, URL, credential, or
 model output is never mapped. At most 50 rows are returned; `truncated` and
 `omitted` combine tmax's own omission count with the cap and are absent only
 when nothing was dropped.
@@ -189,21 +188,9 @@ captures: a positive count is a material gap, and zero is none reported; the
 host also accepts a boolean compatibility value (true as a gap). Unknown coverage
 stays unknown; it is not empty coverage.
 
-Page:
-
-- The Diagnostics history area shows availability from the state only and loads
-  details only after an explicit **Load history** click. Mount, visibility, and
-  timers never fetch history.
-- The table shows up to 20 rows with time, outcome, requested model, selected
-  model when the record reports it (unknown otherwise), target/provider/agent
-  route, and reason; there is no duration column, and a `durationMs` in the
-  payload is not rendered. Coverage and gaps appear above the table, including a
-  numeric incomplete-capture count as a gap when positive. The more-count adds
-  the response's omitted rows to the rows the table did not show.
-- A typed unavailable answer is an unavailable state with its code, message,
-  blockers, and any coverage — never an empty table. A successful read with no
-  retained records is the only empty case.
-- The area has no clear, export, or body-view control.
+The page shows no history: retained history is a CLI read (`tmax history list`
+and `inspect`, and the `/tmax history` subcommand), and the page neither fetches
+nor renders it.
 
 ## Route ownership
 
@@ -453,12 +440,12 @@ refusal, and no outcome carries secret material.
 | Freshness | Use tmax's reported freshness and notes. The page must not invent a staleness threshold or relabel a reading stale by its own clock. |
 | Catalog availability | Availability is tmax evidence about its own routing, not a DSH availability claim and not a request result. |
 | Subscription and renewal | Show the plan and renewal only when tmax reports them. An absent subscription stays absent; it is not a zero allowance. |
-| Configuration revision | Show the saved-configuration revision reported by tmax. A revision change is not proof that an agent applied or reloaded it. |
-| State schema | Show the plugin state `schemaVersion`. An unsupported value is a visible failure, not a guess. |
-| Read-model source | Show `diagnostics.readModel` (`inventory`). A failed source read is a visible section error, never a silently empty section. |
+| Configuration revision | Not shown on the page; a CLI read. A revision change is not proof that an agent applied or reloaded it. |
+| State schema | The plugin state `schemaVersion` is gated, not displayed: an unsupported value is a visible failure, not a guess. |
+| Read-model source | Not shown on the page; a CLI read. A failed source read is a visible error, never a silently empty section. |
 | Route readiness | `active` means DSH currently serves a route with that provider name. It is independent of configured route membership and of credential readiness; the page shows all three separately. |
-| tmax providers | One row per provider tmax lists, including unknown quota. A failed provider inspection becomes a per-provider error row, not a dropped row. |
-| Profile providers | One record per provider this DSH profile configures. This section is independent of tmax providers and is never summed with them. A provider whose vendor has no implementation is reported as having no supported source. |
+| tmax providers | One card per provider tmax lists that reports a quota window, least left first; a provider without a window takes no card. A failed provider read is named where the cards would be, never read as "no account". |
+| Profile providers | Not shown on the page; a CLI read. They are independent of tmax providers and are never summed with them. A provider whose vendor has no implementation is reported as having no supported source. |
 | Quota window | Draw a share only from a computable fraction. No fraction means text only, never a bar. A zero share keeps a visible mark. The accessible value and the drawn value describe the same quantity. |
 | History | Availability and reason come from the state; the retained list is an explicit read, never a mount fetch. Missing history is missing evidence, not proof of no requests; a typed unavailable answer is not an empty table; a successful read with zero retained records is a reported zero. |
 | History coverage | Show the process scope, retained count, range, storage limits, eviction, the numeric incomplete-capture count (positive is a gap, zero is none reported), prior-process and direct-traffic coverage, and material gaps. Unknown coverage stays unknown, and a gap is a warning rather than a normal state. |
@@ -535,15 +522,15 @@ Consumers:
 - Credential entry, reveal, cleanup, or interactive sign-in.
 - Native restore; provider authentication; DSH start/stop/restart; profile,
   preset, and session management. Native application is the contracted Apply
-  action; it is not configuration authority. Gateway start, stop, and restart are
-  contracted page actions.
+  action; it is not configuration authority. Gateway start is the one
+  contracted gateway page action; stop and restart are CLI operations.
 - Automatic observation, automatic Apply, or chained actions.
 - Request bodies, headers, URLs, model output, an error-log viewer, and history
-  clear or export controls. The page's history table and the `/tmax history`
-  subcommand list retained metadata only.
+  clear or export controls. The page shows no history; `/tmax history` lists
+  retained metadata only.
 - Session import, export, or synchronization.
-- Embedding the tmax Web interface. `open_management` opens that surface instead
-  of duplicating it.
+- Embedding the tmax Web interface, or opening it from the page; `tmax web open`
+  is the CLI's, and the page duplicates nothing.
 
 ## Compatibility
 

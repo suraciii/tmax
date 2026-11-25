@@ -149,56 +149,6 @@ uninstalls it. The plugin used to be the `dsh-plugin/` directory; a profile that
 still links it needs one more `just dsh-install`, because that directory no
 longer carries a manifest.
 
-## Configuration
-
-Configuration is optional. The plugin resolves the DSH home from `home`, then
-`DSH_HOME`, then `~/.dsh`, and selects the tmax target from `target`, or by that
-home when `target` is empty.
-
-| Key | Meaning |
-| --- | --- |
-| `home` | DSH home to inspect. Defaults to `DSH_HOME`, then `~/.dsh`. |
-| `target` | Declared tmax target ID. When empty, the one DSH target whose path matches the home is used. |
-| `providerPrefix` | Prefix reported in front of each route name the state lists. Empty by default; it never renames a provider DSH already has. |
-| `refreshSeconds` | Inventory refresh interval in seconds; an integer of at least 10, default `60`. It only re-reads tmax; it never observes a provider. |
-| `tmaxPath` | `tmax` executable to run. Defaults to `tmax` on `PATH`. |
-
-```yaml
-- id: tmax
-  config:
-    home: /home/you/.dsh
-    target: dsh-main
-```
-
-## Inventory source
-
-The host half composes one read model from effect-free tmax reads, each with a
-bounded deadline:
-
-| Command | Facts it owns |
-|---|---|
-| `tmax agent list` | Which declared target matches the DSH home, when the plugin has no explicit `target`. |
-| `tmax agent inspect <TARGET>` | The target's relayed provider entries, their selected models and native projection, applied and pending state, configuration revision, and tmax's own blockers. |
-| `tmax status` | The tmax data directory (reported as the state's authority) and the caller's tmax version. |
-| `tmax gateway status` | Daemon discovery state, gateway readiness, listen address, supervision, autostart, and shared-key load state. |
-| `tmax provider list` | The tmax provider rows: authentication, affected targets, integration, quota state, and suspension/failure summaries. |
-| `tmax provider inspect <ID>` | One provider's billing observations, freshness, quota suspension, and failure detail. |
-| `tmax config validate` | Whether the saved configuration is valid, its revision, and its errors. |
-| `tmax model explain <MODEL> --protocol <P>` | The selected route candidate, priorities, exclusions, and availability for one projected model. |
-
-A failing inspect is reported as an error, with tmax's own code and message,
-rather than as an empty page. A configured gateway whose daemon is absent or
-stopped is reported as `ready: false` with `gateway_not_ready`, not as unknown;
-readiness stays unreported only when the `gateway status` read itself fails. The
-routes the target already declares stay visible either way. There is no
-`tmax dsh` command and no snapshot contract: the plugin composes these reads
-directly, and `diagnostics.readModel` reports the source as `inventory`. An
-older tmax whose inspect predates the relayed-entry or native capability fields
-is reported as unsupported, with the next action being to update tmax.
-
-## Route ownership
-
-
 ## Apply
 
 On the **tmax** page, select **Apply**. This first requests a preview
@@ -250,12 +200,13 @@ the same apply and observation operations.
 | **Apply** (`connect`) | The Apply next action | `tmax agent apply TARGET --dry-run` | Writes the target's native DSH files. The page uses its own Apply panel. |
 
 Every action is previewed first and then explicitly confirmed or cancelled. A
-preview writes nothing and is reported separately from execution. The gateway
-card offers **Start gateway** whenever a configured gateway is not ready,
-including when readiness is unknown; that preview reports the current blocker
-instead of doing anything. **Stop gateway** or **Restart gateway** appear only
-when the gateway reports ready or its daemon is identified. A gateway action
-needs a readable current state and a configured gateway. Results show the typed
+preview writes nothing and is reported separately from execution. The verdict
+line offers **Start gateway** whenever a configured gateway is not ready,
+readiness unknown included; that preview reports the current blocker instead of
+doing anything. A readiness that is unknown because the gateway read itself
+failed offers a retry instead, never Start. Stopping or restarting a gateway is
+a CLI operation. A gateway action needs a readable current state and a
+configured gateway. Results show the typed
 code, status, message, data, blockers, next actions, and effects from tmax.
 Provider IDs are taken exactly from the current read model, and no client string
 reaches tmax argv.
@@ -462,16 +413,17 @@ projection means changing that fixture, which breaks the other side's test.
 - Agent-configured providers are read-only and cover only vendors tmax
   implements. Their observations are explicit and have no history.
 - Request bodies, headers, URLs, model output, error-log viewing, and history
-  clear or export controls are not shipped. The page's history table and
-  `/tmax history` read retained metadata only; a successful load with no retained
-  records is empty, while a typed unavailable answer stays unavailable.
+  clear or export controls are not shipped. The page shows no history;
+  `/tmax history` lists retained metadata only, and a typed unavailable answer
+  stays unavailable.
 - The `/_tmax/state` payload is the plugin's own contract composed from tmax's
   effect-free reads; it is not a tmax CLI contract.
 - Native restore, provider authentication, and profile/preset/session features
-  are not page operations. Gateway start, stop, and restart are previewed page
-  actions; Open management starts or reuses the management listener only.
-- The sidebar marker and gateway card were seen in a real temporary DSH page
-  render of the pre-port host read model, in both light and dark themes and in
+  are not page operations. Gateway start is the one gateway action the page
+  offers, always previewed; stop, restart, and opening the management listener
+  are CLI operations.
+- The sidebar marker was seen in a real temporary DSH page render of the
+  pre-port host read model, in both light and dark themes and in
   English and Chinese locales. The ported page was also rendered in a temporary
   DSH 0.2.3-alpha.2 profile with a synthetic inventory executable: `GET
   /_tmax/state` returned 200 with `diagnostics.readModel: "inventory"`, and the
