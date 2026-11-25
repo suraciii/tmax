@@ -67,7 +67,7 @@ the CLI.
 
 | Section | Required content |
 | --- | --- |
-| Header | The page name, when the state was generated, one reachability verdict, and the one control that changes it when the page has it: **Start gateway** when the gateway is not ready, **Apply** when DSH has not been given the declared routes or a credential tmax knows is missing. Otherwise one line names what stands in the way — a pending reload, an invalid or unavailable configuration with its own errors, a route-ownership conflict, or a tmax blocker — followed by every failed section read and every route blocker, bounded and code first, with a **Retry** that reads again and never observes. **Refresh** observes every listed provider. A failed read keeps the last good table, labels it last known, and shows the failure once. |
+| Header | The page name, when the state was generated, one reachability verdict, and the one control that changes it when the page has it: **Start gateway** when the gateway is not ready, **Apply** when DSH has not been given the declared routes or a credential tmax knows is missing. Otherwise one line names what stands in the way — a pending reload, an invalid or unavailable configuration with its own errors, a route-ownership conflict, or a tmax blocker — followed by every failed section read and every route blocker, bounded and code first, with a **Retry** that reads again and never observes. **Refresh** observes every listed provider that reports a quota source. A failed read keeps the last good table, labels it last known, and shows the failure once. |
 | Accounts | One card per tmax account that reports a quota window, closest to its limit first; an account without any window takes no card. Every window the account reports is one bar filled with the share it has used, stating its name, what it used of what, and when it resets, whatever basis the account reports in: a percentage window states its share of 100%, a reported quantity states what was used of it; an unqualified reset time is printed as approximate, an absent one is left out. A window whose share cannot be computed is text, never a bar. A card carries a tag only for a state a person must act on or know about — disabled, suspended, failing — and the one action its evidence calls for: resume for a reported suspension, reset for an active failure. |
 | Models | Every projected model and the account its routing selects; the target's default is marked. |
 | Actions | The preview and result of one confirmed provider, gateway, or Apply action: typed code, status, message, data, blockers, next actions, and effects. Preview and confirmation are separate; cancel clears. An observation names only the accounts it could not read. |
@@ -266,14 +266,16 @@ DSH or native write; [Apply](#apply) is the only such write.
 
 The page exposes the whole-surface form as **Refresh**; it offers no
 per-provider observation, so a reader never has to pick which account to read.
-A completed refresh names only the accounts whose observation failed or that a
-person can fix; a provider with no supported quota source is a capability of
-that provider, not a failed refresh, and the page does not list it.
+A refresh attempts only the providers whose integration reports a quota source:
+the list's `billing_kind` other than `unknown`, the same set the tmax Web UI
+refreshes. A provider with no source is not attempted and produces no item, so
+it can never read as a failed observation. A completed refresh names the accounts
+whose observation failed or that a person can fix.
 
 `dryRun` is a boolean; an absent value means `false`. An invalid value is refused
 without an observation. One observation previews or publishes one quota-scope
-`tmax provider refresh` for every provider tmax lists; the plugin holds no vendor
-endpoint, credential resolution, or quota reading of its own.
+`tmax provider refresh` per provider with a quota source; the plugin holds no
+vendor endpoint, credential resolution, or quota reading of its own.
 
 Each result item identifies its source (`tmax`), the provider id, and one status:
 
@@ -377,8 +379,9 @@ Rules:
   readiness is unknown and when tmax's own blocker asks for the start; that
   preview reports the current blocker instead of performing anything. It offers
   no `observe_provider`, `open_management`, `gateway_stop`, or `gateway_restart`:
-  Refresh reads every account at once, and the rest belong to the CLI. The
-  action route still accepts them for other callers. No evidence, no action.
+  Refresh reads every account with a quota source at once, and the rest belong
+  to the CLI. The action route still accepts them for other callers. No
+  evidence, no action.
 - A provider operand must be exactly one provider id from the current read model.
   Anything else is refused before argv. `scope` is a closed set.
 - `dryRun: true` previews; `dryRun: false` executes. Every action the page offers

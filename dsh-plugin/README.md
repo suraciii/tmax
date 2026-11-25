@@ -189,7 +189,7 @@ the same apply and observation operations.
 
 | Action | Where it appears | Preview | What confirmation does |
 | --- | --- | --- | --- |
-| **Observe quota** (`observe_provider`) | Not offered by the page; Refresh reads every listed provider at once | Provider refresh dry run | Publishes provider evidence; scope is `quota` by default. |
+| **Observe quota** (`observe_provider`) | Not offered by the page; Refresh reads every listed provider with a quota source at once | Provider refresh dry run | Publishes provider evidence; scope is `quota` by default. |
 | **Resume quota** (`resume_quota`) | Only a provider that reports a suspension | `provider quota-resume --dry-run` | Explicit tmax mutation that clears the suspension. |
 | **Reset failure** (`reset_failure`) | Only a provider with an active failure | `provider failure-reset --dry-run` | Explicit tmax mutation that clears the failure override. |
 | **Open management** (`open_management`) | Not offered by the page; the CLI opens the management UI | `tmax web status` listener readiness | Starts or reuses the tmax management listener and reports its ready URL. It does not start inference, reload configuration, or launch a browser. |
@@ -246,11 +246,10 @@ account's quota is spent and when it comes back.
   names what stands in the way — a pending reload, an invalid configuration with
   its own errors, a route-ownership conflict, a tmax blocker — followed by every
   failed section read and route blocker, code first, with a **Retry** that reads
-  again and never observes. **Refresh** observes every listed provider; an
-  observation names only the accounts it could not read or that a person can
-  fix — a provider with no supported quota source is not a failed refresh. A
-  failed read keeps the last good table, labels it last known, and shows the
-  failure once.
+  again and never observes. **Refresh** observes every listed provider that
+  reports a quota source; a provider with none is not queried and never reads as
+  a failure. A failed read keeps the last good table, labels it last known, and
+  shows the failure once.
 - **Accounts** — one card per tmax account that reports a quota window, closest
   to its limit first. Every window the account reports is one bar filled with
   what it has used, its name, what it used of what, and when it resets, whatever
@@ -354,7 +353,7 @@ JSON media-type, 16 KiB body-size, and single-flight checks to its POST actions.
 | `GET /_tmax/status` | First-generation page compatibility summary of the same read model. Reads cached state only. |
 | `GET /_tmax/usage` | First-generation provider and usage rows from the same read model. Reads cached state only. |
 | `GET /_tmax/history` | Explicit retained-history read. One read-only `tmax history list` (45 s) mapped to `{ ok, generatedAt, coverage, records, truncated?, omitted? }` with at most 50 compact rows; a typed unavailable daemon/history answer is `200` with `ok:false` and its reason (never an empty history), while a missing transport envelope is `502` `history_unavailable`. Bodies, headers, URLs, and secrets never cross. |
-| `POST /_tmax/observe` | Explicit observation. Body `{ "dryRun": false }`. One quota-scope `tmax provider refresh` per provider tmax lists. Returns per-provider outcomes and fresh state: `200` when no item failed, `207` when one did, `409` when an observation is already running, and `502` when the host cannot run the observation at all. |
+| `POST /_tmax/observe` | Explicit observation. Body `{ "dryRun": false }`. One quota-scope `tmax provider refresh` per provider that reports a quota source. Returns per-provider outcomes and fresh state: `200` when no item failed, `207` when one did, `409` when an observation is already running, and `502` when the host cannot run the observation at all. |
 | `POST /_tmax/connect` | Explicit Apply. Body `{ "dryRun": true }` or `{ "preview": true }` previews through `tmax agent apply TARGET --dry-run`; `{ "dryRun": false }` or `{ "preview": false }` executes; a `?dry-run=1`/`?preview=1` query previews only. A request that states neither preview nor execution is `400` `invalid_dry_run` before any tmax call. Returns the typed result and fresh state (`200`). A typed refusal from tmax is `409` with the refusal and fresh state; an unresolved target is `409` with its typed code and writes nothing; a busy Apply is `409` `busy` with no state; a transport failure, timeout, or output that is not a JSON envelope is `502` `connect_unavailable`. |
 | `POST /_tmax/action` | The allowlisted action surface used by the page for provider and management actions. Body `{ "action": "...", "provider"?: "...", "scope"?: "...", "dryRun": true }` for `connect`, `observe_provider`, `resume_quota`, `reset_failure`, `open_management`, `gateway_start`, `gateway_stop`, and `gateway_restart`. `200`: typed `result` plus fresh state. `409`: typed refusal plus fresh state, or an unknown-provider, gateway guard, or busy refusal with neither. `400`: invalid request with neither. `502`: `state_unavailable` with neither, or a transport/no-envelope failure with a typed `result` and state when a read is available. |
 | `POST /_tmax/usage/refresh` | First-generation explicit tmax observation. Same rules as `/_tmax/observe`; a `dryRun`/`preview` body or `?dry-run=1`/`?preview=1` performs no real observation. |

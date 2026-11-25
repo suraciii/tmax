@@ -1490,47 +1490,6 @@ test('Refresh is the only observation path: one explicit POST /_tmax/observe', a
   }
 })
 
-test('a provider with no quota source is not a failed observation', async () => {
-  const updated = { ...connected, configurationRevision: 'bbbbbbbbccccccccddddddddeeeeeeeeffffffff000000001111111122222222' }
-  const page = await mountPage(async record => {
-    if (pathOf(record) === '/_tmax/state') return { status: 200, body: connected }
-    if (pathOf(record) === '/_tmax/observe') {
-      // The host counts only failed items as a failed observation, so blocked
-      // providers arrive as a 200 with a fresh state.
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          generatedAt: '2026-11-23T10:16:00Z',
-          dryRun: false,
-          state: updated,
-          items: [
-            { source: 'tmax', id: 'zai-coding-cn', status: 'refreshed' },
-            { source: 'tmax', id: 'cpa-us2', status: 'blocked', code: 'unsupported_source', message: 'this provider has no supported observation source' },
-            { source: 'tmax', id: 'llm-us', status: 'blocked', code: 'unsupported_source', message: 'this provider has no supported observation source' },
-            { source: 'tmax', id: 'kimi', status: 'blocked', code: 'credential_unavailable', message: 'the credential for this provider is unavailable' },
-          ],
-        },
-      }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    await page.mount()
-    const text = textOf(await page.click('refresh'))
-    // No supported source is a capability of the provider, not a failed refresh:
-    // the page does not name those accounts at all.
-    assert.doesNotMatch(text, /cpa-us2/)
-    assert.doesNotMatch(text, /llm-us/)
-    assert.doesNotMatch(text, /unsupported_source/)
-    // An account a person can fix is still named, and counted once.
-    assert.match(text, /kimi \(credential_unavailable/)
-    assert.match(text, /observeFailed: 1/)
-  } finally {
-    page.restore()
-  }
-})
-
 test('a failed refresh keeps the old table and names the failure', async () => {
   const page = await mountPage(async record => {
     if (pathOf(record) === '/_tmax/state') return { status: 200, body: connected }

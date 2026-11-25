@@ -88,11 +88,14 @@ function classifyTmaxItem(id, result, dryRun) {
 
 
 /**
- * Explicitly refresh quota observations for every provider tmax manages.
- * One `provider refresh <id> --scope quota` per provider; `--dry-run` when the
+ * Explicitly refresh quota observations for the providers tmax reports a quota
+ * source for. `billing_kind` is tmax's static answer for the provider's
+ * integration: a kind other than `unknown` means an endpoint exists, so the same
+ * set the native Web UI refreshes is the only set attempted. One
+ * `provider refresh <id> --scope quota` per provider; `--dry-run` when the
  * caller asked for a preview. Results are per item, never a generic success.
  * @param {object} config
- * @param {{dryRun?: boolean, readEnvelopeImpl?: Function}} [options]
+ * @param {{dryRun?: boolean}} [options]
  */
 export async function observeTmax(config, { dryRun = false } = {}) {
   const listed = await readEnvelope(config, ['provider', 'list'])
@@ -108,6 +111,12 @@ export async function observeTmax(config, { dryRun = false } = {}) {
     }
   }
   const ids = (listed.data?.providers ?? [])
+    // No source means no request: an attempt would only restate the provider's
+    // capability as a failed observation.
+    .filter((provider) => {
+      const kind = provider?.observations?.billing_kind
+      return typeof kind === 'string' && kind !== '' && kind !== 'unknown'
+    })
     .map(provider => (typeof provider?.id === 'string' && provider.id !== '' ? provider.id : undefined))
     .filter(id => id !== undefined)
   const items = await Promise.all(ids.map(async id => {
