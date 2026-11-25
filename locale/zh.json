@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "tmax",
-    "description": "在 DeepSeek Harness 中使用 tmax 管理的模型、查看访问状态并加入模型。",
+    "description": "在 DeepSeek Harness 中管理各 Harness 的模型配置、查看访问状态，并按 Harness 应用。",
     "detail": "dsh-plugin/README.md"
   }
 }

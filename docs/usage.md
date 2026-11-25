@@ -1164,9 +1164,13 @@ change rewrites the reference and the whole field is managed as one unit.
 Apply is authoritative over tmax-managed fields. If the tool's own settings
 changed a tmax-managed default after apply, the next apply overwrites it with
 the current tmax default; it is not a conflict and does not need a separate
-accept or discard step. `tmax agent inspect TARGET` reports the applied state
-and the tool's current default, and `tmax agent restore TARGET` returns the
-managed fields to the target's single retained managed snapshot. The tool must
+accept or discard step. `tmax agent inspect TARGET` reports the applied state,
+the tool's current default, and whether the target's desired configuration is
+unapplied; its `target_revision` and `applied_target_revision` fields identify
+that comparison, which is not a native pending change.
+`tmax agent restore TARGET` returns the managed fields to the target's single
+retained managed snapshot; a restored target reports unapplied until the next
+successful apply. The tool must
 reload or restart before new sessions use the updated default; running sessions
 keep their selection.
 
@@ -1330,13 +1334,25 @@ DeepSeek Harness uses the same target/provider/model operations as the Pi exampl
 with `--agent dsh` and the existing DSH home as its scope. Discovery uses nonblank
 `DSH_HOME`, otherwise the OS home directory's `.dsh`.
 
-A provider is a profile-level setting in DSH — its Models page writes into
-`profiles/<profile>/cordis.patch.yml`. Apply writes there too: one provider per
-target entry, named after that entry, with the endpoint, protocol, models, and a
-credential reference, and puts the referenced key in the credential document DSH
-already reads. Nothing has to be installed first, and the next DSH start serves
-the routes. Apply selects the profile by `--profile`, otherwise `desktop`, then
-`web`, and reports which one it used.
+With the DSH plugin installed, its tmax page presents each declared tmax target
+as a Harness. On its Models tab, adding or removing a model selection changes
+only that Harness's desired configuration: it writes no DSH files, hands off no
+credential, and applies nothing. The Harness tab lists every declared Harness with its selected
+provider entries and models and applies one Harness at a time; each Apply is the
+previewed authoritative `agent apply TARGET`. `待应用` (unapplied) means that
+Harness has no completed apply of its current desired configuration: the target
+revision differs from the last successful apply, no apply has completed, or the
+retained record is an incomplete, recovery-required, or restored one. The flag
+is a target revision comparison, not a native pending change or a count of
+changed models, and it never blocks the next Apply. There is no global Apply.
+
+A provider is a profile-level setting in DSH — DSH's own Models settings page
+writes into `profiles/<profile>/cordis.patch.yml`. Apply writes there too: one
+provider per target entry, named after that entry, with the endpoint, protocol,
+models, and a credential reference, and puts the referenced key in the
+credential document DSH already reads. Nothing has to be installed first, and
+the next DSH start serves the routes. Apply selects the profile by `--profile`,
+otherwise `desktop`, then `web`, and reports which one it used.
 
 Apply overwrites the tmax-managed provider entries and fields from the current
 expected configuration; the user's own providers in that row, unrelated fields,

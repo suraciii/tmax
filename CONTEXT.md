@@ -192,11 +192,35 @@ configuration scope are being configured. DSH uses one home-wide scope, not
 separate profile targets.
 _Avoid_: Agent type, provider account, calling agent
 
+**Harness**:
+The user-facing name for one declared Agent target in the DSH in-context page
+and in product guidance for that page's configuration flow. It is the existing
+target and its configuration scope, not a tool, a DSH profile, a seat, or a
+separately managed resource. The `agent` command family still declares, edits,
+applies, and restores it.
+_Avoid_: Tool, seat, DSH profile, agent type, separate resource
+
 **Expected configuration**:
 The current desired tmax-managed settings for one Agent target: its provider
 entries, model selections, default, and roles. It is saved intent, not a
 statement about the Agent's files. "Desired configuration" means the same thing.
 _Avoid_: Pending changes, applied state, native state
+
+**Target revision**:
+A stable revision of one Agent target's expected configuration alone. Unrelated
+targets and configuration-file formatting do not change it. It is a local
+comparison value for that target, not an actual-configuration hash, the saved
+configuration revision, or a native revision.
+_Avoid_: Configuration revision, file hash, native revision
+
+**Unapplied configuration**:
+The state of an Agent target that has no completed apply of its current expected
+configuration. That includes expected configuration that advanced after the last
+successful apply, a target that has never been applied, and a retained record
+that represents an incomplete write, a recovery-required state, or a restore. It
+is a tmax desired-versus-applied comparison, not a native pending change, a
+merge, a per-field difference, or a conflict.
+_Avoid_: Native pending changes, pending queue, unmerged changes
 
 **Actual configuration**:
 An Agent target's own configuration files and credential artifacts that tmax

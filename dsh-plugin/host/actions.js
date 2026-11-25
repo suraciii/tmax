@@ -4,9 +4,10 @@
 // a flag, or a path. This module owns the exact argv for every action, the
 // closed scope enum, the per-action timeout, and the single-flight key. A
 // provider ID is accepted only when it is exactly one ID from the current host
-// state, so an arbitrary client string can never reach argv. Connect is the
-// native application `tmax agent apply TARGET`; the legacy `tmax dsh connect`
-// form no longer exists.
+// state, and a target is accepted only when it is exactly one declared Harness
+// in `state.harnesses`, so an arbitrary client string can never reach argv.
+// Connect is the legacy native application `tmax agent apply TARGET`; the
+// legacy `tmax dsh connect` form no longer exists.
 //
 // A tmax answer is data: a typed envelope that is not a completed operation is
 // a 409 (and its code/status/blockers/next_actions/effects are preserved), while
@@ -32,7 +33,12 @@ export const ACTIONS = Object.freeze([
   'gateway_stop',
   'gateway_restart',
   'add_model',
+  'remove_model',
+  'apply_target',
 ])
+
+/** Actions that change one target's desired provider/model selection. */
+export const MODEL_ACTIONS = Object.freeze(['add_model', 'remove_model'])
 
 /** Actions that name one tmax provider and therefore need an exact snapshot ID. */
 export const PROVIDER_ACTIONS = Object.freeze(['observe_provider', 'resume_quota', 'reset_failure'])
@@ -60,7 +66,10 @@ export const ADD_PROTOCOLS = Object.freeze(['chat-completions', 'responses', 'me
  * observation runs auth, models, and quota checks and gets a longer budget.
  * `web status` is a read and stays short; `web open` starts a listener and gets
  * more room. Gateway lifecycle can wait on supervision (unit registration and
- * process startup), so it gets the longest deadline.
+ * process startup), so it gets the longest deadline. A desired-configuration
+ * write can run a provider creation plus a model selection, so it keeps the
+ * longer storage budget; applying one target writes native files through
+ * tmax's own recovery and lock sequence and gets the apply deadline.
  */
 export const ACTION_TIMEOUTS = Object.freeze({
   connect: CONNECT_TIMEOUT_MS,
@@ -72,6 +81,8 @@ export const ACTION_TIMEOUTS = Object.freeze({
   webOpen: 60_000,
   gateway: 90_000,
   add_model: 120_000,
+  remove_model: 120_000,
+  apply_target: CONNECT_TIMEOUT_MS,
 })
 
 /** The deadline for one planned action; scope, phase, and family select it. */
@@ -90,16 +101,22 @@ export function actionTimeoutMs(action, { dryRun = false, scope = null } = {}) {
  * Canonical single-flight key shared by the legacy routes and the action
  * service: both connect forms lock `connect`, every observation locks
  * `observe`, each persisted repair locks its own provider, and each gateway
- * verb locks itself.
+ * verb locks itself. Desired-configuration writes share the target-write lock
+ * with connect because they all change what an apply will write; applying one
+ * Harness locks that target alone, so different Harnesses can apply at once
+ * while the same one cannot.
  */
-export function actionLockKey(action, provider = null) {
-  if (action === 'connect' || action === 'add_model') return 'connect'
+export function actionLockKey(action, provider = null, target = null) {
+  if (action === 'connect' || action === 'add_model' || action === 'remove_model') return 'connect'
   if (action === 'observe_provider') return 'observe'
   if (action === 'resume_quota' || action === 'reset_failure') {
     return typeof provider === 'string' && provider !== '' ? `${action}:${provider}` : action
   }
   if (action === 'open_management') return 'open_management'
   if (GATEWAY_ACTIONS.includes(action)) return `gateway:${GATEWAY_VERBS[action]}`
+  if (action === 'apply_target') {
+    return typeof target === 'string' && target !== '' ? `apply:${target}` : 'apply'
+  }
   return null
 }
 
@@ -161,16 +178,26 @@ export function validateActionRequest(body) {
     scope = body.scope
   }
   if (action === 'observe_provider' && scope === null) scope = DEFAULT_OBSERVE_SCOPE
-  if (action === 'add_model') {
+  // A target-naming action is a declared Harness; the browser never names an
+  // arbitrary target. The operand is validated against state.harnesses by the
+  // planner; only its syntax is closed here.
+  if (MODEL_ACTIONS.includes(action) || action === 'apply_target') {
+    const target = body.target
+    if (typeof target !== 'string' || target === '') {
+      return invalid(400, 'invalid_target', `${action} requires a target`)
+    }
+    if (action === 'apply_target') {
+      return { ok: true, request: { action, target, provider: null, scope: null, dryRun } }
+    }
     const provider = body.provider
     const model = body.model
     const protocol = body.protocol
-    if (typeof provider !== 'string' || provider === '') return invalid(400, 'invalid_provider', 'add_model requires a provider ID')
-    if (typeof model !== 'string' || model === '') return invalid(400, 'invalid_model', 'add_model requires a model ID')
+    if (typeof provider !== 'string' || provider === '') return invalid(400, 'invalid_provider', `${action} requires a provider ID`)
+    if (typeof model !== 'string' || model === '') return invalid(400, 'invalid_model', `${action} requires a model ID`)
     if (typeof protocol !== 'string' || !ADD_PROTOCOLS.includes(protocol)) {
       return invalid(400, 'invalid_protocol', `protocol must be one of ${ADD_PROTOCOLS.join(', ')}`)
     }
-    return { ok: true, request: { action, provider, model, protocol, scope: null, dryRun } }
+    return { ok: true, request: { action, target, provider, model, protocol, scope: null, dryRun } }
   }
   if (PROVIDER_ACTIONS.includes(action)) {
     const provider = body.provider
@@ -180,28 +207,89 @@ export function validateActionRequest(body) {
     }
     return { ok: true, request: { action, provider, scope, dryRun } }
   }
-  // A provider for an action that names none is ignored, never argv.
+  // A provider or target for an action that names none is ignored, never argv.
   return { ok: true, request: { action, provider: null, scope, dryRun } }
 }
 
+/** Exact declared-Harness IDs from the current host snapshot; nothing else is addressable. */
+export function harnessIdsFromState(state) {
+  const rows = state?.harnesses
+  if (!Array.isArray(rows)) return []
+  return rows.map(row => row?.id).filter(id => typeof id === 'string' && id !== '')
+}
+
 /**
- * Plan one fixed target-selection write: add one existing catalog model to the
- * declared DSH target and apply it. The browser never names an entry, a command,
- * or a flag; every operand is derived from the current catalog. Pure.
+ * The declared Harness for one target, or the typed refusal that prevents
+ * addressing it. A target is addressable only when the Harness list was read
+ * and that Harness's own inspection answered, because a selection write reads
+ * and extends the target's existing entries.
+ * @returns {{ok: true, harness: object} | {ok: false, status: number, code: string, message: string}}
+ */
+export function harnessFromState(state, target) {
+  const rows = Array.isArray(state?.harnesses) ? state.harnesses : null
+  if (rows === null) {
+    return invalid(409, 'harnesses_unavailable', 'the declared tmax Harnesses could not be read, so the target cannot be validated')
+  }
+  const failure = listOf(state?.errors).find(error => isPlainObject(error) && error.section === 'harnesses')
+  if (failure !== undefined) {
+    return invalid(
+      409,
+      'harnesses_unavailable',
+      textOf(failure.message) ?? 'the declared tmax Harnesses could not be read, so the target cannot be validated',
+    )
+  }
+  const harness = rows.find(row => isPlainObject(row) && row.id === target)
+  if (harness === undefined) {
+    return invalid(409, 'unknown_target', `target "${target}" is not a declared tmax Harness`)
+  }
+  if (harness.appliedState === null) {
+    // The list named the target but its inspection did not answer: its entries
+    // are unknown, so a selection could not be placed safely.
+    return invalid(409, 'target_uninspectable', `target "${target}" cannot be inspected, so its provider entries cannot be read safely`)
+  }
+  return { ok: true, harness }
+}
+
+/** A target-local provider entry name a write may create, or a typed refusal. */
+function entryName(provider, protocol, names) {
+  const base = provider.source === 'gateway' ? 'tmax' : String(provider.id)
+  if (/[\s\u0000-\u001f]/u.test(base)) {
+    return invalid(409, 'entry_name_unavailable', 'the provider ID cannot form a native entry name')
+  }
+  let name = base
+  if (names.has(name)) name = `${base}-${protocol}`
+  for (let suffix = 2; names.has(name) && suffix < 10; suffix += 1) name = `${base}-${protocol}-${suffix}`
+  if (names.has(name)) return invalid(409, 'entry_name_conflict', 'no free target entry name is available for this provider')
+  return { ok: true, name }
+}
+
+/**
+ * Plan one target-selection add: add one existing catalog model to one declared
+ * Harness's desired configuration. The browser never names an entry, a command,
+ * or a flag; the target, provider, model, and protocol are validated against
+ * the current read model and every following operand is derived from it. Pure.
+ *
+ * The plan creates the target-local provider entry only when the target does
+ * not already hold an entry able to serve the protocol, then adds the model
+ * selection. It never plans an apply: actual configuration is applied only
+ * through the explicit, per-target `apply_target` action.
  *
  * @returns {{ok: true, plan: {provider: string, model: string, protocol: string, target: string, entry: {name: string, mode: 'existing'|'create'}, steps: {name: string, argv: string[]}[]}}
  *   | {ok: false, status: number, code: string, message: string}}
  */
-export function planAddModel(request, { state, target } = {}) {
+export function planAddModel(request, { state } = {}) {
   if (!isPlainObject(request) || request.action !== 'add_model') return invalid(400, 'invalid_action', 'an add_model request is required')
   const providerId = textOf(request.provider)
   const modelId = textOf(request.model)
   const protocol = textOf(request.protocol)
-  const resolvedTarget = textOf(target)
+  const target = textOf(request.target)
+  if (target === null) return invalid(400, 'invalid_target', 'add_model requires a target')
   if (providerId === null) return invalid(400, 'invalid_provider', 'add_model requires a provider ID')
   if (modelId === null) return invalid(400, 'invalid_model', 'add_model requires a model ID')
   if (protocol === null || !ADD_PROTOCOLS.includes(protocol)) return invalid(400, 'invalid_protocol', `protocol must be one of ${ADD_PROTOCOLS.join(', ')}`)
-  if (resolvedTarget === null) return invalid(409, 'target_unresolved', 'no declared DSH target resolves for this home; declare one before adding a model')
+  const addressed = harnessFromState(state, target)
+  if (!addressed.ok) return addressed
+  const harness = addressed.harness
   const catalog = isPlainObject(state?.catalog) ? state.catalog : null
   if (catalog === null || catalog.state !== 'available') {
     return invalid(409, 'catalog_unavailable', 'the tmax model catalog is unavailable, so the selection cannot be validated')
@@ -216,60 +304,123 @@ export function planAddModel(request, { state, target } = {}) {
   if (!protocols.includes(protocol)) {
     return invalid(409, 'unsupported_protocol', `model "${providerId}/${modelId}" does not publish protocol "${protocol}"`)
   }
-  if (model.joined !== true && model.joined !== false) {
-    return invalid(409, 'target_uninspectable', 'the target selection cannot be read, so the model cannot be added safely')
-  }
-  if (provider.entries === null || provider.entries === undefined) {
-    return invalid(409, 'target_uninspectable', 'the target entries cannot be read, so the model cannot be added safely')
-  }
-  const joinedProtocols = listOf(model.joinedProtocols)
-  if (joinedProtocols.includes(protocol)) {
-    return invalid(409, 'already_joined', `model "${providerId}/${modelId}" is already selected for protocol "${protocol}"`)
-  }
   if (provider.source === 'gateway' && state?.gateway?.configured !== true) {
     return invalid(409, 'gateway_not_configured', 'the tmax gateway is not configured, so its route cannot be added to the target')
   }
-  const entries = listOf(provider.entries).filter(entry => isPlainObject(entry) && textOf(entry.name) !== null)
+  // The target's own inspected entries are the only selection evidence: the
+  // catalog describes models, not where this Harness already holds them.
+  const targetEntries = listOf(harness.providers).filter(entry => isPlainObject(entry) && textOf(entry.name) !== null)
+  const entries = targetEntries.filter(entry => entry.sourceProvider === providerId)
+  const selected = entries.some(entry => listOf(entry.models)
+    .some(selection => isPlainObject(selection) && selection.id === modelId && selection.protocol === protocol))
+  if (selected) {
+    return invalid(409, 'already_joined', `model "${providerId}/${modelId}" is already selected for protocol "${protocol}" on target "${target}"`)
+  }
   // Prefer an entry that already serves this protocol; otherwise fill an
   // existing entry that has no model yet before creating another name.
-  const existing = entries.find(entry => listOf(entry.protocols).includes(protocol))
-    ?? entries.find(entry => listOf(entry.protocols).length === 0)
+  const existing = entries.find(entry => listOf(entry.models)
+    .some(selection => isPlainObject(selection) && selection.protocol === protocol))
+    ?? entries.find(entry => listOf(entry.models).length === 0)
   let entry
   if (existing !== undefined) {
     entry = { name: textOf(existing.name), mode: 'existing' }
   } else {
     // A DSH entry holds one protocol. Reuse a matching entry; otherwise create
-    // a target-local name that no declared entry already uses.
-    const names = new Set()
-    for (const row of listOf(catalog.providers)) {
-      for (const candidate of listOf(row?.entries)) {
-        const name = textOf(candidate?.name)
-        if (name !== null) names.add(name)
-      }
-    }
-    const base = provider.source === 'gateway' ? 'tmax' : String(provider.id)
-    if (/[\s\u0000-\u001f]/u.test(base)) {
-      return invalid(409, 'entry_name_unavailable', 'the provider ID cannot form a native entry name')
-    }
-    let name = base
-    if (names.has(name)) name = `${base}-${protocol}`
-    for (let suffix = 2; names.has(name) && suffix < 10; suffix += 1) name = `${base}-${protocol}-${suffix}`
-    if (names.has(name)) return invalid(409, 'entry_name_conflict', 'no free target entry name is available for this provider')
-    entry = { name, mode: 'create' }
+    // a target-local name that no declared entry of this target already uses.
+    const names = new Set(targetEntries.map(candidate => textOf(candidate.name)).filter(name => name !== null))
+    const named = entryName(provider, protocol, names)
+    if (!named.ok) return named
+    entry = { name: named.name, mode: 'create' }
   }
   const steps = []
   if (entry.mode === 'create') {
-    steps.push({ name: 'provider_add', argv: ['agent', 'provider', 'add', resolvedTarget, entry.name, '--provider', String(provider.id)] })
+    steps.push({ name: 'provider_add', argv: ['agent', 'provider', 'add', target, entry.name, '--provider', String(provider.id)] })
   }
-  steps.push({ name: 'model_add', argv: ['agent', 'model', 'add', resolvedTarget, entry.name, String(model.id), '--protocol', protocol] })
-  steps.push({ name: 'apply', argv: ['agent', 'apply', resolvedTarget] })
+  steps.push({ name: 'model_add', protocol, argv: ['agent', 'model', 'add', target, entry.name, String(model.id), '--protocol', protocol] })
   return {
     ok: true,
     plan: {
       provider: String(provider.id),
       model: String(model.id),
       protocol,
-      target: resolvedTarget,
+      target,
+      entry,
+      steps,
+    },
+  }
+}
+
+/**
+ * Plan one target-selection remove: find the declared Harness entry that holds
+ * the exact provider/model/protocol selection and remove every protocol
+ * selection for that model from that target's desired configuration as one
+ * host-fixed sequence. Pure; never plans an apply.
+ *
+ * @returns {{ok: true, plan: {provider: string, model: string, protocol: string, target: string, entry: {name: string, mode: 'existing'}, steps: {name: string, argv: string[]}[]}}
+ *   | {ok: false, status: number, code: string, message: string}}
+ */
+export function planRemoveModel(request, { state } = {}) {
+  if (!isPlainObject(request) || request.action !== 'remove_model') return invalid(400, 'invalid_action', 'a remove_model request is required')
+  const providerId = textOf(request.provider)
+  const modelId = textOf(request.model)
+  const protocol = textOf(request.protocol)
+  const target = textOf(request.target)
+  if (target === null) return invalid(400, 'invalid_target', 'remove_model requires a target')
+  if (providerId === null) return invalid(400, 'invalid_provider', 'remove_model requires a provider ID')
+  if (modelId === null) return invalid(400, 'invalid_model', 'remove_model requires a model ID')
+  if (protocol === null || !ADD_PROTOCOLS.includes(protocol)) return invalid(400, 'invalid_protocol', `protocol must be one of ${ADD_PROTOCOLS.join(', ')}`)
+  const addressed = harnessFromState(state, target)
+  if (!addressed.ok) return addressed
+  // The requested protocol is a selector, not the removal limit: one checkbox
+  // represents this provider/model in the Harness, so removing it removes every
+  // protocol selection for that model. The host derives the exact entry and
+  // protocol list from the Harness, not from browser-named argv.
+  const entries = listOf(addressed.harness.providers).filter(entry =>
+    isPlainObject(entry)
+    && entry.sourceProvider === providerId
+    && textOf(entry.name) !== null)
+  const holders = entries.filter(entry => listOf(entry.models).some(selection =>
+    isPlainObject(selection) && selection.id === modelId))
+  if (holders.length > 1) {
+    // The browser names no entry, so choosing one would be arbitrary. The user
+    // must remove the duplicate selection through the CLI.
+    return invalid(409, 'ambiguous_selection', `model "${providerId}/${modelId}" is selected in ${holders.length} entries on target "${target}"; remove it by CLI`)
+  }
+  const steps = []
+  const seen = new Set()
+  for (const entry of entries) {
+    for (const selection of listOf(entry.models)) {
+      if (!isPlainObject(selection) || selection.id !== modelId) continue
+      const held = textOf(selection.protocol)
+      if (held === null) continue
+      const key = `${textOf(entry.name)}\u0000${held}`
+      if (seen.has(key)) {
+        return invalid(409, 'ambiguous_selection', `model "${providerId}/${modelId}" is selected more than once on target "${target}"; remove it by CLI`)
+      }
+      seen.add(key)
+      steps.push({
+        name: 'model_remove',
+        protocol: held,
+        argv: ['agent', 'model', 'remove', target, String(textOf(entry.name)), modelId, '--protocol', held],
+      })
+    }
+  }
+  if (steps.length === 0) {
+    return invalid(409, 'not_joined', `model "${providerId}/${modelId}" is not selected on target "${target}"`)
+  }
+  if (!steps.some(step => step.argv[step.argv.length - 1] === protocol)) {
+    return invalid(409, 'not_joined', `model "${providerId}/${modelId}" is not selected for protocol "${protocol}" on target "${target}"`)
+  }
+  const first = entries.find(entry => listOf(entry.models).some(selection =>
+    isPlainObject(selection) && selection.id === modelId))
+  const entry = { name: textOf(first?.name), mode: 'existing' }
+  return {
+    ok: true,
+    plan: {
+      provider: providerId,
+      model: modelId,
+      protocol,
+      target,
       entry,
       steps,
     },
@@ -294,6 +445,13 @@ export function actionArgv(action, { provider = null, scope = null, dryRun = fal
     const resolved = typeof target === 'string' && target !== '' ? target : explicitTarget(config)
     if (resolved === undefined) return null
     return withPreview(['agent', 'apply', resolved], dryRun)
+  }
+  if (action === 'apply_target') {
+    // The target is an explicit operand the snapshot validated; a missing one
+    // has no argv form rather than falling back to the configured target.
+    const named = typeof target === 'string' && target !== '' ? target : undefined
+    if (named === undefined) return null
+    return withPreview(['agent', 'apply', named], dryRun)
   }
   if (action === 'observe_provider') {
     if (providerOperand === undefined) return null
@@ -321,12 +479,13 @@ export function actionArgv(action, { provider = null, scope = null, dryRun = fal
 }
 
 /**
- * Validate one request against the addressable provider IDs and build its exact
- * argv, timeout, and single-flight key. Pure: no CLI, no clock, no mutation.
+ * Validate one request against the addressable provider IDs and declared
+ * Harness IDs and build its exact argv, timeout, and single-flight key. Pure:
+ * no CLI, no clock, no mutation.
  * @returns {{ok: true, plan: {action: string, provider: string|null, scope: string|null, dryRun: boolean, argv: string[], timeoutMs: number}}
  *   | {ok: false, status: number, code: string, message: string}}
  */
-export function planAction(body, { providerIds = [], config = {}, env = process.env, target = undefined } = {}) {
+export function planAction(body, { providerIds = [], targets, config = {}, env = process.env, target = undefined } = {}) {
   const validated = validateActionRequest(body)
   if (!validated.ok) return validated
   const request = validated.request
@@ -336,10 +495,24 @@ export function planAction(body, { providerIds = [], config = {}, env = process.
       return invalid(409, 'unknown_provider', `provider "${request.provider}" is not in the current tmax state`)
     }
   }
-  const argv = actionArgv(request.action, { ...request, config, env, target })
+  if (request.action === 'apply_target') {
+    // The target is addressable only when the declared Harness list was read;
+    // an empty list from a failed read is unknown, never "no such target".
+    const known = Array.isArray(targets) ? targets : null
+    if (known === null) {
+      return invalid(409, 'harnesses_unavailable', 'the declared tmax Harnesses could not be read, so the target cannot be validated')
+    }
+    if (!known.includes(request.target)) {
+      return invalid(409, 'unknown_target', `target "${request.target}" is not a declared tmax Harness`)
+    }
+  }
+  const argv = actionArgv(request.action, { ...request, config, env, target: request.target ?? target })
   if (argv === null) {
     if (request.action === 'connect') {
       return invalid(409, 'target_unresolved', 'no declared DSH target resolves for this home; declare one before applying it')
+    }
+    if (request.action === 'apply_target') {
+      return invalid(409, 'target_unresolved', 'the target to apply is unresolved')
     }
     return invalid(400, 'invalid_action', `${request.action} has no host argv form`)
   }
@@ -427,36 +600,39 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
   }
 
   /** The browser-visible plan: no argv, no paths, no secret material. */
-  function addPlanResult(plan) {
+  function writePlanResult(plan) {
     return {
+      target: plan.target,
       provider: plan.provider,
       model: plan.model,
       protocol: plan.protocol,
-      target: plan.target,
       entry: plan.entry,
       steps: plan.steps.map(step => step.name),
+      protocols: plan.steps.map(step => step.protocol ?? null),
     }
   }
 
   /** Merge plan/step metadata into one tmax step's data without dropping its evidence. */
-  function addResultData(base, steps, extra, evidence) {
+  function writeResultData(base, steps, extra, evidence) {
     const data = isPlainObject(evidence?.data) ? { ...evidence.data } : {}
     return { ...data, ...base, steps, ...extra }
   }
 
   /**
-   * One explicitly previewed target-selection write. A preview is the
-   * catalog-derived plan (no tmax invocation, no write); execution runs the
-   * fixed provider/model/apply sequence, stops at the first refusal, and
-   * reports every completed step and the fresh state. There is no rollback:
-   * a partial write is visible and the page can apply or repair it.
+   * One target-selection write on one declared Harness. A preview is the
+   * read-model-derived plan (no tmax invocation, no write); execution runs the
+   * fixed selection sequence — provider creation only when the target needs an
+   * entry, then the model addition or removal — and never an apply. It stops
+   * at the first refusal and reports every completed step and the fresh state.
+   * The target's actual configuration changes only through `apply_target`.
    */
-  async function runAddModel(body) {
+  async function runModelWrite(body) {
     const validated = validateActionRequest(body)
+    const action = validated.ok ? validated.request.action : (typeof body?.action === 'string' ? body.action : 'add_model')
     if (!validated.ok) {
       return reply(validated.status, {
         ok: false,
-        action: 'add_model',
+        action,
         dryRun: body?.dryRun === true,
         code: validated.code,
         message: validated.message,
@@ -468,24 +644,25 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
     try {
       current = dryRun ? await readCurrentState() : await snapshot.state({ force: true })
     } catch (error) {
-      log?.(`add_model state read failed: ${error instanceof Error ? error.message : String(error)}`)
+      log?.(`${request.action} state read failed: ${error instanceof Error ? error.message : String(error)}`)
       current = undefined
     }
     if (current === undefined || current.ok !== true) {
       return reply(502, {
         ok: false,
-        action: 'add_model',
+        action: request.action,
         dryRun,
         code: 'state_unavailable',
         message: 'the current tmax state is unavailable, so the selection cannot be validated',
       })
     }
-    const target = explicitTarget(config) ?? (typeof current.target?.id === 'string' && current.target.id !== '' ? current.target.id : undefined)
-    const planned = planAddModel(request, { state: current, target })
+    const planned = request.action === 'add_model'
+      ? planAddModel(request, { state: current })
+      : planRemoveModel(request, { state: current })
     if (!planned.ok) {
       return reply(planned.status, {
         ok: false,
-        action: 'add_model',
+        action: request.action,
         dryRun,
         code: planned.code,
         message: planned.message,
@@ -495,17 +672,17 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
     if (dryRun) {
       return reply(200, {
         ok: true,
-        action: 'add_model',
+        action: request.action,
         dryRun: true,
-        result: secretFree({ code: 'ok', status: 'dry_run', data: addPlanResult(plan) }),
+        result: secretFree({ code: 'ok', status: 'dry_run', data: writePlanResult(plan) }),
         state: current,
       })
     }
-    const key = actionLockKey('add_model')
+    const key = actionLockKey(request.action)
     if (running.has(key)) {
       return reply(409, {
         ok: false,
-        action: 'add_model',
+        action: request.action,
         dryRun: false,
         code: 'busy',
         message: 'another target write is already running',
@@ -513,18 +690,18 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
     }
     running.add(key)
     const steps = []
-    const base = { provider: plan.provider, model: plan.model, protocol: plan.protocol, entry: plan.entry }
-    const deadline = Date.now() + actionTimeoutMs('add_model')
-    let applyEvidence
+    const base = { target: plan.target, provider: plan.provider, model: plan.model, protocol: plan.protocol, entry: plan.entry }
+    const deadline = Date.now() + actionTimeoutMs(request.action)
+    let evidence
     try {
       for (const step of plan.steps) {
         const remaining = deadline - Date.now()
         if (remaining <= 0) {
-          const message = 'the add-model deadline expired before the next step'
+          const message = `the ${request.action} deadline expired before the next step`
           const state = await freshState(current)
           return reply(502, {
             ok: false,
-            action: 'add_model',
+            action: request.action,
             dryRun: false,
             code: 'tmax_unavailable',
             message,
@@ -538,7 +715,7 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
           const state = await freshState(current)
           return reply(502, {
             ok: false,
-            action: 'add_model',
+            action: request.action,
             dryRun: false,
             code: 'tmax_unavailable',
             message,
@@ -555,25 +732,18 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
         if (!isActionSuccess(read.envelope, false)) {
           const message = result.message ?? envelopeMessage(read.envelope)
           result.message = message
-          if (step.name === 'apply') {
-            try {
-              await refreshOwnership?.()
-            } catch (error) {
-              log?.(`add_model ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
-            }
-          }
           const state = await freshState(current)
           return reply(409, {
             ok: false,
-            action: 'add_model',
+            action: request.action,
             dryRun: false,
             code: result.code,
             message,
             result: secretFree({
               ...result,
-              data: addResultData(
+              data: writeResultData(
                 base,
-                [...steps, { name: step.name, code: result.code, status: result.status }],
+                [...steps, { name: step.name, code: result.code, status: result.status, protocol: step.protocol ?? null }],
                 { failedStep: step.name },
                 result,
               ),
@@ -581,39 +751,32 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
             state,
           })
         }
-        steps.push({ name: step.name, code: result.code, status: result.status })
-        if (step.name === 'apply') {
-          applyEvidence = result
-          try {
-            await refreshOwnership?.()
-          } catch (error) {
-            log?.(`add_model ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
-          }
-        }
+        steps.push({ name: step.name, code: result.code, status: result.status, protocol: step.protocol ?? null })
+        evidence = result
       }
       const success = {
-        code: applyEvidence?.code ?? 'ok',
+        code: evidence?.code ?? 'ok',
         status: 'success',
-        data: addResultData(base, steps, {}, applyEvidence),
+        data: writeResultData(base, steps, {}, evidence),
       }
       for (const field of ['effects', 'blockers', 'next_actions']) {
-        if (applyEvidence?.[field] !== undefined) success[field] = applyEvidence[field]
+        if (evidence?.[field] !== undefined) success[field] = evidence[field]
       }
       const state = await freshState(current)
       return reply(200, {
         ok: true,
-        action: 'add_model',
+        action: request.action,
         dryRun: false,
         result: secretFree(success),
         state,
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      log?.(`add_model failed: ${message}`)
+      log?.(`${request.action} failed: ${message}`)
       const state = await freshState(current)
       return reply(502, {
         ok: false,
-        action: 'add_model',
+        action: request.action,
         dryRun: false,
         code: 'action_failed',
         message,
@@ -626,21 +789,26 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
   }
 
   async function run(body) {
-    if (body?.action === 'add_model') return runAddModel(body)
+    if (MODEL_ACTIONS.includes(body?.action)) return runModelWrite(body)
     const actionName = typeof body?.action === 'string' ? body.action : null
     const dryRun = body?.dryRun === true
     // Provider actions validate an exact provider ID against state; gateway
     // actions validate that a configured gateway exists; connect resolves the
-    // target it applies. Each needs the state read first when the request does
-    // not already pin the fact; everything else is answered from the request.
+    // target it applies; apply_target addresses one declared Harness. Each
+    // needs the state read first when the request does not already pin the
+    // fact; everything else is answered from the request.
     const providerAction = PROVIDER_ACTIONS.includes(actionName)
     const gatewayAction = GATEWAY_ACTIONS.includes(actionName)
     const connectAction = actionName === 'connect'
+    const applyTargetAction = actionName === 'apply_target'
     const configuredTarget = explicitTarget(config)
     const needsProviders = providerAction
       && typeof body?.provider === 'string'
       && body.provider !== ''
-    const needsState = needsProviders || gatewayAction || (connectAction && configuredTarget === undefined)
+    const needsHarnesses = applyTargetAction
+      && typeof body?.target === 'string'
+      && body.target !== ''
+    const needsState = needsProviders || gatewayAction || needsHarnesses || (connectAction && configuredTarget === undefined)
     let current
     if (needsState) {
       current = await readCurrentState()
@@ -678,6 +846,20 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
           message: 'the current tmax state is unavailable, so the action cannot be validated',
         })
       }
+      if (applyTargetAction) {
+        // A Harness list that failed to read is a typed refusal, not an empty
+        // list: the target cannot be proven declared, so no apply may run.
+        const failure = listOf(current.errors).find(error => isPlainObject(error) && error.section === 'harnesses')
+        if (failure !== undefined) {
+          return reply(409, {
+            ok: false,
+            action: actionName,
+            dryRun,
+            code: 'harnesses_unavailable',
+            message: textOf(failure.message) ?? 'the declared tmax Harnesses could not be read, so the target cannot be validated',
+          })
+        }
+      }
       if (gatewayAction) {
         const gateway = current.gateway
         if (gateway === null || gateway === undefined || gateway.configured === null || gateway.configured === undefined) {
@@ -714,20 +896,22 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
     }
     const planned = planAction(body, {
       providerIds: needsProviders ? providerIdsFromState(current) : [],
+      targets: needsHarnesses ? harnessIdsFromState(current) : undefined,
       config,
       env,
       target: connectTarget,
     })
     if (!planned.ok) return reply(planned.status, { ok: false, action: actionName, dryRun, code: planned.code, message: planned.message })
     const plan = planned.plan
-    const key = actionLockKey(plan.action, plan.provider) ?? plan.action
+    const key = actionLockKey(plan.action, plan.provider, plan.target) ?? plan.action
     if (running.has(key)) {
+      const named = plan.target ?? plan.provider
       return reply(409, {
         ok: false,
         action: plan.action,
         dryRun: plan.dryRun,
         code: 'busy',
-        message: `another ${plan.action}${plan.provider === null ? '' : ` for "${plan.provider}"`} is already running`,
+        message: `another ${plan.action}${named === null || named === undefined ? '' : ` for "${named}"`} is already running`,
       })
     }
     running.add(key)

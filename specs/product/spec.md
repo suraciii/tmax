@@ -570,7 +570,9 @@ The Agent configuration view must report the target's applied state from its
 retained managed record: unknown when the scope is unavailable, not applied when
 no record is retained, and otherwise that record's state (for example awaiting
 Agent reload or recovery required), together with any blocker for the requested
-operation. It must distinguish expected configuration from the running Agent's
+operation. It must also report whether the target's expected configuration is
+unapplied, from the target revision comparison rather than from the Agent's
+files. It must distinguish expected configuration from the running Agent's
 effective configuration. Higher-precedence settings and unmanaged fields must be surfaced
 and never claimed as active. A later edit to a managed field is not a separate
 state; the next authoritative apply overwrites it.
@@ -584,6 +586,32 @@ method, protocol, and model capability. Explain unavailable combinations before
 changing files. Requests must use the configured concrete model or an eligible
 candidate of the selected model alias; failure must not select an unconfigured
 model, provider, credential, or billing product.
+
+### Harness configuration flow
+
+The DSH in-context page presents every declared Agent target as a **Harness**.
+The name identifies that target; it is not a second resource, and declaring,
+editing, applying, and restoring a target stay in the `agent` command family.
+The page supports two separate explicit steps:
+
+| Step | Required behavior |
+| --- | --- |
+| Choose models for a Harness | Add or remove selected models in that target's expected configuration only. It writes no actual configuration, resolves no credential, and applies nothing. |
+| Apply a Harness | Run that target's own apply as an explicit, previewed operation. Each Harness is applied independently; there is no target-wide or page-wide apply. |
+
+A Harness is **unapplied** while its expected configuration differs from the
+target revision captured by its last successful apply, when no apply has
+completed, or when its retained managed record represents an incomplete write,
+recovery-required state, or restore. `待应用` (unapplied) is this
+desired-versus-applied revision flag; it is not a native pending change, merge,
+or per-field difference, and it never blocks the next apply. A completed
+successful apply makes the Harness current.
+
+Apply remains the authoritative operation under
+[Agent provider configuration](#agent-provider-configuration): last writer wins
+for tmax-managed actual configuration, unmanaged fields stay, and the target's
+single-level restore snapshot is retained. Applying one Harness never writes
+another Harness's actual configuration.
 
 ## Agent provider configuration
 
@@ -1329,6 +1357,12 @@ credentials; do not claim readiness or add a fallback.
     unqualified writer fails closed, another target remains unaffected, and no
     core rule depends on a fixed table, file, field, or path-encoder name. Confirm
     a legacy schema is not silently treated as current.
+38. In the DSH plugin page, present each declared Agent target as a Harness, add
+    and remove its model selections without writing actual configuration, and
+    apply Harnesses one at a time. Confirm `待应用` follows the
+    desired-versus-last-applied target revision, a successful apply makes that
+    Harness current, a restored record is unapplied, and applying one Harness
+    leaves another Harness's actual configuration and retained snapshot unchanged.
 
 An agent's native mode may remain the only supported path for a particular
 subscription. Such a limitation must be named, not described as complete

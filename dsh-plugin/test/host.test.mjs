@@ -88,6 +88,9 @@ function agentInspect(overrides = {}) {
         source: 'https://github.com/deepseek-ai/deepseek-harness',
       },
       applied_state: 'unknown',
+      target_revision: 'rev-2',
+      applied_target_revision: 'rev-1',
+      unapplied: true,
       blockers: [{
         code: 'gateway_not_ready',
         field: null,
@@ -462,6 +465,9 @@ function pick() {
   if (a[0] === 'agent' && a[1] === 'inspect') {
     if (a.includes('--home')) {
       return { code: 'invalid_arguments', status: 'error', data: null, message: 'Unknown option --home.', __exit: 2 }
+    }
+    if (scenario.agentInspects !== undefined && Object.prototype.hasOwnProperty.call(scenario.agentInspects, a[2])) {
+      return scenario.agentInspects[a[2]]
     }
     return scenario.agentInspect
   }
@@ -877,8 +883,8 @@ test('the inventory composes from agent list/inspect, gateway status, and tmax s
   await fake.clearCalls()
   const body = (await getJson(state, '/_tmax/state')).body
   const calls = await fake.calls()
-  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'list'])), 'the home resolves the target')
-  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'inspect', 'dsh-main'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'list', '--format', 'json'])), 'the declared targets are read as JSON')
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'inspect', 'dsh-main', '--format', 'json'])), 'each declared Harness is inspected')
   assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['gateway', 'status'])))
   assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['status'])))
   assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['provider', 'list'])))
@@ -890,17 +896,199 @@ test('the inventory composes from agent list/inspect, gateway status, and tmax s
   assert.equal(body.ok, true)
 })
 
-test('an explicit target skips agent list and is the agent inspect operand', async () => {
+test('an explicit target skips agent list for target resolution and is the agent inspect operand', async () => {
   const { fake, state } = await applied({ config: { target: 'custom-target' } })
   await fake.clearCalls()
   await getJson(state, '/_tmax/state')
   const calls = await fake.calls()
-  assert.equal(calls.some(argv => argv[0] === 'agent' && argv[1] === 'list'), false)
+  // The inventory uses the configured target directly; the Harness section
+  // still reads every declared target, which is its own list read.
   assert.deepEqual(
-    calls.find(argv => argv[0] === 'agent' && argv[1] === 'inspect'),
+    calls.find(argv => argv[0] === 'agent' && argv[1] === 'inspect' && argv[2] === 'custom-target'),
     ['agent', 'inspect', 'custom-target'],
   )
+  assert.ok(
+    calls.some(argv => argv[0] === 'agent' && argv[1] === 'list'),
+    'the Harness section reads the declared targets',
+  )
   assert.equal(calls.some(argv => argv.includes('--home')), false, 'agent inspect has no --home selector')
+})
+
+test('state schema 5 exposes every declared target as a Harness', async () => {
+  const scenario = baseScenario()
+  scenario.agentList = {
+    code: 'ok',
+    status: 'success',
+    data: {
+      agents: [
+        { target: 'dsh-main', agent: 'dsh', path: '__HOME__', provider_count: 1, model_count: 3, default_configured: true },
+        { target: 'pi-main', agent: 'pi', path: '/tmp/pi-agent', provider_count: 2, model_count: 3, default_configured: true },
+      ],
+    },
+  }
+  scenario.agentInspect = agentInspect({ target_revision: 'rev-3', applied_target_revision: 'rev-2', unapplied: true })
+  scenario.agentInspects = {
+    'pi-main': agentInspect({
+      target: 'pi-main',
+      agent: 'pi',
+      path: '/tmp/pi-agent',
+      providers: [
+        {
+          name: 'deepseek',
+          source: { provider: 'kimi' },
+          relayed: false,
+          base_url: null,
+          credential_ref: null,
+          applied_delivery: null,
+          models: [{ id: 'k3.1-pro', protocol: 'responses' }],
+        },
+        {
+          name: 'other',
+          source: { provider: 'cpa-us2' },
+          relayed: false,
+          base_url: null,
+          credential_ref: null,
+          applied_delivery: null,
+          models: [
+            { id: 'gpt-6-astra', protocol: 'chat-completions' },
+            { id: 'gpt-6-mini', protocol: 'chat-completions' },
+          ],
+        },
+      ],
+      default: { provider: 'deepseek', id: 'k3.1-pro', protocol: 'responses' },
+      native_projection: [],
+      applied_state: 'applied',
+      target_revision: 'rev-2',
+      applied_target_revision: 'rev-2',
+      unapplied: false,
+      blockers: [{ code: 'credential_missing', message: 'Provider "kimi" has no credential' }],
+    }),
+  }
+  const { fake, state, home } = await applied({ scenario })
+  await fake.clearCalls()
+  const body = (await getJson(state, '/_tmax/state')).body
+  const calls = await fake.calls()
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'list', '--format', 'json'])))
+  assert.ok(calls.some(argv => JSON.stringify(argv) === JSON.stringify(['agent', 'inspect', 'pi-main', '--format', 'json'])), 'each declared target is inspected')
+
+  assert.equal(body.schemaVersion, 5)
+  assert.deepEqual(body.harnesses.map(row => row.id), ['dsh-main', 'pi-main'])
+  const dsh = body.harnesses[0]
+  assert.deepEqual(Object.keys(dsh).sort(), [
+    'agent', 'appliedState', 'blockers', 'default', 'defaultConfigured',
+    'id', 'modelCount', 'path', 'providerCount', 'providers', 'unapplied',
+  ])
+  assert.equal(dsh.id, 'dsh-main')
+  assert.equal(dsh.agent, 'dsh')
+  assert.equal(dsh.path, home, 'the list path is the declared scope path')
+  assert.equal(dsh.providerCount, 1)
+  assert.equal(dsh.modelCount, 3)
+  assert.equal(dsh.defaultConfigured, true)
+  assert.equal(dsh.appliedState, 'unknown')
+  assert.equal(dsh.unapplied, true, 'the core inspect flag crosses unchanged')
+  assert.deepEqual(dsh.default, { provider: 'tmax', id: 'deepseek-v4.1-flash', protocol: 'responses', effort: 'max' })
+  assert.deepEqual(dsh.blockers.map(blocker => blocker.code), ['gateway_not_ready'])
+  assert.deepEqual(dsh.providers, [{
+    name: 'tmax',
+    sourceProvider: 'tmax',
+    relayed: true,
+    models: [
+      { id: 'public-model', protocol: 'responses' },
+      { id: 'text-only', protocol: 'responses' },
+      { id: 'no-context', protocol: 'responses' },
+    ],
+  }])
+
+  const pi = body.harnesses[1]
+  assert.equal(pi.id, 'pi-main')
+  assert.equal(pi.agent, 'pi')
+  assert.equal(pi.path, '/tmp/pi-agent')
+  assert.equal(pi.providerCount, 2)
+  assert.equal(pi.modelCount, 3)
+  assert.equal(pi.defaultConfigured, true)
+  assert.equal(pi.appliedState, 'applied')
+  assert.equal(pi.unapplied, false)
+  assert.deepEqual(pi.blockers, [{ code: 'credential_missing', message: 'Provider "kimi" has no credential' }])
+  assert.deepEqual(pi.default, { provider: 'deepseek', id: 'k3.1-pro', protocol: 'responses' })
+  assert.deepEqual(pi.providers[1], {
+    name: 'other',
+    sourceProvider: 'cpa-us2',
+    relayed: false,
+    models: [
+      { id: 'gpt-6-astra', protocol: 'chat-completions' },
+      { id: 'gpt-6-mini', protocol: 'chat-completions' },
+    ],
+  })
+
+  // The DSH-native sections stay beside the new section for existing consumers.
+  assert.equal(body.target.id, 'dsh-main')
+  assert.equal(body.catalog.state, 'available')
+  assert.deepEqual(body.errors, [])
+})
+
+test('a Harness whose inspection failed keeps its list facts and names the failure', async () => {
+  const scenario = baseScenario()
+  scenario.agentList = {
+    code: 'ok',
+    status: 'success',
+    data: {
+      agents: [
+        { target: 'dsh-main', agent: 'dsh', path: '__HOME__', provider_count: 1, model_count: 3, default_configured: true },
+        { target: 'pi-main', agent: 'pi', path: '/tmp/pi-agent', provider_count: 2, model_count: 5, default_configured: false },
+      ],
+    },
+  }
+  scenario.agentInspects = {
+    'pi-main': {
+      code: 'unknown_resource',
+      status: 'error',
+      data: null,
+      blockers: [{ code: 'unknown_resource', message: 'Unknown target "pi-main".' }],
+      __exit: 2,
+    },
+  }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  const pi = body.harnesses.find(row => row.id === 'pi-main')
+  assert.ok(pi, 'a listed target is never hidden by its own failed inspection')
+  assert.equal(pi.agent, 'pi')
+  assert.equal(pi.path, '/tmp/pi-agent')
+  assert.equal(pi.providerCount, 2, 'list counts stand')
+  assert.equal(pi.modelCount, 5)
+  assert.equal(pi.defaultConfigured, false)
+  assert.equal(pi.appliedState, null, 'an unread inspection is unknown, not "not applied"')
+  assert.equal(pi.unapplied, null)
+  assert.equal(pi.default, null)
+  assert.deepEqual(pi.providers, [], 'no entry is invented from a failed inspection')
+  assert.deepEqual(pi.blockers, [{ code: 'unknown_resource', message: 'Unknown target "pi-main".' }])
+  assert.deepEqual(body.errors, [], 'one target failure is a row fact, not a section failure')
+})
+
+test('an unreadable Harness list names the section failure instead of claiming no targets', async () => {
+  const scenario = baseScenario()
+  scenario.agentList = {
+    code: 'unknown_resource',
+    status: 'error',
+    data: null,
+    blockers: [{ code: 'unknown_resource', message: 'Target inventory unavailable.' }],
+    __exit: 2,
+  }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.schemaVersion, 5)
+  assert.deepEqual(body.harnesses, [])
+  const failure = body.errors.find(error => error.section === 'harnesses')
+  assert.ok(failure, 'the failed Harness read is a named section failure')
+  assert.equal(failure.code, 'unknown_resource')
+  assert.equal(failure.message, 'Target inventory unavailable.')
+
+  // A completed read without the list is unreadable, not "no targets".
+  const malformed = baseScenario()
+  malformed.agentList = { code: 'ok', status: 'success', data: {} }
+  const empty = await applied({ scenario: malformed })
+  const emptyBody = (await getJson(empty.state, '/_tmax/state')).body
+  assert.deepEqual(emptyBody.harnesses, [])
+  assert.equal(emptyBody.errors.find(error => error.section === 'harnesses').code, 'invalid_result')
 })
 
 test('no declared target matching the DSH home is a visible typed error', async () => {
@@ -1060,7 +1248,7 @@ test('a missing tmax CLI does not fail activation and is reported as a blocker',
   const stateBody = (await getJson(state, '/_tmax/state')).body
   // Nothing answered: the target, provider, and configuration reads each name
   // their own failure instead of one generic claim.
-  assert.deepEqual([...new Set(stateBody.errors.map(error => error.section))].sort(), ['catalog', 'config', 'projection', 'providers'])
+  assert.deepEqual([...new Set(stateBody.errors.map(error => error.section))].sort(), ['catalog', 'config', 'harnesses', 'projection', 'providers'])
   assert.ok(stateBody.errors.every(error => typeof error.code === 'string' && error.code !== '' && typeof error.message === 'string'))
   assert.equal(JSON.stringify(stateBody).includes('/definitely/missing/tmax'), false, 'no section error echoes the executable path')
   assert.equal(stateBody.diagnostics.readModel, 'inventory')
@@ -1414,7 +1602,9 @@ test('the state cache serves repeated reads and single-flights cold ones', async
   ])
   assert.deepEqual(left.body, right.body)
   const inspects = (await cold.fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'inspect').length
-  assert.equal(inspects, 1, 'one cold composition serves both readers')
+  // One composition inspects the DSH target for the inventory and each
+  // declared Harness; two readers share that one composition.
+  assert.equal(inspects, 2, 'one cold composition serves both readers')
   await cold.fake.update(baseScenario())
 })
 
@@ -1514,7 +1704,7 @@ test('a dry-run observation previews with --dry-run and publishes nothing', asyn
   assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged'])
   assert.ok(preview.body.items.every(item => item.code === 'dry_run'))
   // The preview still returns a fresh read model, under the current schema.
-  assert.equal(preview.body.state.schemaVersion, 4)
+  assert.equal(preview.body.state.schemaVersion, 5)
 })
 
 test('explicit observe reports all-failed and partial outcomes without claiming success', async () => {

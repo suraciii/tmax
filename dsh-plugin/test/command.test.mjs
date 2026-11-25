@@ -189,7 +189,15 @@ const logPath = __LOG__
 const argv = process.argv.slice(2)
 fs.appendFileSync(logPath, JSON.stringify(argv) + "\\n")
 const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'))
-const key = argv.join(' ')
+// The global output selector names no evidence; dispatch ignores it so one
+// scenario entry answers both the plain and the explicit-JSON form.
+const operands = []
+for (let index = 0; index < argv.length; index += 1) {
+  if (argv[index] === '--format') { index += 1; continue }
+  if (argv[index].startsWith('--format=')) continue
+  operands.push(argv[index])
+}
+const key = operands.join(' ')
 function pick() {
   const dispatch = scenario.dispatch || {}
   if (Object.prototype.hasOwnProperty.call(dispatch, key)) return dispatch[key]
@@ -348,6 +356,9 @@ function fakeContext({ withCommands = true } = {}) {
 function baseScenario() {
   return {
     dispatch: {
+      'agent list': success({ agents: [
+        { target: 'dsh-main', agent: 'dsh', path: '/tmp/dsh', provider_count: 1, model_count: 2, default_configured: true },
+      ] }),
       'agent inspect dsh-main': success(agentInspectData()),
       'gateway status': success(gatewayStatusData()),
       status: success({ config_path: '/tmp/tmax/tmax.toml', file_revision: 'rev-1', configuration_state: 'valid', daemon: gatewayStatusData() }),

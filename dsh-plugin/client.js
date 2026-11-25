@@ -4,11 +4,16 @@
 // full content column instead of competing for room in a settings footer. It
 // reads one host read model (`GET /_tmax/state`); it never runs a CLI itself,
 // never observes a provider on mount or on visibility, and never receives a
-// key. A deliberate Refresh posts `/_tmax/observe`, Apply previews with
-// `{ dryRun: true }` before it writes anything, and every repair action
-// (`POST /_tmax/action`) is one exact operation shown as a typed result: a
-// preview first, an explicit confirmation, and a failure never drawn as
-// success.
+// key. A deliberate Refresh posts `/_tmax/observe`.
+//
+// Four sections answer four questions: 模型 lists the catalog with one inline
+// Harness control per model, Harness lists one row per declared tmax target,
+// 网关 shows the gateway, and 额度 shows quota windows. A Harness control saves
+// desired configuration directly (`add_model` / `remove_model`) and never
+// applies it; only an explicit Harness Apply previews one target with
+// `apply_target { dryRun: true }` before it writes, confirms, and adopts the
+// returned state. Every action is one exact operation with a typed result, and
+// a failure is never drawn as success.
 //
 // Every colour resolves through a `--dsw-alias-*` token so the page follows the
 // light and dark themes.
@@ -37,42 +42,16 @@ window.__ModuleLoader__.load({
       no: 'no',
       updated: 'updated',
       schema: 'schema',
-      // Header verdict. It answers reachability only.
-      stateReady: 'Reachable',
-      stateGateway: 'Gateway not ready',
-      stateUnknown: 'Status unknown',
-      stateUnreadable: 'Read failed',
-      stateDisconnected: 'Not connected',
-      stateNotUsable: 'Registered, not usable',
-      stateNotApplied: 'Not applied yet',
-      stateReload: 'Reload pending',
-      stateProjection: 'Routes unavailable',
+      // The state contract this page consumes.
       stateSchemaUnsupported: 'Unsupported state schema',
-      stateLastKnown: 'Last known',
-      // Next action: only an action that can change the reported state is offered.
-      nextReload: 'The routes are applied but DSH has not loaded them yet. Restart DSH to activate them.',
-      nextConflict: 'A route ownership conflict is reported; resolve it before changing access.',
-      nextBlocker: 'tmax reports a blocker that prevents access.',
-      nextConfig: 'The tmax configuration is invalid; fix it in the tmax CLI.',
-      nextConfigUnavailable: 'The tmax configuration could not be validated; inspect it in the tmax CLI.',
-      nextProjectionRetry: 'The route projection could not be read; retry the host read.',
-      nextSectionRetry: 'A section of the host state could not be read; retry the state read.',
-      nextRetry: 'The tmax host state could not be read.',
-      nextSettingsUnreadable: 'The profile settings could not be read, so whether the routes are applied is unknown; read again.',
-      // Status and access.
+      // Status and target evidence.
       target: 'Target',
-      targetPath: 'Home path',
       ownerSettings: 'applied settings',
       ownerUnapplied: 'not applied yet',
       ownerNone: 'none',
       scopeProfileScoped: 'profile-scoped',
       conflict: 'Conflict',
       applied: 'Applied',
-      credentialsTitle: 'Credentials',
-      credentialPath: 'path',
-      credentialState: 'state',
-      credentialPermissions: 'permissions',
-      noRoutes: 'The host reported no routes.',
       routeLive: 'live',
       routeNotApplied: 'not applied',
       routeBlockers: 'Route blockers',
@@ -96,10 +75,8 @@ window.__ModuleLoader__.load({
       configInvalid: 'invalid',
       configUnavailable: 'unavailable',
       // Models and routing.
-      modelsTitle: 'Models',
       accountsTitle: 'Accounts',
       noAccounts: 'No account reports a quota window yet.',
-      defaultTag: 'default',
       providerFailing: 'failing',
       kindAlias: 'alias',
       kindConcrete: 'concrete',
@@ -150,33 +127,10 @@ window.__ModuleLoader__.load({
       // Observation results.
       observeRunning: 'Observing provider sources…',
       observeFailed: 'Observation failed',
-      // Apply. The host route keeps its compatibility name `/_tmax/connect`; the
-      // user-facing operation is `tmax agent apply`, which writes the target's
-      // DSH configuration files.
       connect: 'Apply',
-      connectPreview: 'Apply preview',
-      connectPreviewNote: 'No changes are written yet. Applying writes the target\'s DSH routes and credential reference; the key never enters the browser.',
-      connectApplying: 'Applying…',
-      connectApply: 'Confirm apply',
-      connectCancel: 'Cancel',
-      connectApplied: 'Applied; tmax state refreshed.',
-      connectFailed: 'Apply failed',
-      connectNoDetails: 'The host reported no change details.',
-      connectRefs: 'references',
-      connectChanged: 'changed',
       connectEffects: 'effects',
       connectBlockers: 'blockers',
       connectNextActions: 'next actions',
-      connectDetail: 'detail',
-      connectState: 'state',
-      connectFiles: 'planned files',
-      connectRecovery: 'recovery',
-      recoveryPlanned: 'planned',
-      recoveryRetained: 'retained',
-      connectFactGaps: 'fact gaps',
-      actionWouldWrite: 'would write',
-      actionWritten: 'written',
-      actionUnchanged: 'unchanged',
       // Explicit repair actions. Each button names one fixed tmax operation.
       actionResumeQuota: 'Resume quota',
       actionResetFailure: 'Reset failure',
@@ -206,37 +160,65 @@ window.__ModuleLoader__.load({
       // Page tabs, catalog search, provider detail, and target-selection add.
       tabsLabel: 'Page sections',
       tabModels: 'Models',
+      // The Harness: one row per declared tmax target, and the inline selection
+      // control beside each catalog model. A status is target-level only.
+      tabHarness: 'Harness',
+      harnessNone: 'No Harness is declared.',
+      harnessPending: 'To apply',
+      harnessApplied: 'Applied',
+      harnessUnknown: 'Unknown',
+      harnessReloadPending: 'Reload pending',
+      harnessApply: 'Apply',
+      harnessReapply: 'Reapply',
+      harnessApplyTo: 'Apply to',
+      harnessAddModel: 'Add model',
+      harnessDefault: 'default',
+      harnessScope: 'this Harness only',
+      harnessApplyNote: 'Overwrites tmax-managed configuration; reopen the Harness after applying.',
+      harnessWritten: 'Written',
+      harnessReopenPrefix: 'reopen',
+      harnessReopenSuffix: 'to use it',
+      harnessPickerSearch: 'Search Harness',
+      harnessPickerConfigured: 'Configured',
+      harnessCountUnit: 'Harnesses',
+      harnessCountOne: 'Harness',
+      harnessPickerDone: 'Done',
+      selectHarness: 'Choose a Harness',
+      pendingHarnesses: 'Harnesses to apply',
+      pendingHarnessOne: 'Harness to apply',
+      goApply: 'Review',
+      searchModelsPlaceholder: 'Search models or providers',
+      fileOne: 'file',
+      fileUnit: 'files',
+      configProblem: 'Configuration problem',
+      selectionSaved: 'Harness selection saved',
+      resultTitle: 'Result',
+      actionAddModel: 'Add model',
+      actionRemoveModel: 'Remove model',
+      actionApplyHarness: 'Apply Harness',
+      resultDetails: 'Details',
+      actionResult: 'Completed',
+      resultDismiss: 'Dismiss result',
+      selectionFailed: 'Harness selection failed',
+      applyPreviewTitle: 'Apply preview',
+      applyPreviewing: 'Checking the write plan…',
+      applyApplying: 'Applying…',
+      applyConfirm: 'Confirm apply',
+      applyCancel: 'Cancel',
+      applyApplied: 'Applied; tmax state refreshed.',
+      applyFailed: 'Apply failed',
       modelOne: 'model',
       modelUnit: 'models',
       noProviders: 'No providers are configured.',
       tabGateway: 'Gateway',
       tabQuota: 'Quota',
-      searchCatalogPlaceholder: 'Search models, providers, aliases',
       clearSearch: 'Clear search',
       searchNoMatch: 'No matching models.',
-      providerNoModels: 'This provider has no models.',
-      backAllProviders: 'All providers',
-      joinModel: 'Add to DSH',
-      joined: 'joined',
-      joinedUnknown: 'join state unknown',
       gatewayKey: 'Key',
       gatewayConfig: 'configuration',
       gatewayConfigured: 'configured',
       gatewayUnconfigured: 'not configured',
-      addPreviewing: 'Checking the current catalog…',
-      addPreviewReady: 'Add preview ready.',
-      addInvalidPreview: 'The preview did not return a complete plan.',
       catalogUnavailable: 'The model catalog is unavailable. Fix the failed provider or model read and refresh.',
-      addNewEntry: 'new entry',
-      addExistingEntry: 'existing entry',
-      addProtocol: 'Protocol',
-      addConfirm: 'Add',
-      addApplied: 'Added to DSH.',
-      addReloadHint: 'Reload DSH to use it.',
-      addFailed: 'Add failed',
-      addStepProviderAdd: 'create entry',
-      addStepModelAdd: 'add model',
-      addStepApply: 'apply',
       markerUnknown: 'tmax state unknown',
       markerReady: 'tmax ready',
       markerNoRoute: 'no tmax route projected',
@@ -265,6 +247,9 @@ window.__ModuleLoader__.load({
       footerPageUnavailable: 'The tmax page is not available in this composition.',
       footerReload: 'Reload',
       footerLoading: 'Reading tmax state…',
+      footerHarness: 'DSH Harness',
+      footerUnapplied: 'unapplied',
+      footerOpenHint: 'Apply is in the tmax Harness tab',
       toolTitle: 'tmax status',
       toolPending: 'reading tmax state…',
       toolUnreadable: 'the tmax status result could not be read',
@@ -286,8 +271,6 @@ window.__ModuleLoader__.load({
       modelsInactive: 'The tmax route is configured but not active in DSH.',
       modelsNone: 'No tmax model is projected for this profile.',
       modelsReload: 'A DSH reload is pending before the tmax route can be used.',
-      connectChangedFiles: 'changed files',
-      connectUnchangedFiles: 'unchanged files',
       effectLocksCreated: 'locks created',
       effectNativeWrites: 'file writes',
       effectProcessesStarted: 'processes started',
@@ -312,42 +295,16 @@ window.__ModuleLoader__.load({
       no: '否',
       updated: '更新于',
       schema: 'schema',
-      // Header verdict.
-      stateReady: '可用',
-      stateGateway: '网关未就绪',
-      stateUnknown: '状态未知',
-      stateUnreadable: '读取失败',
-      stateDisconnected: '未连接',
-      stateNotUsable: '已注册，但不可用',
-      stateReload: '待重新加载',
-      stateNotApplied: '尚未应用',
-      stateProjection: '路由不可用',
+      // 本页消费的状态契约。
       stateSchemaUnsupported: '状态 schema 不受支持',
-      stateLastKnown: '上次已知',
-      // Next action.
-      nextReload: '已安装 home 集成，但其路由尚未生效。重新加载 DSH 以启用。',
-      nextConflict: '上报了路由归属冲突；先解决冲突再更改访问。',
-      nextBlocker: 'tmax 上报了阻止访问的阻塞项。',
-      nextConfig: 'tmax 配置无效；请在 tmax CLI 中修复。',
-      nextConfigUnavailable: '无法校验 tmax 配置；请在 tmax CLI 中检查。',
-      nextProjectionRetry: '无法读取路由投影；请重试 host 读取。',
-      nextSectionRetry: 'host 状态中有部分内容读取失败；请重新读取状态。',
-      nextRetry: '无法读取 tmax host 状态。',
-      nextSettingsUnreadable: '无法读取 profile 设置，无法判断路由是否已应用；请重新读取。',
-      // Status and access.
+      // 状态与目标证据。
       target: '目标',
-      targetPath: 'Home 路径',
       ownerSettings: '已应用的设置',
       ownerUnapplied: '尚未应用',
       ownerNone: '无',
       scopeProfileScoped: '仅当前 profile',
       conflict: '冲突',
       applied: '已应用',
-      credentialsTitle: '凭据',
-      credentialPath: '路径',
-      credentialState: '状态',
-      credentialPermissions: '权限',
-      noRoutes: 'Host 未报告任何路由。',
       routeLive: '已生效',
       routeNotApplied: '未应用',
       routeBlockers: '路由阻塞项',
@@ -371,10 +328,8 @@ window.__ModuleLoader__.load({
       configInvalid: '无效',
       configUnavailable: '不可用',
       // Models and routing.
-      modelsTitle: '模型',
       accountsTitle: '账号额度',
       noAccounts: '还没有账号上报额度窗口。',
-      defaultTag: '默认',
       providerFailing: '故障',
       kindAlias: '别名',
       kindConcrete: '具体模型',
@@ -425,32 +380,10 @@ window.__ModuleLoader__.load({
       // Observation results.
       observeRunning: '正在观测供应商来源…',
       observeFailed: '观测失败',
-      // 应用。Host 路由保留兼容名称 `/_tmax/connect`；面向用户的操作是
-      // `tmax agent apply`，它写入目标的 DSH 配置文件。
       connect: '应用',
-      connectPreview: '应用预览',
-      connectPreviewNote: '尚未写入任何更改。应用会写入目标的 DSH 路由和凭据引用；密钥不会进入浏览器。',
-      connectApplying: '正在应用…',
-      connectApply: '确认应用',
-      connectCancel: '取消',
-      connectApplied: '已应用；tmax 状态已刷新。',
-      connectFailed: '应用失败',
-      connectNoDetails: 'Host 未报告变更细节。',
-      connectRefs: '引用',
-      connectChanged: '变更',
       connectEffects: '影响',
       connectBlockers: '阻塞项',
       connectNextActions: '下一步',
-      connectDetail: '细节',
-      connectState: '状态',
-      connectFiles: '计划写入的文件',
-      connectRecovery: '恢复',
-      recoveryPlanned: '计划',
-      recoveryRetained: '保留',
-      connectFactGaps: '事实缺口',
-      actionWouldWrite: '将写入',
-      actionWritten: '已写入',
-      actionUnchanged: '未变化',
       // 显式修复操作：每个按钮对应一项固定的 tmax 操作。
       actionResumeQuota: '恢复额度',
       actionResetFailure: '重置失败状态',
@@ -480,37 +413,65 @@ window.__ModuleLoader__.load({
       // Page tabs, catalog search, provider detail, and target-selection add.
       tabsLabel: '页面分区',
       tabModels: '模型',
+      // Harness：每个已声明 tmax 目标一行，以及每个目录模型旁的行内选择控件。
+      // 状态只到目标一级，不为单个模型发明已应用状态。
+      tabHarness: 'Harness',
+      harnessNone: '尚未声明任何 Harness。',
+      harnessPending: '待应用',
+      harnessApplied: '已应用',
+      harnessUnknown: '未知',
+      harnessReloadPending: '待重载',
+      harnessApply: '应用',
+      harnessReapply: '重新应用',
+      harnessApplyTo: '应用到',
+      harnessAddModel: '添加模型',
+      harnessDefault: '默认',
+      harnessScope: '仅此 Harness',
+      harnessApplyNote: '会覆盖 tmax 管理的配置；完成后重新打开该 Harness 生效。',
+      harnessWritten: '已写入',
+      harnessReopenPrefix: '重新打开',
+      harnessReopenSuffix: '后生效',
+      harnessPickerSearch: '搜索 Harness',
+      harnessPickerConfigured: '已配置',
+      harnessCountUnit: '个 Harness',
+      harnessCountOne: '个 Harness',
+      harnessPickerDone: '完成',
+      selectHarness: '选择 Harness',
+      pendingHarnesses: '个 Harness 待应用',
+      pendingHarnessOne: '个 Harness 待应用',
+      goApply: '去应用',
+      searchModelsPlaceholder: '搜索模型或供应商',
+      fileOne: '个文件',
+      fileUnit: '个文件',
+      configProblem: '配置问题',
+      selectionSaved: 'Harness 配置已保存',
+      resultTitle: '操作结果',
+      actionAddModel: '添加模型',
+      actionRemoveModel: '移除模型',
+      actionApplyHarness: '应用 Harness',
+      resultDetails: '详情',
+      actionResult: '已完成',
+      resultDismiss: '关闭结果',
+      selectionFailed: 'Harness 配置更新失败',
+      applyPreviewTitle: '应用预览',
+      applyPreviewing: '正在核对写入计划…',
+      applyApplying: '正在应用…',
+      applyConfirm: '确认应用',
+      applyCancel: '取消',
+      applyApplied: '已应用；tmax 状态已刷新。',
+      applyFailed: '应用失败',
       modelOne: '个模型',
       modelUnit: '个模型',
       noProviders: '没有配置供应商。',
       tabGateway: '网关',
       tabQuota: '额度',
-      searchCatalogPlaceholder: '搜索模型、供应商、别名',
       clearSearch: '清除搜索',
       searchNoMatch: '没有匹配的模型。',
-      providerNoModels: '该供应商没有模型。',
-      backAllProviders: '所有供应商',
-      joinModel: '加入 DSH',
-      joined: '已加入',
-      joinedUnknown: '加入状态未知',
       gatewayKey: '密钥',
       gatewayConfig: '配置',
       gatewayConfigured: '已配置',
       gatewayUnconfigured: '未配置',
-      addPreviewing: '正在核对当前目录…',
-      addPreviewReady: '加入预检已就绪。',
-      addInvalidPreview: '预检没有返回完整计划。',
       catalogUnavailable: '模型目录不可用；先修复供应商或模型读取失败并刷新。',
-      addNewEntry: '新建条目',
-      addExistingEntry: '加入现有条目',
-      addProtocol: '协议',
-      addConfirm: '加入',
-      addApplied: '已加入 DSH。',
-      addReloadHint: '重新加载 DSH 后生效。',
-      addFailed: '加入失败',
-      addStepProviderAdd: '新建条目',
-      addStepModelAdd: '加入模型',
-      addStepApply: '应用',
       markerUnknown: 'tmax 状态未知',
       markerReady: 'tmax 可用',
       markerNoRoute: '未投影 tmax 路由',
@@ -539,6 +500,9 @@ window.__ModuleLoader__.load({
       footerPageUnavailable: '当前组合中不可打开 tmax 页面。',
       footerReload: '重新读取',
       footerLoading: '正在读取 tmax 状态…',
+      footerHarness: 'DSH Harness',
+      footerUnapplied: '待应用',
+      footerOpenHint: '在 tmax 的 Harness 页应用',
       toolTitle: 'tmax 状态',
       toolPending: '正在读取 tmax 状态…',
       toolUnreadable: '无法读取 tmax 状态结果',
@@ -560,8 +524,6 @@ window.__ModuleLoader__.load({
       modelsInactive: 'tmax 路由已配置，但在 DSH 中未生效。',
       modelsNone: '此配置未投影任何 tmax 模型。',
       modelsReload: '需要重新加载 DSH 后 tmax 路由才能使用。',
-      connectChangedFiles: '变更文件',
-      connectUnchangedFiles: '未变文件',
       effectLocksCreated: '创建锁',
       effectNativeWrites: '实际配置写入',
       effectProcessesStarted: '启动进程',
@@ -608,7 +570,8 @@ window.__ModuleLoader__.load({
       gateway: ['gateway', 'gateway_read', 'gateway_status'],
       config: ['config', 'config_read', 'config_validate'],
     }
-    const REFERENCE_ACTIONS = { would_write: 'actionWouldWrite', written: 'actionWritten', unchanged: 'actionUnchanged' }
+    // The host read-model revision this page and its seats consume together.
+    const STATE_SCHEMA_VERSION = 5
     // Only an explicit state names the web listener's lifecycle; a null record
     // is not evidence that it is stopped.
     const WEB_STATES = { running: 'webRunning', stopped: 'webStopped' }
@@ -622,7 +585,7 @@ window.__ModuleLoader__.load({
     // action and one exact operand set. The page never composes an argv and
     // never retries one on its own.
     const GATEWAY_ACTIONS = ['gateway_start', 'gateway_stop', 'gateway_restart']
-    const ACTION_KINDS = ['resume_quota', 'reset_failure', 'observe_provider', 'open_management', 'add_model', ...GATEWAY_ACTIONS]
+    const ACTION_KINDS = ['resume_quota', 'reset_failure', 'observe_provider', 'open_management', 'add_model', 'remove_model', 'apply_target', ...GATEWAY_ACTIONS]
     const ACTION_LABELS = {
       resume_quota: 'actionResumeQuota',
       reset_failure: 'actionResetFailure',
@@ -631,6 +594,9 @@ window.__ModuleLoader__.load({
       gateway_start: 'actionStartGateway',
       gateway_stop: 'actionStopGateway',
       gateway_restart: 'actionRestartGateway',
+      add_model: 'actionAddModel',
+      remove_model: 'actionRemoveModel',
+      apply_target: 'actionApplyHarness',
     }
     const ACTION_SCOPES = ['quota', 'auth', 'models', 'all']
     const ADD_PROTOCOLS = ['chat-completions', 'responses', 'messages']
@@ -646,9 +612,6 @@ window.__ModuleLoader__.load({
 .tmx-title { margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; letter-spacing: -0.01em; }
 .tmx-tools { display: flex; align-items: center; gap: 12px; }
 .tmx-meta { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-/* The verdict is the one line the page is read for. */
-.tmx-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0 0; font-size: 15px; line-height: 24px; font-weight: 500; }
-.tmx-nextStep { margin: 8px 0 0 20px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
 .tmx-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
 .tmx-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
 .tmx-dot[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
@@ -736,60 +699,144 @@ window.__ModuleLoader__.load({
   .tmx-bar { order: 4; flex-basis: 100%; height: 10px; align-self: center; }
   .tmx-windowWide { order: 2; flex-basis: 100%; font-size: 14px; }
   .tmx-modelId { font-size: 14px; }
-  .tmx-nextStep { font-size: 14px; }
 }
 @media (max-width: 420px) { .tmx-meta { display: none; } }
 @media (prefers-reduced-motion: reduce) { .tmx-barFill { transition: none; } }
 /* Seats: navigation marker, Settings > Models card, tool card. */
-/* Page tabs, model catalog, provider detail, and the one-line add panel. */
-.tmx-tabs { display: flex; justify-content: center; gap: 2px; width: max-content; max-width: 100%; margin: 16px auto 0; padding: 2px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); }
-.tmx-tab { box-sizing: border-box; min-height: 28px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
+/* The page's read-failure evidence: one compact line each, never a paragraph. */
+.tmx-errors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 10px 0 0; }
+.tmx-errors .tmx-errorText { flex: 1 1 100%; margin: 0; }
+.tmx-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-top: 16px; }
+.tmx-pending { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.tmx-linkButton { border: 0; background: transparent; padding: 2px 0; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; line-height: 18px; font-weight: 600; cursor: pointer; }
+.tmx-linkButton:hover { color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 80%, var(--dsw-alias-label-primary)); }
+.tmx-tabs { display: flex; justify-content: flex-start; gap: 2px; width: max-content; max-width: 100%; margin: 16px 0 0; padding: 2px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-tab { box-sizing: border-box; display: inline-flex; align-items: center; min-height: 28px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
 .tmx-tab:hover { color: var(--dsw-alias-label-primary); }
 .tmx-tab[data-active='true'] { background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-primary); font-weight: 500; }
-.tmx-catalogSection { margin-top: 16px; }
-.tmx-searchRow { display: flex; align-items: center; gap: 12px; }
-.tmx-search { box-sizing: border-box; display: flex; flex: 1; align-items: center; gap: 8px; width: 100%; max-width: 360px; height: 34px; padding: 0 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 999px; background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-secondary); }
+.tmx-tabBadge { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; margin-left: 5px; padding: 0 4px; border-radius: 999px; background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 18%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); font-size: 10px; line-height: 1; font-weight: 600; vertical-align: 1px; }
+/* The models tab: one provider-grouped list, one inline Harness control per model. */
+.tmx-search { box-sizing: border-box; display: flex; flex: 1 1 240px; align-items: center; gap: 8px; width: 100%; max-width: 360px; height: 34px; padding: 0 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 999px; background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-secondary); }
 .tmx-search:focus-within { border-color: var(--dsw-alias-label-tertiary); }
 .tmx-searchGlyph { flex: none; font-size: 14px; line-height: 1; }
 .tmx-searchInput { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; }
 .tmx-searchInput::placeholder { color: var(--dsw-alias-label-tertiary); }
 .tmx-searchInput::-webkit-search-cancel-button { display: none; }
 .tmx-searchClear { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
-.tmx-catalog { margin-top: 12px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); overflow: hidden; }
-.tmx-providerRow { box-sizing: border-box; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 10px 16px; border: 0; border-bottom: 0.5px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; text-align: left; cursor: pointer; }
-.tmx-providerRow:last-child { border-bottom: 0; }
-.tmx-providerRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.tmx-mark { flex: none; display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; overflow: hidden; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 14px; font-weight: 600; line-height: 1; }
-.tmx-mark[data-gateway='true'] { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
-.tmx-providerMain { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
-.tmx-providerName { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
-.tmx-providerMeta { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-.tmx-providerSide { display: flex; flex: none; align-items: center; gap: 8px; }
-.tmx-ratio { font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
-.tmx-chevron { font-size: 16px; line-height: 1; color: var(--dsw-alias-label-tertiary); }
-.tmx-searchGroup { border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
-.tmx-searchGroup:last-child { border-bottom: 0; }
-.tmx-searchHead { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); }
-.tmx-searchHead .tmx-providerMeta { display: none; }
-.tmx-modelRow { box-sizing: border-box; display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 10px 16px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
-.tmx-modelRow:last-child { border-bottom: 0; }
-.tmx-modelMain { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
-.tmx-modelProtocols { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
-.tmx-modelSide { display: flex; flex: none; align-items: center; gap: 8px; }
-.tmx-joined { display: inline-flex; align-items: center; gap: 3px; color: var(--dsw-alias-state-success-primary); font-size: 12px; line-height: 18px; white-space: nowrap; }
-.tmx-joinButton { min-height: 28px; padding: 0 10px; border-radius: 999px; font-size: 12px; }
-.tmx-addBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px; border-top: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); font-size: 12px; line-height: 18px; }
-.tmx-addText { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.tmx-addProtocol { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-secondary); }
-.tmx-addSelect { height: 26px; max-width: 160px; padding: 0 6px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 6px; background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
-.tmx-addActions { display: flex; align-items: center; gap: 6px; }
-.tmx-detailBack { display: inline-flex; align-items: center; min-height: 32px; padding: 8px 16px 4px; border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
-.tmx-detailBack:hover { color: var(--dsw-alias-label-primary); }
-.tmx-detailHead { display: flex; align-items: center; gap: 12px; padding: 8px 16px 12px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
-.tmx-detailHead .tmx-mark { width: 40px; height: 40px; }
-.tmx-detailNote, .tmx-detailEmpty, .tmx-catalogNote { padding: 10px 16px; }
+.tmx-catalog { margin-top: 12px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
 .tmx-catalogEmpty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 24px 16px; }
 .tmx-catalogError { margin: 8px 0 0; }
+.tmx-providerGroup { border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-providerGroup:last-child { border-bottom: 0; }
+.tmx-providerHead { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 8px 14px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-providerName { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; overflow-wrap: anywhere; }
+.tmx-providerCount { color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 18px; }
+.tmx-providerProtocols { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 18px; }
+.tmx-mark { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 6px; background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-secondary); font-size: 10px; font-weight: 600; line-height: 1; }
+.tmx-mark[data-gateway='true'] { border-color: transparent; background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
+.tmx-modelRow { box-sizing: border-box; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-modelRows .tmx-modelRow:last-child { border-bottom: 0; }
+.tmx-modelRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-modelMain { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; }
+.tmx-modelId { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 13.5px; line-height: 20px; }
+.tmx-protocol { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 6px; border-radius: 5px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 10.5px; line-height: 18px; white-space: nowrap; }
+.tmx-harnessWrap { position: relative; display: flex; flex: none; }
+.tmx-harnessControl { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: flex-start; gap: 7px; min-width: 128px; max-width: 210px; height: 30px; padding: 0 8px; border: 0.5px solid transparent; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; line-height: 18px; text-align: left; cursor: pointer; }
+.tmx-harnessControl:hover { border-color: var(--dsw-alias-border-l3); }
+.tmx-harnessControl[aria-expanded='true'] { border-color: var(--dsw-alias-border-l3); }
+.tmx-harnessControl .tmx-dot { width: 6px; height: 6px; }
+.tmx-harnessEmpty { justify-content: center; min-width: 112px; border: 0.5px dashed var(--dsw-alias-border-l3); background: transparent; color: var(--dsw-alias-label-secondary); }
+.tmx-harnessEmpty:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.tmx-harnessLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmx-harnessEmpty .tmx-harnessLabel { flex: none; }
+.tmx-plus { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 1; }
+.tmx-chevron { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 1; margin-left: auto; }
+/* The anchored picker: declared Harnesses only, no create action. */
+.tmx-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; box-sizing: border-box; width: min(332px, calc(100vw - 24px)); max-height: min(70vh, 460px); overflow: auto; padding: 6px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); box-shadow: 0 16px 42px color-mix(in srgb, var(--dsw-alias-label-primary) 18%, transparent); animation: tmxPopIn var(--ds-transition-duration, 160ms) var(--ds-ease-in-out, ease-out); }
+.tmx-popover[data-flip='true'] { top: auto; bottom: calc(100% + 6px); }
+@keyframes tmxPopIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.tmx-popoverSearch { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 8px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-tertiary); }
+.tmx-popoverSearchInput { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
+.tmx-popoverSearchInput::placeholder { color: var(--dsw-alias-label-tertiary); }
+.tmx-popoverGroup { display: flex; align-items: center; gap: 8px; margin: 7px 5px 2px; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; line-height: 16px; }
+.tmx-popoverGroup::after { content: ''; height: 1px; flex: 1; background: var(--dsw-alias-border-l2); }
+.tmx-popoverItem { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 3px 6px; border-radius: 7px; cursor: pointer; }
+.tmx-popoverItem:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-popoverItem input { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--dsw-alias-button-primary-fill); }
+.tmx-popoverName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 18px; }
+.tmx-popoverMeta { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 10.5px; line-height: 16px; white-space: nowrap; }
+.tmx-popoverStatus { flex: none; font-size: 10px; line-height: 16px; white-space: nowrap; }
+.tmx-popoverStatus[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+.tmx-popoverStatus[data-tone='ok'] { color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%, var(--dsw-alias-label-primary)); }
+.tmx-popoverStatus[data-tone='idle'] { color: var(--dsw-alias-label-tertiary); }
+.tmx-popoverEmpty { margin: 4px 6px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-popoverError { margin: 4px 6px; }
+.tmx-popoverFooter { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; padding: 6px 7px 3px; border-top: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-popoverFooter span { color: var(--dsw-alias-label-tertiary); font-size: 10.5px; line-height: 16px; }
+.tmx-popoverDone { height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); font: inherit; font-size: 11px; line-height: 18px; font-weight: 500; cursor: pointer; }
+.tmx-harnessMark { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+.tmx-popoverItem .tmx-harnessMark { width: 20px; height: 20px; border-radius: 6px; }
+.tmx-harnessInitial { font-size: 9px; line-height: 1; font-weight: 600; }
+/* The Harness tab: one row per declared target, one target-level status. */
+.tmx-harnessSection { margin-top: 16px; }
+.tmx-harnessList { border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
+.tmx-harnessGroup { border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-harnessGroup:last-child { border-bottom: 0; }
+.tmx-harnessRow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 11px; padding: 13px 15px 6px; }
+.tmx-harnessInfo { flex: 1; min-width: 0; }
+.tmx-harnessName { display: block; font-size: 14px; line-height: 20px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.tmx-harnessMeta { display: block; margin-top: 1px; color: var(--dsw-alias-label-secondary); font-size: 11.5px; line-height: 17px; overflow-wrap: anywhere; }
+.tmx-harnessActions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.tmx-pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 10.5px; line-height: 16px; white-space: nowrap; }
+.tmx-pill .tmx-dot { width: 5px; height: 5px; }
+.tmx-pill[data-tone='warn'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 15%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+.tmx-pill[data-tone='ok'] { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%, var(--dsw-alias-label-primary)); }
+.tmx-applyButton { min-height: 28px; padding: 0 11px; border-radius: 8px; font-size: 12px; }
+.tmx-modelChips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 15px 12px 52px; }
+.tmx-modelChip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; height: 23px; padding: 0 7px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 10.5px; line-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tmx-modelChip .tmx-dot { width: 5px; height: 5px; }
+.tmx-addModel { display: inline-flex; align-items: center; height: 23px; padding: 0 4px; border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 10.5px; line-height: 17px; cursor: pointer; }
+.tmx-addModel:hover { color: var(--dsw-alias-label-primary); }
+.tmx-harnessNote { margin: 0; padding: 0 15px 12px 52px; font-size: 11px; line-height: 17px; color: var(--dsw-alias-label-secondary); }
+.tmx-harnessWritten { color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%, var(--dsw-alias-label-primary)); font-weight: 600; }
+/* One Harness apply: dry-run preview, explicit confirmation, typed result. */
+.tmx-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 22px; background: color-mix(in srgb, var(--dsw-alias-label-primary) 32%, transparent); }
+.tmx-dialog { box-sizing: border-box; display: flex; flex-direction: column; width: min(480px, 100%); max-height: calc(100vh - 44px); border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-bg-base); box-shadow: 0 24px 64px color-mix(in srgb, var(--dsw-alias-label-primary) 24%, transparent); overflow: hidden; }
+.tmx-dialogHead { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 0; }
+.tmx-dialogTitle { flex: 1; margin: 0; font-size: 15px; line-height: 22px; font-weight: 600; overflow-wrap: anywhere; }
+.tmx-dialogClose { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.tmx-dialogClose:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-dialogBody { display: flex; flex-direction: column; gap: 9px; padding: 6px 18px 0; overflow: auto; }
+.tmx-dialogLead { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 12.5px; line-height: 19px; }
+.tmx-dialogMeta { margin: 0; color: var(--dsw-alias-label-tertiary); font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10.5px; line-height: 16px; overflow-wrap: anywhere; }
+.tmx-applyFiles { display: flex; flex-direction: column; padding: 1px 9px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-applyFile { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; border-bottom: 0.5px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); font-size: 10.5px; line-height: 16px; }
+.tmx-applyFile:last-child { border-bottom: 0; }
+.tmx-applyFileGlyph { flex: none; color: var(--dsw-alias-label-tertiary); }
+.tmx-applyFilePath { min-width: 0; overflow-wrap: anywhere; font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); }
+.tmx-applyFileFormat { flex: none; color: var(--dsw-alias-label-tertiary); }
+.tmx-dialogBlockers { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0 0 0 14px; }
+.tmx-dialogNote { margin: 0; padding: 8px 9px; border-radius: 7px; background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); font-size: 10.5px; line-height: 16px; }
+.tmx-dialogActions { display: flex; justify-content: flex-end; gap: 7px; padding: 14px 18px 16px; }
+.tmx-toast { position: fixed; left: 50%; bottom: 20px; z-index: 60; box-sizing: border-box; max-width: min(440px, calc(100vw - 32px)); padding: 8px 11px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsw-alias-settings-card-fill); box-shadow: 0 10px 28px color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent); color: var(--dsw-alias-label-secondary); font-size: 11.5px; line-height: 17px; overflow-wrap: anywhere; transform: translateX(-50%); }
+.tmx-toast[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
+.tmx-result { margin-top: 12px; padding: 9px 12px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsw-alias-settings-card-fill); }
+.tmx-resultHead { display: flex; align-items: center; gap: 8px; }
+.tmx-resultTitle { font-size: 12px; line-height: 18px; font-weight: 600; }
+.tmx-resultMeta { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 17px; }
+.tmx-resultClose { flex: none; width: 22px; height: 22px; border: 0; border-radius: 5px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.tmx-resultClose:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-resultDetails { margin-top: 4px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 17px; }
+.tmx-resultDetails summary { cursor: pointer; color: var(--dsw-alias-label-secondary); }
+.tmx-resultLines { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 6px 0 0; }
+.tmx-resultLines dt { color: var(--dsw-alias-label-tertiary); }
+.tmx-resultLines dd { margin: 0; overflow-wrap: anywhere; }
+.tmx-previewFacts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 0; font-size: 11px; line-height: 17px; color: var(--dsw-alias-label-secondary); }
+.tmx-previewFacts dt { color: var(--dsw-alias-label-tertiary); }
+.tmx-previewFacts dd { margin: 0; overflow-wrap: anywhere; }
+.tmx-modelsSection { margin-top: 16px; }
+.tmx-modelsSection .tmx-toolbar { margin-top: 0; }
+/* The gateway tab keeps its compact facts and one lifecycle control. */
 .tmx-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 10px 0 0; font-size: 12.5px; line-height: 20px; }
 .tmx-fact { display: contents; }
 .tmx-fact dt { color: var(--dsw-alias-label-secondary); }
@@ -800,26 +847,29 @@ window.__ModuleLoader__.load({
 .tmx-gatewayStatus { font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .tmx-gatewayReason { margin-top: 8px; }
 .tmx-gatewayActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.tmx-tab:focus-visible, .tmx-providerRow:focus-visible, .tmx-detailBack:focus-visible, .tmx-searchClear:focus-visible, .tmx-addSelect:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
+.tmx-tab:focus-visible, .tmx-harnessControl:focus-visible, .tmx-searchClear:focus-visible, .tmx-linkButton:focus-visible, .tmx-addModel:focus-visible, .tmx-popoverDone:focus-visible, .tmx-dialogClose:focus-visible, .tmx-resultClose:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .tmx-popover { animation: none; } }
 @media (max-width: 720px) {
-  .tmx-tabs { width: 100%; }
-  .tmx-tab { flex: 1; }
+  .tmx-tabs { justify-content: flex-start; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tmx-tabs::-webkit-scrollbar { display: none; }
+  .tmx-tab { flex: none; white-space: nowrap; }
   .tmx-search { max-width: none; }
-  .tmx-providerRow { padding: 10px 12px; }
-  .tmx-modelRow { padding: 10px 12px; }
-  .tmx-searchHead { padding: 10px 12px; }
-  .tmx-detailBack { padding: 8px 12px 4px; }
-  .tmx-detailHead { padding: 8px 12px 12px; }
-  .tmx-addBar { padding: 10px 12px; }
-  .tmx-detailNote, .tmx-detailEmpty, .tmx-catalogNote { padding: 10px 12px; }
+  .tmx-toolbar { align-items: stretch; flex-direction: column; }
+  .tmx-modelRow { align-items: flex-start; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; }
+  .tmx-modelMain { flex: 1 0 100%; }
+  .tmx-harnessWrap { flex: 1; }
+  .tmx-harnessControl { max-width: none; flex: 1; }
+  .tmx-popover { position: fixed; top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: 60vh; }
+  .tmx-modelChips, .tmx-harnessNote { padding-left: 12px; }
+  .tmx-providerHead, .tmx-harnessRow { padding-left: 12px; padding-right: 12px; }
 }
 @media (pointer: coarse) {
   .tmx-tab { min-height: 44px; padding: 0 20px; }
-  .tmx-joinButton { min-height: 44px; padding: 0 14px; }
-  .tmx-detailBack { min-height: 44px; }
   .tmx-search { min-height: 48px; }
   .tmx-searchClear { width: 44px; height: 44px; }
-  .tmx-addSelect { height: 44px; }
+  .tmx-harnessControl { min-height: 44px; }
+  .tmx-popoverItem { min-height: 44px; }
+  .tmx-popoverDone { height: 44px; }
 }
 .tmx-navMark { display: inline-flex; align-items: center; gap: 4px; }
 .tmx-navMark[data-tone='warn'] .tmx-dot { background: var(--dsw-alias-state-warn-primary); }
@@ -1102,54 +1152,205 @@ window.__ModuleLoader__.load({
       return models
     }
 
-    /**
-     * The one word in the header. It answers reachability only: a route that
-     * exists but is not live in DSH is not connected, and a route whose
-     * credential is missing is "registered, not usable".
-     */
-    function verdict(load, t) {
-      if (!load || load.phase === 'loading') return { tone: 'idle', text: t('checking') }
-      if (load.schemaUnsupported === true) return { tone: 'error', text: t('stateSchemaUnsupported') }
-      const state = load.value
-      if (state === undefined || state === null || state.ok !== true) {
-        return { tone: 'error', text: t('stateUnreadable') }
-      }
-      const result = stateVerdict(state, t)
-      // A failed read that still shows the last good state says so instead of
-      // claiming the stale table is current.
-      if (load.phase === 'failed') {
-        return { tone: result.tone, text: `${t('stateLastKnown')}${t('colon')} ${result.text}` }
-      }
-      return result
+    // ------------------------------------------------------------- Harnesses
+    //
+    // A Harness is one declared tmax target (`state.harnesses`). The host
+    // reports each target as a whole: its configured selections, the desired
+    // configuration revision, and whether that revision is what the Agent has
+    // loaded. It does not report which individual model is live, so the page
+    // never draws a per-model applied state: a Harness is applied or pending,
+    // and every chip of that Harness carries the same tone.
+
+    const AGENT_NAMES = {
+      dsh: 'DeepSeek Harness',
+      pi: 'Pi',
+      codex: 'Codex',
+      opencode: 'OpenCode',
+      hermes: 'Hermes',
+      omp: 'OMP',
+    }
+    const AGENT_SHORTS = {
+      dsh: 'DSH',
+      pi: 'Pi',
+      codex: 'Codex',
+      opencode: 'OpenCode',
+      hermes: 'Hermes',
+      omp: 'OMP',
+    }
+    // Small marks are drawn inline: no image asset ships with the page. A known
+    // Agent gets its own glyph; anything else is a letter tile.
+    const AGENT_GLYPHS = {
+      dsh: { viewBox: '0 0 16 16', stroke: true, paths: ['M1.8 10.4c1.6-3.5 4.3-3.5 5.9 0 1.6 3.5 4.3 3.5 5.9 0', 'M12.9 4.2h.01'] },
+      pi: { viewBox: '0 0 24 24', paths: ['M1 1h16.5v11H12v5.5H6.5V23H1V1zm5.5 5.5V12H12V6.5H6.5z', 'M17.5 12H23v11h-5.5V12z'] },
+      opencode: { viewBox: '0 0 24 24', paths: ['M16 6H8v12h8V6zm4 16H4V2h16v20z'] },
+      hermes: { viewBox: '12 16 40 40', paths: ['M21 20h7v14h8V20h7v32h-7V40h-8v12h-7zM13 21l7 3v6l-7-3zM51 21l-7 3v6l7-3z'] },
+      omp: { viewBox: '12 16 40 40', paths: ['M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z'] },
     }
 
-    function stateVerdict(state, t) {
-      // A failed projection read cannot support any claim about routes.
-      if (projectionFailed(state)) {
-        return { tone: 'error', text: t('stateProjection') }
+    /** The Agent's product name, or its bounded host token when unknown. */
+    function agentName(agent) {
+      if (typeof agent !== 'string' || agent === '') return ''
+      return AGENT_NAMES[agent] ?? boundedText(agent, 40)
+    }
+
+    /** The short label used beside a model: DSH, Pi, Codex. */
+    function agentShort(agent) {
+      if (typeof agent !== 'string' || agent === '') return ''
+      if (AGENT_SHORTS[agent] !== undefined) return AGENT_SHORTS[agent]
+      const text = boundedText(agent, 24)
+      return text === '' ? '' : text.toUpperCase()
+    }
+
+    function countSelections(harness) {
+      let count = 0
+      for (const provider of Array.isArray(harness?.providers) ? harness.providers : []) {
+        count += Array.isArray(provider?.models) ? provider.models.length : 0
       }
-      const routes = Array.isArray(state.routes) ? state.routes : []
-      const ownership = state.ownership ?? {}
-      if (routes.length === 0) return { tone: 'idle', text: t('stateDisconnected') }
-      const usable = usableRoutes(state)
-      if (usable.length > 0) {
-        const ready = state.gateway?.ready
-        if (ready === true) return { tone: 'ok', text: t('stateReady') }
-        if (ready === false) return { tone: 'error', text: t('stateGateway') }
-        return { tone: 'idle', text: t('stateUnknown') }
+      return count
+    }
+
+    /**
+     * The declared Harnesses, normalized. A row the host did not finish is
+     * skipped rather than guessed at: an unreadable entry is not a Harness the
+     * page can draw.
+     */
+    function harnessesOf(state) {
+      const raw = Array.isArray(state?.harnesses) ? state.harnesses : []
+      const list = []
+      for (const item of raw) {
+        if (item === null || typeof item !== 'object') continue
+        const id = boundedText(item.id, 80)
+        if (id === '') continue
+        const agent = boundedText(item.agent, 40)
+        const providers = []
+        for (const provider of Array.isArray(item.providers) ? item.providers : []) {
+          if (provider === null || typeof provider !== 'object') continue
+          const name = boundedText(provider.name, 80)
+          const sourceProvider = boundedText(provider.sourceProvider, 160)
+          if (name === '' && sourceProvider === '') continue
+          const models = []
+          for (const model of Array.isArray(provider.models) ? provider.models : []) {
+            if (model === null || typeof model !== 'object') continue
+            const modelId = boundedText(model.id, 160)
+            if (modelId === '') continue
+            models.push({ id: modelId, protocol: boundedText(model.protocol, 48) })
+          }
+          providers.push({ name, sourceProvider, relayed: provider.relayed === true, models })
+        }
+        const blockers = (Array.isArray(item.blockers) ? item.blockers : []).slice(0, 12)
+          .map(blocker => blocker !== null && typeof blocker === 'object'
+            ? { code: boundedText(blocker.code, 48), message: boundedText(blocker.message, 240) }
+            : { code: '', message: boundedText(blocker, 240) })
+          .filter(blocker => blocker.code !== '' || blocker.message !== '')
+        const modelCount = numeric(item.modelCount)
+        const normalized = {
+          id,
+          agent,
+          name: agentName(agent) || id,
+          short: agentShort(agent) || id,
+          path: boundedText(item.path, 200),
+          providerCount: numeric(item.providerCount),
+          defaultConfigured: item.defaultConfigured === true,
+          appliedState: boundedText(item.appliedState, 64),
+          unapplied: item.unapplied === true ? true : item.unapplied === false ? false : null,
+          blockers,
+          default: item.default !== null && typeof item.default === 'object'
+            ? {
+                provider: boundedText(item.default.provider, 80),
+                id: boundedText(item.default.id, 160),
+                protocol: boundedText(item.default.protocol, 48),
+              }
+            : null,
+          providers,
+        }
+        normalized.modelCount = modelCount ?? countSelections(normalized)
+        list.push(normalized)
       }
-      const active = routes.filter(route => route?.active === true)
-      // Routes are declared but DSH has not loaded the settings that carry
-      // them: the next start is the reload that makes them live.
-      if (active.length === 0) {
-        if (ownership.reason === 'apply_not_run') return { tone: 'warn', text: t('stateNotApplied') }
-        return { tone: 'idle', text: t('stateReload') }
+      return list
+    }
+
+    /** One target-level word, never a per-model claim. */
+    function harnessTone(unapplied) {
+      return unapplied === false ? 'ok' : unapplied === true ? 'warn' : 'idle'
+    }
+
+    function harnessStatusKey(unapplied) {
+      return unapplied === false ? 'harnessApplied' : unapplied === true ? 'harnessPending' : 'harnessUnknown'
+    }
+
+    /**
+     * How two Harnesses of the same Agent are told apart. The short label is
+     * the Agent, and a duplicated Agent carries its target ID beside it.
+     */
+    function harnessLabelMap(harnesses) {
+      const counts = new Map()
+      for (const harness of harnesses) counts.set(harness.short, (counts.get(harness.short) ?? 0) + 1)
+      const labels = new Map()
+      for (const harness of harnesses) {
+        labels.set(harness.id, (counts.get(harness.short) ?? 0) > 1 ? `${harness.short} ${harness.id}` : harness.short)
       }
-      // A live route with a known-missing credential is registered, not usable;
-      // readiness that was never reported stays unknown.
-      const missing = active.filter(route => route?.credentialConfigured === false)
-      if (missing.length > 0) return { tone: 'warn', text: t('stateNotUsable') }
-      return { tone: 'idle', text: t('stateUnknown') }
+      return labels
+    }
+
+    /**
+     * Which model a Harness selects, keyed by the catalog's provider ID and
+     * model ID. A target entry names its `sourceProvider`, so a relayed model
+     * and a direct model of the same ID stay distinct.
+     */
+    function harnessMembershipOf(harnesses) {
+      const membership = new Map()
+      for (const harness of harnesses) {
+        for (const provider of harness.providers) {
+          if (provider.sourceProvider === '') continue
+          for (const model of provider.models) {
+            const key = `${provider.sourceProvider}\u0000${model.id}`
+            const member = { harness, protocol: model.protocol }
+            const found = membership.get(key)
+            if (found === undefined) membership.set(key, [member])
+            else found.push(member)
+          }
+        }
+      }
+      return membership
+    }
+
+    /** Harnesses whose desired configuration the Agent has not loaded. */
+    function unappliedHarnesses(harnesses) {
+      return harnesses.filter(harness => harness.unapplied === true)
+    }
+
+    function harnessStatusText(harness, t) {
+      return t(harnessStatusKey(harness.unapplied))
+    }
+
+    function defaultSelectionText(harness) {
+      const selection = harness?.default
+      if (selection === null || selection === undefined) return ''
+      return [selection.provider, selection.id].filter(part => part !== '').join('/')
+    }
+
+    function harnessMark(harness) {
+      const glyph = AGENT_GLYPHS[harness?.agent]
+      const initial = boundedText(harness?.short, 4) || '?'
+      const body = glyph === undefined
+        ? h('span', { className: 'tmx-harnessInitial', key: 'initial' }, initial)
+        : h('svg', {
+            width: 18,
+            height: 18,
+            viewBox: glyph.viewBox,
+            fill: glyph.stroke === true ? 'none' : 'currentColor',
+            stroke: glyph.stroke === true ? 'currentColor' : 'none',
+            strokeWidth: glyph.stroke === true ? 1.6 : undefined,
+            strokeLinecap: glyph.stroke === true ? 'round' : undefined,
+            'aria-hidden': 'true',
+            key: 'glyph',
+          }, glyph.paths.map((d, index) => h('path', { d, key: index })))
+      return h('span', {
+        className: 'tmx-harnessMark',
+        key: 'mark',
+        'data-agent': harness?.agent === '' ? undefined : harness?.agent,
+        'aria-hidden': 'true',
+      }, body)
     }
 
     /**
@@ -1332,23 +1533,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /**
-     * A connect envelope is host-owned and may grow; the page renders the
-     * groups it knows about and ignores the rest rather than inventing detail.
-     */
-    /** A reference row is one route's credential decision; the value never crosses. */
-    function referenceLine(reference, t) {
-      if (reference === null || typeof reference !== 'object') return entryText(reference)
-      const parts = []
-      for (const field of ['route', 'protocol', 'credential_ref']) {
-        if (typeof reference[field] === 'string' && reference[field] !== '') parts.push(boundedText(reference[field], 120))
-      }
-      if (typeof reference.action === 'string' && reference.action !== '') {
-        parts.push(enumText(reference.action, REFERENCE_ACTIONS, t))
-      }
-      return parts.length === 0 ? entryText(reference) : parts.join(' · ')
-    }
-
     function effectLines(effects, t) {
       if (effects === null || typeof effects !== 'object') return []
       const lines = []
@@ -1359,129 +1543,6 @@ window.__ModuleLoader__.load({
       for (const [field, value] of Object.entries(effects)) {
         if (CONNECT_EFFECTS.some(([known]) => known === field)) continue
         lines.push(`${boundedText(field, 48)}${t('colon')} ${entryText(value) || t('unknown')}`)
-      }
-      return lines
-    }
-
-    /**
-     * A connect envelope is host-owned: tmax's secret-free `agent apply` data on
-     * success, or a blocker envelope on refusal. Render the groups the page can
-     * state truthfully and ignore anything else rather than inventing detail.
-     */
-    function connectLines(connect, t) {
-      const lines = []
-      if (connect === null || typeof connect !== 'object') return lines
-
-      // A preview must disclose what it would touch, not only its references.
-      if (connect.target !== null && typeof connect.target === 'object') {
-        const items = []
-        if (typeof connect.target.id === 'string' && connect.target.id !== '') items.push(`${t('target')}${t('colon')} ${boundedText(connect.target.id, 80)}`)
-        if (typeof connect.target.path === 'string' && connect.target.path !== '') items.push(`${t('targetPath')}${t('colon')} ${boundedText(connect.target.path, 160)}`)
-        if (items.length > 0) lines.push({ label: t('target'), items })
-      } else if (typeof connect.target === 'string' && connect.target !== '') {
-        // `agent apply` reports the target as an id string.
-        lines.push({ label: t('target'), items: [boundedText(connect.target, 80)] })
-      }
-      // `tmax agent apply` data: the applied state, the files it planned or
-      // changed, its recovery record, and fact gaps. Paths and states only; no
-      // configuration file content ever crosses into the page.
-      if (typeof connect.state === 'string' && connect.state !== '') {
-        lines.push({ label: t('connectState'), items: [boundedText(connect.state, 64)] })
-      }
-      const planned = Array.isArray(connect.files) ? connect.files : []
-      if (planned.length > 0) {
-        const items = planned.slice(0, 12).map(file => {
-          if (file === null || typeof file !== 'object') return entryText(file)
-          const path = boundedText(file.path, 160)
-          const format = typeof file.format === 'string' && file.format !== '' ? boundedText(file.format, 32) : ''
-          if (path === '') return format
-          return format === '' ? path : `${path}${t('colon')} ${format}`
-        }).filter(text => text !== '')
-        if (items.length > 0) lines.push({ label: t('connectFiles'), items })
-      }
-      for (const [field, key] of [['changed_files', 'connectChangedFiles'], ['unchanged_files', 'connectUnchangedFiles']]) {
-        const values = Array.isArray(connect[field]) ? connect[field] : []
-        const items = values.slice(0, 12).map(value => boundedText(value, 160)).filter(text => text !== '')
-        if (items.length > 0) lines.push({ label: t(key), items })
-      }
-      if (typeof connect.recovery === 'string' && connect.recovery !== '') {
-        lines.push({ label: t('connectRecovery'), items: [boundedText(connect.recovery, 80)] })
-      } else if (connect.recovery !== null && typeof connect.recovery === 'object') {
-        const items = []
-        if (typeof connect.recovery.planned === 'string' && connect.recovery.planned !== '') {
-          items.push(`${t('recoveryPlanned')}${t('colon')} ${boundedText(connect.recovery.planned, 160)}`)
-        }
-        if (typeof connect.recovery.retained === 'string' && connect.recovery.retained !== '') {
-          items.push(`${t('recoveryRetained')}${t('colon')} ${boundedText(connect.recovery.retained, 80)}`)
-        }
-        if (items.length > 0) lines.push({ label: t('connectRecovery'), items })
-      }
-      const factGaps = Array.isArray(connect.fact_gaps) ? connect.fact_gaps : []
-      if (factGaps.length > 0) {
-        const items = factGaps.slice(0, 12).map(gap => {
-          if (gap === null || typeof gap !== 'object') return entryText(gap)
-          const subject = [boundedText(gap.entry, 80), boundedText(gap.model, 80)].filter(text => text !== '').join('/')
-          const missing = Array.isArray(gap.missing)
-            ? gap.missing.map(item => boundedText(item, 48)).filter(text => text !== '').join(', ')
-            : boundedText(gap.missing, 120)
-          if (subject === '') return missing === '' ? entryText(gap) : missing
-          return missing === '' ? subject : `${subject}${t('colon')} ${missing}`
-        }).filter(text => text !== '')
-        if (items.length > 0) lines.push({ label: t('connectFactGaps'), items })
-      }
-      if (connect.gateway !== null && typeof connect.gateway === 'object') {
-        const gateway = connect.gateway
-        const items = []
-        if (typeof gateway.listen === 'string' && gateway.listen !== '') items.push(`${t('gatewayListen')}${t('colon')} ${boundedText(gateway.listen, 80)}`)
-        items.push(`${t('gatewayReady')}${t('colon')} ${word(gateway.ready, t)}`)
-        if (typeof gateway.reason_code === 'string' && gateway.reason_code !== '') {
-          items.push(`${t('gatewayReason')}${t('colon')} ${enumText(gateway.reason_code, REASONS, t)}`)
-        }
-        lines.push({ label: t('gatewayTitle'), items })
-      }
-      if (connect.credentials !== null && typeof connect.credentials === 'object') {
-        const credentials = connect.credentials
-        const items = []
-        if (typeof credentials.path === 'string' && credentials.path !== '') items.push(`${t('credentialPath')}${t('colon')} ${boundedText(credentials.path, 160)}`)
-        if (typeof credentials.state === 'string' && credentials.state !== '') items.push(`${t('credentialState')}${t('colon')} ${boundedText(credentials.state, 40)}`)
-        if (typeof credentials.permissions === 'string' || typeof credentials.permissions === 'number') {
-          items.push(`${t('credentialPermissions')}${t('colon')} ${boundedText(credentials.permissions, 40)}`)
-        }
-        if (items.length > 0) lines.push({ label: t('credentialsTitle'), items })
-      }
-
-      const references = Array.isArray(connect.references) ? connect.references : []
-      if (references.length > 0) {
-        lines.push({ label: t('connectRefs'), items: references.slice(0, 20).map(reference => referenceLine(reference, t)) })
-      } else if (Array.isArray(connect.refs)) {
-        lines.push({ label: t('connectRefs'), items: connect.refs.slice(0, 20).map(entryText).filter(text => text !== '') })
-      }
-
-      if (connect.changed !== undefined && connect.changed !== null && typeof connect.changed !== 'object') {
-        lines.push({ label: t('connectChanged'), items: [word(connect.changed, t)] })
-      } else if (Array.isArray(connect.changed)) {
-        const items = connect.changed.slice(0, 12).map(entryText).filter(text => text !== '')
-        if (items.length > 0) lines.push({ label: t('connectChanged'), items })
-      }
-
-      if (connect.effects !== null && typeof connect.effects === 'object' && !Array.isArray(connect.effects)) {
-        const items = effectLines(connect.effects, t)
-        if (items.length > 0) lines.push({ label: t('connectEffects'), items })
-      } else if (Array.isArray(connect.effects)) {
-        const items = connect.effects.slice(0, 12).map(entryText).filter(text => text !== '')
-        if (items.length > 0) lines.push({ label: t('connectEffects'), items })
-      }
-
-      const blockers = Array.isArray(connect.blockers) ? connect.blockers : []
-      if (blockers.length > 0) {
-        lines.push({ label: t('connectBlockers'), items: blockers.slice(0, 12).map(entryText).filter(text => text !== '') })
-      }
-      const nextActions = Array.isArray(connect.next_actions) ? connect.next_actions : Array.isArray(connect.nextActions) ? connect.nextActions : []
-      if (nextActions.length > 0) {
-        lines.push({ label: t('connectNextActions'), items: nextActions.slice(0, 12).map(entryText).filter(text => text !== '') })
-      }
-      if (typeof connect.message === 'string' && connect.message !== '') {
-        lines.push({ label: t('connectDetail'), items: [boundedText(connect.message, 200)] })
       }
       return lines
     }
@@ -1530,21 +1591,33 @@ window.__ModuleLoader__.load({
       if (descriptor === null || typeof descriptor !== 'object') return undefined
       const action = descriptor.action
       if (typeof action !== 'string' || !ACTION_KINDS.includes(action)) return undefined
-      if (action === 'open_management' || GATEWAY_ACTIONS.includes(action)) return { action, dryRun: dryRun === true }
+      const preview = dryRun === true
+      if (action === 'open_management' || GATEWAY_ACTIONS.includes(action)) {
+        return { action, dryRun: preview }
+      }
+      // A Harness operation names one declared target; the host validates the ID
+      // against its own state, so the page only bounds the string it received.
+      if (action === 'apply_target') {
+        const target = boundedText(descriptor.target, 80)
+        if (target === '') return undefined
+        return { action, target, dryRun: preview }
+      }
+      if (action === 'add_model' || action === 'remove_model') {
+        const target = boundedText(descriptor.target, 80)
+        const provider = boundedText(descriptor.provider, 80)
+        const model = boundedText(descriptor.model, 160)
+        const protocol = descriptor.protocol
+        if (target === '' || provider === '' || model === '') return undefined
+        if (typeof protocol !== 'string' || !ADD_PROTOCOLS.includes(protocol)) return undefined
+        return { action, target, provider, model, protocol, dryRun: preview }
+      }
       const provider = descriptor.provider
       if (typeof provider !== 'string' || provider === '') return undefined
-      if (action === 'add_model') {
-        const model = descriptor.model
-        const protocol = descriptor.protocol
-        if (typeof model !== 'string' || model === '') return undefined
-        if (typeof protocol !== 'string' || !ADD_PROTOCOLS.includes(protocol)) return undefined
-        return { action, provider, model, protocol, dryRun: dryRun === true }
-      }
       if (action === 'observe_provider') {
         const scope = typeof descriptor.scope === 'string' && ACTION_SCOPES.includes(descriptor.scope) ? descriptor.scope : 'quota'
-        return { action, provider, scope, dryRun: dryRun === true }
+        return { action, provider, scope, dryRun: preview }
       }
-      return { action, provider, dryRun: dryRun === true }
+      return { action, provider, dryRun: preview }
     }
 
     /**
@@ -1726,14 +1799,14 @@ window.__ModuleLoader__.load({
 
     /**
      * The one consumer gate for a host read model, shared by the page and every
-     * seat. Only an object carrying `schemaVersion === 4` and `ok === true` is
+     * seat. Only an object carrying the current `schemaVersion` and `ok === true` is
      * a state; an unsupported schema is a typed failure, and a refused model is
      * an error. Neither is ever adopted as evidence.
      * @returns {{ object: boolean, state?: object, schemaUnsupported?: boolean, message?: string }}
      */
     function stateGate(value, response) {
       if (value === null || typeof value !== 'object') return { object: false }
-      if (value.schemaVersion !== 4) {
+      if (value.schemaVersion !== STATE_SCHEMA_VERSION) {
         return { object: true, schemaUnsupported: true, message: boundedText(value.schemaVersion, 24) }
       }
       if (value.ok !== true) return { object: true, message: stateError(value, response?.status) }
@@ -1778,7 +1851,6 @@ window.__ModuleLoader__.load({
     function TmaxPage({ t }) {
       const [load, setLoad] = React.useState({ phase: 'loading' })
       const [observe, setObserve] = React.useState({ phase: 'idle', items: [] })
-      const [connect, setConnect] = React.useState({ phase: 'idle', lines: [] })
       // One explicit repair action at a time, in one panel: preview, then an
       // explicit confirmation, then a typed result. Never retried on its own.
       const [repair, setRepair] = React.useState({ phase: 'idle' })
@@ -1786,13 +1858,23 @@ window.__ModuleLoader__.load({
       // model section is shown; it never starts a read or an action.
       const [tab, setTab] = React.useState('models')
       const [query, setQuery] = React.useState('')
-      const [selectedProvider, setSelectedProvider] = React.useState(null)
-      // One target-selection add at a time: catalog preview, then confirm, then
-      // the fixed provider/model/apply sequence's typed result.
-      const [add, setAdd] = React.useState({ phase: 'idle' })
-      // A response may arrive after a newer preview/protocol change; only the
-      // newest request may touch the panel or adopt its state.
-      const [addSeq] = React.useState(() => ({ current: 0 }))
+      // One model's Harness popover: the model it answers for, its own search
+      // text, and the viewport anchor it was opened from.
+      const [picker, setPicker] = React.useState(null)
+      // A selection write runs without a preview: the host saves desired
+      // configuration and returns the state the control is redrawn from.
+      const [selection, setSelection] = React.useState({ phase: 'idle' })
+      // One Harness apply at a time: preview, confirmation, then the returned
+      // state. 'applied' keeps its announcement until the next action.
+      const [apply, setApply] = React.useState({ phase: 'idle' })
+      // Monotonic fences: a late response from a cancelled dialog or an older
+      // selection write must not reopen or overwrite the newer interaction.
+      const [applySeq] = React.useState({ current: 0 })
+      const [selectionSeq] = React.useState({ current: 0 })
+      const [toast, setToast] = React.useState(null)
+      // The typed result of the last save or apply, kept until dismissed so the
+      // page can disclose code/status/steps/files rather than only announce success.
+      const [lastResult, setLastResult] = React.useState(null)
 
       const loadState = React.useCallback(async () => {
         setLoad(previous => ({ phase: previous.value === undefined ? 'loading' : 'refreshing', value: previous.value }))
@@ -1804,7 +1886,7 @@ window.__ModuleLoader__.load({
           // The state schema is a hard consumer gate: an unknown version is a
           // failure, never a payload this page guesses at. A last-known state
           // stays on screen, labeled, instead of being cleared.
-          if (value.schemaVersion !== 4) {
+          if (value.schemaVersion !== STATE_SCHEMA_VERSION) {
             setLoad(previous => ({
               phase: 'failed',
               value: previous.value,
@@ -1836,6 +1918,16 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => { void loadState() }, [loadState])
 
+      // A toast is a confirmation, not a log: it clears itself after a moment.
+      // The handle is unref'd where the runtime offers that, so a pending
+      // confirmation never holds a non-browser process open.
+      React.useEffect(() => {
+        if (toast === null) return undefined
+        const handle = setTimeout(() => setToast(null), 3200)
+        if (handle !== null && typeof handle === 'object' && typeof handle.unref === 'function') handle.unref()
+        return () => clearTimeout(handle)
+      }, [toast])
+
       const refresh = React.useCallback(async () => {
         setObserve({ phase: 'running', items: [] })
         try {
@@ -1864,40 +1956,6 @@ window.__ModuleLoader__.load({
           setLoad(previous => ({ phase: 'failed', value: previous.value, message: plainError(error) }))
         }
       }, [loadState, t])
-
-      const previewConnect = React.useCallback(async () => {
-        setConnect({ phase: 'previewing', lines: [] })
-        try {
-          const { response, value } = await postJson('/_tmax/connect', { dryRun: true })
-          if (!response.ok || value?.ok !== true) {
-            setConnect({ phase: 'failed', lines: connectLines(value?.connect, t), message: stateError(value, response.status) })
-            return
-          }
-          setConnect({ phase: 'preview', lines: connectLines(value.connect, t) })
-        } catch (error) {
-          setConnect({ phase: 'failed', lines: [], message: plainError(error) })
-        }
-      }, [t])
-
-      const executeConnect = React.useCallback(async () => {
-        setConnect(previous => ({ ...previous, phase: 'executing' }))
-        try {
-          const { response, value } = await postJson('/_tmax/connect', { dryRun: false })
-          if (!response.ok || value?.ok !== true) {
-            setConnect({ phase: 'failed', lines: connectLines(value?.connect, t), message: stateError(value, response.status) })
-            return
-          }
-          const nextState = value?.state !== null && typeof value?.state === 'object' ? value.state : undefined
-          if (!adoptState(setLoad, nextState, response, t)) await loadState()
-          setConnect({ phase: 'applied', lines: connectLines(value.connect, t) })
-        } catch (error) {
-          setConnect({ phase: 'failed', lines: [], message: plainError(error) })
-        }
-      }, [loadState, t])
-
-      const cancelConnect = React.useCallback(() => {
-        setConnect({ phase: 'idle', lines: [] })
-      }, [])
 
       /**
        * One action, previewed or executed. The payload is rebuilt from the
@@ -1942,107 +2000,222 @@ window.__ModuleLoader__.load({
 
       const cancelRepair = React.useCallback(() => { setRepair({ phase: 'idle' }) }, [])
 
+      const changeTab = React.useCallback(next => {
+        if (apply.phase === 'executing') return
+        applySeq.current += 1
+        setPicker(null)
+        setApply({ phase: 'idle' })
+        setTab(next)
+      }, [apply.phase, applySeq])
+
+      const togglePicker = React.useCallback((key, event) => {
+        setSelection({ phase: 'idle' })
+        setPicker(previous => {
+          if (previous !== null && previous.key === key) return null
+          return { key, query: '', anchor: pickerAnchor(event) }
+        })
+      }, [])
+
+      const changePickerQuery = React.useCallback(value => {
+        setPicker(previous => previous === null ? null : { ...previous, query: String(value) })
+      }, [])
+
+      const closePicker = React.useCallback(() => setPicker(null), [])
+
       /**
-       * The one target-selection action. A preview posts the catalog request
-       * with dryRun; confirming posts the same operands without it. The host
-       * returns the plan or the fresh state; the browser never composes argv.
+       * One desired-configuration write: add sends the protocol the model
+       * publishes, remove names the exact protocol selection the Harness holds.
+       * There is no preview; the typed result reports success or the reason.
        */
-      const runAdd = React.useCallback(async (request, dryRun) => {
-        const payload = actionPayload({ action: 'add_model', provider: request.provider, model: request.model, protocol: request.protocol }, dryRun)
-        if (payload === undefined) return
-        const generation = addSeq.current + 1
-        addSeq.current = generation
+      const runSelection = React.useCallback(async (harness, provider, model, protocol, action) => {
+        const payload = actionPayload({ action, target: harness.id, provider: provider.id, model: model.id, protocol }, false)
+        if (payload === undefined) return false
+        const key = `${provider.id}\u0000${model.id}`
+        const seq = ++selectionSeq.current
+        setLastResult(null)
+        setSelection({ phase: 'running', key, action })
         try {
           const { response, value } = await postJson('/_tmax/action', payload)
-          if (generation !== addSeq.current) return
           const result = value !== null && typeof value === 'object' && value.result !== null && typeof value.result === 'object'
             ? value.result
             : undefined
           const succeeded = actionSucceeded(value, response.ok)
-          // A partial add returns the state after the completed prefix; adopt it
-          // even on a refusal so the page shows the entry/model that now exists.
+          // A stale response's snapshot is older than a newer completed write.
+          // Never let it overwrite the visible state: read the authoritative
+          // state instead, then stop updating this action's UI.
+          if (seq !== selectionSeq.current) {
+            await loadState()
+            return false
+          }
+          const nextState = value?.state !== null && typeof value?.state === 'object' ? value.state : undefined
+          const adopted = nextState !== undefined && adoptState(setLoad, nextState, response, t)
+          if (!adopted) await loadState()
+          if (result !== undefined) setLastResult({ action, result })
+          if (succeeded) {
+            setSelection({ phase: 'saved', key, result })
+            setToast({ tone: 'ok', text: `${boundedText(model.id, 160)} · ${t('selectionSaved')}` })
+            return true
+          }
+          const detail = hostCodeText(result?.code, result?.message) || stateError(value, response.status)
+          setSelection({ phase: 'failed', key, result, message: detail })
+          setToast({ tone: 'error', text: `${t('selectionFailed')} · ${boundedText(detail, 160)}` })
+          return false
+        } catch (error) {
+          if (seq !== selectionSeq.current) return false
+          const message = plainError(error)
+          setSelection({ phase: 'failed', key, message })
+          setToast({ tone: 'error', text: `${t('selectionFailed')} · ${boundedText(message, 160)}` })
+          return false
+        }
+      }, [loadState, t])
+
+      /**
+       * A checkbox toggles one Harness selection for one model. Adding names
+       * the model's preferred protocol; removing names each protocol selection
+       * the Harness already holds, one exact host action each.
+       */
+      const toggleSelection = React.useCallback((harness, provider, model, protocols, checked) => {
+        setSelection({ phase: 'idle' })
+        if (checked === true) {
+          const protocol = preferredProtocol(model.protocols)
+          if (protocol === undefined || protocols.includes(protocol)) return
+          void runSelection(harness, provider, model, protocol, 'add_model')
+          return
+        }
+        // The host removes every protocol selection for this provider/model in
+        // one fixed sequence; the requested protocol only proves the selector.
+        const selected = protocols.length > 0
+          ? protocols[0]
+          : preferredProtocol(model.protocols)
+        if (selected === undefined) return
+        void runSelection(harness, provider, model, selected, 'remove_model')
+      }, [runSelection])
+
+      const previewApply = React.useCallback(async harness => {
+        const payload = actionPayload({ action: 'apply_target', target: harness.id }, true)
+        if (payload === undefined) return
+        const seq = ++applySeq.current
+        setLastResult(null)
+        setApply({ phase: 'previewing', harness })
+        try {
+          const { response, value } = await postJson('/_tmax/action', payload)
+          if (seq !== applySeq.current) return
+          const result = value !== null && typeof value === 'object' && value.result !== null && typeof value.result === 'object'
+            ? value.result
+            : undefined
+          const succeeded = actionSucceeded(value, response.ok)
           const nextState = value?.state !== null && typeof value?.state === 'object' ? value.state : undefined
           if (nextState !== undefined) adoptState(setLoad, nextState, response, t)
-          if (succeeded && dryRun) {
-            const plan = result?.status === 'dry_run' && result.data !== null && typeof result.data === 'object' ? result.data : undefined
-            const entry = plan?.entry !== null && typeof plan?.entry === 'object' ? plan.entry : undefined
-            const valid = plan !== undefined
-              && entry !== undefined
-              && typeof entry.name === 'string' && entry.name !== ''
-              && (entry.mode === 'create' || entry.mode === 'existing')
-              && plan.provider === request.provider
-              && plan.model === request.model
-              && plan.protocol === request.protocol
-            if (!valid) {
-              setAdd({ phase: 'failed', request, result, message: t('addInvalidPreview') })
-              return
-            }
-            setAdd({ phase: 'preview', request, plan })
+          if (!succeeded) {
+            setApply({ phase: 'failed', harness, result, message: hostCodeText(result?.code, result?.message) || stateError(value, response.status) })
             return
           }
-          if (succeeded) {
-            setAdd({ phase: 'applied', request, result })
-            return
-          }
-          const detail = hostCodeText(result?.code, result?.message)
-          // Plan refusals (catalog unavailable, unknown model) carry their
-          // typed code on the body, not in a tmax result envelope.
-          const code = result?.code ?? (value !== null && typeof value?.code === 'string' ? value.code : undefined)
-          setAdd({
-            phase: 'failed',
-            request,
-            result,
-            code,
-            message: detail === '' ? stateError(value, response.status) : undefined,
-          })
+          const data = result?.data !== null && typeof result?.data === 'object' ? result.data : {}
+          setApply({ phase: 'preview', harness, data, result })
         } catch (error) {
-          if (generation !== addSeq.current) return
-          setAdd(previous => ({ ...previous, phase: 'failed', message: plainError(error) }))
+          if (seq !== applySeq.current) return
+          setApply({ phase: 'failed', harness, message: plainError(error) })
         }
-      }, [addSeq, t])
+      }, [t])
 
-      const previewAdd = React.useCallback(request => {
-        setAdd({ phase: 'previewing', request })
-        void runAdd(request, true)
-      }, [runAdd])
+      const confirmApply = React.useCallback(async () => {
+        if (apply.phase !== 'preview' || apply.harness === null || typeof apply.harness !== 'object') return
+        const harness = apply.harness
+        const payload = actionPayload({ action: 'apply_target', target: harness.id }, false)
+        if (payload === undefined) return
+        const seq = applySeq.current
+        setApply(previous => ({ ...previous, phase: 'executing' }))
+        try {
+          const { response, value } = await postJson('/_tmax/action', payload)
+          if (seq !== applySeq.current) return
+          const result = value !== null && typeof value === 'object' && value.result !== null && typeof value.result === 'object'
+            ? value.result
+            : undefined
+          const succeeded = actionSucceeded(value, response.ok)
+          const nextState = value?.state !== null && typeof value?.state === 'object' ? value.state : undefined
+          const adopted = nextState !== undefined && adoptState(setLoad, nextState, response, t)
+          if (!adopted) await loadState()
+          if (seq !== applySeq.current) return
+          if (!succeeded) {
+            setApply({ phase: 'failed', harness, result, message: hostCodeText(result?.code, result?.message) || stateError(value, response.status) })
+            return
+          }
+          setApply({ phase: 'applied', harness, result })
+          setLastResult({ action: 'apply_target', result })
+          setToast({ tone: 'ok', text: `${boundedText(harness.name, 120)} · ${t('applyApplied')}` })
+        } catch (error) {
+          if (seq !== applySeq.current) return
+          setApply(previous => ({ ...previous, phase: 'failed', message: plainError(error) }))
+        }
+      }, [apply, loadState, t])
 
-      const startAdd = React.useCallback((provider, model, protocols) => {
-        const protocol = preferredProtocol(protocols)
-        if (protocol === undefined) return
-        previewAdd({ provider, model, protocol })
-      }, [previewAdd])
+      const cancelApply = React.useCallback(() => {
+        // An executing write cannot be cancelled at the host; keep the dialog
+        // (and its result) authoritative instead of discarding the completion.
+        if (apply.phase === 'executing') return
+        applySeq.current += 1
+        setApply({ phase: 'idle' })
+      }, [apply.phase, applySeq])
 
-      const changeAddProtocol = React.useCallback(protocol => {
-        if (add.request === undefined || !ADD_PROTOCOLS.includes(protocol)) return
-        previewAdd({ ...add.request, protocol })
-      }, [add.request, previewAdd])
-
-      const confirmAdd = React.useCallback(() => {
-        if (add.phase !== 'preview' || add.request === undefined) return
-        setAdd(previous => ({ ...previous, phase: 'executing' }))
-        void runAdd(add.request, false)
-      }, [add.phase, add.request, runAdd])
-
-      const cancelAdd = React.useCallback(() => {
-        addSeq.current += 1
-        setAdd({ phase: 'idle' })
-      }, [addSeq])
-      const openProvider = React.useCallback(id => {
-        setSelectedProvider(id)
-        // Do not clear an in-flight add: navigation must not turn a running
-        // target write into an editable idle panel.
-      }, [])
-      const backProviders = React.useCallback(() => {
-        setSelectedProvider(null)
-      }, [])
+      // An aria-modal dialog owns focus while it is open: focus the safe close
+      // control, keep Tab inside it, close on Escape, and return focus after.
+      const applyOpen = apply !== null && apply !== undefined && apply.phase !== 'idle' && apply.phase !== 'applied'
+      React.useEffect(() => {
+        if (typeof document === 'undefined' || applyOpen !== true) return undefined
+        if (typeof document.querySelector !== 'function' || typeof document.addEventListener !== 'function') return undefined
+        const dialog = document.querySelector('.tmx-dialog')
+        if (dialog === null || typeof dialog.querySelectorAll !== 'function') return undefined
+        const previous = typeof document.activeElement === 'object' ? document.activeElement : null
+        const focusable = () => Array.from(dialog.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        const initial = dialog.querySelector('[data-autofocus]') ?? focusable()[0]
+        if (initial !== null && typeof initial.focus === 'function') initial.focus()
+        const onKeyDown = event => {
+          if (event.key === 'Escape') {
+            event.preventDefault?.()
+            cancelApply()
+            return
+          }
+          if (event.key !== 'Tab') return
+          const items = focusable()
+          if (items.length === 0) {
+            event.preventDefault?.()
+            return
+          }
+          const first = items[0]
+          const last = items[items.length - 1]
+          if (event.shiftKey === true && document.activeElement === first) {
+            event.preventDefault?.()
+            last.focus?.()
+          } else if (event.shiftKey !== true && document.activeElement === last) {
+            event.preventDefault?.()
+            first.focus?.()
+          }
+        }
+        document.addEventListener('keydown', onKeyDown)
+        return () => {
+          document.removeEventListener('keydown', onKeyDown)
+          if (previous !== null && typeof previous.focus === 'function') previous.focus()
+        }
+      }, [applyOpen, cancelApply])
 
       const state = load.value !== null && typeof load.value === 'object' && load.value.ok === true ? load.value : undefined
-      const verdictInfo = verdict(load, t)
-      const action = state === undefined ? undefined : nextAction(load)
+      const harnesses = state === undefined ? [] : harnessesOf(state)
+      const labels = harnessLabelMap(harnesses)
+      const membership = harnessMembershipOf(harnesses)
+      const unapplied = unappliedHarnesses(harnesses)
+      const config = state?.config !== null && typeof state?.config === 'object' ? state.config : {}
+      const ownership = state?.ownership !== null && typeof state?.ownership === 'object' ? state.ownership : {}
+      const conflict = ownership.conflict
+      // A failed read, an invalid configuration, or a reported ownership
+      // conflict is not evidence a write may act on. Desired configuration
+      // stays editable only while the read model is current and valid.
+      const readBlocked = load.phase === 'failed'
+        || config.state === 'invalid' || config.state === 'unavailable'
+        || (conflict !== null && conflict !== undefined)
       const busy = observe.phase === 'running'
-        || connect.phase === 'previewing' || connect.phase === 'executing'
         || repair.phase === 'previewing' || repair.phase === 'executing'
-        || add.phase === 'previewing' || add.phase === 'executing'
+        || selection.phase === 'running'
+        || apply.phase === 'previewing' || apply.phase === 'executing'
       const repairHandlers = {
         run: descriptor => { void runRepair(descriptor, false) },
         disabled: busy,
@@ -2068,38 +2241,89 @@ window.__ModuleLoader__.load({
         h('div', { className: 'tmx-scroll' },
           h('div', { className: 'tmx-content' }, [
             pageHeader(state, state === undefined && load.phase === 'failed' ? retryButton : refreshButton, t),
-            state === undefined ? null : tabsBar(tab, setTab, t),
-            verdictLine(verdictInfo, primaryAction(action, busy, { start: () => repairHandlers.run({ action: 'gateway_start' }), connect: previewConnect }, t), t),
+            state === undefined ? null : tabsBar(tab, changeTab, t, unapplied.length),
             h('p', { className: 'tmx-sr', key: 'live', role: 'status', 'aria-live': 'polite' },
-              announce({ load, observe, connect, repair, add, verdict: verdictInfo.text }, t)),
-            state !== undefined && load.phase === 'failed' ? null
-              : nextStep(action, t, { retry: loadState, failures: state === undefined ? [] : [...sectionErrors(state), ...configErrors(state)] }),
+              announce({ load, observe, repair, selection, apply }, t)),
+            pageErrors(state, t, loadState),
+            resultPanel(lastResult, t, () => setLastResult(null)),
             state === undefined ? null : routeBlockerLine(state, t),
             staleBanner(load, t, loadState),
             state === undefined && load.phase === 'failed' ? initialError(load, t, loadState) : null,
             repairPanel(repair, t, { confirm: confirmRepair, cancel: cancelRepair, disabled: busy }),
-            connectPanel(connect, t, { execute: executeConnect, cancel: cancelConnect }),
             observePanel(observe, t, load.phase === 'failed'),
             state === undefined && load.phase === 'loading' ? skeleton(t) : null,
             state === undefined ? null : tab === 'models'
-              ? catalogSection(state, t, {
+              ? modelsSection(state, t, {
                 query,
+                harnesses,
+                labels,
+                membership,
+                picker,
+                selection,
                 onQuery: setQuery,
-                selectedProvider,
-                onOpen: openProvider,
-                onBack: backProviders,
-                add,
-                onAdd: startAdd,
-                onProtocol: changeAddProtocol,
-                onConfirm: confirmAdd,
-                onCancel: cancelAdd,
+                onTogglePicker: togglePicker,
+                onPickerQuery: changePickerQuery,
+                onClosePicker: closePicker,
+                onToggleSelection: toggleSelection,
+                onGoApply: () => changeTab('harness'),
                 gatewayConfigured: state.gateway?.configured === true,
                 busy,
+                readBlocked,
               })
-              : tab === 'gateway'
-                ? gatewaySection(state, t, repairHandlers, busy)
-                : accountsSection(state, t, repairHandlers),
-          ])))
+              : tab === 'harness'
+                ? harnessSection(state, t, harnesses, {
+                  onApply: harness => { void previewApply(harness) },
+                  onAddModel: () => changeTab('models'),
+                  busy,
+                  readBlocked,
+                })
+                : tab === 'gateway'
+                  ? gatewaySection(state, t, repairHandlers, busy)
+                  : accountsSection(state, t, repairHandlers),
+            applyDialog(apply, t, { confirm: () => { void confirmApply() }, cancel: cancelApply }),
+          ])),
+        toastLine(toast))
+    }
+
+    /**
+     * The typed result of the last desired-configuration save or Harness apply.
+     * The summary stays visible; the full code/status/data/steps/blockers/effects
+     * are behind one disclosure so the page remains sparse without dropping the
+     * result the host returned.
+     */
+    function resultPanel(last, t, onClose) {
+      if (last === null || last === undefined) return null
+      const actionKey = ACTION_LABELS[last.action] ?? 'resultTitle'
+      const lines = actionResultLines(last.result, t, last.action)
+      const status = last.result?.status === 'success'
+        ? t('actionDone')
+        : last.result?.status === 'dry_run' ? t('actionPreviewTitle') : t('actionResult')
+      const code = typeof last.result?.code === 'string' && last.result.code !== ''
+        ? boundedText(last.result.code, 48)
+        : t('unknown')
+      return h('section', { className: 'tmx-result', key: 'result', role: 'status' }, [
+        h('div', { className: 'tmx-resultHead', key: 'head' }, [
+          h('span', { className: 'tmx-resultTitle', key: 'title' }, t(actionKey)),
+          h('span', { className: 'tmx-resultMeta', key: 'meta' }, `${status} · ${code}`),
+          h('button', {
+            type: 'button',
+            className: 'tmx-resultClose',
+            key: 'close',
+            'aria-label': t('resultDismiss'),
+            onClick: onClose,
+          }, '×'),
+        ]),
+        lines.length === 0
+          ? null
+          : h('details', { className: 'tmx-resultDetails', key: 'details' }, [
+            h('summary', { key: 'summary' }, t('resultDetails')),
+            h('dl', { className: 'tmx-resultLines', key: 'lines' },
+              lines.flatMap((line, index) => [
+                h('dt', { key: `label:${index}` }, line.label),
+                h('dd', { key: `value:${index}` }, line.items.join(' · ')),
+              ])),
+          ]),
+      ])
     }
 
     /** The name, when the state was generated, and the one control that reads again. */
@@ -2114,68 +2338,65 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The one control that changes the verdict when the page has it: starting a
-     * gateway that is down, or applying what DSH has not been given. Every
-     * other next step is a fact to read, so it takes no button.
+     * Page-level evidence that something is wrong outside one section: a failed
+     * section read, an invalid configuration, or a reported ownership conflict.
+     * One compact line each, with the read retry beside them: the page states
+     * the fact and never explains at length.
      */
-    function primaryAction(action, busy, handlers, t) {
-      if (action === undefined || busy) return undefined
-      if (action.kind === 'gateway') return { label: t('actionStartGateway'), run: handlers.start }
-      if (action.kind === 'connect') return { label: t('connect'), run: handlers.connect }
-      return undefined
-    }
-
-    /** The verdict in one line: reachability, then the control that changes it. */
-    function verdictLine(verdictInfo, primary, t) {
-      return h('p', { className: 'tmx-verdict', key: 'verdict' }, [
-        dot(verdictInfo.tone),
-        h('span', { key: 'text' }, verdictInfo.text),
-        primary === undefined
-          ? null
-          : h('button', {
-            type: 'button',
-            className: 'tmx-button',
-            'data-kind': 'primary',
-            key: 'primary',
-            onClick: primary.run,
-          }, primary.label),
+    function pageErrors(state, t, retry) {
+      if (state === undefined || state === null) return null
+      const failures = sectionErrors(state)
+      const config = configErrors(state)
+      const ownership = state.ownership !== null && typeof state.ownership === 'object' ? state.ownership : {}
+      const conflict = ownership.conflict
+      const lines = []
+      for (const failure of failures) lines.push(`${t('readFailed')}${t('colon')} ${failure.text}`)
+      for (const failure of config) lines.push(`${t('configProblem')}${t('colon')} ${failure.text}`)
+      if (conflict !== null && conflict !== undefined) {
+        const text = hostCodeText(conflictCode(conflict), conflictMessage(conflict)) || entryText(conflict)
+        if (text !== '') lines.push(`${t('conflict')}${t('colon')} ${text}`)
+      }
+      if (lines.length === 0) return null
+      return h('div', { className: 'tmx-errors', key: 'pageErrors' }, [
+        ...lines.map((line, index) => h('p', { className: 'tmx-errorText tmx-break', key: `line:${index}` }, line)),
+        failures.length === 0 ? null : h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: retry }, t('retry')),
       ])
     }
 
     /**
-     * What stands between the reader and a working model, when the answer is a
-     * fact rather than a button. A retry is the header's own control, and the
-     * gateway and Apply steps sit on the verdict line, so they are not repeated.
+     * Decide whether the popover opens below its control or flips above it.
+     * The popover is absolutely positioned inside the row wrapper, so its
+     * horizontal alignment is CSS; only the vertical fit needs a measurement.
+     * A narrow viewport renders it as a bottom sheet from CSS.
      */
-    function nextStep(action, t, handlers) {
-      if (action === undefined) return null
-      let text
-      // A failed read is retried by reading again, never by observing, so this
-      // step keeps its own control beside the header's Refresh.
-      let retry = false
-      switch (action.kind) {
-        case 'reload': text = t('nextReload'); break
-        case 'conflict': text = `${t('nextConflict')} ${hostCodeText(action.code, action.message)}`.trim(); break
-        case 'blocker': text = hostCodeText(action.code, action.message) || t('nextBlocker'); break
-        case 'config': text = action.reason === 'unavailable' ? t('nextConfigUnavailable') : t('nextConfig'); break
-        case 'retry':
-          text = action.reason === 'projection'
-            ? t('nextProjectionRetry')
-            : action.reason === 'settings' ? t('nextSettingsUnreadable')
-            : action.reason === 'section' ? t('nextSectionRetry') : t('nextRetry')
-          retry = handlers !== undefined
-          break
-        default: return null
-      }
-      // Every failed section read follows the sentence, code first and bounded:
-      // a section whose read failed must say so, wherever the next step points.
-      const detail = handlers.failures.map(error => error.text).join(' · ')
-      return h('p', { className: 'tmx-nextStep', key: 'step' }, [
-        h('span', { key: 'text' }, detail === '' ? text : `${text} ${detail}`),
-        retry ? h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: handlers.retry }, t('retry')) : null,
-      ])
+    function pickerAnchor(event) {
+      const rect = event?.currentTarget?.getBoundingClientRect?.()
+      if (rect === undefined || rect === null || typeof rect.bottom !== 'number') return null
+      const viewportHeight = typeof window !== 'undefined' && Number.isFinite(window.innerHeight) ? window.innerHeight : 0
+      const viewportWidth = typeof window !== 'undefined' && Number.isFinite(window.innerWidth) ? window.innerWidth : 0
+      if (viewportWidth > 0 && viewportWidth <= 720) return null
+      // Match the stylesheet cap (min(70vh, 460px)). Prefer below, but flip only
+      // when below cannot hold it and above has more room.
+      const maxHeight = viewportHeight > 0 ? Math.min(460, Math.max(240, Math.round(viewportHeight * 0.7))) : 460
+      const below = viewportHeight > 0 ? viewportHeight - rect.bottom - 12 : maxHeight
+      const above = typeof rect.top === 'number' ? rect.top - 12 : 0
+      if (below < maxHeight + 16 && above > below) return { flip: true }
+      return { flip: false }
     }
 
+    /**
+     * A toast repeats what the live region says, visually; it is not a second
+     * announcement for assistive technology, and it clears itself.
+     */
+    function toastLine(toast) {
+      if (toast === null || toast === undefined) return null
+      return h('div', {
+        className: 'tmx-toast',
+        'data-tone': toast.tone,
+        key: 'toast',
+        'aria-hidden': 'true',
+      }, toast.text)
+    }
     /**
      * A route the host could not build names why: an unsupported protocol, a
      * credential reference DSH cannot use, a missing base URL. Each blocker is
@@ -2191,7 +2412,7 @@ window.__ModuleLoader__.load({
         }
       }
       if (lines.length === 0) return null
-      return h('p', { className: 'tmx-nextStep tmx-break', key: 'routeBlockers' }, lines.join(' · '))
+      return h('p', { className: 'tmx-errorText tmx-break', key: 'routeBlockers' }, lines.join(' · '))
     }
 
     /** A configuration's own validation errors, bounded and code first. */
@@ -2328,9 +2549,9 @@ window.__ModuleLoader__.load({
     function catalogProviders(catalog) {
       if (catalog === null || !Array.isArray(catalog.providers)) return []
       const providers = catalog.providers.filter(provider => provider !== null && typeof provider === 'object')
-      // Providers already selected into the target lead, then a stable name
-      // order. This is an ordering only: no provider gets a status label.
-      const rank = provider => provider.joinedCount > 0 ? 0 : provider.joinedCount === 0 ? 1 : 2
+      // The derived gateway provider first, then a stable name order. This is
+      // an ordering only: no provider gets a status label.
+      const rank = provider => provider.source === 'gateway' ? 0 : 1
       return providers.slice().sort((left, right) => {
         const byRank = rank(left) - rank(right)
         if (byRank !== 0) return byRank
@@ -2341,7 +2562,7 @@ window.__ModuleLoader__.load({
     }
 
     function providerMark(provider) {
-      const source = provider?.source === 'gateway' ? (provider?.name || provider?.id || '') : (provider?.name || provider?.id || '')
+      const source = provider?.name || provider?.id || ''
       const letter = String(source).trim().charAt(0).toUpperCase() || '?'
       return h('span', {
         className: 'tmx-mark',
@@ -2351,23 +2572,27 @@ window.__ModuleLoader__.load({
       }, letter)
     }
 
-    function providerTags(provider, t) {
-      return [
-        provider?.source === 'gateway' ? h('span', { className: 'tmx-tag', key: 'gateway' }, t('gatewayTitle')) : null,
-        provider?.enabled === false ? h('span', { className: 'tmx-tag', key: 'disabled' }, t('providerDisabled')) : null,
-      ].filter(Boolean)
-    }
-
     function modelCountText(count, t) {
       if (count === null || count === undefined) return t('unknown')
       if (count === 1) return `1 ${t('modelOne')}`
       return `${count} ${t('modelUnit')}`
     }
 
-    function ratioText(provider) {
-      const joined = provider?.joinedCount === null || provider?.joinedCount === undefined ? '–' : provider.joinedCount
-      const total = provider?.totalCount === null || provider?.totalCount === undefined ? '–' : provider.totalCount
-      return `${joined}/${total}`
+    function fileCountText(count, t) {
+      if (count === null || count === undefined) return ''
+      if (count === 1) return `1 ${t('fileOne')}`
+      return `${count} ${t('fileUnit')}`
+    }
+
+    function harnessCountText(count, t) {
+      if (count === null || count === undefined) return ''
+      if (count === 1) return `1 ${t('harnessCountOne')}`
+      return `${count} ${t('harnessCountUnit')}`
+    }
+
+    function pendingHarnessText(count, t) {
+      if (count === 1) return `1 ${t('pendingHarnessOne')}`
+      return `${count} ${t('pendingHarnesses')}`
     }
 
     function protocolText(protocols) {
@@ -2382,276 +2607,516 @@ window.__ModuleLoader__.load({
       return values[0]
     }
 
-    function modelIsAddable(model) {
-      return model !== null && typeof model === 'object'
-        && model.enabled === true
-        && model.joined === false
-        && Array.isArray(model.protocols)
-        && model.protocols.length > 0
-    }
-
     function modelMatches(model, needle) {
       const id = typeof model?.id === 'string' ? model.id.toLowerCase() : ''
       if (id.includes(needle)) return true
       return Array.isArray(model?.protocols) && model.protocols.some(protocol => typeof protocol === 'string' && protocol.toLowerCase().includes(needle))
     }
 
-    function searchCatalog(catalog, query) {
-      const needle = query.trim().toLowerCase()
-      if (needle === '') return []
+    /** The catalog grouped by provider, filtered by one search string. */
+    function catalogGroups(catalog, query) {
+      const needle = typeof query === 'string' ? query.trim().toLowerCase() : ''
       const groups = []
       for (const provider of catalogProviders(catalog)) {
-        const name = typeof provider.name === 'string' ? provider.name.toLowerCase() : ''
-        const id = typeof provider.id === 'string' ? provider.id.toLowerCase() : ''
-        const providerMatched = name.includes(needle) || id.includes(needle)
-        const models = Array.isArray(provider.models) ? provider.models.filter(model => providerMatched || modelMatches(model, needle)) : []
-        if (models.length > 0) groups.push({ provider, models })
+        const models = Array.isArray(provider.models)
+          ? provider.models.filter(model => model !== null && typeof model === 'object')
+          : []
+        if (models.length === 0) continue
+        const providerMatched = needle !== '' && [provider.name, provider.id]
+          .some(value => typeof value === 'string' && value.toLowerCase().includes(needle))
+        const matched = needle === '' || providerMatched ? models : models.filter(model => modelMatches(model, needle))
+        if (matched.length > 0) groups.push({ provider, models: matched })
       }
       return groups
     }
 
-    function tabsBar(tab, setTab, t) {
+    function tabsBar(tab, setTab, t, unappliedCount) {
       const items = [
         ['models', 'tabModels'],
+        ['harness', 'tabHarness'],
         ['gateway', 'tabGateway'],
         ['quota', 'tabQuota'],
       ]
-      // Ordinary navigation buttons, not the ARIA tabs pattern: the three
-      // views are page sections, and incomplete tab semantics would be worse
-      // than plain pressed-state buttons for keyboard and screen-reader users.
+      // Ordinary navigation buttons, not the ARIA tabs pattern: the views are
+      // page sections, and incomplete tab semantics would be worse than plain
+      // pressed-state buttons for keyboard and screen-reader users.
       return h('div', { className: 'tmx-tabs', role: 'group', 'aria-label': t('tabsLabel'), key: 'tabs' },
         items.map(([id, key]) => h('button', {
           type: 'button',
           className: 'tmx-tab',
           key: id,
+          'data-tab': id,
           'data-active': tab === id ? 'true' : undefined,
           'aria-pressed': tab === id ? 'true' : 'false',
           onClick: () => setTab(id),
-        }, t(key))))
+        }, [
+          t(key),
+          id === 'harness' && unappliedCount > 0
+            ? h('span', { className: 'tmx-tabBadge', key: 'badge', title: t('harnessPending') }, String(unappliedCount))
+            : null,
+        ])))
     }
 
-    function providerSummary(provider, t, options = {}) {
-      const name = boundedText(provider?.name || provider?.id || t('unknown'), 120)
-      const main = h('span', { className: 'tmx-providerMain', key: 'main' }, [
-        h('span', { className: 'tmx-providerName', key: 'name' }, [name, ...providerTags(provider, t)]),
-        h('span', { className: 'tmx-providerMeta', key: 'meta' }, modelCountText(provider?.totalCount, t)),
+    // ------------------------------------------------------ models and picker
+
+    function searchField(query, t, onChange) {
+      return h('label', { className: 'tmx-search', key: 'search' }, [
+        h('span', { className: 'tmx-searchGlyph', key: 'glyph', 'aria-hidden': 'true' }, '⌕'),
+        h('input', {
+          type: 'search',
+          className: 'tmx-searchInput',
+          value: query,
+          placeholder: t('searchModelsPlaceholder'),
+          'aria-label': t('searchModelsPlaceholder'),
+          onChange: event => onChange(event?.target?.value ?? ''),
+          onKeyDown: event => { if (event?.key === 'Escape') onChange('') },
+        }),
+        query === ''
+          ? null
+          : h('button', {
+            type: 'button',
+            className: 'tmx-searchClear',
+            key: 'clear',
+            'aria-label': t('clearSearch'),
+            onClick: () => onChange(''),
+          }, '×'),
       ])
-      const side = h('span', { className: 'tmx-providerSide', key: 'side' }, [
-        h('span', { className: 'tmx-ratio', key: 'ratio' }, ratioText(provider)),
-        options.chevron === false ? null : h('span', { className: 'tmx-chevron', key: 'chevron', 'aria-hidden': 'true' }, '›'),
-      ])
-      return [providerMark(provider), main, side]
     }
 
-    function catalogProviderRow(provider, t, handlers) {
-      return h('button', {
+    /** One model in one Harness: a target-level status, never a guess at a model. */
+    function harnessControl(provider, model, members, t, options) {
+      // One model may select the same Harness under two protocols; the control
+      // names each Harness once.
+      const unique = []
+      for (const member of members) {
+        if (!unique.some(known => known.harness.id === member.harness.id)) unique.push(member)
+      }
+      const labels = unique
+        .map(member => options.labels.get(member.harness.id) ?? member.harness.short)
+        .filter(label => label !== '')
+      const tones = unique.map(member => harnessTone(member.harness.unapplied))
+      const tone = tones.includes('warn') ? 'warn' : tones.length > 0 && tones.every(value => value === 'ok') ? 'ok' : 'idle'
+      const open = options.picker !== null && options.picker.key === options.modelKey
+      const statuses = unique
+        .map(member => `${member.harness.id}:${member.harness.unapplied === true ? 'pending' : member.harness.unapplied === false ? 'applied' : 'unknown'}`)
+        .join(',')
+      const common = {
         type: 'button',
-        className: 'tmx-providerRow',
-        key: `provider:${provider.id}`,
+        key: 'control',
+        'aria-haspopup': 'dialog',
+        'aria-expanded': open ? 'true' : 'false',
+        'data-model': model.id,
         'data-provider': provider.id,
-        onClick: () => handlers.onOpen(provider.id),
-      }, providerSummary(provider, t, { chevron: true }))
+        'data-harnesses': unique.map(member => member.harness.id).join(','),
+        'data-statuses': statuses,
+        onClick: event => options.onTogglePicker(options.modelKey, event),
+      }
+      if (members.length === 0) {
+        return h('button', {
+          ...common,
+          className: 'tmx-harnessControl tmx-harnessEmpty',
+          title: t('selectHarness'),
+        }, [
+          h('span', { className: 'tmx-plus', key: 'plus', 'aria-hidden': 'true' }, '+'),
+          h('span', { className: 'tmx-harnessLabel', key: 'label' }, t('selectHarness')),
+        ])
+      }
+      return h('button', {
+        ...common,
+        className: 'tmx-harnessControl',
+        title: labels.join(' · '),
+      }, [
+        h('span', { className: 'tmx-dot', 'data-tone': tone, key: 'dot', 'aria-hidden': 'true' }),
+        h('span', { className: 'tmx-harnessLabel', key: 'label' }, labels.join(' · ')),
+        h('span', { className: 'tmx-chevron', key: 'chevron', 'aria-hidden': 'true' }, '⌄'),
+      ])
     }
 
-    function catalogModelRow(provider, model, t, handlers) {
-      const id = boundedText(model?.id ?? t('unknown'), 160)
-      const protocol = protocolText(model?.protocols)
-      const joined = model?.joined === true
-      const unknown = model?.joined === null || model?.joined === undefined
-      const disabled = model?.enabled !== true
-      const gatewayBlocked = provider.source === 'gateway' && handlers.gatewayConfigured !== true
-      const side = []
-      if (model?.default === true) side.push(h('span', { className: 'tmx-tag', key: 'default' }, t('defaultTag')))
-      if (joined) side.push(h('span', { className: 'tmx-joined', key: 'joined' }, `✓ ${t('joined')}`))
-      else if (unknown) side.push(h('span', { className: 'tmx-tag', key: 'joinedUnknown' }, t('joinedUnknown')))
-      else if (disabled) side.push(h('span', { className: 'tmx-tag', key: 'disabled' }, t('providerDisabled')))
-      else side.push(h('button', {
-        type: 'button',
-        className: 'tmx-button tmx-joinButton',
-        key: 'add',
-        'data-action': 'add-model',
+    function harnessMatches(harness, needle) {
+      if (needle === '') return true
+      return [harness.name, harness.short, harness.id, harness.agent, harness.path]
+        .some(value => typeof value === 'string' && value.toLowerCase().includes(needle))
+    }
+
+    function pickerRow(harness, provider, model, protocols, t, options) {
+      const checked = protocols.length > 0
+      const gatewayBlocked = provider.source === 'gateway' && options.gatewayConfigured !== true
+      const disabled = options.busy || options.readBlocked
+        || (checked === false && (gatewayBlocked || provider.enabled !== true || model.enabled !== true))
+      return h('label', {
+        className: 'tmx-popoverItem',
+        key: `harness:${harness.id}`,
+        'data-harness': harness.id,
+        'data-checked': checked ? 'true' : 'false',
+      }, [
+        h('input', {
+          type: 'checkbox',
+          checked,
+          disabled,
+          onChange: event => options.onToggleSelection(harness, provider, model, protocols, event?.target?.checked === true),
+        }),
+        harnessMark(harness),
+        h('span', { className: 'tmx-popoverName', key: 'name' }, harness.name),
+        h('span', { className: 'tmx-popoverMeta', key: 'meta' }, harness.id),
+        h('span', { className: 'tmx-popoverStatus', 'data-tone': harnessTone(harness.unapplied), key: 'status' }, harnessStatusText(harness, t)),
+      ])
+    }
+
+    /** The anchored picker: only declared Harnesses, checkboxes, and 完成. */
+    function harnessPicker(t, provider, model, members, options) {
+      const picker = options.picker
+      const needle = picker.query.trim().toLowerCase()
+      const protocolsByHarness = new Map()
+      for (const member of members) {
+        const found = protocolsByHarness.get(member.harness.id)
+        if (found === undefined) protocolsByHarness.set(member.harness.id, [member.protocol])
+        else found.push(member.protocol)
+      }
+      const rows = []
+      for (const harness of options.harnesses) {
+        if (!harnessMatches(harness, needle)) continue
+        rows.push(pickerRow(harness, provider, model, protocolsByHarness.get(harness.id) ?? [], t, options))
+      }
+      const checkedCount = protocolsByHarness.size
+      const shell = {
+        className: 'tmx-popover',
+        role: 'dialog',
+        'aria-label': t('selectHarness'),
+        key: 'picker',
+        'data-flip': picker.anchor?.flip === true ? 'true' : undefined,
+      }
+      return h('div', shell, [
+        h('label', { className: 'tmx-popoverSearch', key: 'search' }, [
+          h('span', { className: 'tmx-searchGlyph', key: 'glyph', 'aria-hidden': 'true' }, '⌕'),
+          h('input', {
+            type: 'search',
+            className: 'tmx-popoverSearchInput',
+            value: picker.query,
+            placeholder: t('harnessPickerSearch'),
+            'aria-label': t('harnessPickerSearch'),
+            onChange: event => options.onPickerQuery(event?.target?.value ?? ''),
+            onKeyDown: event => { if (event?.key === 'Escape') options.onClosePicker() },
+          }),
+        ]),
+        h('div', { className: 'tmx-popoverGroup', key: 'group' }, t('harnessPickerConfigured')),
+        rows.length === 0
+          ? h('p', { className: 'tmx-popoverEmpty', key: 'empty' },
+            picker.query.trim() === '' && options.harnesses.length === 0 ? t('harnessNone') : t('searchNoMatch'))
+          : null,
+        ...rows,
+        options.selection !== null && options.selection !== undefined
+          && options.selection.phase === 'failed' && options.selection.key === options.modelKey
+          ? h('p', { className: 'tmx-errorText tmx-popoverError', key: 'error' },
+            `${t('selectionFailed')}${t('colon')} ${boundedText(options.selection.message, 200)}`)
+          : null,
+        h('div', { className: 'tmx-popoverFooter', key: 'footer' }, [
+          h('span', { key: 'count' }, harnessCountText(checkedCount, t)),
+          h('button', { type: 'button', className: 'tmx-popoverDone', key: 'done', onClick: options.onClosePicker }, t('harnessPickerDone')),
+        ]),
+      ])
+    }
+
+    function modelRow(provider, model, t, options) {
+      const key = `${provider.id}\u0000${model.id}`
+      const members = options.membership.get(key) ?? []
+      const open = options.picker !== null && options.picker.key === key
+      return h('div', {
+        className: 'tmx-modelRow',
+        key: `model:${provider.id}:${model.id}`,
         'data-provider': provider.id,
         'data-model': model.id,
-        onClick: () => handlers.onAdd(provider.id, model.id, model.protocols),
-        disabled: handlers.busy || provider.enabled !== true || gatewayBlocked || !modelIsAddable(model),
-      }, t('joinModel')))
-      return h('div', { className: 'tmx-modelRow', key: `model:${provider.id}:${model.id}` }, [
-        h('span', { className: 'tmx-modelMain', key: 'main' }, [
-          h('span', { className: 'tmx-modelId', key: 'id' }, id),
-          h('span', { className: 'tmx-modelProtocols', key: 'protocols' }, protocol || t('unknown')),
+      }, [
+        h('div', { className: 'tmx-modelMain', key: 'main' }, [
+          h('span', { className: 'tmx-modelId', key: 'id' }, boundedText(model.id, 160)),
+          protocolText(model.protocols) === ''
+            ? null
+            : h('span', { className: 'tmx-protocol', key: 'protocol' }, protocolText(model.protocols)),
+          model.enabled === false
+            ? h('span', { className: 'tmx-tag', key: 'disabled' }, t('providerDisabled'))
+            : null,
         ]),
-        h('span', { className: 'tmx-modelSide', key: 'side' }, side),
-      ])
-    }
-
-    function addStepText(step, t) {
-      if (step === 'provider_add') return t('addStepProviderAdd')
-      if (step === 'model_add') return t('addStepModelAdd')
-      if (step === 'apply') return t('addStepApply')
-      return boundedText(step, 40)
-    }
-
-    function catalogAddPanel(add, provider, model, t, handlers) {
-      if (add === null || typeof add !== 'object' || add.phase === 'idle' || add.request === null || typeof add.request !== 'object') return null
-      if (add.request.provider !== provider.id || add.request.model !== model.id) return null
-      const plan = add.plan !== null && typeof add.plan === 'object' ? add.plan : undefined
-      const entry = plan?.entry !== null && typeof plan?.entry === 'object' ? plan.entry : undefined
-      const entryLabel = entry === undefined
-        ? ''
-        : `${t(entry.mode === 'create' ? 'addNewEntry' : 'addExistingEntry')} ${boundedText(entry.name, 80)}`
-      let text
-      if (add.phase === 'applied') text = `${t('addApplied')} ${t('addReloadHint')}`
-      else if (add.phase === 'failed') {
-        const detail = add.message !== undefined ? boundedText(add.message, 120) : hostCodeText(add.result?.code, add.result?.message)
-        const step = add.result?.data?.failedStep
-        text = [t('addFailed'), step === undefined ? '' : addStepText(step, t), detail].filter(part => part !== '').join(' · ')
-      } else if (entryLabel !== '') text = entryLabel
-      else text = t('addPreviewing')
-      const preview = add.phase === 'preview'
-      const done = add.phase === 'applied' || add.phase === 'failed'
-      const actions = done
-        ? h('span', { className: 'tmx-addActions', key: 'actions' }, [
-          h('button', { type: 'button', className: 'tmx-button', key: 'close', onClick: handlers.onCancel }, t('close')),
-        ])
-        : h('span', { className: 'tmx-addActions', key: 'actions' }, [
-          h('button', {
-            type: 'button',
-            className: 'tmx-button',
-            key: 'cancel',
-            onClick: handlers.onCancel,
-            disabled: handlers.busy,
-          }, t('actionCancel')),
-          h('button', {
-            type: 'button',
-            className: 'tmx-button',
-            key: 'confirm',
-            'data-kind': 'primary',
-            onClick: handlers.onConfirm,
-            disabled: handlers.busy || !preview,
-          }, add.phase === 'executing' ? t('actionWorking') : t('addConfirm')),
-        ])
-      const protocols = Array.isArray(model.protocols) ? model.protocols.filter(protocol => typeof protocol === 'string') : []
-      return h('div', { className: 'tmx-addBar', key: `add:${provider.id}:${model.id}`, role: 'status', 'aria-live': 'polite' }, [
-        h('span', { className: 'tmx-addText', key: 'text' }, text),
-        done || protocols.length === 0 ? null : h('span', { className: 'tmx-addProtocol', key: 'protocol' }, [
-          h('span', { className: 'tmx-addProtocolLabel', key: 'label' }, t('addProtocol')),
-          h('select', {
-            className: 'tmx-addSelect',
-            key: 'select',
-            value: add.request.protocol,
-            'aria-label': t('addProtocol'),
-            disabled: handlers.busy,
-            onChange: event => handlers.onProtocol(event.target.value),
-          }, protocols.map(protocol => h('option', { value: protocol, key: protocol }, protocol))),
+        h('div', { className: 'tmx-harnessWrap', key: 'wrap' }, [
+          harnessControl(provider, model, members, t, { ...options, modelKey: key }),
+          open ? harnessPicker(t, provider, model, members, { ...options, modelKey: key }) : null,
         ]),
-        actions,
       ])
     }
 
-    function catalogProviderDetail(state, catalog, provider, t, handlers) {
-      const models = Array.isArray(provider.models) ? provider.models : []
-      const entriesUnknown = catalog !== null && catalog.entriesState === 'unknown'
-      return h('div', { className: 'tmx-catalog', key: `detail:${provider.id}` }, [
-        h('button', { type: 'button', className: 'tmx-detailBack', key: 'back', autoFocus: true, onClick: handlers.onBack }, `← ${t('backAllProviders')}`),
-        h('div', { className: 'tmx-detailHead', key: 'head' }, providerSummary(provider, t, { chevron: false })),
-        entriesUnknown ? h('p', { className: 'tmx-note tmx-detailNote', key: 'unknown' }, t('joinedUnknown')) : null,
-        models.length === 0
-          ? h('p', { className: 'tmx-empty tmx-detailEmpty', key: 'empty' }, t('providerNoModels'))
-          : h('div', { className: 'tmx-modelRows', key: 'rows' },
-            models.map(model => [
-              catalogModelRow(provider, model, t, handlers),
-              catalogAddPanel(handlers.add, provider, model, t, handlers),
-            ])),
-      ])
-    }
-
-    function catalogSection(state, t, options) {
-      const catalog = catalogOf(state)
-      const providers = catalogProviders(catalog)
-      const handlers = {
-        busy: options.busy,
-        add: options.add,
-        onOpen: options.onOpen,
-        onBack: options.onBack,
-        onAdd: options.onAdd,
-        onProtocol: options.onProtocol,
-        onConfirm: options.onConfirm,
-        onCancel: options.onCancel,
-        gatewayConfigured: options.gatewayConfigured === true,
+    function catalogGroup(provider, models, t, options) {
+      const protocols = []
+      for (const model of models) {
+        if (!Array.isArray(model.protocols)) continue
+        for (const protocol of model.protocols) {
+          if (typeof protocol === 'string' && protocol !== '' && !protocols.includes(protocol)) protocols.push(protocol)
+        }
       }
-      const failures = sectionErrors(state).filter(error => error.section === 'catalog')
+      return h('div', {
+        className: 'tmx-providerGroup',
+        key: `provider:${provider.id}`,
+        'data-provider': provider.id,
+      }, [
+        h('div', { className: 'tmx-providerHead', key: 'head' }, [
+          providerMark(provider),
+          h('span', { className: 'tmx-providerName', key: 'name' }, boundedText(provider.name || provider.id || t('unknown'), 120)),
+          h('span', { className: 'tmx-providerCount', key: 'count' }, modelCountText(models.length, t)),
+          provider.enabled === false ? h('span', { className: 'tmx-tag', key: 'disabled' }, t('providerDisabled')) : null,
+          h('span', { className: 'tmx-providerProtocols', key: 'protocols' }, protocols.slice(0, 3).join(' · ')),
+        ]),
+        h('div', { className: 'tmx-modelRows', key: 'rows' }, models.map(model => modelRow(provider, model, t, options))),
+      ])
+    }
+
+    /**
+     * The models tab: one search field, a compact pending count, and every
+     * catalog model with one inline Harness control. A Harness is applied or
+     * pending as a target; a model row never claims more than that.
+     */
+    function modelsSection(state, t, options) {
+      const catalog = catalogOf(state)
+      const failures = sectionErrors(state).filter(error => error.section === 'catalog' || error.section === 'harnesses')
       const failureLine = failures.length === 0
         ? null
         : h('p', { className: 'tmx-errorText tmx-catalogError', key: 'catalogError' },
           `${t('readFailed')}${t('colon')} ${failures.map(error => error.text).join(' · ')}`)
-      // A failed provider or model read is not an empty catalog. Show the typed
-      // unavailable state; never render "no providers" or empty model rows.
+      const unappliedCount = options.harnesses.filter(harness => harness.unapplied === true).length
+      const pending = unappliedCount === 0
+        ? null
+        : h('div', { className: 'tmx-pending', key: 'pending' }, [
+          h('span', { className: 'tmx-dot', 'data-tone': 'warn', 'aria-hidden': 'true', key: 'dot' }),
+          h('span', { key: 'text' }, pendingHarnessText(unappliedCount, t)),
+          h('button', { type: 'button', className: 'tmx-linkButton', key: 'go', onClick: options.onGoApply }, t('goApply')),
+        ])
+      const toolbar = h('div', { className: 'tmx-toolbar', key: 'toolbar' }, [
+        searchField(options.query, t, options.onQuery),
+        pending,
+      ])
       const catalogReady = catalog !== null && catalog.state === 'available'
       if (!catalogReady) {
-        return h('section', { className: 'tmx-section tmx-catalogSection', key: 'catalog' }, [
+        return h('section', { className: 'tmx-section tmx-modelsSection', key: 'models' }, [
+          toolbar,
           failureLine,
           h('p', { className: 'tmx-empty tmx-catalogEmpty', key: 'unavailable' }, t('catalogUnavailable')),
         ])
       }
-      const selected = options.selectedProvider === null || options.selectedProvider === undefined
-        ? undefined
-        : providers.find(provider => provider.id === options.selectedProvider)
-      if (selected !== undefined) {
-        return h('section', { className: 'tmx-section tmx-catalogSection', key: 'catalog' }, [
-          failureLine,
-          catalogProviderDetail(state, catalog, selected, t, handlers),
-        ])
-      }
-      const query = typeof options.query === 'string' ? options.query : ''
-      const search = h('div', { className: 'tmx-searchRow', key: 'search' }, [
-        h('label', { className: 'tmx-search', key: 'field' }, [
-          h('span', { className: 'tmx-searchGlyph', key: 'glyph', 'aria-hidden': 'true' }, '⌕'),
-          h('input', {
-            type: 'search',
-            className: 'tmx-searchInput',
-            value: query,
-            placeholder: t('searchCatalogPlaceholder'),
-            'aria-label': t('searchCatalogPlaceholder'),
-            onChange: event => options.onQuery(event.target.value),
-            onKeyDown: event => { if (event.key === 'Escape') options.onQuery('') },
-          }),
-          query === ''
-            ? null
-            : h('button', {
-              type: 'button',
-              className: 'tmx-searchClear',
-              key: 'clear',
-              'aria-label': t('clearSearch'),
-              onClick: () => options.onQuery(''),
-            }, '×'),
-        ]),
-      ])
-      const groups = query.trim() === '' ? [] : searchCatalog(catalog, query)
+      const groups = catalogGroups(catalog, options.query)
       let body
-      if (query.trim() !== '') {
-        body = groups.length === 0
-          ? h('div', { className: 'tmx-catalog tmx-catalogEmpty', key: 'noMatch' }, [
-            h('p', { className: 'tmx-empty', key: 'text' }, t('searchNoMatch')),
-            h('button', { type: 'button', className: 'tmx-button', key: 'clear', onClick: () => options.onQuery('') }, t('clearSearch')),
-          ])
-          : h('div', { className: 'tmx-catalog', key: 'results' }, groups.map(group => h('div', { className: 'tmx-searchGroup', key: `group:${group.provider.id}` }, [
-            h('div', { className: 'tmx-searchHead', key: 'head' }, providerSummary(group.provider, t, { chevron: false })),
-            h('div', { className: 'tmx-modelRows', key: 'rows' }, group.models.map(model => [
-              catalogModelRow(group.provider, model, t, handlers),
-              catalogAddPanel(handlers.add, group.provider, model, t, handlers),
-            ])),
-          ])))
+      if (groups.length === 0) {
+        body = h('div', { className: 'tmx-catalog tmx-catalogEmpty', key: 'empty' }, [
+          h('p', { className: 'tmx-empty', key: 'text' }, options.query.trim() === '' ? t('noProviders') : t('searchNoMatch')),
+          options.query.trim() === ''
+            ? null
+            : h('button', { type: 'button', className: 'tmx-button', key: 'clear', onClick: () => options.onQuery('') }, t('clearSearch')),
+        ])
       } else {
-        body = providers.length === 0
-          ? h('p', { className: 'tmx-empty tmx-catalogEmpty', key: 'empty' }, t('noProviders'))
-          : h('div', { className: 'tmx-catalog', key: 'providers' }, providers.map(provider => catalogProviderRow(provider, t, handlers)))
+        body = h('div', { className: 'tmx-catalog', key: 'catalog' }, groups.map(group => catalogGroup(group.provider, group.models, t, options)))
       }
-      return h('section', { className: 'tmx-section tmx-catalogSection', key: 'catalog' }, [
-        search,
-        failureLine,
-        catalog !== null && catalog.entriesState === 'unknown' ? h('p', { className: 'tmx-note tmx-catalogNote', key: 'entriesUnknown' }, t('joinedUnknown')) : null,
-        body,
+      return h('section', { className: 'tmx-section tmx-modelsSection', key: 'models' }, [toolbar, failureLine, body])
+    }
+
+    // -------------------------------------------------------------- Harness tab
+
+    function harnessRow(harness, t, options) {
+      const name = harness.name
+      const applied = harness.unapplied === false
+      const tone = harnessTone(harness.unapplied)
+      const reloadPending = harness.appliedState === 'applied_reload_pending'
+      const pills = [
+        h('span', { className: 'tmx-pill', 'data-tone': tone, key: 'status' }, [
+          h('span', { className: 'tmx-dot', 'data-tone': tone, 'aria-hidden': 'true', key: 'dot' }),
+          harnessStatusText(harness, t),
+        ]),
+      ]
+      if (reloadPending) {
+        pills.push(h('span', { className: 'tmx-pill', 'data-tone': 'warn', key: 'reload' }, t('harnessReloadPending')))
+      }
+      if (harness.defaultConfigured) {
+        const selection = defaultSelectionText(harness)
+        pills.push(h('span', {
+          className: 'tmx-tag',
+          key: 'default',
+          title: selection === '' ? undefined : selection,
+        }, t('harnessDefault')))
+      }
+      const chips = []
+      for (const provider of harness.providers) {
+        for (const model of provider.models) {
+          chips.push(h('span', {
+            className: 'tmx-modelChip',
+            key: `chip:${provider.name}:${model.id}:${model.protocol}`,
+            title: [provider.name || provider.sourceProvider, model.protocol].filter(part => part !== '').join(' · '),
+          }, [
+            h('span', { className: 'tmx-dot', 'data-tone': tone, 'aria-hidden': 'true', key: 'dot' }),
+            model.id,
+          ]))
+        }
+      }
+      chips.push(h('button', {
+        type: 'button',
+        className: 'tmx-addModel',
+        key: 'add',
+        onClick: options.onAddModel,
+      }, `+ ${t('harnessAddModel')}`))
+      // Apply stays available on every row: an applied Harness may still need
+      // a reapply to repair actual-file drift. A pending row keeps the primary
+      // treatment; an applied row uses the secondary treatment.
+      const applyButton = h('button', {
+        type: 'button',
+        className: 'tmx-button tmx-applyButton',
+        'data-kind': applied ? undefined : 'primary',
+        key: 'apply',
+        disabled: options.busy || options.readBlocked,
+        onClick: () => options.onApply(harness),
+      }, applied ? t('harnessReapply') : t('harnessApply'))
+      const meta = [harness.id, harness.agent === '' ? t('unknown') : harness.agent, modelCountText(harness.modelCount, t)]
+        .filter(part => part !== '')
+        .join(' · ')
+      return h('div', {
+        className: 'tmx-harnessGroup',
+        key: `harness:${harness.id}`,
+        'data-harness': harness.id,
+        'data-unapplied': harness.unapplied === null ? 'unknown' : String(harness.unapplied),
+      }, [
+        h('div', { className: 'tmx-harnessRow', key: 'head' }, [
+          harnessMark(harness),
+          h('div', { className: 'tmx-harnessInfo', key: 'info' }, [
+            h('span', { className: 'tmx-harnessName', key: 'name' }, name),
+            h('span', { className: 'tmx-harnessMeta', key: 'meta' }, meta),
+          ]),
+          h('div', { className: 'tmx-harnessActions', key: 'actions' }, [
+            ...pills,
+            applyButton,
+          ]),
+        ]),
+        h('div', { className: 'tmx-modelChips', key: 'chips' }, chips),
+        harness.blockers.length === 0
+          ? null
+          : h('p', { className: 'tmx-errorText tmx-harnessNote', key: 'blockers' },
+            harness.blockers.map(blocker => hostCodeText(blocker.code, blocker.message)).filter(text => text !== '').join(' · ')),
+        applied && reloadPending
+          ? h('p', { className: 'tmx-harnessNote', key: 'note' }, [
+            h('strong', { className: 'tmx-harnessWritten', key: 'written' }, t('harnessWritten')),
+            ` · ${t('harnessReopenPrefix')} ${name} ${t('harnessReopenSuffix')}`,
+          ])
+          : null,
       ])
+    }
+
+    /** One compact row per declared Harness; no invented Agent is offered. */
+    function harnessSection(state, t, harnesses, options) {
+      if (harnesses.length === 0) {
+        // A failed Harness read is already named above; it is not an empty
+        // declaration list, so the page draws no empty-state claim here.
+        const failed = sectionErrors(state).some(error => error.section === 'harnesses')
+        if (failed) return null
+        return h('section', { className: 'tmx-section tmx-harnessSection', key: 'harness' },
+          h('p', { className: 'tmx-empty', key: 'empty' }, t('harnessNone')))
+      }
+      return h('section', { className: 'tmx-section tmx-harnessSection', key: 'harness' },
+        h('div', { className: 'tmx-harnessList', key: 'list' },
+          harnesses.map(harness => harnessRow(harness, t, options))))
+    }
+
+    function applyPreviewFiles(data, t) {
+      const files = Array.isArray(data?.files) ? data.files.filter(file => file !== null && typeof file === 'object') : []
+      if (files.length === 0) return null
+      return h('div', { className: 'tmx-applyFiles', key: 'files' },
+        files.slice(0, 12).map((file, index) => h('div', { className: 'tmx-applyFile', key: index }, [
+          h('span', { className: 'tmx-applyFileGlyph', key: 'glyph', 'aria-hidden': 'true' }, '▤'),
+          h('span', { className: 'tmx-applyFilePath', key: 'path' }, boundedText(file.path ?? t('unknown'), 160)),
+          typeof file.format === 'string' && file.format !== ''
+            ? h('span', { className: 'tmx-applyFileFormat', key: 'format' }, boundedText(file.format, 32))
+            : null,
+        ])))
+    }
+
+    /**
+     * One Harness apply: the dry-run preview states the files and the model
+     * count, an explicit confirmation runs the same target, and the refreshed
+     * state redraws the row.
+     */
+    function applyDialog(apply, t, handlers) {
+      if (apply === null || apply === undefined) return null
+      if (apply.phase === 'idle' || apply.phase === 'applied') return null
+      const harness = apply.harness !== null && typeof apply.harness === 'object' ? apply.harness : {}
+      const name = harness.name !== undefined && harness.name !== '' ? harness.name : t('unknown')
+      const previewing = apply.phase === 'previewing'
+      const executing = apply.phase === 'executing'
+      const failed = apply.phase === 'failed'
+      const data = apply.data !== null && typeof apply.data === 'object' ? apply.data : {}
+      const files = Array.isArray(data.files) ? data.files.filter(file => file !== null && typeof file === 'object') : []
+      const lead = [modelCountText(harness.modelCount, t)]
+      if (files.length > 0) lead.push(fileCountText(files.length, t))
+      lead.push(t('harnessScope'))
+      const blockers = Array.isArray(apply.result?.blockers) ? apply.result.blockers.filter(blocker => blocker !== null) : []
+      const actions = []
+      if (apply.phase === 'preview') {
+        actions.push(h('button', { type: 'button', className: 'tmx-button', key: 'cancel', onClick: handlers.cancel }, t('applyCancel')))
+        actions.push(h('button', {
+          type: 'button',
+          className: 'tmx-button',
+          'data-kind': 'primary',
+          key: 'confirm',
+          onClick: handlers.confirm,
+        }, t('applyConfirm')))
+      } else if (previewing || executing) {
+        actions.push(h('button', {
+          type: 'button',
+          className: 'tmx-button',
+          'data-kind': 'primary',
+          key: 'busy',
+          disabled: true,
+          'data-busy': 'true',
+        }, executing ? t('applyApplying') : t('applyPreviewing')))
+      } else {
+        actions.push(h('button', { type: 'button', className: 'tmx-button', key: 'close', onClick: handlers.cancel }, t('close')))
+      }
+      return h('div', { className: 'tmx-backdrop', key: 'applyBackdrop' },
+        h('div', {
+          className: 'tmx-dialog',
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-label': `${t('harnessApplyTo')} ${name}`,
+        }, [
+          h('div', { className: 'tmx-dialogHead', key: 'head' }, [
+            h('h2', { className: 'tmx-dialogTitle', key: 'title' }, `${t('harnessApplyTo')} ${name}`),
+            h('button', {
+              type: 'button',
+              className: 'tmx-dialogClose',
+              key: 'close',
+              'aria-label': t('close'),
+              'data-autofocus': 'true',
+              disabled: executing,
+              onClick: handlers.cancel,
+            }, '×'),
+          ]),
+          h('div', { className: 'tmx-dialogBody', key: 'body' }, [
+            h('p', { className: 'tmx-dialogLead', key: 'lead' }, lead.join(' · ')),
+            typeof apply.result?.code === 'string' && apply.result.code !== ''
+              ? h('p', { className: 'tmx-dialogMeta', key: 'meta' },
+                `${boundedText(apply.result.code, 48)} · ${boundedText(apply.result.status ?? t('unknown'), 48)}`)
+              : null,
+            failed
+              ? h('p', { className: 'tmx-errorText tmx-break', key: 'error' },
+                `${t('applyFailed')}${t('colon')} ${boundedText(apply.message, 200)}`)
+              : null,
+            applyPreviewFiles(data, t),
+            apply.phase === 'preview' && effectLines(data.effects, t).length > 0
+              ? h('dl', { className: 'tmx-previewFacts', key: 'effects' }, [
+                h('dt', { key: 'label' }, t('connectEffects')),
+                h('dd', { key: 'value' }, effectLines(data.effects, t).join(' · ')),
+              ])
+              : null,
+            blockers.length === 0
+              ? null
+              : h('ul', { className: 'tmx-dialogBlockers', key: 'blockers' },
+                blockers.slice(0, 8).map((blocker, index) => h('li', { className: 'tmx-errorText tmx-break', key: index },
+                  hostCodeText(blocker?.code, blocker?.message) || entryText(blocker)))),
+            apply.phase === 'preview'
+              ? h('p', { className: 'tmx-dialogNote', key: 'note' }, t('harnessApplyNote'))
+              : null,
+          ]),
+          h('div', { className: 'tmx-dialogActions', key: 'actions' }, actions),
+        ]))
     }
 
     function gatewayFacts(gateway, t) {
@@ -2751,11 +3216,6 @@ window.__ModuleLoader__.load({
       ])
     }
 
-    function dot(tone) {
-      // Decorative: the adjacent text already states the fact.
-      return h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': tone, 'aria-hidden': 'true' })
-    }
-
     function chip(text, tone) {
       return h('span', { className: 'tmx-chip', 'data-tone': tone }, text)
     }
@@ -2794,49 +3254,6 @@ window.__ModuleLoader__.load({
       // failure once; repeating it here would be the same sentence twice.
       if (observe.phase !== 'failed' || loadFailed || observe.message === undefined) return null
       return h('p', { className: 'tmx-errorText', key: 'observe', role: 'status' }, `${t('observeFailed')}${t('colon')} ${describeError(observe.message, t)}`)
-    }
-
-    function connectPanel(connect, t, handlers) {
-      if (connect === null || connect === undefined || connect.phase === 'idle') return null
-      const preview = connect.phase === 'preview'
-      const applying = connect.phase === 'executing'
-      const failed = connect.phase === 'failed'
-      const title = failed
-        ? t('connectFailed')
-        : connect.phase === 'applied' ? t('connectApplied') : t('connectPreview')
-      const actions = []
-      if (preview) {
-        actions.push(h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          key: 'apply',
-          'data-kind': 'primary',
-          onClick: handlers.execute,
-          disabled: applying,
-        }, t('connectApply')))
-        actions.push(h('button', { type: 'button', className: 'tmx-button', key: 'cancel', onClick: handlers.cancel }, t('connectCancel')))
-      } else if (applying || connect.phase === 'previewing') {
-        actions.push(h('button', { type: 'button', className: 'tmx-button', key: 'busy', 'data-kind': 'primary', disabled: true, 'data-busy': 'true' },
-          applying ? t('connectApplying') : t('checking')))
-      } else {
-        actions.push(h('button', { type: 'button', className: 'tmx-button', key: 'close', onClick: handlers.cancel }, t('close')))
-      }
-      return h('div', { className: 'tmx-panel', key: 'connect' }, [
-        h('h2', { className: 'tmx-panelTitle', key: 'title' }, title),
-        preview ? h('p', { className: 'tmx-panelNote', key: 'note' }, t('connectPreviewNote')) : null,
-        failed && connect.message !== undefined
-          ? h('p', { className: 'tmx-errorText', key: 'message' }, `${t('hostError')}${t('colon')} ${describeError(connect.message, t)}`)
-          : null,
-        connect.lines.length === 0
-          ? h('p', { className: 'tmx-note', key: 'none' }, t('connectNoDetails'))
-          : h('dl', { className: 'tmx-connectLines', key: 'lines' }, connect.lines.map(group =>
-            h('div', { className: 'tmx-connectGroup', key: group.label }, [
-              h('dt', { key: 'label' }, group.label),
-              h('dd', { key: 'items' }, h('ul', { className: 'tmx-inlineList' },
-                group.items.map((item, index) => h('li', { className: 'tmx-break', key: index }, item)))),
-            ]))),
-        h('div', { className: 'tmx-panelActions', key: 'actions' }, actions),
-      ])
     }
 
     /**
@@ -2918,7 +3335,12 @@ window.__ModuleLoader__.load({
       ])
     }
 
-    function announce({ load, observe, connect, repair, add, verdict }, t) {
+    /**
+     * The one line a screen reader is told after each step. A failed step names
+     * its typed detail; a completed step says so, because a reader who cannot
+     * see the row change must still learn that it did.
+     */
+    function announce({ load, observe, repair, selection, apply }, t) {
       if (load.schemaUnsupported === true) return t('stateSchemaUnsupported')
       if (observe.phase === 'failed') {
         return observe.message === undefined
@@ -2926,14 +3348,15 @@ window.__ModuleLoader__.load({
           : `${t('observeFailed')}${t('colon')} ${describeError(observe.message, t)}`
       }
       if (observe.phase === 'running') return t('observeRunning')
-      if (connect.phase === 'failed') {
-        return connect.message === undefined
-          ? t('connectFailed')
-          : `${t('connectFailed')}${t('colon')} ${describeError(connect.message, t)}`
+      if (selection !== null && selection !== undefined && selection.phase === 'failed') {
+        return selection.message === undefined
+          ? t('selectionFailed')
+          : `${t('selectionFailed')}${t('colon')} ${boundedText(selection.message, 160)}`
       }
-      if (add?.phase === 'failed') {
-        const detail = add.message !== undefined ? boundedText(add.message, 120) : hostCodeText(add.result?.code, add.result?.message)
-        return detail === '' ? t('addFailed') : `${t('addFailed')}${t('colon')} ${detail}`
+      if (apply !== null && apply !== undefined && apply.phase === 'failed') {
+        return apply.message === undefined
+          ? t('applyFailed')
+          : `${t('applyFailed')}${t('colon')} ${boundedText(apply.message, 160)}`
       }
       if (repair !== null && repair !== undefined && repair.phase === 'failed') {
         return repair.message === undefined
@@ -2943,17 +3366,16 @@ window.__ModuleLoader__.load({
       if (load.phase === 'failed' && load.message !== undefined) {
         return `${t('hostError')}${t('colon')} ${describeError(load.message, t)}`
       }
-      // A completed step is announced too: a reader who cannot see the cards
-      // change must still learn that the refresh, preview, or repair finished.
-      if (add?.phase === 'previewing' || add?.phase === 'executing') return t('actionWorking')
-      if (connect.phase === 'previewing' || connect.phase === 'executing'
-        || (repair !== null && repair !== undefined && (repair.phase === 'previewing' || repair.phase === 'executing'))) {
+      if (selection !== null && selection !== undefined && selection.phase === 'running') return t('actionWorking')
+      if (apply !== null && apply !== undefined && (apply.phase === 'previewing' || apply.phase === 'executing')) {
         return t('actionWorking')
       }
-      if (add?.phase === 'preview') return t('addPreviewReady')
-      if (add?.phase === 'applied') return t('addApplied')
-      if (connect.phase === 'preview') return t('connectPreview')
-      if (connect.phase === 'applied') return t('connectApplied')
+      if (repair !== null && repair !== undefined && (repair.phase === 'previewing' || repair.phase === 'executing')) {
+        return t('actionWorking')
+      }
+      if (apply !== null && apply !== undefined && apply.phase === 'preview') return t('applyPreviewTitle')
+      if (apply !== null && apply !== undefined && apply.phase === 'applied') return t('applyApplied')
+      if (selection !== null && selection !== undefined && selection.phase === 'saved') return t('selectionSaved')
       if (repair !== null && repair !== undefined && repair.phase === 'preview') return t('actionPreviewTitle')
       if (repair !== null && repair !== undefined && repair.phase === 'applied') {
         const code = typeof repair.result?.code === 'string' ? boundedText(repair.result.code, 48) : ''
@@ -2963,7 +3385,7 @@ window.__ModuleLoader__.load({
         const missed = observe.items.filter(item => item.tone !== 'ok').length
         return missed === 0 ? t('observeDone') : `${t('observeFailed')}${t('colon')} ${missed}`
       }
-      return verdict
+      return ''
     }
 
     /** The sidebar glyph: a gauge, because "how much is left" is what the page answers. */
@@ -2997,7 +3419,7 @@ window.__ModuleLoader__.load({
 
     /** Record a read model the page or a seat just adopted, so the seats agree. */
     function rememberState(state) {
-      if (state === null || typeof state !== 'object' || state.schemaVersion !== 4 || state.ok !== true) return
+      if (state === null || typeof state !== 'object' || state.schemaVersion !== STATE_SCHEMA_VERSION || state.ok !== true) return
       snapshotCache = { at: Date.now(), result: { state } }
     }
 
@@ -3021,7 +3443,7 @@ window.__ModuleLoader__.load({
           if (value === null || typeof value !== 'object') return { message: `HTTP ${response.status}` }
           // The same schema gate the page applies: an unknown version is a
           // failure, never a payload a seat guesses at.
-          if (value.schemaVersion !== 4) return { schemaUnsupported: true, message: String(value.schemaVersion) }
+          if (value.schemaVersion !== STATE_SCHEMA_VERSION) return { schemaUnsupported: true, message: String(value.schemaVersion) }
           if (value.ok !== true) return { message: stateError(value, response.status) }
           return { state: value }
         } catch (error) {
@@ -3229,11 +3651,15 @@ window.__ModuleLoader__.load({
       ])
     }
 
-    /** Settings > Models: whether tmax models are usable, why not, and the one control that helps. */
+    /**
+     * Settings > Models: whether tmax models are usable, which declared DSH
+     * Harness owns them, and how many of its Harnesses are pending. Applying is
+     * the page's Harness tab, so this card never offers a legacy Apply; the one
+     * action that changes configuration is the link back to tmax.
+     */
     function ModelsFooter(props) {
       const t = props.t
       const [load, snapshot] = useSeatSnapshot(t)
-      const [connect, setConnect] = React.useState({ phase: 'idle', lines: [] })
       const [openFailed, setOpenFailed] = React.useState(false)
       const state = load.phase === 'ready' ? load.state : undefined
       // Only a usable read model supplies evidence. A missing or failed read
@@ -3261,46 +3687,28 @@ window.__ModuleLoader__.load({
       const gatewayText = gatewayReadFailed || gateway === undefined
         ? t('unknown')
         : gateway.ready === true ? t('gatewayReady') : gateway.ready === false ? t('gatewayNotReady') : t('unknown')
-      // Apply is offered only when the page's own next action is Apply: the
-      // same predicate that keeps a broken config, a failed read, a pending
-      // reload, or an inert owner ahead of a native write.
-      const pageAction = read === undefined ? undefined : nextAction({ phase: 'ready', value: read })
-      const connectable = pageAction !== undefined && pageAction.kind === 'connect'
-      const reloadable = load.phase === 'failed' || (pageAction !== undefined && pageAction.kind === 'retry')
-
-      async function previewConnect() {
-        setConnect({ phase: 'previewing', lines: [] })
-        try {
-          const { response, value } = await postJson('/_tmax/connect', { dryRun: true })
-          if (!response.ok || value?.ok !== true) {
-            setConnect({ phase: 'failed', lines: connectLines(value?.connect, t), message: stateError(value, response.status) })
-            return
-          }
-          setConnect({ phase: 'preview', lines: connectLines(value.connect, t) })
-        } catch (error) {
-          setConnect({ phase: 'failed', lines: [], message: plainError(error) })
-        }
-      }
-
-      async function executeConnect() {
-        setConnect(previous => ({ ...previous, phase: 'executing' }))
-        try {
-          const { response, value } = await postJson('/_tmax/connect', { dryRun: false })
-          if (!response.ok || value?.ok !== true) {
-            setConnect({ phase: 'failed', lines: connectLines(value?.connect, t), message: stateError(value, response.status) })
-            return
-          }
-          setConnect({ phase: 'applied', lines: connectLines(value.connect, t) })
-          // A returned read model is adopted without a second GET, through the
-          // same schema/ok gate as the page: a refused or unsupported payload
-          // is a visible failed read, never adopted evidence.
-          const nextState = value?.state !== null && typeof value?.state === 'object' ? value.state : undefined
-          if (nextState !== undefined) snapshot.adopt(nextState, response)
-          else snapshot.reload()
-        } catch (error) {
-          setConnect({ phase: 'failed', lines: [], message: plainError(error) })
-        }
-      }
+      // The settings page is DSH's, so it reports the DSH Harnesses. A failed
+      // Harness section is unknown, not an empty declaration list or a zero
+      // pending count.
+      const harnessReadFailed = read !== undefined && errorsForSection(read, 'harnesses').length > 0
+      const harnesses = read === undefined || harnessReadFailed ? undefined : harnessesOf(read)
+      const dshHarnesses = harnesses === undefined ? [] : harnesses.filter(harness => harness.agent === 'dsh')
+      const unappliedDsh = dshHarnesses.filter(harness => harness.unapplied === true)
+      // One uninspectable DSH row makes the exact pending count unknown even
+      // when the list itself read; only a fully known set can print a number.
+      const unappliedDshText = harnesses === undefined || dshHarnesses.some(harness => harness.unapplied === null)
+        ? t('unknown')
+        : unappliedDsh.length
+      const harnessText = harnesses === undefined
+        ? t('unknown')
+        : dshHarnesses.length === 0
+          ? t('none')
+          : dshHarnesses.map(harness => harness.id).join(', ')
+      const reloadable = load.phase === 'failed'
+        || (read !== undefined && (() => {
+          const pageAction = nextAction({ phase: 'ready', value: read })
+          return pageAction !== undefined && pageAction.kind === 'retry'
+        })())
 
       const reasonKey = availability === 'reload'
         ? 'modelsReload'
@@ -3320,6 +3728,8 @@ window.__ModuleLoader__.load({
         facts.push(`${t('footerRoutes')}${t('colon')} ${activeCount}/${routes.length} ${t('footerActive')} · ${usableCount === undefined ? t('unknown') : usableCount} ${t('footerUsable')}`)
       }
       facts.push(`${t('footerModels')}${t('colon')} ${modelCount === undefined ? t('unknown') : modelCount}`)
+      facts.push(`${t('footerHarness')}${t('colon')} ${harnessText}`)
+      facts.push(`${t('footerUnapplied')}${t('colon')} ${unappliedDshText}`)
       // Seat data is one shared GET; say when the read model was generated so a
       // mounted card cannot look newer than the evidence behind it.
       const generatedAt = read === undefined ? '' : clockOf(read.generatedAt)
@@ -3327,16 +3737,6 @@ window.__ModuleLoader__.load({
       const pageAvailable = typeof props.hasLayout === 'function' ? props.hasLayout() === true : false
       const pageUnavailable = pageAvailable !== true || openFailed
       const actions = []
-      if (connectable) {
-        actions.push(h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          'data-kind': 'primary',
-          key: 'connect',
-          onClick: () => { void previewConnect() },
-          disabled: connect.phase === 'previewing' || connect.phase === 'executing',
-        }, t('connect')))
-      }
       if (reloadable) {
         actions.push(h('button', {
           type: 'button',
@@ -3350,7 +3750,7 @@ window.__ModuleLoader__.load({
         type: 'button',
         className: 'tmx-button',
         key: 'open',
-        title: pageUnavailable ? t('footerPageUnavailable') : undefined,
+        title: pageUnavailable ? t('footerPageUnavailable') : t('footerOpenHint'),
         disabled: pageUnavailable,
         onClick: () => {
           if (typeof props.openPage !== 'function') return
@@ -3374,8 +3774,6 @@ window.__ModuleLoader__.load({
       } else {
         body.push(h('p', { className: 'tmx-note', key: 'reason' }, `${t('footerReason')}${t('colon')} ${t(reasonKey)}`))
       }
-      const panel = connectPanel(connect, t, { execute: () => { void executeConnect() }, cancel: () => setConnect({ phase: 'idle', lines: [] }) })
-      if (panel !== null) body.push(panel)
       body.push(h('div', { className: 'tmx-seatActions', key: 'actions' }, actions))
       return h('div', { className: 'tmx-seatCard', 'data-tmax-footer': '1', key: 'card' }, body)
     }
@@ -3515,11 +3913,9 @@ window.__ModuleLoader__.load({
       modelCatalogOf,
       accountsOf,
       windowTone,
-      verdict,
       nextAction,
       safeDashboard,
       lastErrorFact,
-      connectLines,
       observeItems,
       failureIsActive,
       providerActions,
@@ -3529,6 +3925,15 @@ window.__ModuleLoader__.load({
       markerStatus,
       modelsAvailability,
       toolStatusSummary,
+      harnessesOf,
+      harnessTone,
+      harnessStatusKey,
+      harnessLabelMap,
+      harnessMembershipOf,
+      unappliedHarnesses,
+      countSelections,
+      agentName,
+      agentShort,
       locales: { en, zh },
     }
 

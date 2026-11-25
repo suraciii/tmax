@@ -1,11 +1,11 @@
 {
   "contract": "dsh-plugin host state, consumed by the tmax page and seats",
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "cases": {
     "connectedHomeOwned": {
       "ok": true,
       "errors": [],
-      "schemaVersion": 4,
+      "schemaVersion": 5,
       "generatedAt": "2026-11-23T10:15:00Z",
       "configurationRevision": "352a0e3fc342e94777e1a819244e016d98ad211fa7bdd0a082d85bc15a4cbe15",
       "tmaxVersion": "0.1.0",
@@ -47,6 +47,87 @@
           "source": "https://github.com/deepseek-ai/deepseek-harness"
         }
       },
+      "harnesses": [
+        {
+          "id": "dsh-main",
+          "agent": "dsh",
+          "path": "/home/user/.dsh",
+          "providerCount": 2,
+          "modelCount": 3,
+          "defaultConfigured": true,
+          "appliedState": "unknown",
+          "unapplied": true,
+          "blockers": [
+            {
+              "code": "gateway_not_ready",
+              "message": "Explicitly start the configured gateway and activate the matching complete snapshot and shared key before native application"
+            }
+          ],
+          "default": {
+            "provider": "tmax",
+            "id": "deepseek-v4.1-flash",
+            "protocol": "responses",
+            "effort": "max"
+          },
+          "providers": [
+            {
+              "name": "tmax",
+              "sourceProvider": "tmax",
+              "relayed": true,
+              "models": [
+                {
+                  "id": "deepseek-v4.1-flash",
+                  "protocol": "responses"
+                },
+                {
+                  "id": "glm-5.4",
+                  "protocol": "responses"
+                }
+              ]
+            },
+            {
+              "name": "cpa",
+              "sourceProvider": "cpa-us2",
+              "relayed": false,
+              "models": [
+                {
+                  "id": "gpt-6.1-sol",
+                  "protocol": "responses"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "pi-main",
+          "agent": "pi",
+          "path": "/home/user/.pi/agent",
+          "providerCount": 1,
+          "modelCount": 2,
+          "defaultConfigured": false,
+          "appliedState": "applied_reload_pending",
+          "unapplied": false,
+          "blockers": [],
+          "default": null,
+          "providers": [
+            {
+              "name": "local",
+              "sourceProvider": "llm-us",
+              "relayed": false,
+              "models": [
+                {
+                  "id": "gpt-6.1-sol",
+                  "protocol": "responses"
+                },
+                {
+                  "id": "gpt-6.1-mini",
+                  "protocol": "chat-completions"
+                }
+              ]
+            }
+          ]
+        }
+      ],
       "ownership": {
         "owner": "home",
         "scope": "home_wide",

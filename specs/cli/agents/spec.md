@@ -72,8 +72,11 @@ silently.
 
 Saving any declaration, binding, or selection writes expected configuration only:
 it does not start inference, apply actual files, import login, or provision a
-shared key. Removing an entry leaves its actual files until explicit apply or
-restore. Agent selections control configuration/model pickers only, never gateway
+shared key. Saving changes the target revision; `agent inspect` reports the
+target as `unapplied` whenever the current target revision differs from the
+applied target revision. It never creates a native pending change, merge state,
+or accept/discard step. Removing an entry leaves its actual
+files until explicit apply or restore. Agent selections control configuration/model pickers only, never gateway
 publication or request access. All holders of the current shared key use the same derived model
 list; no target registration or Agent binding is required for standalone clients.
 Agent/path edits do not restore the old location or import credentials. Recovery
@@ -110,10 +113,10 @@ Help uses supported model roles, not invented ones.
 | --- | --- |
 | `agent list` | Compact target IDs/tool identities, resolved paths, provider/model counts, and `default_configured`. |
 | `agent discover [--agent AGENT]` | Supported installations/paths, versions, profiles, and read-only `native_default`, without registration/import. |
-| `agent inspect TARGET` | Actual entries and their configured provider source, relayed delivery facts, precedence, supported roles/requirements, effective auth/model use, `native_projection`, expected/applied/effective state, blockers, and recovery. |
+| `agent inspect TARGET` | Actual entries and their configured provider source, relayed delivery facts, precedence, supported roles/requirements, effective auth/model use, `native_projection`, expected/applied/effective state, the target revision, the applied target revision, the `unapplied` flag, blockers, and recovery. |
 | `agent inspect --agent AGENT --path PATH` | Inspect an explicit undeclared configuration path without registration/import. |
-| `agent apply TARGET` | Apply expected configuration authoritatively to the target's actual files: overwrite or remove managed fields and entries from expected configuration, leave unmanaged fields alone, and retain one managed snapshot for restore. Report affected files, applied state, and the retained snapshot. |
-| `agent restore TARGET` | Restore the target's one managed snapshot, captured immediately before its last successful apply; report affected files and record state. |
+| `agent apply TARGET` | Apply expected configuration authoritatively to the target's actual files: overwrite or remove managed fields and entries from expected configuration, leave unmanaged fields alone, retain one managed snapshot for restore, and record the target revision it applied. Report affected files, applied state, and the retained snapshot. |
+| `agent restore TARGET` | Restore the target's one managed snapshot, captured immediately before its last successful apply; report affected files and record state. The target reports `unapplied` until a later successful apply. |
 | `agent restore --recovery RECORD` | Restore exactly that record, including after removal, without recreating a target. |
 | `agent recovery list [--target TARGET]` | Recovery handles/paths under current-user-restricted `~/.tmax`, including removed targets, with record state and restore availability, and no credentials. |
 | `agent recovery inspect RECORD` | Ownership, target identity, affected files, and remaining supported actions. |
@@ -189,7 +192,9 @@ upstream login tokens to create another refresh maintainer. Apply is authoritati
 over tmax-managed fields: a later edit to one is overwritten by the next apply,
 unmanaged fields stay, and partial write or reload state is reported. Restore is
 single-level from the retained managed snapshot and also overwrites later edits to
-managed fields. Recovery
+managed fields. Apply records the target revision it applied; restore retains
+that record and reports the target as `unapplied` until a later successful apply
+captures the current revision. Recovery
 is stored as plaintext under current-user-restricted `~/.tmax`; file permissions
 are not encryption. There is no automatic application and no merge mode.
 
@@ -210,7 +215,10 @@ restoring the retained snapshot never revokes the shared key. Stop management wi
 | `NativeModelRef` | `{provider, id, protocol}` with a target-local provider name; a default adds optional `effort` or `native_effort`. |
 | `AgentProviderView` | `name`, `source` (`{provider: string}`), `relayed`, and exact `{id, protocol}` selections. A relayed entry also reports `base_url`, `credential_ref` (DSH target with one selected protocol only), and `applied_delivery`; a direct entry has null values for those fields. |
 | Provider detail | Qualified requirements, readiness, actual precedence/evidence, and expected/applied/effective state; no mode, target credential, permission list, or target continuity field. |
-| `configuration_revision` | `agent inspect` returns the current saved configuration revision at the top level; null when unavailable. It is not an applied revision. |
+| `configuration_revision` | `agent inspect` returns the current saved configuration revision at the top level; null when unavailable. It covers the whole saved file and is not the target revision or an applied revision. |
+| `target_revision` | A stable revision of that target's expected configuration alone, comparing equal across unrelated target changes and configuration-file formatting. It is not the saved configuration revision, an actual-file hash, or an applied revision. |
+| `applied_target_revision` | The target revision captured by the retained managed record's last successful apply; null when no record is retained or the record captured no revision. A null value never means the target is current. |
+| `unapplied` | False only when the retained managed record represents completed actual configuration and its captured target revision equals `target_revision`; true when expected configuration has advanced, when no record is retained, or when the record represents an incomplete write, a recovery-required state, or a restore. Null when the scope is unavailable and the comparison cannot be made; a null value is unknown, never false. The owed Agent reload is separate. It reports a target-level desired-versus-applied comparison, not a native pending change, merge, per-field difference, or count of model items. |
 | `applied_delivery` | Relayed entry field comparing the applied delivery facts with the current ones: `state` (`current`, `stale`, `blocked`, `unknown`, `not_applied`, or `not_configured`), `revision`, `applied_revision` when recorded, named `reasons`, and `routes.removed`. Reasons are not merged: `listen_changed`, `key_rotated`, `route_removed`, and `entry_selection_changed` make the state `stale`; `entry_references_missing_route` and `gateway_not_ready` make it `blocked` when no drift is present, and an apply whose writes did not finish is `blocked` with `apply_incomplete`. The recorded revision is target-scoped over the `route/protocol` pairs that target references, so an unrelated added route changes neither the revision nor the state, while a changed selection protocol is drift. An unknown or not-applied state names its `reason_code` (`delivery_not_recorded` or `never_applied`). |
 | `agent inspect` | `data.providers` contains entries; `data.default` uses `NativeModelRef` with optional `effort` or `native_effort`, `data.roles` use model-only `NativeModelRef`, and a null default means unmanaged. |
 | `readiness` | `agent inspect` reports one row per dimension a target's blockers touch, plus the dimensions that are fine: `ready` is true only when nothing blocks, `blocked` lists `{dimension, code, message, next_action}` in the order a reader meets them (`scope`, `native_installation`, `plugin`, `gateway`, `credential`, `compatibility`, `selection`, then any other), and `dimensions` lists every row's `state`. A dimension carries its first blocker; the `blockers` array beside it carries them all. `next_action` is the action that clears that dimension: a runnable command where one exists, otherwise one sentence naming what the reader must do, and null only where no action exists (`scope`, which the reader selects). |
@@ -274,7 +282,11 @@ sets `scope_state: unavailable`, and provides `scope_reason_code` (`absent`,
 `not_applied` when no tmax-managed record is retained, and otherwise the retained
 record's state (for example `applied_reload_pending`, `write_pending`, or
 `recovery_required`). It does not compare expected configuration against the
-current files and has no pending-changes value. `awaiting_native_reload` is
+current files. The separate `unapplied` flag compares the target revision with
+the revision retained by the last successful apply and treats a retained record
+without completed actual configuration as unapplied; it is not a native pending
+change, merge, or per-field difference, and no `pending_native_changes` field is
+produced. `awaiting_native_reload` is
 separate: it means written changes await a tool reload/restart.
 
 Installation evidence consists of `state`, `version`, `executable`, and `source`,
