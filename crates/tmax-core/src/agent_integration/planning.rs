@@ -816,7 +816,9 @@ pub(super) fn pending_native_changes(
         }
         if let Some(previous) = previous {
             for field in previous.fields.iter().filter(|field| !field.released) {
-                if !desired.iter().any(|(path, _)| *path == field.path) {
+                if !desired.iter().any(|(path, _)| *path == field.path)
+                    && document::get(&current, &field.path).is_some()
+                {
                     changes.push(json!({"path":file.path,"field":field.path,"change":"release"}));
                 }
             }
@@ -827,8 +829,17 @@ pub(super) fn pending_native_changes(
             file.format != Format::Credential
                 && !files.iter().any(|desired| desired.path == file.path)
         }) {
+            // An owned field that is already absent is not a native change.
+            // Apply keeps that absence owned so a later restore can reinstate
+            // it, but pending must describe bytes that would be written.
+            let current = document::parse(
+                read_native(&file.path)?.as_deref().unwrap_or(""),
+                file.format,
+            )?;
             for field in file.fields.iter().filter(|field| !field.released) {
-                changes.push(json!({"path":file.path,"field":field.path,"change":"release"}));
+                if document::get(&current, &field.path).is_some() {
+                    changes.push(json!({"path":file.path,"field":field.path,"change":"release"}));
+                }
             }
         }
     }
@@ -958,6 +969,22 @@ mod tests {
         assert_eq!(
             pending_native_changes(&target, &[], &[], Some(&record)).unwrap()[0]["change"],
             "release"
+        );
+        fs::write(&path, b"{}").unwrap();
+        assert!(
+            pending_native_changes(&target, &[], &[], Some(&record))
+                .unwrap()
+                .is_empty(),
+            "owned absence is not a pending native write"
+        );
+        let other = [File {
+            path: path.clone(),
+            format: Format::Json,
+            desired: json!({"other":"x"}),
+        }];
+        assert_eq!(
+            pending_native_changes(&target, &other, &[], Some(&record)).unwrap(),
+            vec![json!({"path":path,"field":["other"],"change":"set"})]
         );
     }
     #[tokio::test]

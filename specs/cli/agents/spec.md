@@ -273,7 +273,9 @@ sets `scope_state: unavailable`, and provides `scope_reason_code` (`absent`,
 `applied_state` describes current desired-versus-written state. When comparison
 is available, `pending_native_changes` identifies native field `set`/`release`
 changes or a credential-reference replacement; otherwise it is null. These are
-unwritten desired deltas. `awaiting_native_reload` is separate: it means written
+unwritten desired deltas; a `release` appears only while the owned field is still
+present in native. An owned field that is already absent is recovery bookkeeping,
+not a pending native write. `awaiting_native_reload` is separate: it means written
 native changes await a tool reload/restart, not that those deltas remain pending.
 
 Installation evidence consists of `state`, `version`, `executable`, and `source`,
