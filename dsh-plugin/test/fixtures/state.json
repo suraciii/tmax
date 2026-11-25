@@ -1,11 +1,11 @@
 {
   "contract": "dsh-plugin host state, consumed by the tmax page and seats",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "cases": {
     "connectedHomeOwned": {
       "ok": true,
       "errors": [],
-      "schemaVersion": 2,
+      "schemaVersion": 3,
       "generatedAt": "2026-11-23T10:15:00Z",
       "configurationRevision": "352a0e3fc342e94777e1a819244e016d98ad211fa7bdd0a082d85bc15a4cbe15",
       "tmaxVersion": "0.1.0",
@@ -204,7 +204,8 @@
               "expiresAt": null,
               "reasonCode": null
             },
-            "error": null
+            "error": null,
+            "source": "upstream"
           },
           {
             "id": "cpa-us2",
@@ -240,7 +241,8 @@
               "expiresAt": null,
               "reasonCode": null
             },
-            "error": null
+            "error": null,
+            "source": "upstream"
           }
         ]
       },
@@ -310,6 +312,213 @@
         "lastProjectionAt": "2026-11-23T10:14:31Z",
         "lastError": null,
         "readModel": "inventory"
+      },
+      "catalog": {
+        "state": "available",
+        "entriesState": "available",
+        "default": {
+          "provider": "tmax",
+          "model": "deepseek-v4.1-flash",
+          "protocol": "responses"
+        },
+        "providers": [
+          {
+            "id": "tmax",
+            "name": "tmax",
+            "source": "gateway",
+            "integration": "gateway",
+            "enabled": true,
+            "entry": "tmax",
+            "entries": [
+              {
+                "name": "tmax",
+                "relayed": true,
+                "protocols": [
+                  "responses"
+                ]
+              }
+            ],
+            "models": [
+              {
+                "id": "deepseek-v4.1-flash",
+                "kind": "alias",
+                "enabled": true,
+                "availability": "unverified",
+                "protocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "declaredProtocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "joined": true,
+                "joinedProtocols": [
+                  "responses"
+                ],
+                "default": true,
+                "publishedProtocols": [
+                  "chat-completions",
+                  "responses"
+                ]
+              },
+              {
+                "id": "glm-5.4",
+                "kind": "alias",
+                "enabled": true,
+                "availability": "unverified",
+                "protocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "declaredProtocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "joined": true,
+                "joinedProtocols": [
+                  "responses"
+                ],
+                "default": false,
+                "publishedProtocols": [
+                  "chat-completions",
+                  "responses"
+                ]
+              },
+              {
+                "id": "gpt-6-astra",
+                "kind": "alias",
+                "enabled": true,
+                "availability": "unverified",
+                "protocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "declaredProtocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "joined": false,
+                "joinedProtocols": [],
+                "default": false,
+                "publishedProtocols": [
+                  "chat-completions",
+                  "responses"
+                ]
+              }
+            ],
+            "totalCount": 3,
+            "joinedCount": 2
+          },
+          {
+            "id": "kimi",
+            "name": "Kimi Coding Plan",
+            "source": "upstream",
+            "integration": "kimi-code-plan-cn",
+            "enabled": true,
+            "entry": null,
+            "entries": [],
+            "models": [
+              {
+                "id": "k3.1-pro",
+                "kind": "concrete",
+                "enabled": true,
+                "availability": "unverified",
+                "protocols": [
+                  "chat-completions",
+                  "messages",
+                  "responses"
+                ],
+                "declaredProtocols": [
+                  "chat-completions",
+                  "messages",
+                  "responses"
+                ],
+                "joined": false,
+                "joinedProtocols": [],
+                "default": false,
+                "publishedProtocols": [
+                  "chat-completions",
+                  "messages",
+                  "responses"
+                ]
+              }
+            ],
+            "totalCount": 1,
+            "joinedCount": 0
+          },
+          {
+            "id": "cpa-us2",
+            "name": "cpa-us2",
+            "source": "upstream",
+            "integration": "custom",
+            "enabled": true,
+            "entry": null,
+            "entries": [],
+            "models": [
+              {
+                "id": "gpt-6-astra",
+                "kind": "concrete",
+                "enabled": true,
+                "availability": "unverified",
+                "protocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "declaredProtocols": [
+                  "chat-completions",
+                  "responses"
+                ],
+                "joined": false,
+                "joinedProtocols": [],
+                "default": false,
+                "publishedProtocols": [
+                  "chat-completions",
+                  "responses"
+                ]
+              }
+            ],
+            "totalCount": 1,
+            "joinedCount": 0
+          },
+          {
+            "id": "opencode-go-2",
+            "name": "opencode-go-2",
+            "source": "upstream",
+            "integration": "opencode-go",
+            "enabled": true,
+            "entry": null,
+            "entries": [],
+            "models": [
+              {
+                "id": "deepseek-v4.1-flash",
+                "kind": "concrete",
+                "enabled": true,
+                "availability": "unverified",
+                "protocols": [
+                  "chat-completions",
+                  "messages",
+                  "responses"
+                ],
+                "declaredProtocols": [
+                  "chat-completions",
+                  "messages",
+                  "responses"
+                ],
+                "joined": false,
+                "joinedProtocols": [],
+                "default": false,
+                "publishedProtocols": [
+                  "chat-completions",
+                  "messages",
+                  "responses"
+                ]
+              }
+            ],
+            "totalCount": 1,
+            "joinedCount": 0
+          }
+        ]
       }
     }
   }

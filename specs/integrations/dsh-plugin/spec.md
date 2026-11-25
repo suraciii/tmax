@@ -21,10 +21,15 @@ commands above and maps it into one plugin-owned state contract. That contract
 is not a second tmax CLI contract, and the plugin does not add a command.
 
 The plugin is an in-context lens and safe control surface for tmax-managed
-access. tmax's CLI and Web remain where configuration is authored. The plugin
-does not edit providers, models, aliases, priorities, or schedules, does not
-manage DSH profiles or presets, and is not a second tmax authority. The browser
-half never runs tmax; the host half reads it.
+access. tmax's CLI and Web remain where provider and model definitions are
+authored. The plugin may add one existing catalog model to its one declared DSH
+target through the fixed, previewed `add_model` target-selection action; it does
+not edit providers, models, aliases, priorities, or schedules, does not manage
+DSH profiles or presets, and is not a second tmax authority. The browser half
+never runs tmax; the host half reads it, and its only target-selection write is
+the fixed `add_model` action. Its other mutations are previewed observation,
+provider repair, and gateway lifecycle actions; it never edits a provider,
+model, alias, priority, or schedule definition.
 
 The page, seats, the `/tmax` command, and the `tmax_status` tool read one host
 read model. They must not hold separate business logic for the same facts. Seats
@@ -44,11 +49,14 @@ authority.
    another owner's.
 5. No credential value crosses to the browser, logs, argv, environment, or an
    ordinary response. A reference name is not a secret.
-6. The plugin does not author tmax configuration or manage DSH profiles. Apply is
-   tmax's own previewed native-application operation invoked through the page; it
-   is not a plugin-authored file format.
+6. The plugin does not author tmax provider, model, alias, priority, or schedule
+   definitions and does not manage DSH profiles. It may add one existing model
+   selection to its declared DSH target through `add_model`; Apply remains
+   tmax's own native-application operation, not a plugin-authored file format.
 7. Every action the page offers is allowlisted and previewed. The browser names
-   one action and closed operands, never a command, flag, or path.
+   one action and closed operands, never a command, flag, or path. `add_model`
+   is one fixed composite target-selection operation with per-step results; it
+   is not arbitrary action chaining.
 8. The read model source is explicit: `diagnostics.readModel` reports
    `inventory`, the composition of effect-free tmax reads. There is no snapshot
    source and no fallback source; a failed read is a visible error, never an
@@ -59,19 +67,20 @@ authority.
 
 ## Page content
 
-The page is one first-level DSH page. It answers two questions and shows
-nothing else: is model access working, and how much of each account's quota is
-spent and when it comes back. Everything the CLI reports — configuration revisions, schemas, route
-detail, gateway supervision, diagnostics, retained request history — stays in
-the CLI.
+The page is one first-level DSH page with three tabs: **Models**, **Gateway**,
+and **Quota**. It answers whether model access is working and how much of each
+account's quota is spent, and exposes the one control that adds an existing tmax
+model to the declared DSH target. Configuration revisions, schemas, route
+detail, full gateway supervision, diagnostics, and retained request history stay
+in the CLI.
 
 | Section | Required content |
 | --- | --- |
-| Header | The page name, when the state was generated, one reachability verdict, and the one control that changes it when the page has it: **Start gateway** when the gateway is not ready, **Apply** when DSH has not been given the declared routes or a credential tmax knows is missing. Otherwise one line names what stands in the way — a pending reload, an invalid or unavailable configuration with its own errors, a route-ownership conflict, or a tmax blocker — followed by every failed section read and every route blocker, bounded and code first, with a **Retry** that reads again and never observes. **Refresh** observes every listed provider that reports a quota source. A failed read keeps the last good table, labels it last known, and shows the failure once. |
-| Accounts | One card per tmax account that reports a quota window, closest to its limit first; an account without any window takes no card. Every window the account reports is one bar filled with the share it has used, stating its name, what it used of what, and when it resets, whatever basis the account reports in: a percentage window states its share of 100%, a reported quantity states what was used of it; an unqualified reset time is printed as approximate, an absent one is left out. A window whose share cannot be computed is text, never a bar. A card carries a tag only for a state a person must act on or know about — disabled, suspended, failing — and the one action its evidence calls for: resume for a reported suspension, reset for an active failure. |
-| Models | Every projected model and the account its routing selects; the target's default is marked. |
-| Actions | The preview and result of one confirmed provider, gateway, or Apply action: typed code, status, message, data, blockers, next actions, and effects. Preview and confirmation are separate; cancel clears. An observation names only the accounts it could not read. |
-
+| Header | The page name, when the state was generated, one reachability verdict, and the one control that changes it when the page has it: **Start gateway** when the gateway is not ready, **Apply** when DSH has not been given the declared routes or a credential tmax knows is missing. Otherwise one line names what stands in the way — a pending reload, an invalid or unavailable configuration with its own errors, a route-ownership conflict, or a tmax blocker — followed by every failed section read and every route blocker, bounded and code first, with a **Retry** that reads again and never observes. **Refresh** observes every listed provider that reports a quota source. A failed read keeps the last good table, labels it last known, and shows the failure once. The tab bar follows the header; switching tabs never reads or acts. |
+| Models | Every tmax provider and every concrete model and alias under it, with the target's selection ratio `joined/total`; no provider-level "joined" or "not joined" text. Search matches provider name/id, model id, and protocol, and shows results grouped by provider. A provider drills into its model rows: model id, published protocols, default mark, joined mark, and an **Add to DSH** control for an unselected, enabled model with a published protocol. The control is offered; the action refuses a pending or unreadable target state before any write, and the pending refusal's add bar offers **Apply current changes first**, which opens the ordinary Apply preview instead of adding a page-level Apply button. After that Apply succeeds, the page may restore the Models tab, clear the search, reopen the same provider, and reopen the same add preview once. That is a UI resume, not a second action; the Add still waits for an explicit confirmation. The page's target default is marked. |
+| Gateway | The configured and ready state, listener address, shared-key loaded state, and tmax's reason code when not ready; the **Start gateway** control when configured and not ready. It shows no supervision, autostart, or other CLI detail. |
+| Quota | One card per tmax account that reports a quota window, closest to its limit first; an account without any window takes no card. Every window the account reports is one bar filled with the share it has used, stating its name, what it used of what, and when it resets, whatever basis the account reports in: a percentage window states its share of 100%, a reported quantity states what was used of it; an unqualified reset time is printed as approximate, an absent one is left out. A window whose share cannot be computed is text, never a bar. A card carries a tag only for a state a person must act on or know about — disabled, suspended, failing — and the one action its evidence calls for: resume for a reported suspension, reset for an active failure. |
+| Actions | The preview and result of one confirmed provider, gateway, Apply, or **Add to DSH** action: typed code, status, message, data, blockers, next actions, and effects. Preview and confirmation are separate; cancel clears. An add preview states the selected entry and protocol and writes nothing. An observation names only the accounts it could not read. |
 
 ## Seats
 
@@ -223,9 +232,9 @@ Read purity:
 
 - The host composes the state from effect-free tmax reads: `agent list`,
   `agent inspect`, `status`, `gateway status`, `provider list`,
-  `provider inspect`, `config validate`, and `model explain`. It must not run
-  `provider refresh`, request a vendor quota endpoint, run `agent apply`, or
-  resolve a credential value.
+  `provider inspect`, `config validate`, `model list`, and `model explain`. It
+  must not run `provider refresh`, request a vendor quota endpoint, run
+  `agent apply`, or resolve a credential value.
 - There is no versioned snapshot source and no compatibility composition: the
   read model is the same composition on every supported tmax version. An older
   tmax whose inspection lacks the relayed-entry or native-capability fields is
@@ -335,12 +344,14 @@ states neither is refused with `400` `invalid_dry_run` before any tmax call.
 - The response carries a freshly composed read model. The page must not report a
   route as live because a file was written; the home integration becomes live
   only when DSH reloads the home entry.
-- Apply is the only DSH or native write this contract permits. An observation
+- Apply is the only bare native write this contract permits; `add_model` is the
+  one fixed target-selection write and ends in the same Apply. An observation
   publishes evidence; [`resume_quota` and `reset_failure`](#actions) are explicit
   tmax mutations, not DSH or native writes. Gateway start, stop, and restart are
   separate previewed actions on tmax's inference service; native restore,
-  provider authentication, and profile or preset changes are not page operations
-  and remain explicit CLI or tmax Web operations.
+  provider authentication, provider/model definition edits, and profile or
+  preset changes are not page operations and remain explicit CLI or tmax Web
+  operations.
 
 ## Actions
 
@@ -357,6 +368,7 @@ per-action timeout, and the single-flight key.
 | Action | Operands | Preview | Execution |
 | --- | --- | --- | --- |
 | `connect` | none; the configured target | `agent apply TARGET --dry-run` | Writes the target's native DSH files. |
+| `add_model` | one provider id, one model id, one protocol | Catalog-derived plan; writes nothing | Fixed target-selection sequence: create the provider entry when no matching entry exists, add the model selection, then `agent apply TARGET`. |
 | `observe_provider` | one provider id; `scope` is `quota`, `auth`, `models`, or `all`, default `quota` | Provider refresh dry run | Publishes provider evidence. |
 | `resume_quota` | one provider id | `provider quota-resume --dry-run` | Publishes an explicit tmax mutation that clears a quota suspension. |
 | `reset_failure` | one provider id | `provider failure-reset --dry-run` | Publishes an explicit tmax mutation that clears a failure override. |
@@ -402,15 +414,41 @@ Rules:
   service; it does not apply or restore native files, change configuration, or
   manage the DSH host.
 - The action surface does not widen ownership of tmax state: `connect` is the
-  only DSH or native write, observation publishes evidence, and the two repairs
-  are explicit tmax mutations.
+  only bare native write, `add_model` is the one fixed target-selection write,
+  observation publishes evidence, and the two repairs are explicit tmax
+  mutations.
+- `add_model` is offered only for a catalog model that is enabled, has a
+  published protocol, and is not already selected for that protocol. The
+  provider must be in the current catalog; a relayed provider additionally
+  requires a configured gateway. The target must resolve.
+- The client never names an entry, a command, or a flag. The host reuses an
+  existing target entry whose protocol matches; otherwise it derives a free
+  target-local entry name. A DSH provider-namespace conflict is an Apply-time
+  refusal, not a client guess.
+- The add preview is the catalog-derived plan (entry, protocol, and step names);
+  it writes nothing and sends no target-selection command, but a cold or expired
+  state cache is composed with the same effect-free reads as any state read.
+  The action refuses `pending_native_changes` when the target already has pending
+  native changes and `target_uninspectable` when that pending state is unreadable;
+  a standalone Apply must run first, so the add cannot silently carry unrelated
+  selections, defaults, roles, or native edits. Confirmation runs
+  the fixed sequence over that clean target plus the new selection; the first
+  refusal stops it and reports the completed prefix and failed step. There is no
+  rollback: a partial desired-state write is visible in the fresh state, and the
+  page can Apply or repair it. The action shares the `connect` single-flight lock
+  because both write the target.
+- The page never chains one action into another; `add_model` is one allowlisted
+  action whose internal steps are fixed by the host, not a browser-driven
+  sequence. The one UI exception is the contextual Apply for a refused Add: its
+  success may reopen the same Add preview, never execute the Add, and never form
+  a browser-driven provider/model/apply chain.
 
 Action responses:
 
 | Outcome | Status | Body |
 | --- | --- | --- |
 | Completed action or preview | `200` | `ok: true` with the typed `result` and a freshly read `state`. |
-| Typed tmax refusal | `409` | `ok: false` with the refusal code and message, the typed `result`, and a freshly read `state`. |
+| Typed tmax refusal | `409` | `ok: false` with the refusal code and message, the typed `result`, and a freshly read `state`. For `add_model`, `result.data` also names the completed `steps` and `failedStep`; a prior step may have written desired state. |
 | Provider not in the current read model | `409` | Typed refusal only; no `result` and no `state`, because the provider is not addressable. A typed tmax refusal that happens to report an unknown provider is still an attempted operation and keeps its `result` and `state`. |
 | Target not resolved | `409` | The typed target or inventory code (for example `target_unresolved`) as a refusal only; no `result` and no `state`, because Apply cannot name a target. |
 | Gateway not configured or its state unavailable | `409` | `gateway_not_configured` or `gateway_unavailable` as a typed refusal only; no `result` and no `state`, because the lifecycle cannot be attempted. |
@@ -452,7 +490,7 @@ refusal, and no outcome carries secret material.
 
 ## State consumer contract
 
-The plugin state contract is plugin-owned and has `schemaVersion: 2`. It is not a
+The plugin state contract is plugin-owned and has `schemaVersion: 3`. It is not a
 tmax CLI contract: the host composes it from effect-free tmax reads and adds the
 DSH-only facts tmax cannot know. `null` means unknown or not reported unless the
 row says otherwise; it is never a stand-in for zero or for an empty list.
@@ -460,8 +498,8 @@ row says otherwise; it is never a stand-in for zero or for an empty list.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `ok` | boolean | Whether the host produced a usable read model. A failed target inventory keeps `ok` true when the provider-list or configuration-validation read answered, and sets it false only when neither answered; the failure is still a `projection` error with a null target. Section-level failures inside a usable model are reported in `errors` and do not hide the model; an invalid configuration is reported inside `config`. |
-| `errors` | array of `{section, code, message}` (strings) | One entry per failed section read. Sections are `projection` (the target inventory and route source), `authority` (tmax data directory and CLI version), `providers`, `gateway`, and `config`; Empty when every read answered. Per-provider and per-model failures stay in their own records; this list is for section-level reads only. A section must show its own entry and must not render an empty result in place of a failed read. |
-| `schemaVersion` | integer | Plugin state schema, currently `2`. |
+| `errors` | array of `{section, code, message}` (strings) | One entry per failed section read. Sections are `projection` (the target inventory and route source), `authority` (tmax data directory and CLI version), `providers`, `catalog`, `gateway`, and `config`; Empty when every read answered. Per-provider and per-model failures stay in their own records; this list is for section-level reads only. A section must show its own entry and must not render an empty result in place of a failed read. |
+| `schemaVersion` | integer | Plugin state schema, currently `3`. |
 | `generatedAt` | string | RFC 3339 time when the host composed this state. |
 | `configurationRevision` | string or null | tmax saved-configuration revision. |
 | `tmaxVersion` | string or null | Producing CLI version. |
@@ -471,7 +509,8 @@ row says otherwise; it is never a stand-in for zero or for an empty list.
 | `gateway` | object or null | `configured` and three-valued `ready` (boolean or null), `listen` (string or null), `daemonDiscoveryState` (`identified`, `unidentified`, or `unknown`), `reasonCode` (string or null), `supervision` (`state`, `reasonCode` strings or null), `autostart` (`savedIntent` boolean or null; `registration` string or null; `unitMatches` boolean or null), and `sharedKey` (`loadedState` `loaded`, `absent`, or `unknown`; `reasonCode` string or null). |
 | `config` | object | `state` (`valid`, `invalid`, or `unavailable`), `revision` (string or null), and `errors` (array of `{code, message}`). An absent saved configuration is a valid empty configuration; a missing revision stays null rather than invented. |
 | `routes` | array | Per route: `name` and `provider` (string or null), `protocol` (string or null), `baseUrl` (string), `credentialRef` (string or null), `credentialConfigured` (`true`, `false`, or null), `scope` (`home_wide`, `profile_scoped`, or null), `models` (array; each `id`, `name`, `kind`, `continuity`, `availability` strings or null, `candidateCount` integer or null, and `capabilities` object; the target inspection currently reports no kind, continuity, or candidate count, so those stay null, and availability stays `unverified`), `active` (boolean), and `blockers` (array of `{code, message, models?}`). Route `blockers` describe only the profile-scoped fallback this plugin owns or attempts to register; they are empty when it registers nothing. |
-| `providers` | object | One `tmax` array holding every provider tmax lists: `id` and `name` strings, `enabled` (boolean or null), `authentication` (string or null), `affectedTargets` (integer), `accountIdentity` (string or null), `subscription` (object or null), `integration` (string or null), `billing` (object), `suspension` (object), `failure` (object), and `error` (`{code, message}` or null). A provider's `billing` carries `reasonCode` and `lastAttempt` only when the listed attempt reported them (for example `unsupported_source` with `lastAttempt: unavailable`), so a provider with no supported source is distinct from one that was never observed. |
+| `providers` | object | One `tmax` array holding every provider tmax lists: `id` and `name` strings, `enabled` (boolean or null), `authentication` (string or null), `source` (`upstream`, `gateway`, or null), `affectedTargets` (integer), `accountIdentity` (string or null), `subscription` (object or null), `integration` (string or null), `billing` (object), `suspension` (object), `failure` (object), and `error` (`{code, message}` or null). A provider's `billing` carries `reasonCode` and `lastAttempt` only when the listed attempt reported them (for example `unsupported_source` with `lastAttempt: unavailable`), so a provider with no supported source is distinct from one that was never observed. |
+| `catalog` | object | The model catalog. `state` is `available` only when the provider list and `model list` both answered, otherwise `unavailable`; `entriesState` is `available` or `unknown` (the target dossier); `default` is `{provider, model, protocol}` or null; `providers` is an array of `{id, name, source, integration, enabled, entry, entries, models, totalCount, joinedCount}`. `entries` is null when the target dossier is unavailable, otherwise an array of `{name, relayed, protocols}`; `entry` is the first matching entry name or null. Each model is `{id, kind, enabled, availability, protocols, publishedProtocols, declaredProtocols, joined, joinedProtocols, default}`; `declaredProtocols` is `null` when the source does not report it. `joined` and `joinedCount` are null when the target dossier is unknown, never false. A provider-list failure makes the whole catalog `unavailable` rather than empty; the `providers` section error carries that failure. `totalCount` is null when the model read failed. A model-list failure is a `catalog` section error, not an empty provider list. |
 | `routing` | array | One row per projected model: `model`, `protocol`, `kind`, `continuity`, `availability` (string or null), `candidateCount` (integer or null), `selection` (`{qualifiedModel, provider, model, priority}` or null), `candidates` (array of `{qualifiedModel, priority, selected}`), `excluded` (array of `{qualifiedModel, reasonCode}`), and a typed `error` (`{code, message}` or null). |
 | `diagnostics` | object | `readModel` (`inventory`), `history` (`state` `available` or `unavailable`; `reasonCode` string or null), `lastProjectionAt` (string or null; the last inventory read time), and `lastError` (string or null). |
 
@@ -498,9 +537,11 @@ Consumers:
   origin check, a wrong media type, and an oversized body have distinct typed
   refusals.
 - The action route accepts one allowlisted action with closed operands only. A
-  provider must be an exact id from the current read model, and no client string
-  reaches argv. Single-flight covers connect, observation, provider repairs,
-  management, and each gateway verb; a duplicate is busy.
+  provider, model, and protocol named by `add_model` must be exact catalog
+  members; the entry is host-derived. No client string reaches argv.
+  Single-flight covers connect and `add_model` under the same target-write lock,
+  plus observation, provider repairs, management, and each gateway verb; a
+  duplicate is busy.
 - The plugin must not add permissive CORS headers or wildcard origin admission.
 - No secret appears in a response, log, argv, environment, or error text. Action
   and Apply results are filtered to non-secret fields, and host error text is
@@ -513,13 +554,14 @@ Consumers:
 
 ## Non-goals
 
-- Provider, model, alias, priority, or schedule editing.
+- Provider, model, alias, priority, schedule, or default editing; the one fixed add of an existing catalog model to the declared target is the only target-selection write.
 - Credential entry, reveal, cleanup, or interactive sign-in.
 - Native restore; provider authentication; DSH start/stop/restart; profile,
   preset, and session management. Native application is the contracted Apply
-  action; it is not configuration authority. Gateway start is the one
-  contracted gateway page action; stop and restart are CLI operations.
-- Automatic observation, automatic Apply, or chained actions.
+  action, also used by the fixed `add_model` sequence; it is not configuration
+  authority. Gateway start is the one contracted gateway page action; stop and
+  restart are CLI operations.
+- Automatic observation, automatic Apply, or arbitrary action chaining; `add_model` is the one fixed composite.
 - Request bodies, headers, URLs, model output, an error-log viewer, and history
   clear or export controls. The page shows no history; `/tmax history` lists
   retained metadata only.

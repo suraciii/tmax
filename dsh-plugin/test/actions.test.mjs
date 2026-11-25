@@ -17,6 +17,7 @@ import {
   createActionService,
   isActionSuccess,
   planAction,
+  planAddModel,
   providerIdsFromState,
   resultFromEnvelope,
   validateActionRequest,
@@ -60,8 +61,8 @@ function agentInspectData() {
     }],
     native_default: { state: 'available', fields: { provider: 'tmax', model: 'public-model', present: true } },
     installation: { executable: '/tmp/bin/dsh', version: '0.2.3-alpha.2', state: 'detected', source: 'https://github.com/deepseek-ai/deepseek-harness' },
-    applied_state: 'unknown',
-    pending_native_changes: null,
+    applied_state: 'applied',
+    pending_native_changes: [],
     blockers: [],
   }
 }
@@ -232,6 +233,17 @@ function connectEnvelope(dryRun) {
   }
 }
 
+/** `tmax model list`: all catalog rows the add action validates against. */
+function modelListEnvelope() {
+  return success({
+    models: [
+      { id: 'kimi/k3.1-pro', kind: 'concrete', enabled: true, availability: 'unverified', published_protocols: ['chat-completions', 'messages', 'responses'] },
+      { id: 'cpa-us2/gpt-6-astra', kind: 'concrete', enabled: true, availability: 'unverified', published_protocols: ['chat-completions', 'responses'] },
+      { id: 'public-model', kind: 'alias', enabled: true, availability: 'unverified', protocols: ['responses'], published_protocols: ['responses'] },
+    ],
+  })
+}
+
 function baseScenario() {
   const dispatch = {}
   for (const provider of ['kimi', 'cpa-us2']) {
@@ -258,10 +270,13 @@ function baseScenario() {
   dispatch['gateway status'] = success(gatewayStatusData())
   dispatch['status'] = success(tmaxStatusData())
   dispatch['provider list'] = success(providerListData())
+  dispatch['model list'] = modelListEnvelope()
   dispatch['provider inspect kimi'] = success(kimiInspectData())
   dispatch['provider inspect cpa-us2'] = success(cpaInspectData())
   dispatch['config validate'] = success({ valid: true, revision: 'rev-1', snapshot_state: 'available' })
   dispatch['model explain public-model --protocol responses'] = success(stateExplainData())
+  dispatch['agent provider add dsh-main kimi --provider kimi'] = success({ target: 'dsh-main', name: 'kimi', provider: 'kimi' })
+  dispatch['agent model add dsh-main kimi k3.1-pro --protocol responses'] = success({ target: 'dsh-main', name: 'kimi', model: 'k3.1-pro', protocol: 'responses' })
   dispatch['agent apply dsh-main --dry-run'] = connectEnvelope(true)
   dispatch['agent apply dsh-main'] = connectEnvelope(false)
   return {
@@ -518,6 +533,7 @@ test('the action contract is a closed allowlist with closed operands and deadlin
     'gateway_start',
     'gateway_stop',
     'gateway_restart',
+    'add_model',
   ])
   assert.deepEqual([...GATEWAY_ACTIONS], ['gateway_start', 'gateway_stop', 'gateway_restart'])
   assert.deepEqual([...OBSERVE_SCOPES], ['quota', 'auth', 'models', 'all'])
@@ -532,6 +548,7 @@ test('the action contract is a closed allowlist with closed operands and deadlin
   assert.equal(actionTimeoutMs('resume_quota'), 45_000)
   assert.equal(actionTimeoutMs('reset_failure'), 45_000)
   assert.equal(actionTimeoutMs('connect'), 45_000)
+  assert.equal(actionTimeoutMs('add_model'), 120_000)
   assert.equal(actionTimeoutMs('open_management', { dryRun: true }), 20_000)
   assert.equal(actionTimeoutMs('open_management', { dryRun: false }), 60_000)
   // Gateway lifecycle waits on supervision, so every verb gets the 90 s budget.
@@ -543,6 +560,7 @@ test('the action contract is a closed allowlist with closed operands and deadlin
 
   // Canonical lock keys are shared with the legacy routes.
   assert.equal(actionLockKey('connect'), 'connect')
+  assert.equal(actionLockKey('add_model'), 'connect')
   assert.equal(actionLockKey('observe_provider', 'kimi'), 'observe')
   assert.equal(actionLockKey('resume_quota', 'kimi'), 'resume_quota:kimi')
   assert.equal(actionLockKey('reset_failure', 'kimi'), 'reset_failure:kimi')
@@ -1272,4 +1290,259 @@ test('the action route keeps the shared POST guards and works beside the legacy 
   const connect = await postJson(state, '/_tmax/connect', { dryRun: true })
   assert.equal(connect.statusCode, 200)
   assert.equal(connect.body.ok, true)
+})
+
+// ---------------------------------------------------------------------------
+// Target-selection add: one previewed composite, exact argv, stop and report.
+
+test('add_model previews a catalog-derived plan without writing anything', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const preview = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.body.ok, true)
+  assert.equal(preview.body.dryRun, true)
+  assert.equal(preview.body.result.status, 'dry_run')
+  assert.deepEqual(preview.body.result.data, {
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    target: 'dsh-main',
+    entry: { name: 'kimi', mode: 'create' },
+    steps: ['provider_add', 'model_add', 'apply'],
+  })
+  // A preview reads state only; it never writes desired or native configuration.
+  const calls = await fake.calls()
+  assert.equal(calls.some(argv => argv[0] === 'agent' && ['provider', 'model', 'apply'].includes(argv[1])), false)
+  assert.equal(preview.body.state.schemaVersion, 3)
+  assert.equal(preview.body.state.catalog.state, 'available')
+})
+
+test('add_model executes the fixed provider, model, apply sequence and reports every step', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const executed = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(executed.statusCode, 200)
+  assert.equal(executed.body.ok, true)
+  assert.equal(executed.body.result.status, 'success')
+  assert.equal(executed.body.result.code, 'awaiting_native_reload')
+  assert.deepEqual(executed.body.result.data, {
+    target: 'dsh-main',
+    agent: 'dsh',
+    path: '/tmp/dsh',
+    state: 'applied_reload_pending',
+    written: true,
+    changed_files: ['/tmp/dsh/cordis.patch.yml'],
+    unchanged_files: [],
+    recovery: 'recovery-1',
+    fact_gaps: [],
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    entry: { name: 'kimi', mode: 'create' },
+    steps: [
+      { name: 'provider_add', code: 'ok', status: 'success' },
+      { name: 'model_add', code: 'ok', status: 'success' },
+      { name: 'apply', code: 'awaiting_native_reload', status: 'success' },
+    ],
+  })
+  assert.equal(JSON.stringify(executed.body.result).includes('sk-live-CONNECT-SECRET'), false, 'apply evidence is secret-free')
+  const writes = (await fake.calls()).filter(argv => argv[0] === 'agent' && ['provider', 'model', 'apply'].includes(argv[1]))
+  assert.deepEqual(writes, [
+    ['agent', 'provider', 'add', 'dsh-main', 'kimi', '--provider', 'kimi'],
+    ['agent', 'model', 'add', 'dsh-main', 'kimi', 'k3.1-pro', '--protocol', 'responses'],
+    ['agent', 'apply', 'dsh-main'],
+  ])
+  assert.equal(executed.body.state.schemaVersion, 3)
+})
+
+test('add_model reuses an existing entry whose protocol matches', async () => {
+  const scenario = baseScenario()
+  scenario.dispatch['agent inspect dsh-main'] = success({
+    ...agentInspectData(),
+    providers: [
+      ...agentInspectData().providers,
+      {
+        name: 'kimi-entry',
+        source: { provider: 'kimi' },
+        relayed: false,
+        base_url: null,
+        credential_ref: null,
+        applied_delivery: null,
+        models: [{ id: 'k3.1-pro', protocol: 'responses' }],
+      },
+    ],
+  })
+  const listed = modelListEnvelope()
+  listed.data.models.push({ id: 'kimi/kimi-other', kind: 'concrete', enabled: true, availability: 'unverified', published_protocols: ['responses'] })
+  scenario.dispatch['model list'] = listed
+  const { state } = await applied({ scenario })
+  const already = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(already.statusCode, 409)
+  assert.equal(already.body.code, 'already_joined')
+  const preview = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'kimi-other',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(preview.statusCode, 200)
+  assert.deepEqual(preview.body.result.data.entry, { name: 'kimi-entry', mode: 'existing' })
+  assert.deepEqual(preview.body.result.data.steps, ['model_add', 'apply'])
+})
+
+test('add_model refuses unknown, unsupported, and already-selected requests before argv', async () => {
+  const { state } = await applied()
+  for (const [body, code] of [
+    [{ provider: 'missing', model: 'k3.1-pro', protocol: 'responses' }, 'unknown_provider'],
+    [{ provider: 'kimi', model: 'missing', protocol: 'responses' }, 'unknown_model'],
+    [{ provider: 'cpa-us2', model: 'gpt-6-astra', protocol: 'messages' }, 'unsupported_protocol'],
+    [{ provider: 'kimi', model: 'k3.1-pro', protocol: 'bogus' }, 'invalid_protocol'],
+  ]) {
+    const result = await postJson(state, '/_tmax/action', { action: 'add_model', ...body, dryRun: false })
+    assert.equal(result.body.ok, false)
+    assert.equal(result.body.code, code)
+    assert.equal(result.body.state, undefined)
+  }
+})
+
+test('add_model stops at a refused step and reports the completed prefix', async () => {
+  const scenario = baseScenario()
+  delete scenario.dispatch['agent model add dsh-main kimi k3.1-pro --protocol responses']
+  const { state } = await applied({ scenario })
+  const executed = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(executed.statusCode, 409)
+  assert.equal(executed.body.ok, false)
+  assert.equal(executed.body.result.data.failedStep, 'model_add')
+  assert.deepEqual(executed.body.result.data.steps, [
+    { name: 'provider_add', code: 'ok', status: 'success' },
+    { name: 'model_add', code: 'unknown_resource', status: 'error' },
+  ])
+  assert.ok(executed.body.state, 'the fresh state accompanies a partial write')
+})
+
+test('add_model refuses a disabled provider before any argv', () => {
+  const state = {
+    catalog: {
+      state: 'available',
+      entriesState: 'available',
+      providers: [{
+        id: 'disabled',
+        name: 'disabled',
+        source: 'upstream',
+        enabled: false,
+        entry: null,
+        entries: [],
+        joinedCount: 0,
+        totalCount: 1,
+        models: [{ id: 'm1', kind: 'concrete', enabled: true, protocols: ['responses'], joined: false, joinedProtocols: [] }],
+      }],
+    },
+    gateway: { configured: true },
+    target: { pendingNativeChanges: [] },
+  }
+  const planned = planAddModel({ action: 'add_model', provider: 'disabled', model: 'm1', protocol: 'responses' }, { state, target: 'dsh-main' })
+  assert.equal(planned.ok, false)
+  assert.equal(planned.code, 'provider_disabled')
+})
+
+test('add_model refuses a target that already has pending native changes', async () => {
+  const scenario = baseScenario()
+  scenario.dispatch['agent inspect dsh-main'] = success({
+    ...agentInspectData(),
+    applied_state: 'pending_native_changes',
+    pending_native_changes: [{ kind: 'default', id: 'unrelated' }],
+  })
+  const { fake, state } = await applied({ scenario })
+  await fake.clearCalls()
+  const preview = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(preview.statusCode, 409)
+  assert.equal(preview.body.code, 'pending_native_changes')
+  assert.equal('result' in preview.body, false, 'a planned refusal has no tmax result envelope')
+  assert.equal((await fake.calls()).some(argv => argv[0] === 'agent' && argv[1] === 'provider'), false)
+})
+
+test('add_model preserves the apply refusal evidence and reports the failed apply step', async () => {
+  const { fake, state } = await applied()
+  await fake.patch(current => {
+    current.dispatch['agent apply dsh-main'] = {
+      code: 'partial_native_apply',
+      status: 'error',
+      data: {
+        state: 'partially_applied',
+        changed_files: ['/tmp/dsh/cordis.patch.yml'],
+        recovery: 'recovery-2',
+      },
+      effects: { native_writes: true, locks_created: false },
+      blockers: [{ code: 'partial_native_apply', message: 'one file failed' }],
+    }
+  })
+  await fake.clearCalls()
+  const executed = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(executed.statusCode, 409)
+  assert.equal(executed.body.code, 'partial_native_apply')
+  assert.equal(executed.body.result.data.state, 'partially_applied')
+  assert.deepEqual(executed.body.result.data.changed_files, ['/tmp/dsh/cordis.patch.yml'])
+  assert.equal(executed.body.result.data.recovery, 'recovery-2')
+  assert.equal(executed.body.result.data.failedStep, 'apply')
+  assert.equal(executed.body.result.data.entry.name, 'kimi')
+  assert.deepEqual(executed.body.result.effects, { native_writes: true, locks_created: false })
+})
+
+test('add_model refuses an unreadable pending target state separately from known pending changes', async () => {
+  const scenario = baseScenario()
+  scenario.dispatch['agent inspect dsh-main'] = success({
+    ...agentInspectData(),
+    applied_state: 'unknown',
+    pending_native_changes: null,
+  })
+  const { fake, state } = await applied({ scenario })
+  await fake.clearCalls()
+  const preview = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(preview.statusCode, 409)
+  assert.equal(preview.body.code, 'target_uninspectable')
+  assert.equal((await fake.calls()).some(argv => argv[0] === 'agent' && argv[1] === 'provider'), false)
 })
