@@ -4,6 +4,7 @@
 export function parseBlocks(text) {
   const lines = []
   for (const raw of text.split('\n')) {
+    if (raw.includes('\t')) throw new Error('a tab is not YAML indentation')
     const trimmed = raw.trim()
     if (trimmed === '' || trimmed.startsWith('#')) continue
     lines.push({ indent: raw.length - raw.trimStart().length, text: trimmed })

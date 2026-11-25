@@ -875,7 +875,8 @@ window.__ModuleLoader__.load({
       const counters = row.counters !== null && typeof row.counters === 'object' ? row.counters : undefined
       const total = numeric(counters?.total ?? counters?.limit)
       const left = numeric(counters?.remaining)
-      if (total !== undefined && left !== undefined && total > 0) {
+      // Counters are a share only on the two bases that define them.
+      if ((row.basis === 'counters' || row.basis === 'credit') && total !== undefined && left !== undefined && total > 0) {
         const consumed = Math.round(Math.max(0, Math.min(100, ((total - left) / total) * 100)))
         return {
           name,

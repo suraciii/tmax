@@ -811,11 +811,11 @@ function emptyHome() {
 
 const defaultConfig = home => ({ tmaxPath: undefined, home, refreshSeconds: 3600 })
 
-async function applied({ scenario = baseScenario(), config = {}, context = {}, prefix = '' } = {}) {
+async function applied({ scenario = baseScenario(), config = {}, context = {} } = {}) {
   const home = config.home ?? await emptyHome()
   const fake = await fakeTmax(scenario, home)
   const { ctx, state } = fakeContext(context)
-  const merged = { ...defaultConfig(home), tmaxPath: fake.path, providerPrefix: prefix, ...config }
+  const merged = { ...defaultConfig(home), tmaxPath: fake.path, ...config }
   if (merged.home === undefined) merged.home = home
   await apply(ctx, merged)
   return { fake, ctx, state, home }
@@ -1505,7 +1505,6 @@ test('explicit observe reports all-failed and partial outcomes without claiming 
 
 test('dry-run observe previews with --dry-run and performs no agent request', async () => {
   const { fake, state } = await applied({
-    prefix: '',
     context: glmAgentContext().context,
   })
   await fake.clearCalls()
@@ -2135,7 +2134,7 @@ test('a comment or another row\'s field is never read as an applied provider', a
   assert.equal(body.ownership.conflict, null)
 })
 
-test('conflicts are decided per route against the settings keys, whatever the display prefix', async () => {
+test('conflicts are decided per route against the settings keys the registry spells', async () => {
   // Route `tmax` is applied and served by the settings; route `other` is live
   // under a foreign owner. One applied route must not hide the other's conflict.
   const home = await emptyHome()
@@ -2148,13 +2147,29 @@ test('conflicts are decided per route against the settings keys, whatever the di
   const { state } = await applied({
     scenario,
     config: { home },
+    // The registry names providers exactly as the settings keys spell them.
     context: { liveNames: ['tmax', 'other'] },
-    prefix: 'preview-',
   })
   const body = (await getJson(state, '/_tmax/state')).body
   assert.equal(body.ownership.owner, 'unapplied', 'one of two routes applied is not fully applied')
   assert.equal(body.ownership.reason, null, 'something was applied, so it is not "never applied"')
   assert.deepEqual(body.ownership.conflict.routes, ['other'])
+})
+
+test('a settings document that will not parse leaves ownership unreadable, not unapplied', async () => {
+  const home = await emptyHome()
+  await mkdir(join(home, 'profiles/desktop'), { recursive: true })
+  await writeFile(
+    join(home, 'profiles/desktop/cordis.patch.yml'),
+    '- id: llm-pi-ai\n  config:\n    providers:\n      tmax:\n        api: openai-completions\n',
+  )
+  await mkdir(join(home, 'profiles/broken'), { recursive: true })
+  // A tab indentation is not YAML: the reader throws.
+  await writeFile(join(home, 'profiles/broken/cordis.patch.yml'), '- id: other\n\tconfig: {}\n')
+  const { state } = await applied({ config: { home } })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.ownership.owner, 'unknown')
+  assert.equal(body.ownership.reason, 'settings_unreadable')
 })
 
 test('without the entry-list parser, ownership is unreadable rather than guessed', async () => {

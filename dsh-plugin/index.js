@@ -422,7 +422,6 @@ export async function apply(ctx, config = {}) {
   const log = message => ctx.logger?.warn?.(`tmax: ${message}`)
   /** The protocols the qualified DSH adapter serves. */
   const DSH_PROTOCOLS = new Set(['chat-completions', 'responses', 'messages'])
-  const prefix = typeof config.providerPrefix === 'string' ? config.providerPrefix : ''
   let ownershipDecision
   let skippedBlockers = []
   let refreshing
@@ -463,10 +462,10 @@ export async function apply(ctx, config = {}) {
    */
   async function readAppliedProviders() {
     const documents = await readProfileDocuments(resolveHome(config))
-    return {
-      applied: appliedProviderNames(documents, parseEntryYaml),
-      parsed: typeof parseEntryYaml === 'function',
-    }
+    const read = appliedProviderNames(documents, parseEntryYaml)
+    // A document that will not parse leaves ownership unreadable: guessing from
+    // the other documents would report "unapplied" for a home that may be fine.
+    return { applied: read.names, parsed: typeof parseEntryYaml === 'function' && read.parsed }
   }
 
   /** Re-read the ownership facts without re-reading tmax. */
@@ -512,7 +511,7 @@ export async function apply(ctx, config = {}) {
         })
         continue
       }
-      const providerName = `${prefix}${route.name}`
+      const providerName = route.name
       const declaredModels = Array.isArray(route.models) ? route.models : []
       const hiddenModels = []
       const usableModels = declaredModels.filter(model => {
