@@ -123,6 +123,8 @@ window.__ModuleLoader__.load({
       failureActive: 'active',
       usedShare: 'used',
       reset: 'resets',
+      resetApprox: '~',
+      resetApproxNote: 'interpreted as Unix milliseconds; unconfirmed',
       today: 'today',
       tomorrow: 'tomorrow',
       windowRolling: 'rolling',
@@ -365,6 +367,8 @@ window.__ModuleLoader__.load({
       failureActive: '生效中',
       usedShare: '已用',
       reset: '重置',
+      resetApprox: '约',
+      resetApproxNote: '按 Unix 毫秒解释，含义待确认',
       today: '今天',
       tomorrow: '明天',
       windowRolling: '滚动',
@@ -816,6 +820,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * An unqualified epoch carries no proven meaning, but it is still the only
+     * reset evidence the provider reported. The page reads it as Unix
+     * milliseconds and says so instead of hiding the time.
+     */
+    function unqualifiedResetAt(reset) {
+      if (reset === null || typeof reset !== 'object' || resetQualified(reset)) return undefined
+      // Both discriminators must name the same native form: an unqualified epoch
+      // in some other unit is not a millisecond timestamp the page can print.
+      if (reset.kind !== 'unqualified_epoch_millis' || reset.encoding !== 'epoch_milliseconds_unqualified') return undefined
+      const raw = numeric(reset.raw)
+      if (raw === undefined) return undefined
+      const date = new Date(raw)
+      return Number.isNaN(date.getTime()) ? undefined : date
+    }
+
+    /**
      * A window's name comes from whatever the provider actually discriminates by.
      * Some report a protobuf-ish type and a count, some a bucket name and a
      * window, some a duration. Inventing a name from an unmapped enum would be a
@@ -857,8 +877,8 @@ window.__ModuleLoader__.load({
       if (row === null || typeof row !== 'object') return undefined
       const name = windowName(row.label, index, t)
       const raw = boundedText(JSON.stringify(row.label ?? {}), 120)
-      const reset = resetAt(row.reset)
       const resetIsUnqualified = resetUnqualified(row.reset)
+      const reset = resetIsUnqualified ? unqualifiedResetAt(row.reset) : resetAt(row.reset)
       const percent = numeric(row.percent)
       // A share is computable only on the two bases that name it. A basis the
       // contract does not define is not read as consumed by default: that would
@@ -1514,6 +1534,7 @@ window.__ModuleLoader__.load({
           source,
           id,
           status,
+          code,
           tone: status === 'refreshed' ? 'ok' : status === 'failed' ? 'error' : status === 'blocked' ? 'warn' : 'idle',
           detail: hostCodeText(code, message),
         })
@@ -1953,6 +1974,7 @@ window.__ModuleLoader__.load({
       }
       const tone = windowTone(item.used)
       const reset = item.reset === undefined ? '' : formatReset(item.reset, t)
+      const approx = reset !== '' && item.resetUnqualified === true
       return h('li', { className: 'tmx-window', key }, [
         h('span', { className: 'tmx-windowName', key: 'name' }, name),
         h('span', {
@@ -1972,8 +1994,12 @@ window.__ModuleLoader__.load({
         h('span', {
           className: 'tmx-windowReset',
           'data-empty': reset === '' ? 'true' : undefined,
+          ...(approx ? { title: t('resetApproxNote') } : {}),
           key: 'reset',
-        }, [h('span', { className: 'tmx-resetWord', key: 'word' }, `${t('reset')} `), reset]),
+        }, [
+          h('span', { className: 'tmx-resetWord', key: 'word' }, `${t('reset')} `),
+          approx ? `${t('resetApprox')} ${reset}` : reset,
+        ]),
       ])
     }
 
@@ -2138,12 +2164,21 @@ window.__ModuleLoader__.load({
     // only after an explicit click, says what it covers and what is missing, and
     // reports an unavailable read as unavailable rather than an empty list.
 
-    /** Rows rendered per read; the rest is named as retained but not drawn. */
+    /**
+     * The accounts a refresh could not read, minus the ones a person cannot fix:
+     * a provider with no supported quota source is a capability, not a failure,
+     * and its card (if it has one) already states the upstream reading.
+     */
+    function observeMissed(items) {
+      return (Array.isArray(items) ? items : [])
+        .filter(item => item.tone !== 'ok' && item.code !== 'unsupported_source')
+    }
+
     function observePanel(observe, t, loadFailed) {
       if (observe === null || observe === undefined || observe.phase === 'idle' || observe.phase === 'running') return null
       // A completed or partially refused observation names only the accounts it
       // could not read; every account it did is already on its card.
-      const missed = observe.items.filter(item => item.tone !== 'ok')
+      const missed = observeMissed(observe.items)
       if (missed.length > 0) {
         return h('p', { className: 'tmx-errorText', key: 'observe', role: 'status' }, [
           `${t('observeFailed')}${t('colon')} `,
@@ -2314,7 +2349,7 @@ window.__ModuleLoader__.load({
         return code === '' ? t('actionDone') : `${t('actionDone')}${t('colon')} ${code}`
       }
       if (observe.phase === 'done') {
-        const missed = observe.items.filter(item => item.tone !== 'ok').length
+        const missed = observeMissed(observe.items).length
         return missed === 0 ? t('observeDone') : `${t('observeFailed')}${t('colon')} ${missed}`
       }
       return verdict
@@ -2863,6 +2898,7 @@ window.__ModuleLoader__.load({
       sectionErrorText,
       resetQualified,
       resetUnqualified,
+      unqualifiedResetAt,
       resetAt,
       usableRoutes,
       modelCatalogOf,
