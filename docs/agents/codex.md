@@ -194,7 +194,7 @@ loopback Responses execution, and restore. The repaired native run completed;
 one captured `/v1/responses` request used the selected synthetic key. An initial
 fixture model-refresh GET returned 404 and remains a fixture limitation, not a
 successful discovery claim. Restore recovered exact original bytes and removed
-the native key artifact. Both operations reported reload pending.
+the key artifact. Both operations reported reload pending.
 
 An earlier fabricated `model_catalog_json` failed native validation because the
 model lacked instructions (`base_instructions` or

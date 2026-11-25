@@ -716,20 +716,6 @@ const COMMANDS: &[Command] = &[
         mutation: false,
     },
     Command {
-        path: "agent recovery accept",
-        min: 0,
-        max: 1,
-        options: "recovery",
-        mutation: true,
-    },
-    Command {
-        path: "agent recovery discard",
-        min: 1,
-        max: 1,
-        options: "",
-        mutation: true,
-    },
-    Command {
         path: "network proxy",
         min: 1,
         max: 1,

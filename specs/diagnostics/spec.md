@@ -4,7 +4,7 @@
 reporting, and local gateway request history. The [product contract](../product/spec.md)
 owns provider lifecycle, Agent provider configuration, the model gateway, security, and billing scope. The
 [configuration contract](../configuration/spec.md#save-reload-and-apply) owns
-save, activation, and native application. [Model selection](../model-routing/spec.md#selection-and-continuity)
+save, activation, and Agent application. [Model selection](../model-routing/spec.md#selection-and-continuity)
 owns candidate eligibility, priority evaluation, and conversation continuity.
 [Input values and acquisition](../model-routing/inputs/spec.md#input-values-and-acquisition)
 owns current quota/reset heads, validity, replacement, and acquisition.
@@ -25,12 +25,12 @@ them; success in one row must not supply success in another.
 
 | Fact | Required distinction |
 | --- | --- |
-| Configuration | The sole authority `~/.tmax/tmax.toml`'s validation result and revision versus the loaded configuration and accepted metadata revisions. Saved, invalid, and saved-but-not-active settings must not appear active. A target with empty native providers/selections or no default is valid but incomplete for native application, not an invalid login source or a blocker for independent gateway inference. |
-| Native application and relayed delivery | Desired-versus-written native state with the affected target and applied revision, kept distinct from each relayed entry's applied delivery: `state` (`current`, `stale`, `blocked`, `unknown`, `not_applied`, or `not_configured`), `revision`, `applied_revision`, and named `reasons`. Availability, delivery, and use stay separate facts under the [product contract](../product/spec.md#availability-delivery-and-use); a written native setting is not proof of running-agent use. Reasons are not merged: `listen_changed`, `key_rotated`, `route_removed`, and `entry_selection_changed` are drift; `entry_references_missing_route`, `native_edit_conflict`, `gateway_not_ready`, and `apply_incomplete` block. The recorded revision is target-scoped over the target's `route/protocol` pairs, so a changed selection protocol is drift. The [CLI contract](../cli/agents/spec.md#agent-result-data) owns the field shape. |
+| Configuration | The sole authority `~/.tmax/tmax.toml`'s validation result and revision versus the loaded configuration and accepted metadata revisions. Saved, invalid, and saved-but-not-active settings must not appear active. A target with empty provider entries/selections or no default is valid but incomplete for Agent application, not an invalid login source or a blocker for independent gateway inference. |
+| Agent application and relayed delivery | Record-derived applied state for the affected target, kept distinct from each relayed entry's applied delivery: applied state is unknown when the scope is unavailable, `not_applied` when no managed record is retained, and otherwise the retained record's state (for example `applied_reload_pending` or `recovery_required`). Relayed delivery reports `state` (`current`, `stale`, `blocked`, `unknown`, `not_applied`, or `not_configured`), `revision`, `applied_revision`, and named `reasons`. Availability, delivery, and use stay separate facts under the [product contract](../product/spec.md#availability-delivery-and-use); a written actual setting is not proof of running-agent use. Reasons are not merged: `listen_changed`, `key_rotated`, `route_removed`, and `entry_selection_changed` are drift; `entry_references_missing_route`, `gateway_not_ready`, and `apply_incomplete` block. The recorded revision is target-scoped over the target's `route/protocol` pairs, so a changed selection protocol is drift. The [CLI contract](../cli/agents/spec.md#agent-result-data) owns the field shape. |
 | Process and listener | Actual daemon identity, authority, executable/management compatibility, and inference/Web listener states under the [daemon contract](../product/spec.md#daemon-service-identity). Distinguish absent, identified compatible, incompatible, unidentified occupied endpoint, and unavailable evidence. A PID or a running Web interface does not prove inference availability or usable upstream authorization. |
 | Startup registration | Saved autostart intent versus this authority's actual OS registration, ownership, and latest reconciliation outcome. Drift is not a failed unrelated edit; explicit repair follows the [configuration contract](../configuration/spec.md#save-reload-and-apply). |
 | Service supervision | Native manager, owned definition, actual process ownership, current recovery state and cause, restart limits, and user-session boundary under the [service contract](../service/spec.md). Installed or enabled is not supervised or ready; requested listeners are not observed running listeners. |
-| Effective agent state | The latest qualified evidence of the running target's native provider entries, each source and endpoint/model selection, and native configuration precedence. Applied files, a requested reload, or a reachable listener alone must not verify that effective state. Unsupported runtime inspection must remain unknown. |
+| Effective agent state | The latest qualified evidence of the running target's provider entries, each source and endpoint/model selection, and actual configuration precedence. Applied files, a requested reload, or a reachable listener alone must not verify that effective state. Unsupported runtime inspection must remain unknown. |
 | Provider authentication | Configured authentication method and login source `auth.via`, when applicable, and locally known credential availability versus a qualified upstream authentication result. A secret reference, readable local secret file, or configured key must not become a verified upstream login. Unknown upstream account identity must remain unverified. |
 | Shared gateway access and models | Current shared-key availability and loaded acceptance state versus listener readiness and the common enabled publication list with its protocols. No Agent registration, native selected subset, or target default is needed for inference. Native subsets do not restrict requests. A shared key does not identify a target or conversation, and a saved reference is not proof of a readable key. |
 | Model reachability | The exact provider authorization, model, native protocol, transport, and tested capability scope of a successful or failed request. Catalog presence, model discovery, authentication success, and quota-query success must not verify inference or untested capabilities. |
@@ -40,7 +40,7 @@ them; success in one row must not supply success in another.
 | Outbound network | Saved versus loaded global mode and nonsecret gateway destination, with the policy used by the operation. A configured gateway is not proof of network reachability. Native-agent networking is outside this evidence scope. |
 
 Views must identify the affected targets and the next supported action for an
-incomplete fact. A stopped listener must not turn applied native configuration
+incomplete fact. A stopped listener must not turn applied actual configuration
 into an unapplied state. An unavailable credential must block only its affected
 scope, not imply that every provider or target is unavailable.
 After a partial native sign-in, show the affected shared credential scope and
@@ -83,7 +83,7 @@ Explicit diagnostic detail must make the following evidence available for each f
   Input kind, source, declaration, covered models, and scoped reset/window
   identity must remain attributable. Unestablished scope remains unknown.
 - The relevant revisions or instances: desired and loaded configuration,
-  accepted metadata, native application/effective inputs, authorization generation,
+  accepted metadata, Agent application/effective inputs, authorization generation,
   input declaration/head revisions, and process/listener instance as applicable.
   A missing required revision must be explicit, not inferred from current state.
 - Its result, freshness or superseded state, any named evidence gap, and a safe,
@@ -96,7 +96,7 @@ success. A summary's state must remain consistent with its detailed evidence.
 
 An evidence result must not apply beyond its recorded scope. A change to a
 relevant endpoint, authorization, model/protocol capability, accepted metadata,
-native input, or configuration dependency must supersede the old result for the
+actual input, or configuration dependency must supersede the old result for the
 changed scope. A process restart must not reuse an earlier listener instance's
 availability as current evidence. An unrelated change need not invalidate evidence
 whose dependencies are known to be unchanged.
@@ -138,7 +138,7 @@ account-wide billing evidence, and local request counters must not fabricate the
 
 Status, provider/model inspection, history reads, and selection previews must be
 side-effect-free. They may inspect the local inputs permitted by the owning
-contracts. They must not start or stop listeners, change native settings, execute
+contracts. They must not start or stop listeners, change actual settings, execute
 command-backed secret resolution, sign in, refresh credentials,
 contact a provider for new observations, or perform inference.
 refreshing a Web view must not trigger those actions.
@@ -176,12 +176,12 @@ call when a non-inference source is absent. An unsupported source must remain
 unavailable with the supported next action or provider-dashboard link.
 
 Observation refresh updates dated evidence, not desired configuration, user
-priorities, schedules, or native settings. Manual input record/clear is explicit
+priorities, schedules, or actual settings. Manual input record/clear is explicit
 caller-supplied data management, not a verified provider check. No prior dry run
 is required. The declared login source may refresh an existing
 session through its qualified flow without changing authorization identity or
 source. If the operation needs a new sign-in, replacement authorization,
-listener lifecycle change, or native write, it must stop with that prerequisite
+listener lifecycle change, or actual-file write, it must stop with that prerequisite
 and identify the explicit operation that owns the requested effect.
 Refresh failure must preserve unrelated observations and must not disable an
 otherwise qualified inference path.

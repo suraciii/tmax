@@ -238,7 +238,7 @@ Route context and exact catalog overrides agreed: local false capabilities won
 over conflicting native catalog facts, inherited metadata remained effective,
 and unknown input left vision unknown. Native output limits remained native
 catalog data; aliases received no concrete winner metadata. Zero context blocked
-before writes. Reapply/three-way restore preserved native request preferences
+before writes. Reapply/restore preserved unmanaged request preferences
 and unknown-model settings and removed private key artifacts. These were
 offline configuration/metadata readers, not inference, OAuth, entitlement, or
 running-agent reload proof.

@@ -382,14 +382,6 @@ pub(super) fn desired_fields_with_ownership(
     fields
 }
 
-pub(super) fn inline_credential(agent: &str, path: &[String]) -> bool {
-    match agent {
-        "hermes" => hermes::inline_credential(path),
-        "dsh" => dsh::inline_credential(path),
-        _ => false,
-    }
-}
-
 pub(super) fn validate_credentials(agent: &str, current: &Value) -> Result<()> {
     if agent == "dsh" {
         dsh::validate_credentials(current)?;

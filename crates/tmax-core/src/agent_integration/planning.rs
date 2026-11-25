@@ -2,14 +2,13 @@
 #[cfg(test)]
 use super::adapters::desired_fields;
 use super::{
-    adapters::{self, Entry, File, inline_credential},
+    adapters::{self, Entry},
     authentication::auth_namespace_present,
     compatibility,
     discovery::safe_files,
-    document::{self, Format},
     installation::{schema_blocker, version},
-    recovery::{INDEX, Index, Record, field_drift, field_hash, owner, record_for, record_view},
-    scope::{dsh_preflight, read_native, scope_evidence, target, unavailable},
+    recovery::{INDEX, Index, Record, owner, record_for, record_view},
+    scope::{dsh_preflight, scope_evidence, target, unavailable},
 };
 use crate::{
     Error, Result,
@@ -58,7 +57,6 @@ fn applied_delivery(
     target: &AgentTarget,
     record: Option<&Record>,
     ready: Option<bool>,
-    native_conflict: bool,
 ) -> Value {
     let Some(current) = config::gateway_delivery_for(config, &config.relayed_route_pairs(target))
     else {
@@ -92,9 +90,6 @@ fn applied_delivery(
     let drifted = !reasons.is_empty();
     if !config.missing_relayed_routes(target).is_empty() {
         reasons.push("entry_references_missing_route");
-    }
-    if native_conflict {
-        reasons.push("native_edit_conflict");
     }
     if ready == Some(false) {
         reasons.push("gateway_not_ready");
@@ -141,10 +136,7 @@ pub async fn delivery(store: &Store, config: &Config) -> Result<Value> {
         let (path, _) = scope_evidence(store, &target.scope)?;
         let identity = owner(store, id)?;
         let record = record_for(&index, identity.as_deref(), &path);
-        let native_conflict = record
-            .and_then(|record| field_drift(record, false).ok())
-            .is_some_and(|drift| !drift.is_empty());
-        let applied = applied_delivery(config, target, record, readiness, native_conflict);
+        let applied = applied_delivery(config, target, record, readiness);
         for entry in relayed {
             targets.push(json!({
                 "target": id,
@@ -283,7 +275,6 @@ pub async fn inspect(
     } else {
         None
     };
-    let mut native_conflict = false;
     let mut blockers = Vec::new();
     if !available {
         blockers.push(json!({"code":"native_scope_unavailable","path":path,"reason_code":scope_reason,"message":"Select an existing native configuration directory or explicitly create the intended directory before applying"}));
@@ -294,32 +285,19 @@ pub async fn inspect(
     {
         blockers.push(json!({"code":"target_incomplete","message":"Select providers and models before applying; Codex also requires a default model"}));
     }
-    let mut pending = None;
     let mut native_projection = None;
     let mut fact_gaps = Vec::new();
     if available {
         let plan = match entries(store, config, id, target, &path, true).await {
-            Ok((entries, references)) => {
+            Ok((entries, _references)) => {
                 fact_gaps = fact_gap_warnings(target, &entries);
                 native_projection = Some(projection_view(target, &entries));
-                adapters::build_in_profile(target, &path, &entries, profile)
-                    .and_then(|files| pending_native_changes(target, &files, &references, record))
+                adapters::build_in_profile(target, &path, &entries, profile).map(|_| ())
             }
             Err(error) => Err(error),
         };
-        match plan {
-            Ok(changes) => pending = Some(changes),
-            Err(error) => blockers
-                .push(json!({"code":error.code,"field":error.field,"message":error.message})),
-        }
-        if let Some(record) = record {
-            match field_drift(record, false) {
-                Ok(drift) => {
-                    native_conflict = !drift.is_empty();
-                    blockers.extend(drift)
-                }
-                Err(error) => blockers.push(json!({"code":error.code,"message":error.message})),
-            }
+        if let Err(error) = plan {
+            blockers.push(json!({"code":error.code,"field":error.field,"message":error.message}));
         }
     }
     let installed = if available {
@@ -351,18 +329,25 @@ pub async fn inspect(
     if relayed_entry_present && readiness == Some(false) {
         blockers.push(json!({"code":"gateway_not_ready","message":"Explicitly start the configured gateway and activate the matching complete snapshot and shared key before native application"}));
     }
-    let delivery = applied_delivery(config, target, record, readiness, native_conflict);
+    let delivery = applied_delivery(config, target, record, readiness);
     // One row per thing a reader can act on, so a blocked target names every
     // obstacle at once instead of whichever check ran first.
     let readiness_matrix = readiness_matrix(&blockers);
-    let applied_state = match &pending {
-        None => "unknown",
-        Some(_) if record.is_none() => "not_applied",
-        Some(changes) if !changes.is_empty() => "pending_native_changes",
-        Some(_) => record.map(|r| r.state.as_str()).unwrap_or("not_applied"),
+    let applied_state = if !available {
+        "unknown"
+    } else {
+        record
+            .map(|r| {
+                if r.state == "restored" {
+                    "not_applied"
+                } else {
+                    r.state.as_str()
+                }
+            })
+            .unwrap_or("not_applied")
     };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,dsh_profile.as_deref().unwrap_or_default(),name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"dsh_profile":dsh_profile,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view_in(&target.agent,&path,dsh_profile.as_deref()),"pending_native_changes":pending,"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,dsh_profile.as_deref().unwrap_or_default(),name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"dsh_profile":dsh_profile,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view_in(&target.agent,&path,dsh_profile.as_deref()),"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -773,85 +758,12 @@ pub(super) async fn entries(
     }
     Ok((entries, references))
 }
-pub(super) fn pending_native_changes(
-    target: &AgentTarget,
-    files: &[File],
-    references: &[String],
-    record: Option<&Record>,
-) -> Result<Vec<Value>> {
-    let mut changes = Vec::new();
-    for file in files
-        .iter()
-        .filter(|file| file.format != Format::Credential)
-    {
-        let current = document::parse(
-            read_native(&file.path)?.as_deref().unwrap_or(""),
-            file.format,
-        )?;
-        let previous = record.and_then(|record| {
-            record
-                .files
-                .iter()
-                .find(|previous| previous.path == file.path)
-        });
-        let desired = adapters::desired_fields_with_ownership(
-            &target.agent,
-            &file.desired,
-            &current,
-            previous.map_or(&[], |file| file.fields.as_slice()),
-        );
-        for (path, value) in &desired {
-            if !previous.is_some_and(|file| {
-                file.written
-                    && file.fields.iter().any(|field| {
-                        !field.released
-                            && field.path == *path
-                            && field.after_hash == field_hash(document::get(&current, path))
-                    })
-                    && (inline_credential(&target.agent, path)
-                        || document::get(&current, path) == value.as_ref())
-            }) {
-                changes.push(json!({"path":file.path,"field":path,"change":if value.is_some(){"set"}else{"remove"}}));
-            }
-        }
-        if let Some(previous) = previous {
-            for field in previous.fields.iter().filter(|field| !field.released) {
-                if !desired.iter().any(|(path, _)| *path == field.path) {
-                    changes.push(json!({"path":file.path,"field":field.path,"change":"release"}));
-                }
-            }
-        }
-    }
-    if let Some(record) = record {
-        for file in record.files.iter().filter(|file| {
-            file.format != Format::Credential
-                && !files.iter().any(|desired| desired.path == file.path)
-        }) {
-            for field in file.fields.iter().filter(|field| !field.released) {
-                changes.push(json!({"path":file.path,"field":field.path,"change":"release"}));
-            }
-        }
-    }
-    if record
-        .map(|record| record.secret_refs.as_slice())
-        .unwrap_or_default()
-        != references
-    {
-        changes.push(
-            json!({"field":["credential_reference"],"change":"replace","secret_reads":false}),
-        );
-    }
-    Ok(changes)
-}
 
 #[cfg(test)]
 mod tests {
-    use super::super::{
-        application::apply,
-        recovery::{Field, FileRecord},
-        test_support::inspection_target,
-    };
+    use super::super::{application::apply, test_support::inspection_target};
     use super::*;
+    use crate::agent_integration::document::{self, Format};
     use std::fs;
     use std::path::PathBuf;
     #[tokio::test]
@@ -869,7 +781,7 @@ mod tests {
         assert_eq!(inspected["default"]["id"], "first");
         assert_eq!(inspected["providers"][0]["models"][0]["id"], "first");
         assert_eq!(inspected["applied_state"], "unknown");
-        assert!(inspected["pending_native_changes"].is_null());
+        assert!(inspected.get("pending_native_changes").is_none());
         assert_eq!(inspected["installation"]["state"], "not_checked");
         assert_eq!(
             inspected["installation"]["reason_code"],
@@ -893,72 +805,6 @@ mod tests {
         let inspected = inspect(&store, &config, "managed", None).await.unwrap();
         assert_eq!(inspected["scope_reason_code"], "not_directory");
         assert_eq!(inspected["files"], json!([]));
-    }
-    #[test]
-    fn current_native_projection_reports_changed_default_separately_from_last_write() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.json");
-        let target = inspection_target(directory.path().to_owned());
-        fs::write(&path, b"{\"defaultModel\":\"first\"}").unwrap();
-        let mut record = Record {
-            id: "retained".into(),
-            owner: "stable".into(),
-            target: "managed".into(),
-            agent: "pi".into(),
-            scope: target.scope.clone(),
-            payload_ref: "not-read".into(),
-            secret_refs: vec![],
-            state: "applied_reload_pending".into(),
-            delivery: None,
-            files: vec![FileRecord {
-                path: path.clone(),
-                format: Format::Json,
-                original_absent: false,
-                after_revision: "old".into(),
-                written: true,
-                fields: vec![Field {
-                    path: vec!["defaultModel".into()],
-                    after_hash: field_hash(Some(&json!("first"))),
-                    before_hash: "absent".into(),
-                    observed_hash: "absent".into(),
-                    released: false,
-                }],
-            }],
-        };
-        let files = [File {
-            path: path.clone(),
-            format: Format::Json,
-            desired: json!({"defaultModel":"second"}),
-        }];
-        let changes = pending_native_changes(&target, &files, &[], Some(&record)).unwrap();
-        assert_eq!(
-            changes,
-            vec![json!({"path":path,"field":["defaultModel"],"change":"set"})]
-        );
-        assert_eq!(record.state, "applied_reload_pending");
-        record.files[0].fields[0].after_hash = field_hash(Some(&json!("second")));
-        fs::write(&path, b"{\"defaultModel\":\"second\"}").unwrap();
-        assert!(
-            pending_native_changes(&target, &files, &[], Some(&record))
-                .unwrap()
-                .is_empty()
-        );
-        record.files[0].written = false;
-        record.state = "recovery_required".into();
-        assert_eq!(
-            pending_native_changes(&target, &files, &[], Some(&record)).unwrap()[0]["field"],
-            json!(["defaultModel"])
-        );
-        record.files[0].written = true;
-        fs::write(&path, b"{\"defaultModel\":\"first\"}").unwrap();
-        assert_eq!(
-            pending_native_changes(&target, &files, &[], Some(&record)).unwrap()[0]["change"],
-            "set"
-        );
-        assert_eq!(
-            pending_native_changes(&target, &[], &[], Some(&record)).unwrap()[0]["change"],
-            "release"
-        );
     }
     #[tokio::test]
     async fn entries_use_accepted_effective_concrete_metadata_without_native_preference_edits() {
@@ -1480,18 +1326,18 @@ mod tests {
     }
 
     fn state(config: &Config, target: &AgentTarget, record: &super::Record) -> Value {
-        applied_delivery(config, target, Some(record), Some(true), false)
+        applied_delivery(config, target, Some(record), Some(true))
     }
 
     #[test]
-    fn applied_delivery_names_drift_and_blocks_without_merging_reasons() {
+    fn applied_delivery_names_drift_and_blocks_without_duplicate_reasons() {
         let config = delivery_config("127.0.0.1:17840", "secret:gw", &["route"]);
         let target = delivery_target(&["route"]);
         let record = delivery_record(&config, &target);
 
         assert_eq!(state(&config, &target, &record)["state"], "current");
         assert_eq!(
-            applied_delivery(&config, &target, None, None, false)["state"],
+            applied_delivery(&config, &target, None, None)["state"],
             "not_applied"
         );
         let mut legacy = delivery_record(&config, &target);
@@ -1544,14 +1390,8 @@ mod tests {
             serde_json::json!(["entry_selection_changed"])
         );
 
-        let blocked = applied_delivery(&config, &target, Some(&record), Some(false), false);
+        let blocked = applied_delivery(&config, &target, Some(&record), Some(false));
         assert_eq!(blocked["state"], "blocked");
         assert_eq!(blocked["reasons"], serde_json::json!(["gateway_not_ready"]));
-        let conflict = applied_delivery(&config, &target, Some(&record), Some(true), true);
-        assert_eq!(conflict["state"], "blocked");
-        assert_eq!(
-            conflict["reasons"],
-            serde_json::json!(["native_edit_conflict"])
-        );
     }
 }

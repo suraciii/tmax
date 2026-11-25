@@ -21,7 +21,7 @@ the [DSH plugin contract](../../specs/integrations/dsh-plugin/spec.md).
 
 ## Configure through tmax
 
-DSH is a native tmax target, not a launch wrapper. Use the same CLI or Web
+DSH is a tmax Agent target, not a launch wrapper. Use the same CLI or Web
 provider/model selection, apply, inspection, and restoration operations as other
 agents. Start with an existing DSH home outside `~/.tmax` and a tmax provider
 whose endpoint, key, and exact model are configured. These operands are examples;
@@ -43,11 +43,12 @@ tmax agent inspect "$TARGET"
 
 This is model-only application: it writes no `agent-default-model` entry or
 reasoning preference. If wanted, explicitly choose a selected model with
-`agent default set`; no native model-role names or interactive login are
+`agent default set`; no model-role names or interactive login are
 qualified for DSH.
 After application, reload/restart DSH instances using that home. Successful file
-application is not proof of native consumption or hosted inference. To restore
-managed changes while preserving unrelated later edits:
+application is not proof of DSH consumption or hosted inference. To restore
+tmax-managed changes to the target's single retained managed snapshot (unmanaged
+fields stay; later edits to managed fields are overwritten):
 
 ```sh
 tmax agent restore "$TARGET" --dry-run
@@ -56,37 +57,39 @@ tmax agent restore "$TARGET"
 
 For a relayed entry, use `agent provider add ... --provider tmax` and select a
 public route name. The version-1 `--gateway` selector is removed; convert stored
-entries with `tmax config migrate`. Name the native entry `tmax` when that name is
+entries with `tmax config migrate`. Name the entry `tmax` when that name is
 free in DSH's shared provider namespace; an existing user adapter route with that
 name must be explicitly moved or removed first, not silently overwritten. Keep
 the direct entry when adding a relayed one; both can coexist in one target. The
 gateway must already have the matching loaded configuration, listener, and shared
-key; native apply does not start it. Gateway configuration and actual runtime
+key; agent apply does not start it. Gateway configuration and actual runtime
 continuity qualification are separate. `agent inspect` reports the entry's
 `relayed` flag, base URL, credential reference, and applied delivery state.
 
 Choose the client's protocol explicitly. Prefer `--protocol responses` when the
 upstream declares Responses and the selected public ID publishes it; the native
 route then uses `api: openai-responses`. Each DSH provider entry has one API and
-base URL, so different protocols require distinct native names. This does not
+base URL, so different protocols require distinct provider names. This does not
 authorize gateway translation or change an existing selection. See the shared
 [endpoint contract](../../specs/integrations/spec.md#endpoint-resolution).
 In the Web workspace choose **DeepSeek Harness** in **Coding tools**, select the
 existing DSH home directory (normally `~/.dsh`), and use the same explicit
-apply/restore actions. tmax does not enumerate, select, create, or manage profiles.
+apply/restore actions. tmax does not enumerate, create, rename, or delete
+profiles; `agent apply` writes into the selected profile's settings, chosen by
+`--profile`, otherwise `desktop`, then `web`.
 Skill installation remains shared `.agents` or Hermes-only; `skill install
 --agent dsh` is not supported.
 
-## Native scope and precedence
+## Actual configuration scope and precedence
 
-| Surface | Native behavior and tmax boundary |
+| Surface | DSH behavior and tmax boundary |
 | --- | --- |
 | Home | The target scope is the existing DSH home itself. Discovery uses nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`; an explicit target path selects that home directly. It is never inferred from a profile path. |
-| Home configuration | tmax edits the home's `cordis.patch.yml`, a YAML sequence of entry patches identified by `id`, and configures the `tmax` plugin entry there. It does not install the plugin or author a replacement root document. |
-| Profiles | tmax does not enumerate, select, create, or edit profiles or presets, inspect their bundles, or write launcher-owned `cordis.yml`. |
+| Home configuration | The home's `cordis.patch.yml` is user-owned. tmax does not write it or create a plugin entry there; its application writes the selected profile's settings and the adjacent credential store. |
+| Profiles | tmax selects one profile to write into by `--profile`, otherwise `desktop`, then `web`. It does not enumerate, create, rename, or delete profiles or presets, inspect their bundles, or write launcher-owned `cordis.yml`. |
 | Precedence | Bundle patches → profile patch → home `cordis.patch.yml` → command-line `--patch` overlays → telemetry switch. A later entry `config` replaces that same entry's complete configuration, not an independent deep merge. |
 | Common configuration | tmax writes the providers into the profile settings document DSH's own Models page writes — `profiles/<profile>/cordis.patch.yml`, row `llm-pi-ai`, path `config.providers.<entry>` — so the base bundle's adapter serves them with nothing else installed. Providers the user configured keep their own names and fields. Runtime overlays can still change effective behavior and remain outside tmax's ownership. |
-| Preservation | User `llm-pi-ai` configuration, unrelated HOME-level rows, comments, provider fields, and opaque `!!js` expressions remain native-owned. An owned branch that cannot be safely edited blocks rather than evaluating or reserializing arbitrary expressions. |
+| Preservation | User `llm-pi-ai` configuration, unrelated HOME-level rows, comments, provider fields, and opaque `!!js` expressions stay unmanaged. A managed branch that cannot be safely edited blocks rather than evaluating or reserializing arbitrary expressions. |
 | Legacy | `settings.yaml` is not the current configuration surface; tmax does not recreate it. |
 
 Sources at the pinned revision:
@@ -115,9 +118,10 @@ overwritten, and tmax never renames, merges, or omits a colliding entry.
 
 tmax writes into the same `providers` mapping the Models page edits, so its
 entries appear there beside the user's own. That is the point — DSH serves them
-with no further step — and it means a user edit to a provider tmax wrote is
-drift: apply reports the conflicting field rather than overwriting it, and
-restore puts back the value it recorded. Mounting `llm-pi-ai` a second time
+with no further step — and it means a user edit to a provider field tmax wrote is
+overwritten: apply writes the managed fields from the current expected
+configuration, and restore puts back the value in the retained managed
+snapshot. Mounting `llm-pi-ai` a second time
 would not be isolation: each instance declares its whole installed catalog, so
 disjoint configured route names can still collide with `DUPLICATE_DIRECTORY`.
 tmax therefore never adds a mount, an adapter, or a configurable-provider
@@ -149,13 +153,14 @@ fallback source: `diagnostics.readModel` reports `inventory`, and a failed read
 is a visible section error.
 
 The page's Apply action is the previewed `tmax agent apply TARGET [--dry-run]`
-operation: it writes the target's native DSH files (the profile's `llm-pi-ai`
+operation: it writes the target's actual DSH files (the profile's `llm-pi-ai`
 provider settings and the credential reference) and is the page's only bare
-native write. It never edits the home patch, per the shared
+actual-file write. It never edits the home patch, per the shared
 [DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary).
-The page's **Add to DSH** action is one fixed, previewed target-selection write:
-it creates the target entry when needed, adds one existing catalog model
-selection, and applies the target. It never edits provider, model, alias,
+The page's **Add to DSH** action is one direct, fixed, previewed target-selection
+write: it creates the target entry when needed, adds one existing catalog model
+selection, and applies the target. It never requires a prior Apply and never
+waits on a pending-changes state. It never edits provider, model, alias,
 priority, or schedule definitions. Seats are additive and non-authoritative.
 The page also performs only previewed, allowlisted tmax operations, including
 provider observation, quota resume, failure reset, management-listener open, and
@@ -180,13 +185,13 @@ and [tool view slot](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c
 Each route the plugin projects carries `api`,
 `baseURL`, `apiKeyEnv`, and the selected `models`. Protocol and base URL belong
 to the route, not to each model. Selections that need different APIs or bases
-cannot share one native route; split them into distinct provider entries with
-globally unique native names. Application blocks an unrepresentable mixed route
+cannot share one provider route; split them into distinct provider entries with
+globally unique provider names. Application blocks an unrepresentable mixed route
 instead of silently dropping selections.
 An existing HOME-level route in the managed entry with `modelOverrides` cannot
 also accept a selected `models` list under the reused adapter schema. Apply
 blocks before writing; migrate that route explicitly or choose a separate
-native provider name. Unrelated routes in user `llm-pi-ai` are not changed.
+provider name. Unrelated routes in user `llm-pi-ai` are not changed.
 
 | tmax protocol | Native route `api` |
 | --- | --- |
@@ -223,14 +228,14 @@ version-compatibility fallbacks.
 
 For a Chat Completions gateway route whose upstream does not accept the
 `developer` role, explicitly set
-`compat.supportsDeveloperRole: false` on that native provider in the plugin's own
-home patch. A loopback URL cannot convey the upstream's dialect to the native
+`compat.supportsDeveloperRole: false` on that provider route in the managed
+profile settings. A loopback URL cannot convey the upstream's dialect to the native
 adapter. The installed OpenCode Go run below required this route setting;
 tmax does not rewrite message roles or infer it for every gateway model.
-Set it at route level: the selected `models` array is owned and editing that
-array after application blocks reapply. Route-level `compat` remains native-owned
-and survives reapply; as with other later additions, it can block removal of a
-newly inserted plugin during restore.
+Set it at route level: the selected `models` array is tmax-managed, so a later
+apply overwrites edits to it. Route-level `compat` stays unmanaged and survives
+apply and restore; an unmanaged setting that keeps a removed tmax provider route
+in use blocks a later apply before any write.
 
 For direct entries, tmax projects actual upstream declared efforts; for relayed
 entries it projects caller-facing input names under the
@@ -269,57 +274,52 @@ and [`agent-default-model`](https://github.com/deepseek-ai/deepseek-harness/blob
 ## Credentials and recovery
 
 Executed apply hands the referenced tmax upstream or gateway key to DSH's
-**plaintext native-owned** `$DSH_HOME/.credentials.yaml`, under
-`version: 1` and `refs.TMAX_<stable hash>`. The adjacent home patch contains only
+**plaintext, DSH-owned** `$DSH_HOME/.credentials.yaml`, under
+`version: 1` and `refs.TMAX_<stable hash>`. The profile settings row contains only
 the matching `apiKeyEnv` reference. The store is shared by profiles using that
-home; unrelated references and `records` must remain intact. Native credential
+home; unrelated references and `records` must remain intact. DSH credential
 and tmax recovery files are current-user-restricted, not encrypted. Inspection
 and dry-run disclose the handoff without resolving, printing, or returning the secret.
 
 Apply and restore executions hold DSH's sibling `.credentials.yaml.lock` writer
 lock from the initial credential read through commit. The owner-only lock records
 the writer PID. An existing lock blocks immediately with `native_credentials_busy`,
-leaving both native files and that lock unchanged; retry after its owner releases
+leaving both actual files and that lock unchanged; retry after its owner releases
 it. tmax never overwrites or reclaims an existing lock, and releases its own lock
 on success or failure. Inspection and dry-run do not create locks. An empty,
 comment-only, or `{}` credential store is initialized to version 1 on apply;
 nonempty stores without version 1 must first be migrated through DSH.
 
-The native credential service resolves stored references before inherited process
+The DSH credential service resolves stored references before inherited process
 environment, project dotenv, and home dotenv fallback. The shipped headless
 bundle disables `credentials`. When handing off a key, tmax explicitly enables
-that service in the HOME patch without inspecting or selecting a bundle. It does
+that service in the managed profile patch without inspecting or selecting a
+bundle. It does
 not require exporting a secret or launching DSH through tmax. Credential-service
-changes participate in restoration, preserving unrelated HOME-level service settings.
+changes participate in restoration; unmanaged HOME-level service settings stay.
 No login token is copied and no new OAuth refresher is introduced. Removing a
 target does not revoke a provider key or sign DSH out.
 
-Apply and restore track the direct-child plugin artifact, its HOME patch
-insertion, managed provider fields, credential references, and credential-service
-enablement under the [owning recovery contract](../../specs/integrations/spec.md#dsh-home-boundary).
-Restoration removes a newly owned insertion or artifact only when its captured
-baseline and subsequent edits permit that operation. It preserves unrelated
-later edits and reports conflicts instead of overwriting them. The independent
-`tmax` entry is the only supported application format; no earlier shared
-`llm-pi-ai` adapter layout is maintained or automatically migrated. User-owned
-`llm-pi-ai` entries and providers remain untouched.
-Reapplying after a native provider entry is removed or renamed also removes the
-old, introduced route when it has no remaining settings. Unowned additions that
-would leave that route active or invalid block before native writes; move or
-remove those additions explicitly rather than deleting them implicitly.
+Apply and restore track the managed provider fields in the selected profile's
+settings row, the credential references, and the credential-service enablement
+under the [owning recovery contract](../../specs/integrations/spec.md#dsh-home-boundary).
+Restore is single-level: each successful apply replaces the target's retained
+managed snapshot, restore returns tmax-managed fields to it, and unmanaged
+fields, other providers, and unrelated HOME-level rows stay. A later edit to a
+managed field is overwritten by apply and restore, not reported as a conflict.
+The `tmax` entry is the only supported application format; no earlier shared
+`llm-pi-ai` adapter layout is maintained or automatically migrated. An unmanaged
+settings under a removed tmax provider route stay as unmanaged content; they do
+not block a later apply. Interrupted writes accept the
+captured pre-write bytes; unrecognized later edits that prevent a safe
+field-level write still block before any write.
 
-If later unowned additions keep a newly inserted plugin entry nonempty after
-owned fields are reverted, restore stops with `native_conflict` before any native
-write. It never leaves a nameless insertion or deletes an artifact still needed
-by that entry. Interrupted plugin writes accept the captured pre-write bytes;
-unrecognized later edits still block restoration.
-
-The inserted plugin row is regenerated when managed fields change. For rows
+The profile settings row is regenerated when managed fields change. For rows
 outside tmax's JSON-compatible generated form, any `!`, `&`, `*`, or `#` marker
-blocks apply and restore with `native_conflict`, including markers inside quoted
-literals. This conservative rule avoids flattening YAML tags, anchors, aliases,
-or comments; generated JSON string literals remain editable. Unrelated patch
-rows remain byte-preserved.
+blocks the write with `native_conflict` before any write, including
+markers inside quoted literals. This conservative rule avoids flattening YAML
+tags, anchors, aliases, or comments; generated JSON string literals remain
+editable. Unrelated patch rows remain byte-preserved.
 
 Sources:
 [`credentials-local` format and path](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/credentials/credentials-local/src/index.ts#L28-L118),
@@ -333,8 +333,9 @@ and [`headless` bundle](https://github.com/deepseek-ai/deepseek-harness/blob/687
 | Configuration contract | Native home target declaration, selection, explicit apply/restore, the installed `tmax` bundle and its entry ownership, unchanged credential handoff, and the safety boundaries in the owning specification. |
 | Source inspection | The pinned 0.2.1-rc.2 checkout implements the cited patch layers, whole-entry configuration replacement, shared runtime and provider directory, reusable protocol adapter, model schema, credential service, and headless disablement. Source inspection is not a native parser or inference run. |
 | Profile plugin API fit, 2026-11-23 | The running DSH 0.2.3-alpha.2 (source launch, profile `web`) and the installed tmax 0.1.0 were inspected through `cordis_inspect` and source reads. The plugin's host and client rely on the exact authenticated web-route API (`auth` defaults to `required`), the provider registry, credential `describe`, redacted settings and the configurable-provider directory, client slots and locale registration, the optional `commands` service, and effective default-model selection that this version provides. This establishes API fit; the actual temporary-profile loads are recorded in the pre-port and ported render rows below. |
-| Catalog and target-selection page, 2026-11-25 | The page reads one catalog composition from `model list` plus the target dossier, renders Models/Gateway/Quota tabs, and offers one previewed `add_model` action. Host, action, command, and client tests cover catalog unknown-versus-zero, provider/model/joined projection, search grouping, provider drill-in, gateway/quota tabs, add preview versus execute, exact provider/model/apply argv, pending and unreadable-target refusals, already-selected and unsupported refusals, partial-step failure and preserved apply evidence, and schema `3`; the full plugin Node suite passed. The worktree was installed into the live `web` profile and the page was rendered in the running DSH 0.2.3-alpha.2 against the real tmax 0.1.0 state: 11 providers, 19 concrete models, 9 aliases, joined ratios, search, provider drill-in, the gateway tab, and the quota tab rendered; Add and Apply previews were exercised. A live `add_model` execution was not run: the real target reports pending native changes and the page refused it with `pending_native_changes`. |
-| Profile plugin inventory, actions, command, and tests, 2026-11-24 | The ported host composes one `/_tmax/state` contract from `agent list` (when no target is configured), `agent inspect TARGET`, `status`, `gateway status`, `provider list`/`provider inspect`, `config validate`, and `model explain`; no host path runs `tmax dsh`, and `diagnostics.readModel` reports `inventory`. Connect is the previewed `tmax agent apply TARGET [--dry-run]` native write. Host, action, command, history, and observation tests cover route ownership and liveness, credential readiness, section `errors`, allowlist validation, exact argv, preview versus execute, gateway guards and deadlines, busy, typed 409 refusals, 502 transport, secret-free results, every `/tmax` subcommand and its bounded output, the 45 s history read and its typed-unavailable split, and the page's explicit load state and unknown-count handling. The full plugin Node suite passed, including its host, actions, command, client, history, observations, quota, adapter, and package tests. |
+| Catalog and target-selection page, 2026-11-25 | The page reads one catalog composition from `model list` plus the target dossier, renders Models/Gateway/Quota tabs, and offers one previewed `add_model` action. Host, action, command, and client tests cover catalog unknown-versus-zero, provider/model/joined projection, search grouping, provider drill-in, gateway/quota tabs, add preview versus execute, exact provider/model/apply argv, unreadable-target refusal, already-selected and unsupported refusals, partial-step failure and preserved apply evidence, and the then-current state schema; the full plugin Node suite passed. The worktree was installed into the live `web` profile and the page was rendered in the running DSH 0.2.3-alpha.2 against the real tmax 0.1.0 state: 11 providers, 19 concrete models, 9 aliases, joined ratios, search, provider drill-in, the gateway tab, and the quota tab rendered; Add and Apply previews were exercised. A live `add_model` execution was not run at that time. This row predates the authoritative-apply contract below. |
+| Authoritative apply, single-level restore, and direct Add, 2026-11-26 | The Agent application contract now overwrites tmax-managed actual configuration from the current expected configuration, preserves unmanaged fields, and no longer compares managed fields or reports pending changes; restore is single-level from one retained managed snapshot; `agent recovery accept` and `agent recovery discard` are removed from the public CLI; the page's Add is one direct operation ending in `agent apply`; the plugin state schema is `4`. The owning text is the product, CLI, integrations, and DSH plugin contracts. The full plugin Node suite passed (190 tests) in the change worktree, covering schema `4` gating and a direct `add_model` sequence that requires no pending precondition; a live page render and a live `add_model` execution were not re-run for this change. |
+| Profile plugin inventory, actions, command, and tests, 2026-11-24 | The ported host composes one `/_tmax/state` contract from `agent list` (when no target is configured), `agent inspect TARGET`, `status`, `gateway status`, `provider list`/`provider inspect`, `config validate`, and `model explain`; no host path runs `tmax dsh`, and `diagnostics.readModel` reports `inventory`. Connect is the previewed `tmax agent apply TARGET [--dry-run]` actual-file write. Host, action, command, history, and observation tests cover route ownership and liveness, credential readiness, section `errors`, allowlist validation, exact argv, preview versus execute, gateway guards and deadlines, busy, typed 409 refusals, 502 transport, secret-free results, every `/tmax` subcommand and its bounded output, the 45 s history read and its typed-unavailable split, and the page's explicit load state and unknown-count handling. The full plugin Node suite passed, including its host, actions, command, client, history, observations, quota, adapter, and package tests. |
 | Ported inventory real-CLI check, 2026-11-24 | A latest-main binary was built for a read-only smoke check. The real user store is still configuration format 1, so the composed success path could not be exercised against it; the success path is covered by hermetic fake-CLI tests. Real-CLI reads covered target resolution, the typed `unsupported_tmax` gate against the older installed CLI, and the typed `invalid_configuration` answer against the latest binary. That check performed no mutation, apply, refresh, or profile load; the separate ported profile render row records the synthetic-inventory load. |
 | Ported profile page render, 2026-11-24 | A temporary DSH 0.2.3-alpha.2 profile loaded the ported root package with a synthetic inventory executable; it did not use a real tmax store. Real authenticated HTTP returned `GET /_tmax/state` `200` with `diagnostics.readModel` `inventory`, target `dsh-main`, one live route, two providers, two routing rows, and gateway `identified`/`loaded`; the page rendered with route and gateway facts and action controls. This exercises the real package-load, host-composition, HTTP, and client-render path for the ported read model. It does not exercise a real format-2 tmax store, a real workspace session, a browser click on an action control, non-dry-run Apply, Refresh, or actions, a successful history-table load, the settings footer, the model menu option and routing pane, the `tmax_status` tool card, or the `/tmax` command. |
 | Pre-port profile page render, 2026-11-23 | A temporary DSH 0.2.3-alpha.2 profile loaded the earlier, snapshot-backed plugin and served the page. Real authenticated HTTP returned `GET /_tmax/state` `200`; the page rendered in the light theme, the sidebar **tmax** row showed its trailing marker text `a blocker is reported`, and the gateway card showed **Start gateway** and **Open management**. Real `POST /_tmax/action` previews returned `open_management` 200, `observe_provider` 200 `dry_run_ready`, `resume_quota` 200 `dry_run_ready`, a `gateway_start` dry run typed 409 `runtime_blocked`, and an unknown provider 409 typed; earlier checks covered `401` without the session cookie, `415` for a non-JSON observation POST, and `403` for a cross-origin POST. The page was also rendered in dark theme and with a zh-CN locale. This render exercised the pre-port snapshot-backed read model; it does not qualify the ported inventory-backed read model. Not verified in that run or since: a browser click on any action control, non-dry-run Apply/Refresh/actions, the settings footer card, the model menu option and routing pane, the `tmax_status` tool card, `/tmax` invocation, or a successful history-table load. |
@@ -345,10 +346,10 @@ and [`headless` bundle](https://github.com/deepseek-ai/deepseek-harness/blob/687
 | Independent-plugin mixed routes, 2026-10-27 | One actual DSH process dispatched three direct and three concrete gateway routes alongside a native user adapter. All six synthetic image/tool requests passed; duplicate route registration was rejected without replacing existing routes, and profile manifest and patch bytes were unchanged. The gateway setup has the same harness-prepared configuration boundary as the forwarding run above. |
 | tmax Web boundary hint, 2026-10-27 | Actual application assets rendered the DSH add form through an isolated read-only local API bridge in a real browser. Selecting DeepSeek Harness displayed the independent `llm-tmax`, home-only artifact/configuration, unchanged user `llm-pi-ai`, and no-profile-management boundary. No Web save or apply was performed, and no managed live home was modified. This verifies the displayed hint, not Web mutation or native Models settings. |
 | Installed independent-plugin gateway, 2026-10-27 | The release executable was installed locally and its SHA-256 matched both the release build and the restarted daemon. Public CLI operations applied the home plugin, native gateway credential reference, and explicit default to a distinct `tmax-gateway` route without changing the user's existing `tmax` route. Actual DSH 0.2.1-rc.2 headless runs returned exactly `TMAX_DSH_NATIVE_OK` through the stateless Chat Completions alias `deepseek-v4.1-flash`; retained gateway history recorded completed dispatches to `opencode-go`. The first run received upstream HTTP 422 for a `developer` role. Explicit native route `compat.supportsDeveloperRole: false` corrected that dialect mismatch; reapply changed no files and the next native run succeeded. All nine existing profile manifest/configuration files remained byte-unchanged; native credentials retained mode `0600` and no writer lock remained. This qualifies this installed route and selected upstream, not the second account, other hosted protocols, native Web settings, tool/image requests to the hosted provider, or session continuity. |
-| Installed `tmax` Responses cutover, 2026-10-27 | An explicit one-time removal of obsolete user `tmax` routes from the headless and web profile patches freed the shared name; all other profile bytes and manifests were preserved. This was a local configuration change, not automatic profile management by tmax. Public CLI operations renamed the managed entry to `tmax`, selected the stateless Responses alias `deepseek-v4.1-flash`, and applied `api: openai-responses`. A startup check exposed an empty route left by an intermediate build; after explicit removal, the composed managed adapter contained only `tmax`. The final installed release and running daemon matched the release build's SHA-256. Actual DSH headless returned exactly `TMAX_DSH_RESPONSES_OK` with exit 0 and no diagnostics; gateway history recorded Responses, `opencode-go`, HTTP 200, and `completion_evidenced`. Reapply changed no native files; credentials remained mode `0600` with no writer lock. This qualifies the selected hosted Responses request, not both accounts, hosted tools/images, native Web settings, or continuation/replay state. |
+| Installed `tmax` Responses cutover, 2026-10-27 | An explicit one-time removal of obsolete user `tmax` routes from the headless and web profile patches freed the shared name; all other profile bytes and manifests were preserved. This was a local configuration change, not automatic profile management by tmax. Public CLI operations renamed the managed entry to `tmax`, selected the stateless Responses alias `deepseek-v4.1-flash`, and applied `api: openai-responses`. A startup check exposed an empty route left by an intermediate build; after explicit removal, the composed managed adapter contained only `tmax`. The final installed release and running daemon matched the release build's SHA-256. Actual DSH headless returned exactly `TMAX_DSH_RESPONSES_OK` with exit 0 and no diagnostics; gateway history recorded Responses, `opencode-go`, HTTP 200, and `completion_evidenced`. Reapply changed no actual files; credentials remained mode `0600` with no writer lock. This qualifies the selected hosted Responses request, not both accounts, hosted tools/images, native Web settings, or continuation/replay state. |
 | Installed tmax Web protocol choices, 2026-10-27 | In the actual local workspace, model choices included only published protocols and grouped Responses before Chat Completions and Messages for concrete models and same-name aliases. A new alias preferred Responses; editing an existing Chat Completions alias retained Chat, and the DSH default retained its explicit Responses selection. No Web save or native apply was performed in this browser check. This verifies tmax's configuration UI, not DSH's native Models page. |
 | Historical home-target runtime, 2026-10-26 | An isolated release CLI configured one existing DSH home through the earlier `llm-pi-ai` integration. Two independently authored headless profiles consumed the same home patch and native credential store. Actual DSH runs returned `DSH native OK` through Chat Completions, Responses, and Messages against synthetic loopback SSE endpoints. The old home entry shadowed lower profile routes. This establishes no hosted-provider acceptance or independent-plugin qualification. |
-| Historical home-target recovery and Web, 2026-10-26 | Apply and restore previews left native files unchanged. Restore removed managed credential references and preserved existing home routes/defaults, later native patch rows, and unrelated credential records. Both profile manifests and patches remained byte-unchanged. The actual Web discovery form offered only the DSH home, recognized the registered target, and described the then-current home-only file boundary. This predates the plugin artifact. |
+| Historical home-target recovery and Web, 2026-10-26 | Apply and restore previews left actual files unchanged. Restore removed managed credential references and preserved existing home routes/defaults, later native patch rows, and unrelated credential records. Both profile manifests and patches remained byte-unchanged. The actual Web discovery form offered only the DSH home, recognized the registered target, and described the then-current home-only file boundary. This predates the plugin artifact. |
 | Historical gateway runtime boundary | Earlier profile-path runs exercised all three protocols through tmax's gateway against loopback fixtures. The historical home-target runs above exercised direct routes, not gateway continuity or hosted providers. These historical runs do not qualify the independent plugin; its concrete gateway-forwarding evidence is recorded separately above. |
 | Historical alias reasoning runtime and Web, 2026-10-27 | Before the independent-plugin cutover, a release CLI applied a stateless Chat Completions alias referencing two OpenCode Go provider instances for `deepseek-v4.1-flash`. The actual DSH Web selector displayed Default, Low, High, and Max on the alias. Headless gateway calls succeeded with native default effort and a one-run explicit `high` effort, returning `DSH_ALIAS_OK` and `DSH_ALIAS_HIGH_OK`. Alias membership and native effort defaults remained unchanged. This exercises alias selection and the dispatched hosted route, not both accounts individually, other protocols, session continuity, or the independent plugin. |
 
@@ -390,10 +391,10 @@ in DSH. Inspection remains `unavailable` with `reasoning_options_unavailable`.
 This does not declare the candidates non-reasoning or change saved effort
 preferences; an incompatible inherited preference can still fail.
 Inspect and reapply affected entries as specified by the shared rule, then reload
-DSH. Neither native application nor this projection changes alias routing.
+DSH. Neither Agent application nor this projection changes alias routing.
 
 In particular, direct **OpenCode Go is not qualified**: no genuine DSH Go session
 mechanism is established by this reference. The
 [Go contract](../../specs/integrations/opencode-go/spec.md) owns provider session
-requirements. Successful native file application, credential resolution, or a
+requirements. Successful actual-file application, credential resolution, or a
 local loopback request cannot establish that entitlement or session coverage.

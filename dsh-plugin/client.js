@@ -68,9 +68,6 @@ window.__ModuleLoader__.load({
       scopeProfileScoped: 'profile-scoped',
       conflict: 'Conflict',
       applied: 'Applied',
-      appliedApplied: 'applied',
-      appliedPending: 'pending',
-      pending: 'Pending reload',
       credentialsTitle: 'Credentials',
       credentialPath: 'path',
       credentialState: 'state',
@@ -155,7 +152,7 @@ window.__ModuleLoader__.load({
       observeFailed: 'Observation failed',
       // Apply. The host route keeps its compatibility name `/_tmax/connect`; the
       // user-facing operation is `tmax agent apply`, which writes the target's
-      // native DSH files.
+      // DSH configuration files.
       connect: 'Apply',
       connectPreview: 'Apply preview',
       connectPreviewNote: 'No changes are written yet. Applying writes the target\'s DSH routes and credential reference; the key never enters the browser.',
@@ -229,7 +226,6 @@ window.__ModuleLoader__.load({
       addPreviewing: 'Checking the current catalog…',
       addPreviewReady: 'Add preview ready.',
       addInvalidPreview: 'The preview did not return a complete plan.',
-      addApplyPending: 'Apply current changes first',
       catalogUnavailable: 'The model catalog is unavailable. Fix the failed provider or model read and refresh.',
       addNewEntry: 'new entry',
       addExistingEntry: 'existing entry',
@@ -293,7 +289,7 @@ window.__ModuleLoader__.load({
       connectChangedFiles: 'changed files',
       connectUnchangedFiles: 'unchanged files',
       effectLocksCreated: 'locks created',
-      effectNativeWrites: 'native writes',
+      effectNativeWrites: 'file writes',
       effectProcessesStarted: 'processes started',
       effectSecretReads: 'secret reads',
       observeDone: 'Observation finished',
@@ -347,9 +343,6 @@ window.__ModuleLoader__.load({
       scopeProfileScoped: '仅当前 profile',
       conflict: '冲突',
       applied: '已应用',
-      appliedApplied: '已应用',
-      appliedPending: '待应用',
-      pending: '待重新加载',
       credentialsTitle: '凭据',
       credentialPath: '路径',
       credentialState: '状态',
@@ -433,7 +426,7 @@ window.__ModuleLoader__.load({
       observeRunning: '正在观测供应商来源…',
       observeFailed: '观测失败',
       // 应用。Host 路由保留兼容名称 `/_tmax/connect`；面向用户的操作是
-      // `tmax agent apply`，它写入目标的 DSH 原生文件。
+      // `tmax agent apply`，它写入目标的 DSH 配置文件。
       connect: '应用',
       connectPreview: '应用预览',
       connectPreviewNote: '尚未写入任何更改。应用会写入目标的 DSH 路由和凭据引用；密钥不会进入浏览器。',
@@ -507,7 +500,6 @@ window.__ModuleLoader__.load({
       addPreviewing: '正在核对当前目录…',
       addPreviewReady: '加入预检已就绪。',
       addInvalidPreview: '预检没有返回完整计划。',
-      addApplyPending: '先应用当前更改',
       catalogUnavailable: '模型目录不可用；先修复供应商或模型读取失败并刷新。',
       addNewEntry: '新建条目',
       addExistingEntry: '加入现有条目',
@@ -571,7 +563,7 @@ window.__ModuleLoader__.load({
       connectChangedFiles: '变更文件',
       connectUnchangedFiles: '未变文件',
       effectLocksCreated: '创建锁',
-      effectNativeWrites: '原生写入',
+      effectNativeWrites: '实际配置写入',
       effectProcessesStarted: '启动进程',
       effectSecretReads: '密钥读取',
       observeDone: '观测完成',
@@ -583,7 +575,6 @@ window.__ModuleLoader__.load({
     const OWNER_STATES = { settings: 'ownerSettings', unapplied: 'ownerUnapplied', none: 'ownerNone' }
     const ROUTE_STATES = { active: 'routeLive', inactive: 'routeNotApplied' }
     const SCOPES = { profile_scoped: 'scopeProfileScoped' }
-    const APPLIED_STATES = { applied: 'appliedApplied', pending: 'appliedPending', unknown: 'unknown' }
     // `compatible` is tmax's real token for an identified daemon; `identified` is
     // the host's normalized word for the same fact.
     const DAEMON_STATES = { identified: 'daemonIdentified', compatible: 'daemonIdentified', unidentified: 'daemonUnidentified', unknown: 'unknown' }
@@ -1393,7 +1384,7 @@ window.__ModuleLoader__.load({
       }
       // `tmax agent apply` data: the applied state, the files it planned or
       // changed, its recovery record, and fact gaps. Paths and states only; no
-      // native file content ever crosses into the page.
+      // configuration file content ever crosses into the page.
       if (typeof connect.state === 'string' && connect.state !== '') {
         lines.push({ label: t('connectState'), items: [boundedText(connect.state, 64)] })
       }
@@ -1735,14 +1726,14 @@ window.__ModuleLoader__.load({
 
     /**
      * The one consumer gate for a host read model, shared by the page and every
-     * seat. Only an object carrying `schemaVersion === 3` and `ok === true` is
+     * seat. Only an object carrying `schemaVersion === 4` and `ok === true` is
      * a state; an unsupported schema is a typed failure, and a refused model is
      * an error. Neither is ever adopted as evidence.
      * @returns {{ object: boolean, state?: object, schemaUnsupported?: boolean, message?: string }}
      */
     function stateGate(value, response) {
       if (value === null || typeof value !== 'object') return { object: false }
-      if (value.schemaVersion !== 3) {
+      if (value.schemaVersion !== 4) {
         return { object: true, schemaUnsupported: true, message: boundedText(value.schemaVersion, 24) }
       }
       if (value.ok !== true) return { object: true, message: stateError(value, response?.status) }
@@ -1802,8 +1793,6 @@ window.__ModuleLoader__.load({
       // A response may arrive after a newer preview/protocol change; only the
       // newest request may touch the panel or adopt its state.
       const [addSeq] = React.useState(() => ({ current: 0 }))
-      // After the pending-gate Apply succeeds, resume the add that asked for it.
-      const [resumeAdd, setResumeAdd] = React.useState(null)
 
       const loadState = React.useCallback(async () => {
         setLoad(previous => ({ phase: previous.value === undefined ? 'loading' : 'refreshing', value: previous.value }))
@@ -1815,7 +1804,7 @@ window.__ModuleLoader__.load({
           // The state schema is a hard consumer gate: an unknown version is a
           // failure, never a payload this page guesses at. A last-known state
           // stays on screen, labeled, instead of being cleared.
-          if (value.schemaVersion !== 3) {
+          if (value.schemaVersion !== 4) {
             setLoad(previous => ({
               phase: 'failed',
               value: previous.value,
@@ -1907,7 +1896,6 @@ window.__ModuleLoader__.load({
       }, [loadState, t])
 
       const cancelConnect = React.useCallback(() => {
-        setResumeAdd(null)
         setConnect({ phase: 'idle', lines: [] })
       }, [])
 
@@ -1997,8 +1985,8 @@ window.__ModuleLoader__.load({
             return
           }
           const detail = hostCodeText(result?.code, result?.message)
-          // Plan refusals (target pending, catalog unavailable, unknown model)
-          // carry their typed code on the body, not in a tmax result envelope.
+          // Plan refusals (catalog unavailable, unknown model) carry their
+          // typed code on the body, not in a tmax result envelope.
           const code = result?.code ?? (value !== null && typeof value?.code === 'string' ? value.code : undefined)
           setAdd({
             phase: 'failed',
@@ -2041,41 +2029,12 @@ window.__ModuleLoader__.load({
       }, [addSeq])
       const openProvider = React.useCallback(id => {
         setSelectedProvider(id)
-        // Do not clear a pending add: navigation must not turn a running target
-        // write into an editable idle panel.
+        // Do not clear an in-flight add: navigation must not turn a running
+        // target write into an editable idle panel.
       }, [])
       const backProviders = React.useCallback(() => {
         setSelectedProvider(null)
       }, [])
-
-      /** The add refusal's only recovery: close it and preview the target Apply. */
-      const applyPendingAdd = React.useCallback(() => {
-        const request = add.request
-        if (request === undefined) return
-        setResumeAdd(request)
-        cancelAdd()
-        void previewConnect()
-      }, [add.request, cancelAdd, previewConnect])
-
-      // A successful contextual Apply resumes the add that requested it. Failed
-      // or cancelled previews clear the resume so a later unrelated Apply cannot
-      // silently open a stale add panel.
-      React.useEffect(() => {
-        if (resumeAdd === null) return
-        if (connect.phase === 'applied') {
-          const request = resumeAdd
-          setResumeAdd(null)
-          // The approve/apply flow may have run while the reader navigated away;
-          // bring the resumed preview back to the same catalog context instead
-          // of completing off-screen.
-          setTab('models')
-          setQuery('')
-          setSelectedProvider(request.provider)
-          previewAdd(request)
-        } else if (connect.phase === 'failed' || connect.phase === 'idle') {
-          setResumeAdd(null)
-        }
-      }, [connect.phase, resumeAdd, previewAdd])
 
       const state = load.value !== null && typeof load.value === 'object' && load.value.ok === true ? load.value : undefined
       const verdictInfo = verdict(load, t)
@@ -2134,7 +2093,6 @@ window.__ModuleLoader__.load({
                 onProtocol: changeAddProtocol,
                 onConfirm: confirmAdd,
                 onCancel: cancelAdd,
-                onApplyPending: applyPendingAdd,
                 gatewayConfigured: state.gateway?.configured === true,
                 busy,
               })
@@ -2551,20 +2509,8 @@ window.__ModuleLoader__.load({
       else text = t('addPreviewing')
       const preview = add.phase === 'preview'
       const done = add.phase === 'applied' || add.phase === 'failed'
-      const failureCode = add.result?.code ?? add.code
-      const pendingGate = add.phase === 'failed' && failureCode === 'pending_native_changes'
       const actions = done
         ? h('span', { className: 'tmx-addActions', key: 'actions' }, [
-          pendingGate
-            ? h('button', {
-              type: 'button',
-              className: 'tmx-button',
-              key: 'apply-pending',
-              'data-kind': 'primary',
-              onClick: handlers.onApplyPending,
-              disabled: handlers.busy,
-            }, t('addApplyPending'))
-            : null,
           h('button', { type: 'button', className: 'tmx-button', key: 'close', onClick: handlers.onCancel }, t('close')),
         ])
         : h('span', { className: 'tmx-addActions', key: 'actions' }, [
@@ -2631,7 +2577,6 @@ window.__ModuleLoader__.load({
         onProtocol: options.onProtocol,
         onConfirm: options.onConfirm,
         onCancel: options.onCancel,
-        onApplyPending: options.onApplyPending,
         gatewayConfigured: options.gatewayConfigured === true,
       }
       const failures = sectionErrors(state).filter(error => error.section === 'catalog')
@@ -3052,7 +2997,7 @@ window.__ModuleLoader__.load({
 
     /** Record a read model the page or a seat just adopted, so the seats agree. */
     function rememberState(state) {
-      if (state === null || typeof state !== 'object' || state.schemaVersion !== 3 || state.ok !== true) return
+      if (state === null || typeof state !== 'object' || state.schemaVersion !== 4 || state.ok !== true) return
       snapshotCache = { at: Date.now(), result: { state } }
     }
 
@@ -3076,7 +3021,7 @@ window.__ModuleLoader__.load({
           if (value === null || typeof value !== 'object') return { message: `HTTP ${response.status}` }
           // The same schema gate the page applies: an unknown version is a
           // failure, never a payload a seat guesses at.
-          if (value.schemaVersion !== 3) return { schemaUnsupported: true, message: String(value.schemaVersion) }
+          if (value.schemaVersion !== 4) return { schemaUnsupported: true, message: String(value.schemaVersion) }
           if (value.ok !== true) return { message: stateError(value, response.status) }
           return { state: value }
         } catch (error) {

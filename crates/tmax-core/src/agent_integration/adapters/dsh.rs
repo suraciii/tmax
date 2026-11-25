@@ -249,10 +249,6 @@ pub(super) fn build(
     Ok(files)
 }
 
-pub(super) fn inline_credential(path: &[String]) -> bool {
-    path.len() == 2 && path[0] == "refs"
-}
-
 pub(super) fn preserve_models(path: &[String], value: &mut Value, current: &Value) {
     if path.len() == 5
         && path[0] == PROFILE_SETTINGS

@@ -202,19 +202,6 @@ export function planAddModel(request, { state, target } = {}) {
   if (modelId === null) return invalid(400, 'invalid_model', 'add_model requires a model ID')
   if (protocol === null || !ADD_PROTOCOLS.includes(protocol)) return invalid(400, 'invalid_protocol', `protocol must be one of ${ADD_PROTOCOLS.join(', ')}`)
   if (resolvedTarget === null) return invalid(409, 'target_unresolved', 'no declared DSH target resolves for this home; declare one before adding a model')
-  // `agent apply` writes the target's whole desired state. Never let one add
-  // silently carry unrelated pending selections/default/role edits: require a
-  // standalone Apply first so the add applies only the state the user saw.
-  const pending = state?.target?.pendingNativeChanges
-  // Only a readable, empty pending list proves the target has no hidden deltas.
-  // tmax reports null when planning/scope comparison could not run; that is an
-  // unreadable target, distinct from a known non-empty pending list.
-  if (!Array.isArray(pending)) {
-    return invalid(409, 'target_uninspectable', 'the target pending state is unreadable; apply the target before adding a model')
-  }
-  if (pending.length > 0) {
-    return invalid(409, 'pending_native_changes', 'the target has pending native changes; apply them before adding a model')
-  }
   const catalog = isPlainObject(state?.catalog) ? state.catalog : null
   if (catalog === null || catalog.state !== 'available') {
     return invalid(409, 'catalog_unavailable', 'the tmax model catalog is unavailable, so the selection cannot be validated')

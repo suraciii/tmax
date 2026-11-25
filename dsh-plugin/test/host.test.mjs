@@ -88,7 +88,6 @@ function agentInspect(overrides = {}) {
         source: 'https://github.com/deepseek-ai/deepseek-harness',
       },
       applied_state: 'unknown',
-      pending_native_changes: null,
       blockers: [{
         code: 'gateway_not_ready',
         field: null,
@@ -1515,7 +1514,7 @@ test('a dry-run observation previews with --dry-run and publishes nothing', asyn
   assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged'])
   assert.ok(preview.body.items.every(item => item.code === 'dry_run'))
   // The preview still returns a fresh read model, under the current schema.
-  assert.equal(preview.body.state.schemaVersion, 3)
+  assert.equal(preview.body.state.schemaVersion, 4)
 })
 
 test('explicit observe reports all-failed and partial outcomes without claiming success', async () => {

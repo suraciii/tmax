@@ -70,11 +70,7 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
     if path.starts_with("config recovery ") {
         return configuration::recovery(store, r);
     }
-    if path == "agent recovery list"
-        || path == "agent recovery inspect"
-        || path == "agent recovery discard"
-        || path == "agent recovery accept"
-    {
+    if path == "agent recovery list" || path == "agent recovery inspect" {
         return crate::agent_integration::recovery(store, r).await;
     }
     if path == "agent restore" {

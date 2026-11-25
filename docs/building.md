@@ -52,8 +52,9 @@ nonzero exit status.
 
 The personal authority is resolved from the operating-system user account, not
 `HOME`, the working directory, or a CLI configuration selector. All tmax-owned
-state is under that account's `~/.tmax`; native configuration and native-owned
-credential artifacts remain in their explicitly selected native scopes.
+state is under that account's `~/.tmax`; actual Agent configuration and
+Agent-owned credential artifacts remain in their explicitly selected
+configuration scopes.
 
 Daemon control uses Unix local sockets or local-only Windows named pipes with
 an explicit OS-user ACL and peer identity checks. New processes require a native

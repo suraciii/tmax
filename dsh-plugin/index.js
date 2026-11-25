@@ -107,12 +107,6 @@ function effectiveDefaultText(value) {
   return `${commandCell(selection.provider, 'unknown')}/${commandCell(selection.model, 'unknown')}${source === '' ? '' : ` (${source})`}`
 }
 
-function pendingText(value) {
-  if (value === null || value === undefined) return 'none reported'
-  if (typeof value === 'object') return commandText(JSON.stringify(value)) || 'reported'
-  return commandCell(value, 'reported')
-}
-
 /** Summary: target, route/credential readiness, gateway, provider counts, blockers. */
 export function formatTmaxStatus(state, { blockers = [] } = {}) {
   const source = commandObject(state)
@@ -126,7 +120,7 @@ export function formatTmaxStatus(state, { blockers = [] } = {}) {
     `tmax state: ${source.ok === true ? 'readable' : 'unavailable'}; generated: ${commandCell(source.generatedAt, 'not reported')}; revision: ${commandCell(source.configurationRevision, 'not reported')}`,
     `target: ${commandCell(target.id, 'not reported')}${typeof target.path === 'string' && target.path !== '' ? ` (${commandText(target.path)})` : ''}`,
     `  effective default: ${effectiveDefaultText(target.effectiveDefault)}`,
-    `  applied: ${commandCell(target.appliedState, 'unknown')}; pending native changes: ${pendingText(target.pendingNativeChanges)}`,
+    `  applied: ${commandCell(target.appliedState, 'unknown')}`,
   ]
   // A failed section is never rendered as a successful zero count.
   if (projectionError !== null) {

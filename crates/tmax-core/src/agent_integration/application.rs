@@ -1,13 +1,12 @@
 //! Native application transaction: preview, schema detection, protected capture, guarded writes.
 use super::{
-    adapters::{self, File, desired_fields_with_ownership, inline_credential},
+    adapters::{self, File, desired_fields_with_ownership},
     document::{self, Format},
     installation::{schema_blocker, version},
     planning::{entries, fact_gap_warnings, projection_view},
     recovery::{
-        Capture, Field, FileRecord, INDEX, Index, Payload, Record, baseline, conflicts,
-        decode_payload, field_hash, owner, partial, protect_payload, prune_empty_parents,
-        record_for,
+        Capture, Field, FileRecord, INDEX, Index, Payload, Record, conflicts, field_hash, owner,
+        partial, protect_payload, prune_empty_parents, record_for,
     },
     scope::{
         DshCredentialsLock, digest, dsh_credential_permissions, read_native, revision, scope,
@@ -64,6 +63,7 @@ fn handoff_key(store: &Store, reference: &str) -> Result<Value> {
 }
 /// Refresh the recorded delivery facts of an unchanged apply when they are
 /// missing or outdated, so a second `agent apply` repairs `unknown` delivery.
+#[cfg(test)]
 fn record_unchanged_delivery(
     store: &Store,
     config: &Config,
@@ -196,9 +196,6 @@ pub async fn apply(
     }
     let mut previews = Vec::new();
     let mut observed_inputs = Vec::new();
-    let mut desired_unchanged = previous
-        .as_ref()
-        .is_some_and(|r| r.secret_refs == secret_refs && r.files.len() == files.len());
     for file in &files {
         if file.format == Format::Text
             && file.path.exists()
@@ -301,36 +298,12 @@ pub async fn apply(
             }
         }
         adapters::validate_existing(&target.agent, file, &current)?;
-        if let Some(old) = previous
-            .as_ref()
-            .and_then(|r| r.files.iter().find(|f| f.path == file.path))
-        {
-            for field in &old.fields {
-                if field_hash(document::get(&current, &field.path)) != field.after_hash {
-                    return Err(Error::new("native_conflict","An owned native setting changed after application; inspect it before apply or restore, or accept the current native state with agent recovery accept").field(field.path.join(".")));
-                }
-            }
-        }
         let owned = previous
             .as_ref()
             .and_then(|record| record.files.iter().find(|old| old.path == file.path))
             .map(|file| file.fields.as_slice())
             .unwrap_or_default();
         let fields = desired_fields_with_ownership(&target.agent, &file.desired, &current, owned);
-        if file.format != Format::Credential {
-            let old_fields = previous
-                .as_ref()
-                .and_then(|r| r.files.iter().find(|f| f.path == file.path))
-                .map(|f| &f.fields);
-            desired_unchanged &= old_fields.is_some_and(|old| {
-                old.len() == fields.len()
-                    && fields.iter().all(|(p, v)| {
-                        old.iter().any(|f| f.path == *p)
-                            && (inline_credential(&target.agent, p)
-                                || document::get(&current, p) == v.as_ref())
-                    })
-            });
-        }
         let mut existing_entries = Vec::new();
         for root in ["providers", "model_providers"] {
             if let Some(entries) = file.desired.get(root).and_then(Value::as_object) {
@@ -370,22 +343,9 @@ pub async fn apply(
             json!({"target":id,"agent":target.agent,"path":path,"dry_run":true,"files":previews,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":projection_view(target,&entries),"fact_gaps":fact_gaps,"default":target.default,"roles":target.roles,"credentials":{"resolved":false},"environment":environment,"recovery":{"planned":"exact native bytes in current-user-only files before every external write","retained":previous.as_ref().map(|r|&r.id)},"effects":{"native_writes":false,"secret_reads":false,"processes_started":false,"locks_created":false}}),
         );
     }
-    if desired_unchanged {
-        // A no-op apply is still the documented repair for missing or outdated
-        // delivery facts (for example after a format migration): record the
-        // current revision even though no native byte changes.
-        record_unchanged_delivery(store, config, target, previous.as_ref(), &mut index)?;
-        return Ok(
-            json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"state":"applied_reload_pending","changed_files":[],"unchanged_files":files.iter().map(|f|&f.path).collect::<Vec<_>>(),"recovery":previous.as_ref().map(|r|&r.id),"fact_gaps":fact_gaps}),
-        );
-    }
     adapters::resolve_handoff(&target.agent, &mut files, |reference| {
         handoff_key(store, reference)
     })?;
-    let previous_payload = previous
-        .as_ref()
-        .map(|r| decode_payload(store, r))
-        .transpose()?;
     let mut prepared = Vec::new();
     for file in files {
         let before = read_native(&file.path)?;
@@ -400,12 +360,9 @@ pub async fn apply(
                 "Native bytes changed while qualifying this operation; no newer content was overwritten",
             ));
         }
-        let original = previous_payload
-            .as_ref()
-            .and_then(|p| p.files.iter().find(|f| f.path == file.path));
-        let original_text = original
-            .map(|p| p.before.clone())
-            .unwrap_or_else(|| before.clone());
+        // Single-level restore returns the managed values as they were
+        // immediately before this apply, not the first pre-tmax baseline.
+        let original_text = before.clone();
         let original_value = document::parse(original_text.as_deref().unwrap_or(""), file.format)?;
         if file.format == Format::Credential {
             let after = file.desired.as_str().unwrap_or("").to_owned();
@@ -421,9 +378,7 @@ pub async fn apply(
                 observed_hash: field_hash(document::get(&current, &["$credential".into()])),
                 released: after.is_empty(),
             }];
-            let exact_original_safe = original.is_none_or(|p| {
-                p.exact_original_safe && before.as_deref() == Some(p.after.as_str())
-            });
+            let exact_original_safe = true;
             prepared.push(Inputs {
                 file,
                 before: original_text,
@@ -460,15 +415,18 @@ pub async fn apply(
         {
             for old_field in &old.fields {
                 if !desired.iter().any(|(p, _)| *p == old_field.path) {
-                    let old = baseline(original, &original_value, &old_field.path);
-                    baseline_values.push((old_field.path.clone(), old.cloned()));
-                    if document::get(&current, &old_field.path) != old {
-                        after = document::set(&after, file.format, &old_field.path, old)?;
+                    // A managed field the expected configuration no longer
+                    // declares is removed. The pre-apply snapshot keeps the
+                    // previous value for a single-level restore.
+                    let prior = document::get(&original_value, &old_field.path);
+                    baseline_values.push((old_field.path.clone(), prior.cloned()));
+                    if document::get(&current, &old_field.path).is_some() {
+                        after = document::set(&after, file.format, &old_field.path, None)?;
                     }
                     fields.push(Field {
                         path: old_field.path.clone(),
-                        before_hash: field_hash(old),
-                        after_hash: field_hash(old),
+                        before_hash: field_hash(prior),
+                        after_hash: "absent".into(),
                         observed_hash: field_hash(document::get(&current, &old_field.path)),
                         released: true,
                     });
@@ -479,15 +437,7 @@ pub async fn apply(
             if document::get(&current, &field) != value.as_ref() {
                 after = document::set(&after, file.format, &field, value.as_ref())?;
             }
-            let inherited = previous
-                .as_ref()
-                .and_then(|r| r.files.iter().find(|f| f.path == file.path))
-                .is_some_and(|f| f.fields.iter().any(|f| f.path == field));
-            let before_value = if inherited {
-                baseline(original, &original_value, &field)
-            } else {
-                document::get(&current, &field)
-            };
+            let before_value = document::get(&original_value, &field);
             baseline_values.push((field.clone(), before_value.cloned()));
             // An empty text document is how whole-file absence is expressed, so
             // the recorded state is absence too; recording the empty string would
@@ -504,33 +454,26 @@ pub async fn apply(
                 released: false,
             });
         }
+        // Removing the last managed leaf must not leave an empty provider or
+        // model container behind; unrelated nonempty containers stay.
+        let released: Vec<Field> = fields
+            .iter()
+            .filter(|field| field.released)
+            .cloned()
+            .collect();
+        if !released.is_empty() {
+            prune_released_parents(
+                &mut after,
+                file.format,
+                &file.desired,
+                &original_value,
+                &released,
+            )?;
+        }
         if file.format == Format::DshPatch {
             prune_empty_parents(&mut after, file.format, &original_value, &fields)?;
-            let value = document::parse(&after, file.format)?;
-            for field in owned {
-                if field.path.len() > 4
-                    && field.path[0] == adapters::PROFILE_SETTINGS
-                    && field.path[1] == "config"
-                    && field.path[2] == "providers"
-                {
-                    let route = &field.path[..4];
-                    if document::get(&file.desired, route).is_none()
-                        && document::get(&original_value, route).is_none()
-                        && document::get(&value, route).is_some()
-                    {
-                        return Err(Error::new(
-                            "native_conflict",
-                            "Unowned settings keep a removed DSH provider in use; preserve or move them before applying",
-                        ).field(route.join(".")));
-                    }
-                }
-            }
         }
-        let exact_original_safe = original
-            .is_none_or(|p| p.exact_original_safe && before.as_deref() == Some(p.after.as_str()))
-            && baseline_values
-                .iter()
-                .all(|(path, value)| value.as_ref() == document::get(&original_value, path));
+        let exact_original_safe = true;
         prepared.push(Inputs {
             file,
             before: original_text,
@@ -668,7 +611,9 @@ pub async fn apply(
         }
     }
     for file in &mut record.files {
-        file.fields.retain(|field| !field.released);
+        // Keep released fields as ownership tombstones. Restore can reinstate
+        // their values from the baseline map, and a later apply must still know
+        // they are tmax-managed so it can remove them again.
         for field in &mut file.fields {
             field.observed_hash = field.after_hash.clone();
         }
@@ -677,6 +622,19 @@ pub async fn apply(
     if let Some(r) = index.records.iter_mut().find(|r| r.id == record.id) {
         *r = record.clone();
     }
+    // Restore is single-level: the completed apply replaces earlier retained
+    // snapshots for this target. A failed apply returns before this point, so
+    // its recovery record is not lost.
+    let retained_owner = record.owner.clone();
+    let mut stale_payloads = Vec::new();
+    index.records.retain(|r| {
+        if r.owner == retained_owner && r.id != record.id {
+            stale_payloads.push(r.payload_ref.clone());
+            false
+        } else {
+            true
+        }
+    });
     if store.write_json(INDEX, &index).is_err() {
         return Ok(
             json!({"_code":"partial_native_apply","target":id,"changed_files":changed,"recovery":record.id,"reason_code":"recovery_metadata_write_failed","state":"recovery_required"}),
@@ -685,17 +643,190 @@ pub async fn apply(
     if let Some(old) = previous
         && old.payload_ref != record.payload_ref
     {
-        let _ = secrets::remove(store, &old.payload_ref);
+        stale_payloads.push(old.payload_ref.clone());
+    }
+    stale_payloads.sort();
+    stale_payloads.dedup();
+    for payload_ref in stale_payloads {
+        if payload_ref != record.payload_ref {
+            let _ = secrets::remove(store, &payload_ref);
+        }
     }
     Ok(
         json!({"_code":"awaiting_native_reload","target":id,"agent":target.agent,"path":path,"state":"applied_reload_pending","written":true,"changed_files":changed,"unchanged_files":unchanged,"recovery":record.id,"fact_gaps":fact_gaps}),
     )
 }
 
+fn prune_released_parents(
+    text: &mut String,
+    format: Format,
+    desired: &Value,
+    original: &Value,
+    released: &[Field],
+) -> Result<()> {
+    let mut parents: Vec<Vec<String>> = Vec::new();
+    for field in released {
+        for n in 1..field.path.len() {
+            let parent = field.path[..n].to_vec();
+            if !parents.contains(&parent) {
+                parents.push(parent);
+            }
+        }
+    }
+    parents.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    for parent in parents {
+        if document::get(desired, &parent).is_some() || document::get(original, &parent).is_some() {
+            continue;
+        }
+        let value = document::parse(text, format)?;
+        if document::get(&value, &parent)
+            .is_some_and(|v| v.as_object().is_some_and(|m| m.is_empty()))
+        {
+            *text = document::set(text, format, &parent, None)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::adapters::desired_fields;
 
+    #[tokio::test]
+    async fn an_unchanged_apply_advances_the_restore_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("authority"));
+        let path = directory.path().join("native");
+        fs::create_dir_all(&path).unwrap();
+        let target = inspection_target(path.clone());
+        let reference = secrets::put(&store, "provider:p", b"synthetic-snapshot-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target.clone());
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        fs::write(
+            path.join("settings.json"),
+            "{\"defaultProvider\":\"local\",\"defaultModel\":\"old\",\"unrelated\":{\"keep\":true}}",
+        )
+        .unwrap();
+        apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
+        let after_first = fs::read_to_string(path.join("settings.json")).unwrap();
+        apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
+        let index: Index = store.read_json(INDEX).unwrap();
+        super::super::recovery::restore(&store, &index.records[0].id, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(path.join("settings.json")).unwrap(),
+            after_first,
+            "the second successful apply replaces the snapshot with its pre-apply value"
+        );
+    }
+    #[tokio::test]
+    async fn restore_reinstates_a_removed_managed_field_after_an_unrelated_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("authority"));
+        let path = directory.path().join("native");
+        fs::create_dir_all(&path).unwrap();
+        let target = inspection_target(path.clone());
+        let reference = secrets::put(&store, "provider:p", b"synthetic-removed-field-key").unwrap();
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target.clone());
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+        apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
+        let mut without_default = config.clone();
+        without_default.agents.get_mut("managed").unwrap().default = None;
+        store
+            .write_raw(
+                "tmax.toml",
+                toml::to_string(&without_default).unwrap().as_bytes(),
+            )
+            .unwrap();
+        apply(&store, &without_default, "managed", false, None)
+            .await
+            .unwrap();
+        let removed = fs::read_to_string(path.join("settings.json")).unwrap();
+        assert!(!removed.contains("defaultModel"), "{removed}");
+        // A later unrelated edit must not prevent the single-level snapshot from
+        // putting the removed managed field back.
+        let edited = removed.replace('{', "{\"user\":\"later\",");
+        fs::write(path.join("settings.json"), &edited).unwrap();
+        let index: Index = store.read_json(INDEX).unwrap();
+        super::super::recovery::restore(&store, &index.records[0].id, false)
+            .await
+            .unwrap();
+        let restored = fs::read_to_string(path.join("settings.json")).unwrap();
+        assert!(restored.contains("\"defaultModel\""), "{restored}");
+        assert!(restored.contains("\"user\":\"later\""), "{restored}");
+        // Reapply the configuration that removed the field. Restore must also
+        // reinstate ownership, not just the value, or the old default survives.
+        store
+            .write_raw(
+                "tmax.toml",
+                toml::to_string(&without_default).unwrap().as_bytes(),
+            )
+            .unwrap();
+        apply(&store, &without_default, "managed", false, None)
+            .await
+            .unwrap();
+        let removed_again = fs::read_to_string(path.join("settings.json")).unwrap();
+        assert!(!removed_again.contains("defaultModel"), "{removed_again}");
+    }
+    #[test]
+    fn released_managed_leaves_do_not_leave_empty_containers() {
+        let fields = vec![Field {
+            path: vec!["providers".into(), "local".into(), "baseURL".into()],
+            before_hash: "x".into(),
+            after_hash: "absent".into(),
+            observed_hash: "x".into(),
+            released: true,
+        }];
+        let original = json!({"providers":{"local":{}}});
+        let mut text = "{\"providers\":{\"local\":{},\"unmanaged\":{\"keep\":true}}}".to_owned();
+        prune_released_parents(&mut text, Format::Json, &json!({}), &original, &fields).unwrap();
+        let value = document::parse(&text, Format::Json).unwrap();
+        assert_eq!(
+            value["providers"]["local"],
+            json!({}),
+            "a container present before the apply is user-owned and stays"
+        );
+        assert_eq!(value["providers"]["unmanaged"]["keep"], true);
+    }
     #[test]
     fn an_unchanged_apply_records_missing_delivery_facts() {
         let directory = tempfile::tempdir().unwrap();
@@ -784,7 +915,7 @@ mod tests {
         );
     }
 
-    use super::super::{planning::pending_native_changes, test_support::inspection_target};
+    use super::super::test_support::inspection_target;
     use super::*;
     use crate::config::Auth;
     use std::collections::BTreeMap;
@@ -1103,7 +1234,7 @@ mod tests {
         assert!(path.read_dir().unwrap().next().is_none());
     }
     #[tokio::test]
-    async fn accept_rebaselines_native_rewrites_and_retains_credential_ownership() {
+    async fn authoritative_apply_overwrites_a_later_native_rewrite() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::at(directory.path().to_owned());
         let path = directory.path().join("native");
@@ -1156,8 +1287,8 @@ mod tests {
                     .unwrap()
                     .contains(&json!("limit.context"))
         }));
-        // The tool enriches its own rewritten entry; apply must refuse to
-        // clobber the later native edit.
+        // The tool enriches its own rewritten entry; the authoritative apply
+        // must overwrite that managed entry and leave unrelated entries alone.
         let model_path = vec![
             "providers".to_owned(),
             "local".to_owned(),
@@ -1180,54 +1311,26 @@ mod tests {
         )
         .unwrap();
         fs::write(path.join(filename), &enriched).unwrap();
-        assert_eq!(
-            apply(&store, &config, "managed", false, None)
-                .await
-                .unwrap_err()
-                .code,
-            "native_conflict"
-        );
-        assert_eq!(fs::read_to_string(path.join(filename)).unwrap(), enriched);
-        // Accept re-baselines the record to the current native state without
-        // releasing the credential artifact.
-        let accept = crate::Request {
-            command: vec!["agent".into(), "recovery".into(), "accept".into()],
-            operands: vec!["managed".into()],
-            arguments: BTreeMap::new(),
-            dry_run: false,
-            if_revision: None,
-        };
-        let accepted = super::super::recovery::recovery(&store, &accept)
-            .await
-            .unwrap();
-        assert_eq!(accepted["state"], "accepted");
-        assert_eq!(accepted["credential_ownership"], "retained");
-        assert_eq!(accepted["native_writes"], false);
         let reapplied = apply(&store, &config, "managed", false, None)
             .await
             .unwrap();
         assert_eq!(reapplied["_code"], "awaiting_native_reload");
-        assert!(path.read_dir().unwrap().any(|entry| {
-            entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with("tmax-")
-        }));
-        // Restoration now returns to the accepted baseline, not the pre-tmax
-        // original.
-        let index: Index = store.read_json(INDEX).unwrap();
-        super::super::recovery::restore(&store, &index.records.last().unwrap().id, false)
-            .await
-            .unwrap();
-        let restored = document::parse(
-            &fs::read_to_string(path.join(filename)).unwrap(),
-            Format::Yaml,
-        )
-        .unwrap();
+        let rewritten = fs::read_to_string(path.join(filename)).unwrap();
+        assert_ne!(rewritten, enriched);
+        let value = document::parse(&rewritten, Format::Yaml).unwrap();
         assert_eq!(
-            restored["providers"]["local"]["models"][0]["contextWindow"],
-            json!(1050000)
+            document::get(&value, &model_path).unwrap()[0]["contextWindow"],
+            Value::Null
+        );
+        assert!(
+            value["providers"]["unrelated"]["models"]["keep"].is_object(),
+            "unmanaged provider entries stay"
+        );
+        let index: Index = store.read_json(INDEX).unwrap();
+        assert_eq!(
+            index.records.len(),
+            1,
+            "restore keeps one snapshot per target"
         );
     }
     #[test]
@@ -1244,7 +1347,6 @@ mod tests {
             format: Format::Yaml,
             desired: json!({"providers":{"local":{"api_key":reference}}}),
         }];
-        let preview = files[0].desired.clone();
         adapters::resolve_handoff("hermes", &mut files, |reference| {
             handoff_key(&store, reference)
         })
@@ -1252,58 +1354,6 @@ mod tests {
         assert_eq!(
             files[0].desired["providers"]["local"]["api_key"],
             "synthetic-inline-key"
-        );
-        fs::write(&path, serde_yaml::to_string(&files[0].desired).unwrap()).unwrap();
-        let fields = desired_fields("hermes", &files[0].desired, &json!({}))
-            .into_iter()
-            .map(|(path, value)| Field {
-                path,
-                before_hash: "absent".into(),
-                after_hash: field_hash(value.as_ref()),
-                observed_hash: "absent".into(),
-                released: false,
-            })
-            .collect();
-        let record = Record {
-            id: "recovery".into(),
-            owner: "stable".into(),
-            target: "managed".into(),
-            agent: "hermes".into(),
-            scope: directory.path().to_owned(),
-            payload_ref: "not-read".into(),
-            secret_refs: vec![reference.clone()],
-            state: "applied_reload_pending".into(),
-            files: vec![FileRecord {
-                path: path.clone(),
-                format: Format::Yaml,
-                original_absent: true,
-                after_revision: "retained".into(),
-                written: true,
-                fields,
-            }],
-            delivery: None,
-        };
-        files[0].desired = preview;
-        assert!(
-            pending_native_changes(
-                &target,
-                &files,
-                std::slice::from_ref(&reference),
-                Some(&record)
-            )
-            .unwrap()
-            .is_empty()
-        );
-        let changed =
-            pending_native_changes(&target, &files, &["new-reference".into()], Some(&record))
-                .unwrap();
-        assert_eq!(changed[0]["field"], json!(["credential_reference"]));
-        fs::write(&path, "providers:\n  local:\n    api_key: user-edit\n").unwrap();
-        let drift = pending_native_changes(&target, &files, &[reference], Some(&record)).unwrap();
-        assert_eq!(drift[0]["field"], json!(["providers", "local", "api_key"]));
-        let diagnostics = serde_json::to_string(&(changed, drift)).unwrap();
-        assert!(
-            !diagnostics.contains("synthetic-inline-key") && !diagnostics.contains("user-edit")
         );
     }
 
@@ -1392,7 +1442,8 @@ mod tests {
         );
         assert!(settings.contains("unrelated"));
 
-        // Removing the effort from desired configuration restores its baseline.
+        // Removing the effort from desired configuration removes the managed
+        // field; the single-level snapshot can restore the previous value.
         let mut unmanaged = managed.clone();
         unmanaged
             .agents
@@ -1409,12 +1460,10 @@ mod tests {
             .await
             .unwrap();
         let settings = fs::read_to_string(path.join("settings.json")).unwrap();
-        assert!(
-            settings.contains("\"defaultThinkingLevel\": \"low\"")
-                || settings.contains("\"defaultThinkingLevel\":\"low\"")
-        );
+        assert!(!settings.contains("defaultThinkingLevel"), "{settings}");
 
-        // Re-manage it, then verify an external edit is a conflict, not a silent overwrite.
+        // Re-manage it, then verify an external edit is overwritten by the
+        // authoritative apply, not treated as a blocker.
         store
             .write_raw("tmax.toml", toml::to_string(&managed).unwrap().as_bytes())
             .unwrap();
@@ -1423,11 +1472,15 @@ mod tests {
             .unwrap();
         let settings = fs::read_to_string(path.join("settings.json")).unwrap();
         let edited = settings.replace("\"high\"", "\"low\"");
-        fs::write(path.join("settings.json"), edited).unwrap();
-        let error = apply(&store, &managed, "managed", false, None)
+        fs::write(path.join("settings.json"), &edited).unwrap();
+        apply(&store, &managed, "managed", false, None)
             .await
-            .unwrap_err();
-        assert_eq!(error.code, "native_conflict");
+            .unwrap();
+        let settings = fs::read_to_string(path.join("settings.json")).unwrap();
+        assert!(
+            settings.contains("\"defaultThinkingLevel\": \"high\"")
+                || settings.contains("\"defaultThinkingLevel\":\"high\"")
+        );
     }
 
     #[cfg(unix)]
@@ -1510,7 +1563,7 @@ mod tests {
         let settings = fs::read_to_string(&native_path).unwrap();
         assert!(settings.contains("\"local/first#high\""), "{settings}");
 
-        // Clearing the default releases the whole composite field to its baseline.
+        // Clearing the default removes the managed composite field.
         let mut cleared = unmanaged.clone();
         cleared.agents.get_mut("managed").unwrap().default = None;
         store
@@ -1520,8 +1573,7 @@ mod tests {
             .await
             .unwrap();
         let restored = fs::read_to_string(&native_path).unwrap();
-        assert!(restored.contains("\"local/first\""), "{restored}");
-        assert!(!restored.contains("#high"), "{restored}");
+        assert!(!restored.contains("local/first"), "{restored}");
         assert!(restored.contains("native comment"), "{restored}");
         assert!(restored.contains("unrelated"), "{restored}");
     }

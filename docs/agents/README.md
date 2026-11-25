@@ -12,7 +12,7 @@ precedence, or runtime behavior.
 | [Codex CLI](codex.md) | 0.162.1 | `config.toml`, adjacent profile configuration | Native file/keyring/automatic credential store |
 | [OpenCode V2](opencode.md) | 2.0.28 | `opencode.jsonc` / `opencode.json` | Server-scoped SQLite accounts; legacy file migration is separate |
 | [Hermes Agent](hermes.md) | 0.22.1+683.g848fc0a | Profile `config.yaml` | Native `auth.json`, credential pools, `.env`, provider key sources |
-| [DeepSeek Harness (DSH)](dsh.md) | 0.2.1-rc.2 (native integration reference); 0.2.3-alpha.2 (profile plugin) | HOME `cordis.patch.yml`, common to profiles; launcher-owned `cordis.yml` is never edited | Adjacent home `.credentials.yaml` reference store; no native login qualification |
+| [DeepSeek Harness (DSH)](dsh.md) | 0.2.1-rc.2 (native integration reference); 0.2.3-alpha.2 (profile plugin) | Profile `profiles/<profile>/cordis.patch.yml` row `llm-pi-ai`; launcher-owned `cordis.yml` is never edited | Adjacent home `.credentials.yaml` reference store; no native login qualification |
 
 The DSH page ships as the profile bundle that also registers the routes. Its
 version claim is separate from the native integration reference: the home
@@ -32,11 +32,11 @@ rule: intersect all candidate input sets after model maps and fixed restrictions
 not raw upstream declarations or a current winner snapshot. Native entries send
 those names to the gateway; fixed > map > identity resolution happens only after
 backend selection. Changing only effort must retain that backend or reject, never
-select another one. Direct native entries retain actual upstream capabilities;
-tmax does not install its gateway maps into native mapping fields. This changes
-no native preferences and qualifies no other alias capabilities or Messages
-effort writes. The shared rule owns explicit reapplication and native reload
-after changed maps, candidates, or effective capabilities.
+select another one. Direct Agent entries retain actual upstream capabilities;
+tmax does not install its gateway maps into the Agent's mapping fields. This
+changes no Agent preferences and qualifies no other alias capabilities or
+Messages effort writes. The shared rule owns explicit reapplication and Agent
+reload after changed maps, candidates, or effective capabilities.
 
 ## Qualification and evidence
 
@@ -46,13 +46,14 @@ inferred from one installation. Source-qualified means that a parser or consumer
 implements a field; it does not mean that a provider accepted a request, a login
 succeeded, or a subscription grants entitlement.
 
-The retained five-agent acceptance used private passwd-home isolation and native
-scopes outside the repository, synthetic local credentials, and loopback protocol
-fixtures. No production native auth was imported. It observed installed parser
+The retained five-agent acceptance used private passwd-home isolation and
+configuration scopes outside the repository, synthetic local credentials, and
+loopback protocol fixtures. No production native auth was imported. It observed installed parser
 or local runtime consumption, actual tmax apply, and actual restore for all five
 agents. Apply and restore reported `awaiting_native_reload`; a completed file
-write is not proof that another running native process reloaded it. Exact-byte
-restore and three-way preservation are different claims. See each page.
+write is not proof that another running Agent process reloaded it. Exact-byte
+restore from the retained managed snapshot and preservation of unmanaged fields
+are different claims. See each page.
 
 Concrete-metadata qualification is recorded separately from the earlier
 five-agent acceptance. The OpenCode and Hermes references include bounded
@@ -65,8 +66,8 @@ in a GLM check is not native metadata or five-agent provider qualification.
 DSH has separate source qualification and 2026-10-26 home-target acceptance at
 the revision in its [reference](dsh.md). Two independently authored profiles
 consumed the same home configuration and credentials through all three protocols
-against synthetic loopback endpoints. Apply/restore preserved profile files and
-unrelated home state. DSH is not part of the earlier five-agent acceptance, and
+against synthetic loopback endpoints. Apply/restore preserved unmanaged profile
+files and unrelated home state. DSH is not part of the earlier five-agent acceptance, and
 local runtime success does not establish hosted-provider entitlement.
 
 The DSH profile bundle has separate 2026-11-23 and 2026-11-24 qualifications at
@@ -80,47 +81,49 @@ render did not use a real format-2 tmax store and did not exercise browser
 clicks, non-dry-run operations, the settings footer, the model option and pane,
 the tool card, or a successful history-table load. Its [reference](dsh.md)
 records the exact browser surfaces that were and were not verified; none of this
-evidence qualifies native inference or hosted-provider access.
+evidence qualifies Agent inference or hosted-provider access.
 
 ## Safe scope and credential boundaries
 
-Use an explicit absolute native scope. Native environment selectors are not a
+Use an explicit absolute configuration scope. Environment selectors are not a
 replacement for real OS-home isolation: programs can still consult passwd home,
 XDG roots, project files, external-login stores, plugins, or a running server.
 OpenCode account operations additionally identify the intended server/database.
 Hermes version inspection must use inert source provenance; its launcher version
 path can bootstrap or update an installation.
 
-The examples are finite synthetic native fragments, not instructions to replace
+The examples are finite synthetic configuration fragments, not instructions to replace
 a user's complete files or change defaults, model roles, model scope, subagents,
 sampling, or reasoning preferences. Key references name only environment
 variables, commands, or private fixture paths. There are no portable OAuth-file
-examples. Keep native credential payloads, command output, and SQLite credential
+examples. Keep credential payloads, command output, and SQLite credential
 columns out of diagnostics.
 
 Native login and refresh retain their native owner. A shared-scope login/logout
-can affect other native consumers. Removing a model entry, restoring native
+can affect other native consumers. Removing a model entry, restoring actual
 configuration, deleting a local key artifact, native logout, upstream revocation,
 and cancellation of a subscription are distinct operations. tmax does not import
-native credentials or copy OAuth tokens to another refresher.
+Agent credentials or copy OAuth tokens to another refresher.
 
 Apply/restore resolve a referenced tmax secret only when the requested operation
 requires the key. Current-user-restricted tmax secret files are plaintext, not
-encrypted. An executed native key handoff can create a private, mode-0600
-**plaintext native-owned** key artifact, referenced through the agent's own key
+encrypted. An executed key handoff can create a private, mode-0600
+**plaintext Agent-owned** key artifact, referenced through the agent's own key
 mechanism. Hermes receives its API key in its current-user-restricted
 `config.yaml`, because installed versions may ignore `key_cmd`. Preview and
 inspection disclose this inline handoff without exposing the key. New tmax recovery records also contain plaintext and are restricted
 to the current OS account.
 
-DSH receives key values in the target home's native `.credentials.yaml` `refs`
-map; its adjacent home `cordis.patch.yml` stores only `apiKeyEnv`. Both are common
+DSH receives key values in the target home's `.credentials.yaml` `refs`
+map; the managed profile settings row stores only `apiKeyEnv`. Both are common
 to profiles using that home. Credential-service enablement is an explicit
-managed HOME patch change, not a launch wrapper or secret environment
-requirement. tmax does not enumerate, select, create, or manage DSH profiles.
+managed profile-patch change, not a launch wrapper or secret environment
+requirement. tmax does not enumerate, create, rename, or delete DSH profiles;
+apply writes into the selected profile's settings.
 
-Native recovery operations accept only supported storage formats. Unsupported
+Agent recovery operations accept only supported storage formats. Unsupported
 recovery records remain unchanged and are unavailable to current recovery
-actions. Dry-run and inspect disclose the native credential handoff without
-resolving a secret. Later unrelated edits are preserved; conflicting later owned
-edits or a changed credential artifact require explicit recovery rather than force overwrite.
+actions. Dry-run and inspect disclose the Agent credential handoff without
+resolving a secret. Apply and restore preserve unmanaged fields and overwrite
+later edits to tmax-managed fields from the retained managed snapshot; there is
+no conflict-resolution or force-overwrite path.

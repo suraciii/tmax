@@ -92,7 +92,6 @@ function agentInspectData() {
     native_default: null,
     installation: null,
     applied_state: 'unknown',
-    pending_native_changes: null,
     blockers: [],
   }
 }

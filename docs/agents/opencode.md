@@ -251,9 +251,9 @@ On 2026-10-24, isolated post-repair application was consumed by installed
 `opencode api --standalone GET /api/model`. The effective model reader preserved
 accepted inherited limits, local overrides, explicit zero limits, false tools,
 and empty input/output arrays; unaccepted latest metadata was not used. An
-oversized, inexact JavaScript integer blocked before native writes. Concrete
+oversized, inexact JavaScript integer blocked before any write. Concrete
 gateway selections retained metadata while aliases received no winner snapshot.
-Reapply and three-way restore preserved later native request budgets, effort,
+Reapply and restore preserved later unmanaged request budgets, effort,
 sampling, and unknown-model settings and removed the private key artifacts.
 This was offline metadata/configuration consumption, not inference, OAuth,
 entitlement, or proof that a running agent reloaded.

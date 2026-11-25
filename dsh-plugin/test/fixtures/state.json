@@ -1,11 +1,11 @@
 {
   "contract": "dsh-plugin host state, consumed by the tmax page and seats",
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "cases": {
     "connectedHomeOwned": {
       "ok": true,
       "errors": [],
-      "schemaVersion": 3,
+      "schemaVersion": 4,
       "generatedAt": "2026-11-23T10:15:00Z",
       "configurationRevision": "352a0e3fc342e94777e1a819244e016d98ad211fa7bdd0a082d85bc15a4cbe15",
       "tmaxVersion": "0.1.0",
@@ -35,7 +35,6 @@
           "source": "agent-default-model"
         },
         "appliedState": "unknown",
-        "pendingNativeChanges": null,
         "blockers": [
           {
             "code": "gateway_not_ready",

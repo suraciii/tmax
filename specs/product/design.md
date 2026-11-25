@@ -20,7 +20,7 @@ an assistant or an approval/workflow system.
 | Instances share metadata but differ in local settings | Copy complete catalog definitions into every provider | Select models.dev provider metadata and store instance-local overrides; share defaults, not credentials or routing preferences |
 | CLI, Web, and optional manual edits must agree | Keep competing managed state and exported snapshots | One configuration under `~/.tmax` owns desired state; secret and runtime stores have separate responsibilities |
 | Configuration must not become a task for the caller | Require a complete TOML proposal for every change | Explicit CLI operations cover every setting; TOML remains an internal persistence format, not required authored input |
-| Saving desired settings differs from changing running agents | Watch every file or maintain per-field pending layers | Reload and executed management edits activate the whole valid file, including pending manual changes; native application remains separate |
+| Saving desired settings differs from changing running agents | Watch every file or maintain per-field pending layers | Reload and executed management edits activate the whole valid file, including pending manual changes; Agent application remains separate |
 | Provider setup should not reconstruct another tool's state | Import providers and credentials from existing agents | Create providers from selected metadata or explicit custom settings; inspect agents only to configure them safely |
 | Agent configuration and inference forwarding are separate concerns | Give each target a direct/gateway mode | Native entries reference a provider; the gateway derives provider `tmax`; one target can contain direct and relayed entries, and the gateway needs no managed target |
 | Consumers need fixed or multi-model access | Require a route for every concrete model or add a separate account pool | Concrete models map directly; model aliases list explicit qualified models selected with existing priority rules |
@@ -65,9 +65,9 @@ an assistant or an approval/workflow system.
 | Alias forwarding needs one understandable continuity policy | Store per-client policies and require target registration | Each alias definition owns continuity; clients must satisfy its conversation requirements, independently of configuration management |
 | Candidate removal conflicts with retained session authorization | Grandfather the historical candidate set | Block affected later turns on activation without reassignment; in-flight requests retain their snapshot |
 | Direct edits should not repair unrelated OS integration | Update autostart on every save/reload | Update registration when startup intent changes or an explicit control runs; report unrelated drift without blocking edits |
-| Different assistants and working directories invoke tmax | Select or search a different configuration for each caller | One personal `~/.tmax` home and authority; caller identity is not native target identity |
+| Different assistants and working directories invoke tmax | Select or search a different configuration for each caller | One personal `~/.tmax` home and authority; caller identity is not Agent target identity |
 | Results feed subsequent operations | Require prose parsing or return all internal state on every call | Compact JSON identifies changes and their effect; detail reads expose evidence, and failures retain completed changes and recovery |
-| Native login sources are needed before model setup | Require complete model selections in a joint configuration document | Register the existing target with incomplete selections; block incomplete native application, not source registration or standalone gateway use |
+| Native login sources are needed before model setup | Require complete model selections in a joint configuration document | Register the existing target with incomplete selections; block incomplete Agent application, not source registration or standalone gateway use |
 | Local demand can exceed capacity | Queue requests or retry another provider | Apply [bounded admission](spec.md#local-request-admission); callers own retry decisions |
 | A configured upstream rejects requests repeatedly | Infer depleted quota or permanently rewrite priorities | Opt-in alias fallback plus provider-scoped fixed-duration priority replacement; no partial-response replay or session migration |
 | Reasoning can remain silent while a connection or refresh can stall | One timeout for every stage | Separate [connection/credential deadlines](spec.md#transport-deadlines) from inference lifetime |
@@ -91,7 +91,7 @@ flowchart TB
     Provider["Provider access instance<br/>Authentication and optional subscription information"]
     Model["Provider-owned Models<br/>Priority and rules"]
     Alias["ModelAlias configuration<br/>Model references, local effort, and continuity"]
-    Agent["AgentTarget native scope<br/>Named native provider entries"]
+    Agent["Agent target actual configuration<br/>Named provider entries"]
     Gateway["Local model gateway<br/>Shared key and derived model list"]
     Client["Independently configured client"]
     Provider -.->|Metadata defaults| Catalog
@@ -115,9 +115,9 @@ authority. Each imported session is bound to one primary working directory; the
 destination Agent loads its own project context, and additional workspace roots
 are not copied. The [session contract](../sessions/spec.md) owns that capability.
 
-An agent's native provider entries and model choices are its configuration,
-not upstream accounts or permission grants. Preview, apply, conflict detection,
-and restoration act on that configuration. Removing a managed target does not
+An Agent's provider entries and model choices are its configuration,
+not upstream accounts or permission grants. Preview, apply, ownership and
+namespace checks, and restoration act on that configuration. Removing a managed target does not
 remove the gateway or revoke its shared key.
 
 Base priorities, time schedules, and signal rules belong to concrete models,
@@ -137,13 +137,13 @@ lifetime follow the [model-gateway contract](spec.md#model-gateway), independent
 
 The [configuration contract](../configuration/spec.md) owns TOML field syntax and
 activation semantics. The service evaluates an immutable validated snapshot with
-accepted catalog data. File persistence, service activation, and native application
+accepted catalog data. File persistence, service activation, and Agent application
 are separate failure boundaries; reporting must preserve that distinction rather
 than imply a transaction across filesystem, process, and native credential stores.
 
 The [first-use path](spec.md#first-usable-agent) is a composition of operations,
 not another owner of configuration. CLI operations and supplementary Web actions
-write the same intended settings. Authentication and native application remain
+write the same intended settings. Authentication and Agent application remain
 explicit operations; a completed earlier effect must not be repeated merely
 because a later operation failed.
 
@@ -275,8 +275,8 @@ restrict eligible provider instances to that identity. A readable token alone is
 not proof; the native gateway contract must qualify the account-identity mechanism.
 
 Agent inspection reads only what is needed to locate targets, explain effective
-scope, preview owned changes, and detect conflicts. It does not import native
-providers, models, or credentials. Supported login flows may leave their session
+scope, preview tmax-managed changes, and check ownership and namespaces. It does
+not import providers, models, or credentials. Supported login flows may leave their session
 with the native agent; this is not credential migration. Command-backed secrets
 must not execute merely to render a configuration preview.
 
@@ -313,29 +313,30 @@ A change proceeds through these boundaries:
 
 1. Detect the target version, effective scope, overriding settings, and shared
    files or auth stores. Capture a content snapshot of the managed inputs.
-2. Check the desired configuration against provider and agent capabilities and
-   compute the minimal owned changes, credential exposure, and reload requirements.
+2. Check the expected configuration against provider and agent capabilities and
+   compute the managed changes, credential exposure, and reload requirements.
    A dry run returns that description without writes or retained execution state.
-3. During actual execution, recheck captured inputs before mutation and reject
-   concurrent changes. Serialize writes to shared native files. An earlier
+3. During actual execution, re-read current inputs and overwrite tmax-managed
+   fields and entries with last-writer-wins: a later user edit to a managed field
+   is not a conflict. Serialize writes to shared actual files. An earlier
    dry run does not supply the execution snapshot.
-4. Retain current-user-restricted plaintext recovery information, write owned
-   changes with per-file replacement, and validate the resulting target
-   configuration. Native CLI or credential-store actions need their own
-   documented recovery semantics.
+4. Retain current-user-restricted plaintext recovery information as one managed
+   snapshot per target, write managed changes with per-file replacement, and
+   validate the resulting target configuration. Agent CLI or credential-store
+   actions need their own documented recovery semantics.
 5. Record applied state separately from runtime verification. A restart-dependent
    agent remains awaiting reload until its effective state is confirmed.
 
 Multiple files and an external agent credential store do not provide a single
 atomic transaction. Interrupted operations must be recoverable and visibly
-incomplete rather than hidden behind an all-or-nothing claim. Restoration is a
-three-way comparison of prior values, tmax-applied values, and current values.
-An edit to a managed field after application is a conflict, not permission to
-replace the whole file with an old backup.
+incomplete rather than hidden behind an all-or-nothing claim. Restoration is
+single-level: each successful apply replaces the target's retained managed
+snapshot, and restore returns managed fields to that snapshot without merging or
+preserving later edits to them.
 
-Before applying any relayed native entry, require an explicitly started and ready
+Before applying any relayed entry, require an explicitly started and ready
 listener. Direct entries check prerequisites without starting inference or
-issuing a paid probe. Saving either kind does not apply native files.
+issuing a paid probe. Saving either kind does not apply actual files.
 None of these operations kills a conversation or revokes a native session as an
 incidental step.
 
