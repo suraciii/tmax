@@ -2164,21 +2164,11 @@ window.__ModuleLoader__.load({
     // only after an explicit click, says what it covers and what is missing, and
     // reports an unavailable read as unavailable rather than an empty list.
 
-    /**
-     * The accounts a refresh could not read, minus the ones a person cannot fix:
-     * a provider with no supported quota source is a capability, not a failure,
-     * and its card (if it has one) already states the upstream reading.
-     */
-    function observeMissed(items) {
-      return (Array.isArray(items) ? items : [])
-        .filter(item => item.tone !== 'ok' && item.code !== 'unsupported_source')
-    }
-
     function observePanel(observe, t, loadFailed) {
       if (observe === null || observe === undefined || observe.phase === 'idle' || observe.phase === 'running') return null
       // A completed or partially refused observation names only the accounts it
       // could not read; every account it did is already on its card.
-      const missed = observeMissed(observe.items)
+      const missed = observe.items.filter(item => item.tone !== 'ok')
       if (missed.length > 0) {
         return h('p', { className: 'tmx-errorText', key: 'observe', role: 'status' }, [
           `${t('observeFailed')}${t('colon')} `,
@@ -2349,7 +2339,7 @@ window.__ModuleLoader__.load({
         return code === '' ? t('actionDone') : `${t('actionDone')}${t('colon')} ${code}`
       }
       if (observe.phase === 'done') {
-        const missed = observeMissed(observe.items).length
+        const missed = observe.items.filter(item => item.tone !== 'ok').length
         return missed === 0 ? t('observeDone') : `${t('observeFailed')}${t('colon')} ${missed}`
       }
       return verdict

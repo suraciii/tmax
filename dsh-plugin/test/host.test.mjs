@@ -155,6 +155,7 @@ function providerList() {
           authentication: 'api-key',
           affected_targets: 3,
           observations: {
+            billing_kind: 'plan_allowance',
             billing_state: 'observed',
             observations: [{ scope: 'quota', state: 'observed', last_attempt_outcome: 'completed', last_attempt_reason_code: null }],
           },
@@ -167,6 +168,7 @@ function providerList() {
           authentication: 'api-key',
           affected_targets: 3,
           observations: {
+            billing_kind: 'unknown',
             billing_state: 'unknown',
             observations: [{ scope: 'quota', state: 'unknown', last_attempt_outcome: 'unavailable', last_attempt_reason_code: 'unsupported_source' }],
           },
@@ -1427,6 +1429,21 @@ test('concurrent observe requests are rejected with busy', async () => {
   await fake.update(baseScenario())
 })
 
+test('a provider with no quota source is never refreshed', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const result = await postJson(state, '/_tmax/observe', {})
+  assert.equal(result.statusCode, 200)
+  assert.equal(result.body.ok, true)
+  // The list reports cpa-us2 with billing kind unknown: no endpoint exists, so
+  // the observation does not attempt it and reports no item for it.
+  assert.deepEqual(result.body.items.map(item => item.id), ['kimi'])
+  const refreshed = (await fake.calls())
+    .filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
+    .map(argv => argv[2])
+  assert.deepEqual(refreshed, ['kimi'], 'no source means no request')
+})
+
 test('a dry-run observation previews with --dry-run and publishes nothing', async () => {
   const { fake, state } = await applied()
   await fake.clearCalls()
@@ -1434,14 +1451,15 @@ test('a dry-run observation previews with --dry-run and publishes nothing', asyn
   assert.equal(preview.statusCode, 200)
   assert.equal(preview.body.ok, true)
   assert.equal(preview.body.dryRun, true)
-  // One quota-scope refresh per provider tmax lists, every one a preview.
+  // One quota-scope refresh per provider with a quota source, every one a preview.
   const refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
-  assert.equal(refreshes.length, 2)
+  assert.equal(refreshes.length, 1)
+  assert.ok(refreshes[0].includes('kimi'))
   for (const argv of refreshes) {
     assert.ok(argv.includes('--dry-run'), `dry run passes --dry-run: ${argv.join(' ')}`)
     assert.ok(argv.includes('--scope') && argv.includes('quota'), `one quota observation: ${argv.join(' ')}`)
   }
-  assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged', 'unchanged'])
+  assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged'])
   assert.ok(preview.body.items.every(item => item.code === 'dry_run'))
   // The preview still returns a fresh read model, under the current schema.
   assert.equal(preview.body.state.schemaVersion, 2)
@@ -1449,6 +1467,9 @@ test('a dry-run observation previews with --dry-run and publishes nothing', asyn
 
 test('explicit observe reports all-failed and partial outcomes without claiming success', async () => {
   const scenario = baseScenario()
+  // A second observable provider, so one item can fail while another completes.
+  scenario.providerList.data.providers.find(provider => provider.id === 'cpa-us2')
+    .observations.billing_kind = 'plan_allowance'
   scenario.refresh = {
     kimi: { exec: refreshFailed('kimi'), dryRun: refreshDryRun('kimi') },
     'cpa-us2': { exec: refreshFailed('cpa-us2'), dryRun: refreshDryRun('cpa-us2') },
@@ -1491,7 +1512,7 @@ test('the legacy usage refresh route observes explicitly and reports per-item re
   assert.equal(body.body.ok, true)
   assert.equal(body.body.dryRun, false)
   assert.equal(body.body.providers.length, 2)
-  assert.deepEqual(body.body.items.map(item => item.status), ['refreshed', 'refreshed'])
+  assert.deepEqual(body.body.items.map(item => item.status), ['refreshed'])
 })
 
 // ---------------------------------------------------------------------------
@@ -1505,9 +1526,9 @@ test('POST /_tmax/usage/refresh honors dryRun/preview and never observes on prev
   assert.equal(preview.statusCode, 200)
   assert.equal(preview.body.ok, true)
   assert.equal(preview.body.dryRun, true)
-  assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged', 'unchanged'])
+  assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged'])
   let refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
-  assert.equal(refreshes.length, 2)
+  assert.equal(refreshes.length, 1)
   assert.ok(refreshes.every(argv => argv.includes('--dry-run')), 'a preview passes --dry-run to every refresh')
 
   // The body `preview` alias and the query form are the same request.
@@ -1531,7 +1552,7 @@ test('POST /_tmax/usage/refresh honors dryRun/preview and never observes on prev
   const executed = await postJson(state, '/_tmax/usage/refresh', { dryRun: false })
   assert.equal(executed.statusCode, 200)
   assert.equal(executed.body.dryRun, false)
-  assert.deepEqual(executed.body.items.map(item => item.status), ['refreshed', 'refreshed'])
+  assert.deepEqual(executed.body.items.map(item => item.status), ['refreshed'])
   refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
   assert.ok(refreshes.every(argv => argv.includes('--dry-run') === false), 'a real refresh never previews')
 })
