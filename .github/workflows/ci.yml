@@ -3,6 +3,10 @@ name: Main CI
 on:
   push:
     branches: [main]
+    # Documentation-only pushes skip the post-merge gate; the pull request gate
+    # still runs the full suite for them.
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
