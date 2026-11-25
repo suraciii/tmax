@@ -674,7 +674,7 @@ window.__ModuleLoader__.load({
  * card; every window it reports keeps its own bar, named, with what is left and
  * when it resets. Two columns on a desktop, one on a phone: the same card.
  */
-.tmx-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.tmx-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
 .tmx-account { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); }
 .tmx-accountHead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 20px; }
 .tmx-accountName { font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
