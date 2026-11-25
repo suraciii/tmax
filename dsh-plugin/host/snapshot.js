@@ -13,7 +13,7 @@ import { readEnvelope, READ_TIMEOUT_MS } from './cli.js'
 import { composeInventory, readInventoryFacts } from './inventory.js'
 import { liveProviderIds } from './ownership.js'
 
-export const STATE_SCHEMA_VERSION = 2
+export const STATE_SCHEMA_VERSION = 3
 const CACHE_TTL_MS = 5_000
 const PROTOCOLS = new Set(['chat-completions', 'responses', 'messages'])
 
@@ -127,6 +127,7 @@ function mapProvider(entry, inspected, fallbackId) {
     name: text(listed.name) ?? id,
     enabled: nullableBoolean(listed.enabled),
     authentication: text(listed.authentication),
+    source: text(listed.source),
     affectedTargets: Number.isInteger(listed.affected_targets) ? listed.affected_targets : 0,
     accountIdentity: null,
     subscription: null,
@@ -153,6 +154,7 @@ function mapProvider(entry, inspected, fallbackId) {
     name: text(object(provider.overrides).name) ?? text(listed.name) ?? id,
     enabled: nullableBoolean(provider.enabled) ?? base.enabled,
     authentication: text(listed.authentication) ?? text(object(provider.auth).method),
+    source: text(listed.source) ?? text(data.source) ?? text(provider.source),
     accountIdentity: text(observations.account_identity),
     subscription: provider.subscription ?? null,
     integration: text(provider.integration),
@@ -367,6 +369,118 @@ function diagnosticsSection(inventory, statusRead) {
 }
 
 /**
+ * The model catalog: every configured provider and every concrete model or
+ * alias under it, plus the target selections that already reference them.
+ * `model list` owns the model identities and published protocols; the target
+ * dossier owns entry names and selections; `provider list` owns the provider
+ * rows. Unknown is null, an empty readable list is empty, never the other way.
+ */
+function composeCatalog({ providerRows, providersKnown = true, modelListRead, inspect, defaultSelection }) {
+  const modelsKnown = modelListRead?.ok === true
+  const models = modelsKnown ? list(object(modelListRead.data).models) : []
+  const dossierKnown = inspect !== null && typeof inspect === 'object'
+  const entries = dossierKnown ? list(inspect.providers) : null
+  const gateway = providerRows.find(provider => provider?.source === 'gateway')
+  const gatewayId = gateway === undefined ? null : text(gateway.id)
+  const defaultProvider = defaultSelection !== null && typeof defaultSelection === 'object'
+    ? text(defaultSelection.provider)
+    : null
+  // `agent inspect` reports the default's provider as the target-local entry
+  // name, while the catalog keys providers by the referenced tmax provider ID.
+  const defaultEntry = defaultProvider === null || entries === null
+    ? undefined
+    : entries.find(entry => text(object(entry).name) === defaultProvider)
+  const defaultRow = defaultSelection !== null && typeof defaultSelection === 'object'
+    ? {
+        provider: text(object(defaultEntry?.source).provider) ?? defaultProvider,
+        model: text(defaultSelection.model) ?? text(defaultSelection.id),
+        protocol: text(defaultSelection.protocol),
+      }
+    : null
+  const byProvider = new Map()
+  for (const row of models) {
+    const source = object(row)
+    const kind = text(source.kind)
+    const id = text(source.id)
+    if (id === null) continue
+    let providerId = null
+    let modelId = null
+    if (kind === 'alias') {
+      providerId = gatewayId
+      modelId = id
+    } else if (kind === 'concrete') {
+      const at = id.indexOf('/')
+      if (at > 0 && at < id.length - 1) {
+        providerId = id.slice(0, at)
+        modelId = id.slice(at + 1)
+      }
+    }
+    if (providerId === null || modelId === null) continue
+    const protocols = list(source.published_protocols).filter(protocol => typeof protocol === 'string')
+    const declaredProtocols = Array.isArray(source.protocols)
+      ? source.protocols.filter(protocol => typeof protocol === 'string')
+      : null
+    const rowForProvider = byProvider.get(providerId) ?? []
+    rowForProvider.push({
+      id: modelId,
+      kind,
+      enabled: nullableBoolean(source.enabled),
+      availability: text(source.availability),
+      protocols,
+      publishedProtocols: protocols,
+      declaredProtocols,
+    })
+    byProvider.set(providerId, rowForProvider)
+  }
+  const providers = providerRows.map(provider => {
+    const knownModels = modelsKnown ? (byProvider.get(provider.id) ?? []) : []
+    const providerEntries = entries === null
+      ? null
+      : entries
+        .filter(entry => text(object(entry.source).provider) === provider.id)
+        .map(entry => ({
+          name: text(entry.name),
+          relayed: entry.relayed === true,
+          protocols: [...new Set(list(entry.models).map(model => text(object(model).protocol)).filter(protocol => protocol !== null))],
+        }))
+      .filter(entry => entry.name !== null)
+    const selected = providerEntries === null
+      ? null
+      : providerEntries.flatMap(entry => list(entries.find(candidate => text(candidate.name) === entry.name)?.models)
+        .map(model => ({ id: text(object(model).id), protocol: text(object(model).protocol) })))
+    const catalogModels = knownModels.map(model => {
+      const joinedProtocols = selected === null
+        ? null
+        : selected.filter(item => item.id === model.id).map(item => item.protocol).filter(protocol => protocol !== null)
+      return {
+        ...model,
+        joined: joinedProtocols === null ? null : joinedProtocols.length > 0,
+        joinedProtocols,
+        default: defaultRow !== null && defaultRow.provider === provider.id && defaultRow.model === model.id,
+      }
+    })
+    return {
+      id: provider.id,
+      name: provider.name,
+      source: provider.source,
+      integration: provider.integration,
+      enabled: provider.enabled,
+      entry: providerEntries === null || providerEntries.length === 0 ? null : providerEntries[0].name,
+      entries: providerEntries,
+      models: catalogModels,
+      totalCount: modelsKnown ? knownModels.length : null,
+      joinedCount: !modelsKnown || selected === null ? null : catalogModels.filter(model => model.joined === true).length,
+    }
+  })
+  return {
+    state: modelsKnown && providersKnown ? 'available' : 'unavailable',
+    entriesState: entries === null ? 'unknown' : 'available',
+    default: defaultRow,
+    providers,
+  }
+}
+
+/**
  * Create the state service.
  * @param {object} input
  * @param {object} input.config
@@ -418,7 +532,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
    * still composed and their own failures named. Empty never stands in for
    * unknown.
    */
-  function inventoryFailureState(error, { startedAt, providerRows, listedRead, configRead }) {
+  function inventoryFailureState(error, { startedAt, providerRows, listedRead, configRead, modelListRead }) {
     const code = typeof error?.code === 'string' && error.code !== '' ? error.code : 'inventory_unavailable'
     const message = typeof error?.message === 'string' && error.message !== ''
       ? error.message
@@ -428,6 +542,8 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
     else if (!listedRead.ok) errors.push({ section: 'providers', code: listedRead.code, message: listedRead.message ?? listedRead.code })
     if (configRead.envelope === undefined) errors.push({ section: 'config', code: configRead.code, message: configRead.message ?? configRead.code })
     else if (!configRead.ok) errors.push({ section: 'config', code: configRead.code, message: configRead.message ?? configRead.code })
+    if (modelListRead.envelope === undefined) errors.push({ section: 'catalog', code: modelListRead.code, message: modelListRead.message ?? modelListRead.code })
+    else if (!modelListRead.ok) errors.push({ section: 'catalog', code: modelListRead.code, message: modelListRead.message ?? modelListRead.code })
     // Availability is "tmax answered something": a failed target read must not
     // hide provider or configuration evidence that did answer.
     const ok = listedRead.envelope !== undefined || configRead.envelope !== undefined
@@ -445,6 +561,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
       config: configSection(configRead),
       routes: [],
       providers: { tmax: providerRows },
+      catalog: composeCatalog({ providerRows, providersKnown: listedRead?.envelope !== undefined && listedRead?.ok === true, modelListRead, inspect: undefined, defaultSelection: null }),
       routing: [],
       diagnostics: {
         history: { state: 'unavailable', reasonCode: code },
@@ -461,9 +578,10 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
     const inventoryRead = await readInventoryFacts(config)
       .then(data => ({ ok: true, data }))
       .catch(error => ({ ok: false, error }))
-    const [listedRead, configRead] = await Promise.all([
+    const [listedRead, configRead, modelListRead] = await Promise.all([
       readEnvelope(config, ['provider', 'list']),
       readEnvelope(config, ['config', 'validate']),
+      readEnvelope(config, ['model', 'list']),
     ])
     const listed = listedRead.ok ? list(object(listedRead.data).providers) : []
     const inspected = await Promise.all(listed.map(entry => {
@@ -479,7 +597,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
     }))
     const providerRows = listed.map((entry, index) => mapProvider(entry, inspected[index], object(entry).id))
     if (!inventoryRead.ok) {
-      return inventoryFailureState(inventoryRead.error, { startedAt, providerRows, listedRead, configRead })
+      return inventoryFailureState(inventoryRead.error, { startedAt, providerRows, listedRead, configRead, modelListRead })
     }
     const inventory = composeInventory(inventoryRead.data)
     const facts = inventoryRead.data
@@ -547,10 +665,20 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
     else if (!listedRead.ok) addError('providers', listedRead.code, listedRead.message)
     if (configRead.envelope === undefined) addError('config', configRead.code, configRead.message)
     else if (!configRead.ok) addError('config', configRead.code, configRead.message)
+    if (modelListRead.envelope === undefined) addError('catalog', modelListRead.code, modelListRead.message)
+    else if (!modelListRead.ok) addError('catalog', modelListRead.code, modelListRead.message)
     if (facts.gateway.envelope === undefined) addError('gateway', facts.gateway.code, facts.gateway.message)
     else if (!facts.gateway.ok) addError('gateway', facts.gateway.code, facts.gateway.message)
     if (facts.status.envelope === undefined) addError('authority', facts.status.code, facts.status.message)
     else if (!facts.status.ok) addError('authority', facts.status.code, facts.status.message)
+
+    const catalog = composeCatalog({
+      providerRows,
+      providersKnown: listedRead.envelope !== undefined && listedRead.ok,
+      modelListRead,
+      inspect: facts.inspect,
+      defaultSelection: object(inventory.target).default ?? facts.inspect.default,
+    })
 
     return {
       ok: true,
@@ -566,6 +694,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
       config: configSection(configRead),
       routes,
       providers: { tmax: providerRows },
+      catalog,
       routing,
       diagnostics: diagnosticsSection(inventory, facts.gateway),
     }

@@ -206,6 +206,41 @@ window.__ModuleLoader__.load({
       actionRestartGateway: 'Restart gateway',
       actionGatewayNote: 'Starting or stopping the gateway can take longer and affects every client that uses it.',
       // Seats: one marker, one settings card, one tool card.
+      // Page tabs, catalog search, provider detail, and target-selection add.
+      tabsLabel: 'Page sections',
+      tabModels: 'Models',
+      modelOne: 'model',
+      modelUnit: 'models',
+      noProviders: 'No providers are configured.',
+      tabGateway: 'Gateway',
+      tabQuota: 'Quota',
+      searchCatalogPlaceholder: 'Search models, providers, aliases',
+      clearSearch: 'Clear search',
+      searchNoMatch: 'No matching models.',
+      providerNoModels: 'This provider has no models.',
+      backAllProviders: 'All providers',
+      joinModel: 'Add to DSH',
+      joined: 'joined',
+      joinedUnknown: 'join state unknown',
+      gatewayKey: 'Key',
+      gatewayConfig: 'configuration',
+      gatewayConfigured: 'configured',
+      gatewayUnconfigured: 'not configured',
+      addPreviewing: 'Checking the current catalog…',
+      addPreviewReady: 'Add preview ready.',
+      addInvalidPreview: 'The preview did not return a complete plan.',
+      addApplyPending: 'Apply current changes first',
+      catalogUnavailable: 'The model catalog is unavailable. Fix the failed provider or model read and refresh.',
+      addNewEntry: 'new entry',
+      addExistingEntry: 'existing entry',
+      addProtocol: 'Protocol',
+      addConfirm: 'Add',
+      addApplied: 'Added to DSH.',
+      addReloadHint: 'Reload DSH to use it.',
+      addFailed: 'Add failed',
+      addStepProviderAdd: 'create entry',
+      addStepModelAdd: 'add model',
+      addStepApply: 'apply',
       markerUnknown: 'tmax state unknown',
       markerReady: 'tmax ready',
       markerNoRoute: 'no tmax route projected',
@@ -449,6 +484,41 @@ window.__ModuleLoader__.load({
       actionRestartGateway: '重启网关',
       actionGatewayNote: '启动或停止网关可能耗时较长，并会影响所有使用它的客户端。',
       // 第三阶段席位：一个标记、一张设置卡片、一个路由面板、一张工具结果卡片。
+      // Page tabs, catalog search, provider detail, and target-selection add.
+      tabsLabel: '页面分区',
+      tabModels: '模型',
+      modelOne: '个模型',
+      modelUnit: '个模型',
+      noProviders: '没有配置供应商。',
+      tabGateway: '网关',
+      tabQuota: '额度',
+      searchCatalogPlaceholder: '搜索模型、供应商、别名',
+      clearSearch: '清除搜索',
+      searchNoMatch: '没有匹配的模型。',
+      providerNoModels: '该供应商没有模型。',
+      backAllProviders: '所有供应商',
+      joinModel: '加入 DSH',
+      joined: '已加入',
+      joinedUnknown: '加入状态未知',
+      gatewayKey: '密钥',
+      gatewayConfig: '配置',
+      gatewayConfigured: '已配置',
+      gatewayUnconfigured: '未配置',
+      addPreviewing: '正在核对当前目录…',
+      addPreviewReady: '加入预检已就绪。',
+      addInvalidPreview: '预检没有返回完整计划。',
+      addApplyPending: '先应用当前更改',
+      catalogUnavailable: '模型目录不可用；先修复供应商或模型读取失败并刷新。',
+      addNewEntry: '新建条目',
+      addExistingEntry: '加入现有条目',
+      addProtocol: '协议',
+      addConfirm: '加入',
+      addApplied: '已加入 DSH。',
+      addReloadHint: '重新加载 DSH 后生效。',
+      addFailed: '加入失败',
+      addStepProviderAdd: '新建条目',
+      addStepModelAdd: '加入模型',
+      addStepApply: '应用',
       markerUnknown: 'tmax 状态未知',
       markerReady: 'tmax 可用',
       markerNoRoute: '未投影 tmax 路由',
@@ -557,11 +627,11 @@ window.__ModuleLoader__.load({
       ['processes_started', 'effectProcessesStarted'],
       ['locks_created', 'effectLocksCreated'],
     ]
-    // Explicit repair actions: one fixed tmax operation per action and one exact
-    // operand set. The page never composes an argv, never chains an action, and
+    // Explicit actions: one fixed tmax operation or fixed selection write per
+    // action and one exact operand set. The page never composes an argv and
     // never retries one on its own.
     const GATEWAY_ACTIONS = ['gateway_start', 'gateway_stop', 'gateway_restart']
-    const ACTION_KINDS = ['resume_quota', 'reset_failure', 'observe_provider', 'open_management', ...GATEWAY_ACTIONS]
+    const ACTION_KINDS = ['resume_quota', 'reset_failure', 'observe_provider', 'open_management', 'add_model', ...GATEWAY_ACTIONS]
     const ACTION_LABELS = {
       resume_quota: 'actionResumeQuota',
       reset_failure: 'actionResetFailure',
@@ -572,6 +642,7 @@ window.__ModuleLoader__.load({
       gateway_restart: 'actionRestartGateway',
     }
     const ACTION_SCOPES = ['quota', 'auth', 'models', 'all']
+    const ADD_PROTOCOLS = ['chat-completions', 'responses', 'messages']
     const ACTION_FAILURE_STATUSES = ['failed', 'blocked', 'refused', 'rejected', 'error']
     const LABEL_TYPES = { TOKENS_LIMIT: 'windowTokens', TIME_LIMIT: 'windowTime' }
     const LABEL_KEYS = { rolling: 'windowRolling', interval: 'windowRolling', weekly: 'windowWeekly', monthly: 'windowMonthly', weekly_allowance: 'windowWeekly' }
@@ -636,11 +707,7 @@ window.__ModuleLoader__.load({
 .tmx-resetWord { display: none; }
 .tmx-windowWide { min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-accountActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
-/* A model answers one question: which account it uses. */
-.tmx-models { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
-.tmx-model { padding: 8px 14px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); }
 .tmx-modelId { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 13.5px; line-height: 20px; overflow-wrap: anywhere; }
-.tmx-modelVia { font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-skeletonBar { display: block; width: 60%; height: 10px; border-radius: 4px; background: var(--dsw-alias-interactive-bg-hover); }
 .tmx-skeletonName { width: 30%; margin-bottom: 4px; }
 .tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
@@ -678,12 +745,91 @@ window.__ModuleLoader__.load({
   .tmx-bar { order: 4; flex-basis: 100%; height: 10px; align-self: center; }
   .tmx-windowWide { order: 2; flex-basis: 100%; font-size: 14px; }
   .tmx-modelId { font-size: 14px; }
-  .tmx-modelVia { font-size: 14px; }
   .tmx-nextStep { font-size: 14px; }
 }
 @media (max-width: 420px) { .tmx-meta { display: none; } }
 @media (prefers-reduced-motion: reduce) { .tmx-barFill { transition: none; } }
 /* Seats: navigation marker, Settings > Models card, tool card. */
+/* Page tabs, model catalog, provider detail, and the one-line add panel. */
+.tmx-tabs { display: flex; justify-content: center; gap: 2px; width: max-content; max-width: 100%; margin: 16px auto 0; padding: 2px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-tab { box-sizing: border-box; min-height: 28px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
+.tmx-tab:hover { color: var(--dsw-alias-label-primary); }
+.tmx-tab[data-active='true'] { background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-primary); font-weight: 500; }
+.tmx-catalogSection { margin-top: 16px; }
+.tmx-searchRow { display: flex; align-items: center; gap: 12px; }
+.tmx-search { box-sizing: border-box; display: flex; flex: 1; align-items: center; gap: 8px; width: 100%; max-width: 360px; height: 34px; padding: 0 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 999px; background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-secondary); }
+.tmx-search:focus-within { border-color: var(--dsw-alias-label-tertiary); }
+.tmx-searchGlyph { flex: none; font-size: 14px; line-height: 1; }
+.tmx-searchInput { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; }
+.tmx-searchInput::placeholder { color: var(--dsw-alias-label-tertiary); }
+.tmx-searchInput::-webkit-search-cancel-button { display: none; }
+.tmx-searchClear { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.tmx-catalog { margin-top: 12px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); overflow: hidden; }
+.tmx-providerRow { box-sizing: border-box; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 10px 16px; border: 0; border-bottom: 0.5px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; text-align: left; cursor: pointer; }
+.tmx-providerRow:last-child { border-bottom: 0; }
+.tmx-providerRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-mark { flex: none; display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; overflow: hidden; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 14px; font-weight: 600; line-height: 1; }
+.tmx-mark[data-gateway='true'] { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
+.tmx-providerMain { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.tmx-providerName { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.tmx-providerMeta { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-providerSide { display: flex; flex: none; align-items: center; gap: 8px; }
+.tmx-ratio { font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.tmx-chevron { font-size: 16px; line-height: 1; color: var(--dsw-alias-label-tertiary); }
+.tmx-searchGroup { border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-searchGroup:last-child { border-bottom: 0; }
+.tmx-searchHead { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); }
+.tmx-searchHead .tmx-providerMeta { display: none; }
+.tmx-modelRow { box-sizing: border-box; display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 10px 16px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-modelRow:last-child { border-bottom: 0; }
+.tmx-modelMain { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.tmx-modelProtocols { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.tmx-modelSide { display: flex; flex: none; align-items: center; gap: 8px; }
+.tmx-joined { display: inline-flex; align-items: center; gap: 3px; color: var(--dsw-alias-state-success-primary); font-size: 12px; line-height: 18px; white-space: nowrap; }
+.tmx-joinButton { min-height: 28px; padding: 0 10px; border-radius: 999px; font-size: 12px; }
+.tmx-addBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px; border-top: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); font-size: 12px; line-height: 18px; }
+.tmx-addText { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tmx-addProtocol { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-secondary); }
+.tmx-addSelect { height: 26px; max-width: 160px; padding: 0 6px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 6px; background: var(--dsw-alias-settings-card-fill); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
+.tmx-addActions { display: flex; align-items: center; gap: 6px; }
+.tmx-detailBack { display: inline-flex; align-items: center; min-height: 32px; padding: 8px 16px 4px; border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.tmx-detailBack:hover { color: var(--dsw-alias-label-primary); }
+.tmx-detailHead { display: flex; align-items: center; gap: 12px; padding: 8px 16px 12px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tmx-detailHead .tmx-mark { width: 40px; height: 40px; }
+.tmx-detailNote, .tmx-detailEmpty, .tmx-catalogNote { padding: 10px 16px; }
+.tmx-catalogEmpty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 24px 16px; }
+.tmx-catalogError { margin: 8px 0 0; }
+.tmx-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 10px 0 0; font-size: 12.5px; line-height: 20px; }
+.tmx-fact { display: contents; }
+.tmx-fact dt { color: var(--dsw-alias-label-secondary); }
+.tmx-fact dd { margin: 0; overflow-wrap: anywhere; }
+.tmx-gatewayCard { max-width: 560px; }
+.tmx-gatewayHead { display: flex; align-items: center; gap: 8px; }
+.tmx-gatewayTitle { margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
+.tmx-gatewayStatus { font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.tmx-gatewayReason { margin-top: 8px; }
+.tmx-gatewayActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.tmx-tab:focus-visible, .tmx-providerRow:focus-visible, .tmx-detailBack:focus-visible, .tmx-searchClear:focus-visible, .tmx-addSelect:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
+@media (max-width: 720px) {
+  .tmx-tabs { width: 100%; }
+  .tmx-tab { flex: 1; }
+  .tmx-search { max-width: none; }
+  .tmx-providerRow { padding: 10px 12px; }
+  .tmx-modelRow { padding: 10px 12px; }
+  .tmx-searchHead { padding: 10px 12px; }
+  .tmx-detailBack { padding: 8px 12px 4px; }
+  .tmx-detailHead { padding: 8px 12px 12px; }
+  .tmx-addBar { padding: 10px 12px; }
+  .tmx-detailNote, .tmx-detailEmpty, .tmx-catalogNote { padding: 10px 12px; }
+}
+@media (pointer: coarse) {
+  .tmx-tab { min-height: 44px; padding: 0 20px; }
+  .tmx-joinButton { min-height: 44px; padding: 0 14px; }
+  .tmx-detailBack { min-height: 44px; }
+  .tmx-search { min-height: 48px; }
+  .tmx-searchClear { width: 44px; height: 44px; }
+  .tmx-addSelect { height: 44px; }
+}
 .tmx-navMark { display: inline-flex; align-items: center; gap: 4px; }
 .tmx-navMark[data-tone='warn'] .tmx-dot { background: var(--dsw-alias-state-warn-primary); }
 .tmx-navMark[data-tone='error'] .tmx-dot { background: var(--dsw-alias-state-error-primary); }
@@ -1044,7 +1190,6 @@ window.__ModuleLoader__.load({
       if (config.state === 'unavailable') return { kind: 'config', reason: 'unavailable' }
       // A failed projection read leaves routes unknown; only a retry is honest.
       if (projectionFailed(state)) return { kind: 'retry', reason: 'projection' }
-
       if (usable.length === 0) {
         if (conflict !== null && conflict !== undefined) {
           return { kind: 'conflict', code: conflictCode(conflict), message: conflictMessage(conflict) }
@@ -1397,6 +1542,13 @@ window.__ModuleLoader__.load({
       if (action === 'open_management' || GATEWAY_ACTIONS.includes(action)) return { action, dryRun: dryRun === true }
       const provider = descriptor.provider
       if (typeof provider !== 'string' || provider === '') return undefined
+      if (action === 'add_model') {
+        const model = descriptor.model
+        const protocol = descriptor.protocol
+        if (typeof model !== 'string' || model === '') return undefined
+        if (typeof protocol !== 'string' || !ADD_PROTOCOLS.includes(protocol)) return undefined
+        return { action, provider, model, protocol, dryRun: dryRun === true }
+      }
       if (action === 'observe_provider') {
         const scope = typeof descriptor.scope === 'string' && ACTION_SCOPES.includes(descriptor.scope) ? descriptor.scope : 'quota'
         return { action, provider, scope, dryRun: dryRun === true }
@@ -1583,14 +1735,14 @@ window.__ModuleLoader__.load({
 
     /**
      * The one consumer gate for a host read model, shared by the page and every
-     * seat. Only an object carrying `schemaVersion === 2` and `ok === true` is
+     * seat. Only an object carrying `schemaVersion === 3` and `ok === true` is
      * a state; an unsupported schema is a typed failure, and a refused model is
      * an error. Neither is ever adopted as evidence.
      * @returns {{ object: boolean, state?: object, schemaUnsupported?: boolean, message?: string }}
      */
     function stateGate(value, response) {
       if (value === null || typeof value !== 'object') return { object: false }
-      if (value.schemaVersion !== 2) {
+      if (value.schemaVersion !== 3) {
         return { object: true, schemaUnsupported: true, message: boundedText(value.schemaVersion, 24) }
       }
       if (value.ok !== true) return { object: true, message: stateError(value, response?.status) }
@@ -1637,8 +1789,21 @@ window.__ModuleLoader__.load({
       const [observe, setObserve] = React.useState({ phase: 'idle', items: [] })
       const [connect, setConnect] = React.useState({ phase: 'idle', lines: [] })
       // One explicit repair action at a time, in one panel: preview, then an
-      // explicit confirmation, then a typed result. Never chained.
+      // explicit confirmation, then a typed result. Never retried on its own.
       const [repair, setRepair] = React.useState({ phase: 'idle' })
+      // The page's own browsing state. A tab switch only changes which read
+      // model section is shown; it never starts a read or an action.
+      const [tab, setTab] = React.useState('models')
+      const [query, setQuery] = React.useState('')
+      const [selectedProvider, setSelectedProvider] = React.useState(null)
+      // One target-selection add at a time: catalog preview, then confirm, then
+      // the fixed provider/model/apply sequence's typed result.
+      const [add, setAdd] = React.useState({ phase: 'idle' })
+      // A response may arrive after a newer preview/protocol change; only the
+      // newest request may touch the panel or adopt its state.
+      const [addSeq] = React.useState(() => ({ current: 0 }))
+      // After the pending-gate Apply succeeds, resume the add that asked for it.
+      const [resumeAdd, setResumeAdd] = React.useState(null)
 
       const loadState = React.useCallback(async () => {
         setLoad(previous => ({ phase: previous.value === undefined ? 'loading' : 'refreshing', value: previous.value }))
@@ -1650,7 +1815,7 @@ window.__ModuleLoader__.load({
           // The state schema is a hard consumer gate: an unknown version is a
           // failure, never a payload this page guesses at. A last-known state
           // stays on screen, labeled, instead of being cleared.
-          if (value.schemaVersion !== 2) {
+          if (value.schemaVersion !== 3) {
             setLoad(previous => ({
               phase: 'failed',
               value: previous.value,
@@ -1741,7 +1906,10 @@ window.__ModuleLoader__.load({
         }
       }, [loadState, t])
 
-      const cancelConnect = React.useCallback(() => { setConnect({ phase: 'idle', lines: [] }) }, [])
+      const cancelConnect = React.useCallback(() => {
+        setResumeAdd(null)
+        setConnect({ phase: 'idle', lines: [] })
+      }, [])
 
       /**
        * One action, previewed or executed. The payload is rebuilt from the
@@ -1786,12 +1954,136 @@ window.__ModuleLoader__.load({
 
       const cancelRepair = React.useCallback(() => { setRepair({ phase: 'idle' }) }, [])
 
+      /**
+       * The one target-selection action. A preview posts the catalog request
+       * with dryRun; confirming posts the same operands without it. The host
+       * returns the plan or the fresh state; the browser never composes argv.
+       */
+      const runAdd = React.useCallback(async (request, dryRun) => {
+        const payload = actionPayload({ action: 'add_model', provider: request.provider, model: request.model, protocol: request.protocol }, dryRun)
+        if (payload === undefined) return
+        const generation = addSeq.current + 1
+        addSeq.current = generation
+        try {
+          const { response, value } = await postJson('/_tmax/action', payload)
+          if (generation !== addSeq.current) return
+          const result = value !== null && typeof value === 'object' && value.result !== null && typeof value.result === 'object'
+            ? value.result
+            : undefined
+          const succeeded = actionSucceeded(value, response.ok)
+          // A partial add returns the state after the completed prefix; adopt it
+          // even on a refusal so the page shows the entry/model that now exists.
+          const nextState = value?.state !== null && typeof value?.state === 'object' ? value.state : undefined
+          if (nextState !== undefined) adoptState(setLoad, nextState, response, t)
+          if (succeeded && dryRun) {
+            const plan = result?.status === 'dry_run' && result.data !== null && typeof result.data === 'object' ? result.data : undefined
+            const entry = plan?.entry !== null && typeof plan?.entry === 'object' ? plan.entry : undefined
+            const valid = plan !== undefined
+              && entry !== undefined
+              && typeof entry.name === 'string' && entry.name !== ''
+              && (entry.mode === 'create' || entry.mode === 'existing')
+              && plan.provider === request.provider
+              && plan.model === request.model
+              && plan.protocol === request.protocol
+            if (!valid) {
+              setAdd({ phase: 'failed', request, result, message: t('addInvalidPreview') })
+              return
+            }
+            setAdd({ phase: 'preview', request, plan })
+            return
+          }
+          if (succeeded) {
+            setAdd({ phase: 'applied', request, result })
+            return
+          }
+          const detail = hostCodeText(result?.code, result?.message)
+          // Plan refusals (target pending, catalog unavailable, unknown model)
+          // carry their typed code on the body, not in a tmax result envelope.
+          const code = result?.code ?? (value !== null && typeof value?.code === 'string' ? value.code : undefined)
+          setAdd({
+            phase: 'failed',
+            request,
+            result,
+            code,
+            message: detail === '' ? stateError(value, response.status) : undefined,
+          })
+        } catch (error) {
+          if (generation !== addSeq.current) return
+          setAdd(previous => ({ ...previous, phase: 'failed', message: plainError(error) }))
+        }
+      }, [addSeq, t])
+
+      const previewAdd = React.useCallback(request => {
+        setAdd({ phase: 'previewing', request })
+        void runAdd(request, true)
+      }, [runAdd])
+
+      const startAdd = React.useCallback((provider, model, protocols) => {
+        const protocol = preferredProtocol(protocols)
+        if (protocol === undefined) return
+        previewAdd({ provider, model, protocol })
+      }, [previewAdd])
+
+      const changeAddProtocol = React.useCallback(protocol => {
+        if (add.request === undefined || !ADD_PROTOCOLS.includes(protocol)) return
+        previewAdd({ ...add.request, protocol })
+      }, [add.request, previewAdd])
+
+      const confirmAdd = React.useCallback(() => {
+        if (add.phase !== 'preview' || add.request === undefined) return
+        setAdd(previous => ({ ...previous, phase: 'executing' }))
+        void runAdd(add.request, false)
+      }, [add.phase, add.request, runAdd])
+
+      const cancelAdd = React.useCallback(() => {
+        addSeq.current += 1
+        setAdd({ phase: 'idle' })
+      }, [addSeq])
+      const openProvider = React.useCallback(id => {
+        setSelectedProvider(id)
+        // Do not clear a pending add: navigation must not turn a running target
+        // write into an editable idle panel.
+      }, [])
+      const backProviders = React.useCallback(() => {
+        setSelectedProvider(null)
+      }, [])
+
+      /** The add refusal's only recovery: close it and preview the target Apply. */
+      const applyPendingAdd = React.useCallback(() => {
+        const request = add.request
+        if (request === undefined) return
+        setResumeAdd(request)
+        cancelAdd()
+        void previewConnect()
+      }, [add.request, cancelAdd, previewConnect])
+
+      // A successful contextual Apply resumes the add that requested it. Failed
+      // or cancelled previews clear the resume so a later unrelated Apply cannot
+      // silently open a stale add panel.
+      React.useEffect(() => {
+        if (resumeAdd === null) return
+        if (connect.phase === 'applied') {
+          const request = resumeAdd
+          setResumeAdd(null)
+          // The approve/apply flow may have run while the reader navigated away;
+          // bring the resumed preview back to the same catalog context instead
+          // of completing off-screen.
+          setTab('models')
+          setQuery('')
+          setSelectedProvider(request.provider)
+          previewAdd(request)
+        } else if (connect.phase === 'failed' || connect.phase === 'idle') {
+          setResumeAdd(null)
+        }
+      }, [connect.phase, resumeAdd, previewAdd])
+
       const state = load.value !== null && typeof load.value === 'object' && load.value.ok === true ? load.value : undefined
       const verdictInfo = verdict(load, t)
       const action = state === undefined ? undefined : nextAction(load)
       const busy = observe.phase === 'running'
         || connect.phase === 'previewing' || connect.phase === 'executing'
         || repair.phase === 'previewing' || repair.phase === 'executing'
+        || add.phase === 'previewing' || add.phase === 'executing'
       const repairHandlers = {
         run: descriptor => { void runRepair(descriptor, false) },
         disabled: busy,
@@ -1817,9 +2109,10 @@ window.__ModuleLoader__.load({
         h('div', { className: 'tmx-scroll' },
           h('div', { className: 'tmx-content' }, [
             pageHeader(state, state === undefined && load.phase === 'failed' ? retryButton : refreshButton, t),
+            state === undefined ? null : tabsBar(tab, setTab, t),
             verdictLine(verdictInfo, primaryAction(action, busy, { start: () => repairHandlers.run({ action: 'gateway_start' }), connect: previewConnect }, t), t),
             h('p', { className: 'tmx-sr', key: 'live', role: 'status', 'aria-live': 'polite' },
-              announce({ load, observe, connect, repair, verdict: verdictInfo.text }, t)),
+              announce({ load, observe, connect, repair, add, verdict: verdictInfo.text }, t)),
             state !== undefined && load.phase === 'failed' ? null
               : nextStep(action, t, { retry: loadState, failures: state === undefined ? [] : [...sectionErrors(state), ...configErrors(state)] }),
             state === undefined ? null : routeBlockerLine(state, t),
@@ -1829,8 +2122,25 @@ window.__ModuleLoader__.load({
             connectPanel(connect, t, { execute: executeConnect, cancel: cancelConnect }),
             observePanel(observe, t, load.phase === 'failed'),
             state === undefined && load.phase === 'loading' ? skeleton(t) : null,
-            state === undefined ? null : accountsSection(state, t, repairHandlers),
-            state === undefined ? null : modelsSection(state, t),
+            state === undefined ? null : tab === 'models'
+              ? catalogSection(state, t, {
+                query,
+                onQuery: setQuery,
+                selectedProvider,
+                onOpen: openProvider,
+                onBack: backProviders,
+                add,
+                onAdd: startAdd,
+                onProtocol: changeAddProtocol,
+                onConfirm: confirmAdd,
+                onCancel: cancelAdd,
+                onApplyPending: applyPendingAdd,
+                gatewayConfigured: state.gateway?.configured === true,
+                busy,
+              })
+              : tab === 'gateway'
+                ? gatewaySection(state, t, repairHandlers, busy)
+                : accountsSection(state, t, repairHandlers),
           ])))
     }
 
@@ -2051,51 +2361,410 @@ window.__ModuleLoader__.load({
       ])
     }
 
-    /** The account each model's routing selects, when the evidence reports one. */
-    function accountOfModel(routing, id) {
-      const entry = id === undefined
-        ? undefined
-        : routing.find(item => item !== null && typeof item === 'object' && item.model === id)
-      const selection = entry === undefined || entry.selection === null || typeof entry.selection !== 'object'
-        ? {}
-        : entry.selection
-      if (typeof selection.provider === 'string' && selection.provider !== '') return selection.provider
-      if (typeof selection.qualifiedModel === 'string' && selection.qualifiedModel !== '') {
-        return selection.qualifiedModel.split('/')[0]
-      }
-      return undefined
+    /** The model catalog, or null when this state predates/hides it. */
+    function catalogOf(state) {
+      const catalog = state !== null && typeof state === 'object' ? state.catalog : null
+      return catalog !== null && typeof catalog === 'object' ? catalog : null
     }
 
-    function modelsSection(state, t) {
-      const routes = Array.isArray(state.routes) ? state.routes : []
-      const routing = Array.isArray(state.routing) ? state.routing : []
-      const target = state.target !== null && typeof state.target === 'object' ? state.target : {}
-      const selected = target.default !== null && typeof target.default === 'object' ? target.default : undefined
-      const tiles = []
-      for (const route of routes) {
-        if (route === null || typeof route !== 'object') continue
-        for (const model of Array.isArray(route.models) ? route.models : []) {
-          if (model === null || typeof model !== 'object') continue
-          const id = typeof model.id === 'string' && model.id !== '' ? model.id : undefined
-          const account = accountOfModel(routing, id)
-          const isDefault = id !== undefined && selected !== undefined && selected.id === id
-            && (typeof selected.provider !== 'string' || selected.provider === route.provider)
-          tiles.push(h('li', { className: 'tmx-model', key: `model:${route.provider}:${id ?? tiles.length}` }, [
-            h('div', { className: 'tmx-modelId', key: 'id' }, [
-              boundedText(id ?? ((typeof model.name === 'string' ? model.name : '') || t('unknown')), 120),
-              isDefault ? h('span', { className: 'tmx-tag', key: 'default' }, t('defaultTag')) : null,
-            ]),
-            h('div', { className: 'tmx-modelVia', key: 'via' }, account === undefined ? '' : boundedText(account, 80)),
-          ]))
-        }
+    function catalogProviders(catalog) {
+      if (catalog === null || !Array.isArray(catalog.providers)) return []
+      const providers = catalog.providers.filter(provider => provider !== null && typeof provider === 'object')
+      // Providers already selected into the target lead, then a stable name
+      // order. This is an ordering only: no provider gets a status label.
+      const rank = provider => provider.joinedCount > 0 ? 0 : provider.joinedCount === 0 ? 1 : 2
+      return providers.slice().sort((left, right) => {
+        const byRank = rank(left) - rank(right)
+        if (byRank !== 0) return byRank
+        const leftName = String(left.name ?? left.id ?? '').toLowerCase()
+        const rightName = String(right.name ?? right.id ?? '').toLowerCase()
+        return leftName.localeCompare(rightName)
+      })
+    }
+
+    function providerMark(provider) {
+      const source = provider?.source === 'gateway' ? (provider?.name || provider?.id || '') : (provider?.name || provider?.id || '')
+      const letter = String(source).trim().charAt(0).toUpperCase() || '?'
+      return h('span', {
+        className: 'tmx-mark',
+        key: 'mark',
+        'aria-hidden': 'true',
+        'data-gateway': provider?.source === 'gateway' ? 'true' : undefined,
+      }, letter)
+    }
+
+    function providerTags(provider, t) {
+      return [
+        provider?.source === 'gateway' ? h('span', { className: 'tmx-tag', key: 'gateway' }, t('gatewayTitle')) : null,
+        provider?.enabled === false ? h('span', { className: 'tmx-tag', key: 'disabled' }, t('providerDisabled')) : null,
+      ].filter(Boolean)
+    }
+
+    function modelCountText(count, t) {
+      if (count === null || count === undefined) return t('unknown')
+      if (count === 1) return `1 ${t('modelOne')}`
+      return `${count} ${t('modelUnit')}`
+    }
+
+    function ratioText(provider) {
+      const joined = provider?.joinedCount === null || provider?.joinedCount === undefined ? '–' : provider.joinedCount
+      const total = provider?.totalCount === null || provider?.totalCount === undefined ? '–' : provider.totalCount
+      return `${joined}/${total}`
+    }
+
+    function protocolText(protocols) {
+      const values = Array.isArray(protocols) ? protocols.filter(protocol => typeof protocol === 'string' && protocol !== '') : []
+      return values.length === 0 ? '' : values.join(' · ')
+    }
+
+    function preferredProtocol(protocols) {
+      const values = Array.isArray(protocols) ? protocols.filter(protocol => typeof protocol === 'string' && protocol !== '') : []
+      if (values.includes('responses')) return 'responses'
+      if (values.includes('chat-completions')) return 'chat-completions'
+      return values[0]
+    }
+
+    function modelIsAddable(model) {
+      return model !== null && typeof model === 'object'
+        && model.enabled === true
+        && model.joined === false
+        && Array.isArray(model.protocols)
+        && model.protocols.length > 0
+    }
+
+    function modelMatches(model, needle) {
+      const id = typeof model?.id === 'string' ? model.id.toLowerCase() : ''
+      if (id.includes(needle)) return true
+      return Array.isArray(model?.protocols) && model.protocols.some(protocol => typeof protocol === 'string' && protocol.toLowerCase().includes(needle))
+    }
+
+    function searchCatalog(catalog, query) {
+      const needle = query.trim().toLowerCase()
+      if (needle === '') return []
+      const groups = []
+      for (const provider of catalogProviders(catalog)) {
+        const name = typeof provider.name === 'string' ? provider.name.toLowerCase() : ''
+        const id = typeof provider.id === 'string' ? provider.id.toLowerCase() : ''
+        const providerMatched = name.includes(needle) || id.includes(needle)
+        const models = Array.isArray(provider.models) ? provider.models.filter(model => providerMatched || modelMatches(model, needle)) : []
+        if (models.length > 0) groups.push({ provider, models })
       }
-      return h('section', { className: 'tmx-section', key: 'models' }, [
-        h('h2', { className: 'tmx-sectionTitle', key: 'title' }, t('modelsTitle')),
-        // "No routes" is a claim only a read projection can make; a failed one
-        // says nothing here, because its failure is already named above.
-        tiles.length === 0
-          ? (projectionFailed(state) ? null : h('p', { className: 'tmx-empty', key: 'empty' }, t('noRoutes')))
-          : h('ul', { className: 'tmx-models', key: 'models' }, tiles),
+      return groups
+    }
+
+    function tabsBar(tab, setTab, t) {
+      const items = [
+        ['models', 'tabModels'],
+        ['gateway', 'tabGateway'],
+        ['quota', 'tabQuota'],
+      ]
+      // Ordinary navigation buttons, not the ARIA tabs pattern: the three
+      // views are page sections, and incomplete tab semantics would be worse
+      // than plain pressed-state buttons for keyboard and screen-reader users.
+      return h('div', { className: 'tmx-tabs', role: 'group', 'aria-label': t('tabsLabel'), key: 'tabs' },
+        items.map(([id, key]) => h('button', {
+          type: 'button',
+          className: 'tmx-tab',
+          key: id,
+          'data-active': tab === id ? 'true' : undefined,
+          'aria-pressed': tab === id ? 'true' : 'false',
+          onClick: () => setTab(id),
+        }, t(key))))
+    }
+
+    function providerSummary(provider, t, options = {}) {
+      const name = boundedText(provider?.name || provider?.id || t('unknown'), 120)
+      const main = h('span', { className: 'tmx-providerMain', key: 'main' }, [
+        h('span', { className: 'tmx-providerName', key: 'name' }, [name, ...providerTags(provider, t)]),
+        h('span', { className: 'tmx-providerMeta', key: 'meta' }, modelCountText(provider?.totalCount, t)),
+      ])
+      const side = h('span', { className: 'tmx-providerSide', key: 'side' }, [
+        h('span', { className: 'tmx-ratio', key: 'ratio' }, ratioText(provider)),
+        options.chevron === false ? null : h('span', { className: 'tmx-chevron', key: 'chevron', 'aria-hidden': 'true' }, '›'),
+      ])
+      return [providerMark(provider), main, side]
+    }
+
+    function catalogProviderRow(provider, t, handlers) {
+      return h('button', {
+        type: 'button',
+        className: 'tmx-providerRow',
+        key: `provider:${provider.id}`,
+        'data-provider': provider.id,
+        onClick: () => handlers.onOpen(provider.id),
+      }, providerSummary(provider, t, { chevron: true }))
+    }
+
+    function catalogModelRow(provider, model, t, handlers) {
+      const id = boundedText(model?.id ?? t('unknown'), 160)
+      const protocol = protocolText(model?.protocols)
+      const joined = model?.joined === true
+      const unknown = model?.joined === null || model?.joined === undefined
+      const disabled = model?.enabled !== true
+      const gatewayBlocked = provider.source === 'gateway' && handlers.gatewayConfigured !== true
+      const side = []
+      if (model?.default === true) side.push(h('span', { className: 'tmx-tag', key: 'default' }, t('defaultTag')))
+      if (joined) side.push(h('span', { className: 'tmx-joined', key: 'joined' }, `✓ ${t('joined')}`))
+      else if (unknown) side.push(h('span', { className: 'tmx-tag', key: 'joinedUnknown' }, t('joinedUnknown')))
+      else if (disabled) side.push(h('span', { className: 'tmx-tag', key: 'disabled' }, t('providerDisabled')))
+      else side.push(h('button', {
+        type: 'button',
+        className: 'tmx-button tmx-joinButton',
+        key: 'add',
+        'data-action': 'add-model',
+        'data-provider': provider.id,
+        'data-model': model.id,
+        onClick: () => handlers.onAdd(provider.id, model.id, model.protocols),
+        disabled: handlers.busy || provider.enabled !== true || gatewayBlocked || !modelIsAddable(model),
+      }, t('joinModel')))
+      return h('div', { className: 'tmx-modelRow', key: `model:${provider.id}:${model.id}` }, [
+        h('span', { className: 'tmx-modelMain', key: 'main' }, [
+          h('span', { className: 'tmx-modelId', key: 'id' }, id),
+          h('span', { className: 'tmx-modelProtocols', key: 'protocols' }, protocol || t('unknown')),
+        ]),
+        h('span', { className: 'tmx-modelSide', key: 'side' }, side),
+      ])
+    }
+
+    function addStepText(step, t) {
+      if (step === 'provider_add') return t('addStepProviderAdd')
+      if (step === 'model_add') return t('addStepModelAdd')
+      if (step === 'apply') return t('addStepApply')
+      return boundedText(step, 40)
+    }
+
+    function catalogAddPanel(add, provider, model, t, handlers) {
+      if (add === null || typeof add !== 'object' || add.phase === 'idle' || add.request === null || typeof add.request !== 'object') return null
+      if (add.request.provider !== provider.id || add.request.model !== model.id) return null
+      const plan = add.plan !== null && typeof add.plan === 'object' ? add.plan : undefined
+      const entry = plan?.entry !== null && typeof plan?.entry === 'object' ? plan.entry : undefined
+      const entryLabel = entry === undefined
+        ? ''
+        : `${t(entry.mode === 'create' ? 'addNewEntry' : 'addExistingEntry')} ${boundedText(entry.name, 80)}`
+      let text
+      if (add.phase === 'applied') text = `${t('addApplied')} ${t('addReloadHint')}`
+      else if (add.phase === 'failed') {
+        const detail = add.message !== undefined ? boundedText(add.message, 120) : hostCodeText(add.result?.code, add.result?.message)
+        const step = add.result?.data?.failedStep
+        text = [t('addFailed'), step === undefined ? '' : addStepText(step, t), detail].filter(part => part !== '').join(' · ')
+      } else if (entryLabel !== '') text = entryLabel
+      else text = t('addPreviewing')
+      const preview = add.phase === 'preview'
+      const done = add.phase === 'applied' || add.phase === 'failed'
+      const failureCode = add.result?.code ?? add.code
+      const pendingGate = add.phase === 'failed' && failureCode === 'pending_native_changes'
+      const actions = done
+        ? h('span', { className: 'tmx-addActions', key: 'actions' }, [
+          pendingGate
+            ? h('button', {
+              type: 'button',
+              className: 'tmx-button',
+              key: 'apply-pending',
+              'data-kind': 'primary',
+              onClick: handlers.onApplyPending,
+              disabled: handlers.busy,
+            }, t('addApplyPending'))
+            : null,
+          h('button', { type: 'button', className: 'tmx-button', key: 'close', onClick: handlers.onCancel }, t('close')),
+        ])
+        : h('span', { className: 'tmx-addActions', key: 'actions' }, [
+          h('button', {
+            type: 'button',
+            className: 'tmx-button',
+            key: 'cancel',
+            onClick: handlers.onCancel,
+            disabled: handlers.busy,
+          }, t('actionCancel')),
+          h('button', {
+            type: 'button',
+            className: 'tmx-button',
+            key: 'confirm',
+            'data-kind': 'primary',
+            onClick: handlers.onConfirm,
+            disabled: handlers.busy || !preview,
+          }, add.phase === 'executing' ? t('actionWorking') : t('addConfirm')),
+        ])
+      const protocols = Array.isArray(model.protocols) ? model.protocols.filter(protocol => typeof protocol === 'string') : []
+      return h('div', { className: 'tmx-addBar', key: `add:${provider.id}:${model.id}`, role: 'status', 'aria-live': 'polite' }, [
+        h('span', { className: 'tmx-addText', key: 'text' }, text),
+        done || protocols.length === 0 ? null : h('span', { className: 'tmx-addProtocol', key: 'protocol' }, [
+          h('span', { className: 'tmx-addProtocolLabel', key: 'label' }, t('addProtocol')),
+          h('select', {
+            className: 'tmx-addSelect',
+            key: 'select',
+            value: add.request.protocol,
+            'aria-label': t('addProtocol'),
+            disabled: handlers.busy,
+            onChange: event => handlers.onProtocol(event.target.value),
+          }, protocols.map(protocol => h('option', { value: protocol, key: protocol }, protocol))),
+        ]),
+        actions,
+      ])
+    }
+
+    function catalogProviderDetail(state, catalog, provider, t, handlers) {
+      const models = Array.isArray(provider.models) ? provider.models : []
+      const entriesUnknown = catalog !== null && catalog.entriesState === 'unknown'
+      return h('div', { className: 'tmx-catalog', key: `detail:${provider.id}` }, [
+        h('button', { type: 'button', className: 'tmx-detailBack', key: 'back', autoFocus: true, onClick: handlers.onBack }, `← ${t('backAllProviders')}`),
+        h('div', { className: 'tmx-detailHead', key: 'head' }, providerSummary(provider, t, { chevron: false })),
+        entriesUnknown ? h('p', { className: 'tmx-note tmx-detailNote', key: 'unknown' }, t('joinedUnknown')) : null,
+        models.length === 0
+          ? h('p', { className: 'tmx-empty tmx-detailEmpty', key: 'empty' }, t('providerNoModels'))
+          : h('div', { className: 'tmx-modelRows', key: 'rows' },
+            models.map(model => [
+              catalogModelRow(provider, model, t, handlers),
+              catalogAddPanel(handlers.add, provider, model, t, handlers),
+            ])),
+      ])
+    }
+
+    function catalogSection(state, t, options) {
+      const catalog = catalogOf(state)
+      const providers = catalogProviders(catalog)
+      const handlers = {
+        busy: options.busy,
+        add: options.add,
+        onOpen: options.onOpen,
+        onBack: options.onBack,
+        onAdd: options.onAdd,
+        onProtocol: options.onProtocol,
+        onConfirm: options.onConfirm,
+        onCancel: options.onCancel,
+        onApplyPending: options.onApplyPending,
+        gatewayConfigured: options.gatewayConfigured === true,
+      }
+      const failures = sectionErrors(state).filter(error => error.section === 'catalog')
+      const failureLine = failures.length === 0
+        ? null
+        : h('p', { className: 'tmx-errorText tmx-catalogError', key: 'catalogError' },
+          `${t('readFailed')}${t('colon')} ${failures.map(error => error.text).join(' · ')}`)
+      // A failed provider or model read is not an empty catalog. Show the typed
+      // unavailable state; never render "no providers" or empty model rows.
+      const catalogReady = catalog !== null && catalog.state === 'available'
+      if (!catalogReady) {
+        return h('section', { className: 'tmx-section tmx-catalogSection', key: 'catalog' }, [
+          failureLine,
+          h('p', { className: 'tmx-empty tmx-catalogEmpty', key: 'unavailable' }, t('catalogUnavailable')),
+        ])
+      }
+      const selected = options.selectedProvider === null || options.selectedProvider === undefined
+        ? undefined
+        : providers.find(provider => provider.id === options.selectedProvider)
+      if (selected !== undefined) {
+        return h('section', { className: 'tmx-section tmx-catalogSection', key: 'catalog' }, [
+          failureLine,
+          catalogProviderDetail(state, catalog, selected, t, handlers),
+        ])
+      }
+      const query = typeof options.query === 'string' ? options.query : ''
+      const search = h('div', { className: 'tmx-searchRow', key: 'search' }, [
+        h('label', { className: 'tmx-search', key: 'field' }, [
+          h('span', { className: 'tmx-searchGlyph', key: 'glyph', 'aria-hidden': 'true' }, '⌕'),
+          h('input', {
+            type: 'search',
+            className: 'tmx-searchInput',
+            value: query,
+            placeholder: t('searchCatalogPlaceholder'),
+            'aria-label': t('searchCatalogPlaceholder'),
+            onChange: event => options.onQuery(event.target.value),
+            onKeyDown: event => { if (event.key === 'Escape') options.onQuery('') },
+          }),
+          query === ''
+            ? null
+            : h('button', {
+              type: 'button',
+              className: 'tmx-searchClear',
+              key: 'clear',
+              'aria-label': t('clearSearch'),
+              onClick: () => options.onQuery(''),
+            }, '×'),
+        ]),
+      ])
+      const groups = query.trim() === '' ? [] : searchCatalog(catalog, query)
+      let body
+      if (query.trim() !== '') {
+        body = groups.length === 0
+          ? h('div', { className: 'tmx-catalog tmx-catalogEmpty', key: 'noMatch' }, [
+            h('p', { className: 'tmx-empty', key: 'text' }, t('searchNoMatch')),
+            h('button', { type: 'button', className: 'tmx-button', key: 'clear', onClick: () => options.onQuery('') }, t('clearSearch')),
+          ])
+          : h('div', { className: 'tmx-catalog', key: 'results' }, groups.map(group => h('div', { className: 'tmx-searchGroup', key: `group:${group.provider.id}` }, [
+            h('div', { className: 'tmx-searchHead', key: 'head' }, providerSummary(group.provider, t, { chevron: false })),
+            h('div', { className: 'tmx-modelRows', key: 'rows' }, group.models.map(model => [
+              catalogModelRow(group.provider, model, t, handlers),
+              catalogAddPanel(handlers.add, group.provider, model, t, handlers),
+            ])),
+          ])))
+      } else {
+        body = providers.length === 0
+          ? h('p', { className: 'tmx-empty tmx-catalogEmpty', key: 'empty' }, t('noProviders'))
+          : h('div', { className: 'tmx-catalog', key: 'providers' }, providers.map(provider => catalogProviderRow(provider, t, handlers)))
+      }
+      return h('section', { className: 'tmx-section tmx-catalogSection', key: 'catalog' }, [
+        search,
+        failureLine,
+        catalog !== null && catalog.entriesState === 'unknown' ? h('p', { className: 'tmx-note tmx-catalogNote', key: 'entriesUnknown' }, t('joinedUnknown')) : null,
+        body,
+      ])
+    }
+
+    function gatewayFacts(gateway, t) {
+      const load = gateway?.sharedKey?.loadedState
+      const key = load === 'loaded' ? t('keyLoaded') : load === 'absent' ? t('keyAbsent') : t('unknown')
+      const configured = gateway?.configured === true ? t('gatewayConfigured') : gateway?.configured === false ? t('gatewayUnconfigured') : t('unknown')
+      return h('dl', { className: 'tmx-facts', key: 'facts' }, [
+        h('div', { className: 'tmx-fact', key: 'address' }, [
+          h('dt', { key: 'label' }, t('gatewayListen')),
+          h('dd', { key: 'value' }, boundedText(gateway?.listen ?? t('notReported'), 120)),
+        ]),
+        h('div', { className: 'tmx-fact', key: 'key' }, [
+          h('dt', { key: 'label' }, t('gatewayKey')),
+          h('dd', { key: 'value' }, key),
+        ]),
+        h('div', { className: 'tmx-fact', key: 'configured' }, [
+          h('dt', { key: 'label' }, t('gatewayConfig')),
+          h('dd', { key: 'value' }, configured),
+        ]),
+      ])
+    }
+
+    function gatewaySection(state, t, handlers, busy) {
+      const gateway = state.gateway !== null && typeof state.gateway === 'object' ? state.gateway : null
+      const ready = gateway?.ready
+      const tone = ready === true ? 'ok' : ready === false ? 'warn' : 'idle'
+      const status = gateway === null
+        ? t('unknown')
+        : gateway.configured === false
+          ? t('gatewayUnconfigured')
+          : ready === true
+            ? t('gatewayReady')
+            : ready === false
+              ? t('gatewayNotReady')
+              : t('unknown')
+      const start = gateway !== null && gateway.configured === true && ready !== true
+        ? h('button', {
+          type: 'button',
+          className: 'tmx-button',
+          key: 'start',
+          onClick: () => handlers.run({ action: 'gateway_start' }),
+          disabled: busy,
+        }, t('actionStartGateway'))
+        : null
+      const reason = gateway?.reasonCode !== null && gateway?.reasonCode !== undefined
+        ? h('p', { className: 'tmx-note tmx-gatewayReason', key: 'reason' }, `${t('gatewayReason')}${t('colon')} ${boundedText(gateway.reasonCode, 80)}`)
+        : null
+      return h('section', { className: 'tmx-section', key: 'gateway' }, [
+        h('div', { className: 'tmx-card tmx-gatewayCard', key: 'card' }, [
+          h('div', { className: 'tmx-gatewayHead', key: 'head' }, [
+            h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': tone }),
+            h('h2', { className: 'tmx-gatewayTitle', key: 'title' }, t('gatewayTitle')),
+            h('span', { className: 'tmx-gatewayStatus', key: 'status' }, status),
+          ]),
+          gatewayFacts(gateway, t),
+          reason,
+          start === null ? null : h('div', { className: 'tmx-gatewayActions', key: 'actions' }, start),
+        ]),
       ])
     }
 
@@ -2304,7 +2973,7 @@ window.__ModuleLoader__.load({
       ])
     }
 
-    function announce({ load, observe, connect, repair, verdict }, t) {
+    function announce({ load, observe, connect, repair, add, verdict }, t) {
       if (load.schemaUnsupported === true) return t('stateSchemaUnsupported')
       if (observe.phase === 'failed') {
         return observe.message === undefined
@@ -2317,6 +2986,10 @@ window.__ModuleLoader__.load({
           ? t('connectFailed')
           : `${t('connectFailed')}${t('colon')} ${describeError(connect.message, t)}`
       }
+      if (add?.phase === 'failed') {
+        const detail = add.message !== undefined ? boundedText(add.message, 120) : hostCodeText(add.result?.code, add.result?.message)
+        return detail === '' ? t('addFailed') : `${t('addFailed')}${t('colon')} ${detail}`
+      }
       if (repair !== null && repair !== undefined && repair.phase === 'failed') {
         return repair.message === undefined
           ? t('actionFailed')
@@ -2327,10 +3000,13 @@ window.__ModuleLoader__.load({
       }
       // A completed step is announced too: a reader who cannot see the cards
       // change must still learn that the refresh, preview, or repair finished.
+      if (add?.phase === 'previewing' || add?.phase === 'executing') return t('actionWorking')
       if (connect.phase === 'previewing' || connect.phase === 'executing'
         || (repair !== null && repair !== undefined && (repair.phase === 'previewing' || repair.phase === 'executing'))) {
         return t('actionWorking')
       }
+      if (add?.phase === 'preview') return t('addPreviewReady')
+      if (add?.phase === 'applied') return t('addApplied')
       if (connect.phase === 'preview') return t('connectPreview')
       if (connect.phase === 'applied') return t('connectApplied')
       if (repair !== null && repair !== undefined && repair.phase === 'preview') return t('actionPreviewTitle')
@@ -2376,7 +3052,7 @@ window.__ModuleLoader__.load({
 
     /** Record a read model the page or a seat just adopted, so the seats agree. */
     function rememberState(state) {
-      if (state === null || typeof state !== 'object' || state.schemaVersion !== 2 || state.ok !== true) return
+      if (state === null || typeof state !== 'object' || state.schemaVersion !== 3 || state.ok !== true) return
       snapshotCache = { at: Date.now(), result: { state } }
     }
 
@@ -2400,7 +3076,7 @@ window.__ModuleLoader__.load({
           if (value === null || typeof value !== 'object') return { message: `HTTP ${response.status}` }
           // The same schema gate the page applies: an unknown version is a
           // failure, never a payload a seat guesses at.
-          if (value.schemaVersion !== 2) return { schemaUnsupported: true, message: String(value.schemaVersion) }
+          if (value.schemaVersion !== 3) return { schemaUnsupported: true, message: String(value.schemaVersion) }
           if (value.ok !== true) return { message: stateError(value, response.status) }
           return { state: value }
         } catch (error) {
@@ -2894,7 +3570,6 @@ window.__ModuleLoader__.load({
       modelCatalogOf,
       accountsOf,
       windowTone,
-      accountOfModel,
       verdict,
       nextAction,
       safeDashboard,

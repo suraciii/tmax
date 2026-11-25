@@ -31,6 +31,7 @@ export const ACTIONS = Object.freeze([
   'gateway_start',
   'gateway_stop',
   'gateway_restart',
+  'add_model',
 ])
 
 /** Actions that name one tmax provider and therefore need an exact snapshot ID. */
@@ -50,6 +51,9 @@ export const OBSERVE_SCOPES = Object.freeze(['quota', 'auth', 'models', 'all'])
 
 export const DEFAULT_OBSERVE_SCOPE = 'quota'
 
+/** Protocols a target selection may name; closed before any argv is built. */
+export const ADD_PROTOCOLS = Object.freeze(['chat-completions', 'responses', 'messages'])
+
 /**
  * Per-action deadlines. A persisted provider repair can wait on storage; a
  * single-scope observation uses tmax's own 45 s deadline, while a full
@@ -67,6 +71,7 @@ export const ACTION_TIMEOUTS = Object.freeze({
   webStatus: 20_000,
   webOpen: 60_000,
   gateway: 90_000,
+  add_model: 120_000,
 })
 
 /** The deadline for one planned action; scope, phase, and family select it. */
@@ -88,7 +93,7 @@ export function actionTimeoutMs(action, { dryRun = false, scope = null } = {}) {
  * verb locks itself.
  */
 export function actionLockKey(action, provider = null) {
-  if (action === 'connect') return 'connect'
+  if (action === 'connect' || action === 'add_model') return 'connect'
   if (action === 'observe_provider') return 'observe'
   if (action === 'resume_quota' || action === 'reset_failure') {
     return typeof provider === 'string' && provider !== '' ? `${action}:${provider}` : action
@@ -126,6 +131,14 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function textOf(value) {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+function listOf(value) {
+  return Array.isArray(value) ? value : []
+}
+
 /**
  * Validate everything about one request that does not depend on host state.
  * A malformed request is a 400; nothing here reads the CLI or the snapshot.
@@ -148,6 +161,17 @@ export function validateActionRequest(body) {
     scope = body.scope
   }
   if (action === 'observe_provider' && scope === null) scope = DEFAULT_OBSERVE_SCOPE
+  if (action === 'add_model') {
+    const provider = body.provider
+    const model = body.model
+    const protocol = body.protocol
+    if (typeof provider !== 'string' || provider === '') return invalid(400, 'invalid_provider', 'add_model requires a provider ID')
+    if (typeof model !== 'string' || model === '') return invalid(400, 'invalid_model', 'add_model requires a model ID')
+    if (typeof protocol !== 'string' || !ADD_PROTOCOLS.includes(protocol)) {
+      return invalid(400, 'invalid_protocol', `protocol must be one of ${ADD_PROTOCOLS.join(', ')}`)
+    }
+    return { ok: true, request: { action, provider, model, protocol, scope: null, dryRun } }
+  }
   if (PROVIDER_ACTIONS.includes(action)) {
     const provider = body.provider
     if (provider === undefined || provider === null) return invalid(400, 'missing_provider', `${action} requires a provider`)
@@ -158,6 +182,111 @@ export function validateActionRequest(body) {
   }
   // A provider for an action that names none is ignored, never argv.
   return { ok: true, request: { action, provider: null, scope, dryRun } }
+}
+
+/**
+ * Plan one fixed target-selection write: add one existing catalog model to the
+ * declared DSH target and apply it. The browser never names an entry, a command,
+ * or a flag; every operand is derived from the current catalog. Pure.
+ *
+ * @returns {{ok: true, plan: {provider: string, model: string, protocol: string, target: string, entry: {name: string, mode: 'existing'|'create'}, steps: {name: string, argv: string[]}[]}}
+ *   | {ok: false, status: number, code: string, message: string}}
+ */
+export function planAddModel(request, { state, target } = {}) {
+  if (!isPlainObject(request) || request.action !== 'add_model') return invalid(400, 'invalid_action', 'an add_model request is required')
+  const providerId = textOf(request.provider)
+  const modelId = textOf(request.model)
+  const protocol = textOf(request.protocol)
+  const resolvedTarget = textOf(target)
+  if (providerId === null) return invalid(400, 'invalid_provider', 'add_model requires a provider ID')
+  if (modelId === null) return invalid(400, 'invalid_model', 'add_model requires a model ID')
+  if (protocol === null || !ADD_PROTOCOLS.includes(protocol)) return invalid(400, 'invalid_protocol', `protocol must be one of ${ADD_PROTOCOLS.join(', ')}`)
+  if (resolvedTarget === null) return invalid(409, 'target_unresolved', 'no declared DSH target resolves for this home; declare one before adding a model')
+  // `agent apply` writes the target's whole desired state. Never let one add
+  // silently carry unrelated pending selections/default/role edits: require a
+  // standalone Apply first so the add applies only the state the user saw.
+  const pending = state?.target?.pendingNativeChanges
+  // Only a readable, empty pending list proves the target has no hidden deltas.
+  // tmax reports null when planning/scope comparison could not run; that is an
+  // unreadable target, distinct from a known non-empty pending list.
+  if (!Array.isArray(pending)) {
+    return invalid(409, 'target_uninspectable', 'the target pending state is unreadable; apply the target before adding a model')
+  }
+  if (pending.length > 0) {
+    return invalid(409, 'pending_native_changes', 'the target has pending native changes; apply them before adding a model')
+  }
+  const catalog = isPlainObject(state?.catalog) ? state.catalog : null
+  if (catalog === null || catalog.state !== 'available') {
+    return invalid(409, 'catalog_unavailable', 'the tmax model catalog is unavailable, so the selection cannot be validated')
+  }
+  const provider = listOf(catalog.providers).find(row => isPlainObject(row) && row.id === providerId)
+  if (provider === undefined) return invalid(409, 'unknown_provider', `provider "${providerId}" is not in the current tmax catalog`)
+  if (provider.enabled !== true) return invalid(409, 'provider_disabled', `provider "${providerId}" is not enabled`)
+  const model = listOf(provider.models).find(row => isPlainObject(row) && row.id === modelId)
+  if (model === undefined) return invalid(409, 'unknown_model', `model "${providerId}/${modelId}" is not in the current tmax catalog`)
+  if (model.enabled !== true) return invalid(409, 'model_disabled', `model "${providerId}/${modelId}" is not enabled`)
+  const protocols = listOf(model.protocols)
+  if (!protocols.includes(protocol)) {
+    return invalid(409, 'unsupported_protocol', `model "${providerId}/${modelId}" does not publish protocol "${protocol}"`)
+  }
+  if (model.joined !== true && model.joined !== false) {
+    return invalid(409, 'target_uninspectable', 'the target selection cannot be read, so the model cannot be added safely')
+  }
+  if (provider.entries === null || provider.entries === undefined) {
+    return invalid(409, 'target_uninspectable', 'the target entries cannot be read, so the model cannot be added safely')
+  }
+  const joinedProtocols = listOf(model.joinedProtocols)
+  if (joinedProtocols.includes(protocol)) {
+    return invalid(409, 'already_joined', `model "${providerId}/${modelId}" is already selected for protocol "${protocol}"`)
+  }
+  if (provider.source === 'gateway' && state?.gateway?.configured !== true) {
+    return invalid(409, 'gateway_not_configured', 'the tmax gateway is not configured, so its route cannot be added to the target')
+  }
+  const entries = listOf(provider.entries).filter(entry => isPlainObject(entry) && textOf(entry.name) !== null)
+  // Prefer an entry that already serves this protocol; otherwise fill an
+  // existing entry that has no model yet before creating another name.
+  const existing = entries.find(entry => listOf(entry.protocols).includes(protocol))
+    ?? entries.find(entry => listOf(entry.protocols).length === 0)
+  let entry
+  if (existing !== undefined) {
+    entry = { name: textOf(existing.name), mode: 'existing' }
+  } else {
+    // A DSH entry holds one protocol. Reuse a matching entry; otherwise create
+    // a target-local name that no declared entry already uses.
+    const names = new Set()
+    for (const row of listOf(catalog.providers)) {
+      for (const candidate of listOf(row?.entries)) {
+        const name = textOf(candidate?.name)
+        if (name !== null) names.add(name)
+      }
+    }
+    const base = provider.source === 'gateway' ? 'tmax' : String(provider.id)
+    if (/[\s\u0000-\u001f]/u.test(base)) {
+      return invalid(409, 'entry_name_unavailable', 'the provider ID cannot form a native entry name')
+    }
+    let name = base
+    if (names.has(name)) name = `${base}-${protocol}`
+    for (let suffix = 2; names.has(name) && suffix < 10; suffix += 1) name = `${base}-${protocol}-${suffix}`
+    if (names.has(name)) return invalid(409, 'entry_name_conflict', 'no free target entry name is available for this provider')
+    entry = { name, mode: 'create' }
+  }
+  const steps = []
+  if (entry.mode === 'create') {
+    steps.push({ name: 'provider_add', argv: ['agent', 'provider', 'add', resolvedTarget, entry.name, '--provider', String(provider.id)] })
+  }
+  steps.push({ name: 'model_add', argv: ['agent', 'model', 'add', resolvedTarget, entry.name, String(model.id), '--protocol', protocol] })
+  steps.push({ name: 'apply', argv: ['agent', 'apply', resolvedTarget] })
+  return {
+    ok: true,
+    plan: {
+      provider: String(provider.id),
+      model: String(model.id),
+      protocol,
+      target: resolvedTarget,
+      entry,
+      steps,
+    },
+  }
 }
 
 function withPreview(argv, dryRun) {
@@ -310,7 +439,207 @@ export function createActionService({ config = {}, snapshot, locks = new Set(), 
     return { status, body }
   }
 
+  /** The browser-visible plan: no argv, no paths, no secret material. */
+  function addPlanResult(plan) {
+    return {
+      provider: plan.provider,
+      model: plan.model,
+      protocol: plan.protocol,
+      target: plan.target,
+      entry: plan.entry,
+      steps: plan.steps.map(step => step.name),
+    }
+  }
+
+  /** Merge plan/step metadata into one tmax step's data without dropping its evidence. */
+  function addResultData(base, steps, extra, evidence) {
+    const data = isPlainObject(evidence?.data) ? { ...evidence.data } : {}
+    return { ...data, ...base, steps, ...extra }
+  }
+
+  /**
+   * One explicitly previewed target-selection write. A preview is the
+   * catalog-derived plan (no tmax invocation, no write); execution runs the
+   * fixed provider/model/apply sequence, stops at the first refusal, and
+   * reports every completed step and the fresh state. There is no rollback:
+   * a partial write is visible and the page can apply or repair it.
+   */
+  async function runAddModel(body) {
+    const validated = validateActionRequest(body)
+    if (!validated.ok) {
+      return reply(validated.status, {
+        ok: false,
+        action: 'add_model',
+        dryRun: body?.dryRun === true,
+        code: validated.code,
+        message: validated.message,
+      })
+    }
+    const request = validated.request
+    const dryRun = request.dryRun
+    let current
+    try {
+      current = dryRun ? await readCurrentState() : await snapshot.state({ force: true })
+    } catch (error) {
+      log?.(`add_model state read failed: ${error instanceof Error ? error.message : String(error)}`)
+      current = undefined
+    }
+    if (current === undefined || current.ok !== true) {
+      return reply(502, {
+        ok: false,
+        action: 'add_model',
+        dryRun,
+        code: 'state_unavailable',
+        message: 'the current tmax state is unavailable, so the selection cannot be validated',
+      })
+    }
+    const target = explicitTarget(config) ?? (typeof current.target?.id === 'string' && current.target.id !== '' ? current.target.id : undefined)
+    const planned = planAddModel(request, { state: current, target })
+    if (!planned.ok) {
+      return reply(planned.status, {
+        ok: false,
+        action: 'add_model',
+        dryRun,
+        code: planned.code,
+        message: planned.message,
+      })
+    }
+    const plan = planned.plan
+    if (dryRun) {
+      return reply(200, {
+        ok: true,
+        action: 'add_model',
+        dryRun: true,
+        result: secretFree({ code: 'ok', status: 'dry_run', data: addPlanResult(plan) }),
+        state: current,
+      })
+    }
+    const key = actionLockKey('add_model')
+    if (running.has(key)) {
+      return reply(409, {
+        ok: false,
+        action: 'add_model',
+        dryRun: false,
+        code: 'busy',
+        message: 'another target write is already running',
+      })
+    }
+    running.add(key)
+    const steps = []
+    const base = { provider: plan.provider, model: plan.model, protocol: plan.protocol, entry: plan.entry }
+    const deadline = Date.now() + actionTimeoutMs('add_model')
+    let applyEvidence
+    try {
+      for (const step of plan.steps) {
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) {
+          const message = 'the add-model deadline expired before the next step'
+          const state = await freshState(current)
+          return reply(502, {
+            ok: false,
+            action: 'add_model',
+            dryRun: false,
+            code: 'tmax_unavailable',
+            message,
+            result: secretFree({ code: 'tmax_unavailable', status: 'error', message, data: { ...base, steps, failedStep: step.name } }),
+            state,
+          })
+        }
+        const read = await readEnvelope(config, step.argv, { timeoutMs: Math.min(CONNECT_TIMEOUT_MS, remaining), env })
+        if (read.envelope === undefined) {
+          const message = read.message ?? 'tmax did not answer'
+          const state = await freshState(current)
+          return reply(502, {
+            ok: false,
+            action: 'add_model',
+            dryRun: false,
+            code: 'tmax_unavailable',
+            message,
+            result: secretFree({
+              code: 'tmax_unavailable',
+              status: 'error',
+              message,
+              data: { ...base, steps, failedStep: step.name },
+            }),
+            state,
+          })
+        }
+        const result = resultFromEnvelope(read.envelope)
+        if (!isActionSuccess(read.envelope, false)) {
+          const message = result.message ?? envelopeMessage(read.envelope)
+          result.message = message
+          if (step.name === 'apply') {
+            try {
+              await refreshOwnership?.()
+            } catch (error) {
+              log?.(`add_model ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          }
+          const state = await freshState(current)
+          return reply(409, {
+            ok: false,
+            action: 'add_model',
+            dryRun: false,
+            code: result.code,
+            message,
+            result: secretFree({
+              ...result,
+              data: addResultData(
+                base,
+                [...steps, { name: step.name, code: result.code, status: result.status }],
+                { failedStep: step.name },
+                result,
+              ),
+            }),
+            state,
+          })
+        }
+        steps.push({ name: step.name, code: result.code, status: result.status })
+        if (step.name === 'apply') {
+          applyEvidence = result
+          try {
+            await refreshOwnership?.()
+          } catch (error) {
+            log?.(`add_model ownership re-evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+      }
+      const success = {
+        code: applyEvidence?.code ?? 'ok',
+        status: 'success',
+        data: addResultData(base, steps, {}, applyEvidence),
+      }
+      for (const field of ['effects', 'blockers', 'next_actions']) {
+        if (applyEvidence?.[field] !== undefined) success[field] = applyEvidence[field]
+      }
+      const state = await freshState(current)
+      return reply(200, {
+        ok: true,
+        action: 'add_model',
+        dryRun: false,
+        result: secretFree(success),
+        state,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log?.(`add_model failed: ${message}`)
+      const state = await freshState(current)
+      return reply(502, {
+        ok: false,
+        action: 'add_model',
+        dryRun: false,
+        code: 'action_failed',
+        message,
+        result: secretFree({ code: 'action_failed', status: 'error', message, data: { ...base, steps } }),
+        state,
+      })
+    } finally {
+      running.delete(key)
+    }
+  }
+
   async function run(body) {
+    if (body?.action === 'add_model') return runAddModel(body)
     const actionName = typeof body?.action === 'string' ? body.action : null
     const dryRun = body?.dryRun === true
     // Provider actions validate an exact provider ID against state; gateway

@@ -318,7 +318,7 @@ function seatState(overrides) {
   const base = {
     ok: true,
     errors: [],
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: '2026-11-23T10:15:00Z',
     configurationRevision: 'abc123def4567890abc123def4567890abc123def4567890',
     tmaxVersion: '0.1.0',
@@ -553,7 +553,8 @@ test('host-derived names are bounded before they reach the DOM', async () => {
   })
   const page = await mountPage(withState(state))
   try {
-    const text = textOf(await page.mount())
+    await page.mount()
+    const text = textOf(await page.click('tabQuota'))
     assert.equal(text.includes(long), false, 'no unbounded host name reaches the DOM')
     assert.match(text, /x{120}…/, 'the page draws the bounded prefix')
   } finally {
@@ -736,7 +737,8 @@ test('only an unqualified reset is printed as approximate', async () => {
   const state = { ...connected, providers: { tmax: [provider('approx', unqualified), provider('exact', qualified)] } }
   const page = await mountPage(withState(state))
   try {
-    const tree = await page.mount()
+    await page.mount()
+    const tree = await page.click('tabQuota')
     const text = textOf(tree)
     assert.equal(text.match(/resetApprox/g)?.length ?? 0, 1, 'only the unqualified reset carries the marker')
     const cells = collectNodes(tree, node => node.props?.className === 'tmx-windowReset')
@@ -1048,7 +1050,7 @@ test('client reads one state route and carries no auto-observation path', async 
   const module = await moduleWith(inertReact())
   const pure = module.__pure
 
-  for (const helper of ['windowReading', 'verdict', 'nextAction', 'safeDashboard', 'clockOf', 'formatReset', 'providerActions', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'windowTone', 'accountOfModel']) {
+  for (const helper of ['windowReading', 'verdict', 'nextAction', 'safeDashboard', 'clockOf', 'formatReset', 'providerActions', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'windowTone']) {
     assert.equal(typeof pure[helper], 'function', `__pure.${helper} is exported`)
   }
 
@@ -1111,9 +1113,9 @@ test('an inventory-backed state renders with unknown model metadata', async () =
     // with a retry that reads again rather than observing a provider.
     assert.match(text, /authority_unavailable/)
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
-    // A model with no routing evidence names itself and claims no account;
-    // nothing on the page invents a kind, continuity, or candidate count.
-    assert.match(text, /m1/)
+    // The new catalog is absent from this synthetic state: the page says so
+    // without inventing a model, kind, continuity, or candidate count.
+    assert.match(text, /catalogUnavailable/)
     assert.doesNotMatch(text, /modelKind|modelContinuity|modelCandidates/)
   } finally {
     page.restore()
@@ -1139,12 +1141,16 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     assert.doesNotMatch(text, /inventory/)
     // An account that reports no quota window takes no card, and nothing on the
     // page explains an unreadable source: it is simply not listed.
-    assert.doesNotMatch(text, /cpa-us2/)
+    // The catalog lists every provider, not only the accounts with quota.
+    assert.match(text, /cpa-us2/)
     assert.doesNotMatch(text, /unknownQuotaUnsupported/)
     assert.doesNotMatch(text, /GLM Coding CN/)
+    // Quota lives in its own tab; bars are drawn there.
+    const quotaTree = await page.click('tabQuota')
+    const quotaText = textOf(quotaTree)
     // Each bar states to a screen reader what it draws: the window, what it has
     // used, and the same value the eye reads.
-    const bars = collectNodes(tree, node => node.props?.role === 'img' && String(node.props.className) === 'tmx-bar')
+    const bars = collectNodes(quotaTree, node => node.props?.role === 'img' && String(node.props.className) === 'tmx-bar')
     assert.ok(bars.length >= 2, 'every reported window has a bar')
     for (const bar of bars) {
       const spoken = String(bar.props['aria-label'])
@@ -1152,17 +1158,18 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     }
     // Nothing is used in this fixture: every window is an empty bar printed as
     // zero of its quota, never as an unknown and never as a full bar.
-    const fills = collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-barFill')
+    const fills = collectNodes(quotaTree, node => String(node.props?.className ?? '') === 'tmx-barFill')
     assert.ok(fills.length >= 2)
     for (const fill of fills) assert.equal(fill.props.style.width, '0%')
-    assert.match(text, /0\s+\/\s+100/)
+    assert.match(quotaText, /0\s+\/\s+100/)
     // An exhausted window is a full bar in the error tone, and the same 100% the
     // eye reads beside it.
     const exhausted = withProviderEvidence({ kimi: {} })
     exhausted.providers.tmax[0].billing.rows = [{ label: { key: 'monthly' }, basis: 'consumed_percent', percent: 100, reset: { at: '2026-12-09T03:13:27Z', kind: 'announced' } }]
     const drained = await mountPage(withState(exhausted))
     try {
-      const drainedTree = await drained.mount()
+      await drained.mount()
+      const drainedTree = await drained.click('tabQuota')
       const spent = collectNodes(drainedTree, node => String(node.props?.className ?? '') === 'tmx-barFill')
       assert.equal(spent.length, 1)
       assert.equal(spent[0].props.style.width, '100%')
@@ -1171,11 +1178,9 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     } finally {
       drained.restore()
     }
-    // A model names the account its routing selects, and the default is marked.
-    assert.match(text, /deepseek-v4.1-flash/)
+    // The provider list carries every provider and its joined/total ratio;
+    // model identity is one drill-in away, so this first render stays short.
     assert.match(text, /opencode-go-2/)
-    assert.match(text, /default/)
-    // Routing detail is not the page's: no candidates, no priorities.
     assert.doesNotMatch(text, /routingCandidates|routeActive|ownership/)
   } finally {
     page.restore()
@@ -1233,7 +1238,7 @@ test('declared routes DSH has not loaded say so, name their blockers, and offer 
 
 
 test('an unsupported state schema is a visible failure, not a payload', async () => {
-  const page = await mountPage(withState({ ...connected, schemaVersion: 3 }))
+  const page = await mountPage(withState({ ...connected, schemaVersion: 4 }))
   try {
     const tree = await page.mount()
     const text = textOf(tree)
@@ -1267,7 +1272,8 @@ test('section read failures replace empty and disconnected claims', async () => 
   }
   const page = await mountPage(withState(failed))
   try {
-    const tree = await page.mount()
+    await page.mount()
+    const tree = await page.click('tabQuota')
     const text = textOf(tree)
     assert.match(text, /stateProjection/)
     for (const pattern of [
@@ -1371,15 +1377,15 @@ test('a failed provider read does not hide live routes or claim an empty list', 
   }
   const page = await mountPage(withState(state))
   try {
-    const text = textOf(await page.mount())
+    await page.mount()
+    const text = textOf(await page.click('tabQuota'))
     assert.match(text, /provider_list_unavailable/)
     assert.match(text, /readFailed/)
     assert.doesNotMatch(text, /unknownQuota/)
     assert.doesNotMatch(text, /notReported/)
-    // An empty list the failure caused is never read as "no account", and the
-    // route evidence is independent of the provider read.
+    // An empty list the failure caused is never read as "no account". The
+    // catalog is a separate read and still lists the providers.
     assert.doesNotMatch(text, /noAccounts/)
-    assert.match(text, /deepseek-v4.1-flash/)
   } finally {
     page.restore()
   }
@@ -1391,7 +1397,8 @@ test('a readable empty account list says so instead of reading as a failure', as
   const empty = { ...connected, providers: { tmax: [] }, errors: [] }
   const page = await mountPage(withState(empty))
   try {
-    const text = textOf(await page.mount())
+    await page.mount()
+    const text = textOf(await page.click('tabQuota'))
     assert.match(text, /noAccounts/)
     assert.doesNotMatch(text, /readFailed/)
     assert.doesNotMatch(text, /unknownQuota/)
@@ -1426,7 +1433,7 @@ test('an invalid or unreadable config is the next action before Apply', async ()
 test('a host state with absent sections renders unknowns instead of crashing', async () => {
   const minimal = {
     ok: true,
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: '2026-11-23T10:15:00Z',
     configurationRevision: 'abc12345',
     routes: [],
@@ -1439,12 +1446,14 @@ test('a host state with absent sections renders unknowns instead of crashing', a
   }
   const page = await mountPage(withState(minimal))
   try {
-    const text = textOf(await page.mount())
+    await page.mount()
+    const modelsText = textOf(await page.settle())
     // Absent sections are absent: the page says what it can and invents nothing.
-    assert.match(text, /stateDisconnected/)
-    assert.match(text, /noRoutes/)
-    assert.match(text, /noAccounts/)
-    assert.doesNotMatch(text, /unknown undefined|NaN/)
+    assert.match(modelsText, /stateDisconnected/)
+    assert.match(modelsText, /catalogUnavailable/)
+    const quotaText = textOf(await page.click('tabQuota'))
+    assert.match(quotaText, /noAccounts/)
+    assert.doesNotMatch(modelsText, /unknown undefined|NaN/)
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
   } finally {
     page.restore()
@@ -1500,6 +1509,7 @@ test('a failed refresh keeps the old table and names the failure', async () => {
   })
   try {
     await page.mount()
+    await page.click('tabQuota')
     const tree = await page.click('refresh')
     const text = textOf(tree)
     assert.match(text, /observeFailed/)
@@ -1579,7 +1589,7 @@ test('a later refused read keeps the last good table and names its section error
   let phase = 'good'
   const refused = {
     ok: false,
-    schemaVersion: 2,
+    schemaVersion: 3,
     errors: [{ section: 'projection', code: 'inventory_unavailable', message: 'inventory read failed' }],
     target: null,
     routes: [],
@@ -1597,6 +1607,7 @@ test('a later refused read keeps the last good table and names its section error
   })
   try {
     await page.mount()
+    await page.click('tabQuota')
     assert.match(textOf(await page.click('refresh')), /stateLastKnown/)
     phase = 'refused'
     const tree = await page.click('retry')
@@ -1640,7 +1651,8 @@ test('Apply previews with dryRun before it writes, then uses the returned state'
     return { status: 404, body: { ok: false } }
   })
   try {
-    const ready = await page.mount()
+    await page.mount()
+    const ready = await page.click('tabQuota')
     const before = textOf(ready)
     // Nothing declared: the verdict says so and Apply is its own control, with
     // no explanatory sentence beside it.
@@ -1684,7 +1696,7 @@ test('Apply previews with dryRun before it writes, then uses the returned state'
 test('an unreadable tmax state names the host failure and offers a retry', async () => {
   const unreadable = {
     ok: false,
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: '2026-11-23T10:15:00Z',
     target: null,
     routes: [],
@@ -1910,7 +1922,8 @@ test('a suspended provider previews then executes one resume, and mount runs no 
     return { status: 404, body: { ok: false } }
   })
   try {
-    const mounted = await page.mount()
+    await page.mount()
+    const mounted = await page.click('tabQuota')
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/action').length, 0)
     assert.ok(buttonByText(mounted, 'actionResumeQuota'), 'a suspended quota offers exactly one resume')
@@ -1973,7 +1986,8 @@ test('Reset failure sends one exact provider operation; observing is the page Re
     return { status: 404, body: { ok: false } }
   })
   try {
-    const mounted = await page.mount()
+    await page.mount()
+    const mounted = await page.click('tabQuota')
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/action').length, 0)
     assert.ok(buttonByText(mounted, 'actionResetFailure'), 'an active failure offers one reset')
     // No card repeats the observation: one Refresh reads every account.
@@ -2020,6 +2034,7 @@ test('a refused or unavailable action is a failure, never success, and keeps the
   })
   try {
     await page.mount()
+    await page.click('tabQuota')
     const refused = await page.click('actionResumeQuota')
     const refusedText = textOf(refused)
     assert.match(refusedText, /actionFailed/)
@@ -2067,14 +2082,15 @@ test('a pending action disables every action control until it settles', async ()
     return { status: 404, body: { ok: false } }
   })
   try {
-    const mounted = await page.mount()
+    await page.mount()
+    const mounted = await page.click('tabQuota')
     const resume = buttonByText(mounted, 'actionResumeQuota')
     assert.ok(resume)
     resume.props.onClick()
     const pending = await page.settle()
     // While the preview is in flight every action control, and Refresh, is
     // disabled: one explicit operation at a time.
-    const pendingButtons = collectButtons(pending)
+    const pendingButtons = collectButtons(pending).filter(button => !String(button.props.className ?? '').includes('tmx-tab'))
     assert.ok(pendingButtons.length >= 3)
     for (const button of pendingButtons) {
       assert.equal(button.props.disabled, true, `"${textOf(button).trim()}" is disabled while busy`)
@@ -2154,20 +2170,20 @@ test('Settings > Models availability names why tmax models are absent', async ()
   }), 'unknown')
 })
 
-test('the state gate accepts only schemaVersion 2 with ok true', async () => {
+test('the state gate accepts only schemaVersion 3 with ok true', async () => {
   const pure = (await moduleWith(inertReact())).__pure
-  const good = { schemaVersion: 2, ok: true, routes: [] }
+  const good = { schemaVersion: 3, ok: true, routes: [] }
   assert.deepEqual(pure.stateGate(good, { status: 200 }), { object: true, state: good })
   // A non-object payload is not a state and is never adopted.
   assert.equal(pure.stateGate(null, { status: 200 }).object, false)
   assert.equal(pure.stateGate(undefined, { status: 200 }).object, false)
   // An unsupported schema is a typed failure carrying the value it saw.
-  assert.deepEqual(pure.stateGate({ schemaVersion: 3 }, { status: 200 }),
-    { object: true, schemaUnsupported: true, message: '3' })
+  assert.deepEqual(pure.stateGate({ schemaVersion: 4 }, { status: 200 }),
+    { object: true, schemaUnsupported: true, message: '4' })
   // A refused model is an error, never evidence.
-  assert.equal(pure.stateGate({ schemaVersion: 2, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
+  assert.equal(pure.stateGate({ schemaVersion: 3, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
     'state_unavailable: no answer')
-  assert.equal(pure.stateGate({ schemaVersion: 2, ok: 'yes' }, { status: 200 }).state, undefined)
+  assert.equal(pure.stateGate({ schemaVersion: 3, ok: 'yes' }, { status: 200 }).state, undefined)
 })
 
 test('unknown credential readiness is never drawn as a missing credential', async () => {
@@ -2671,8 +2687,8 @@ test('an apply-returned read model is adopted only through the state gate', asyn
   const cases = [
     {
       name: 'unsupported schema',
-      state: { ...seatState(), schemaVersion: 3 },
-      pattern: /hostError: schema 3/,
+      state: { ...seatState(), schemaVersion: 4 },
+      pattern: /hostError: schema 4/,
     },
     {
       name: 'refused read model',
@@ -2808,6 +2824,439 @@ test('a projection failure is unknown footer evidence, not zero counts', async (
     assert.ok(buttonByText(tree, 'footerReload'), 'the section read can be retried')
     assert.equal(page.calls.filter(call => call.method === 'POST').length, 0)
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/observe').length, 0)
+  } finally {
+    page.restore()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The approved catalog page: tabs, provider drill-in, search, and one add.
+
+test('the page tabs separate models, gateway, and quota without extra reads', async () => {
+  const page = await mountPage(withState(connected))
+  try {
+    const models = await page.mount()
+    assert.match(textOf(models), /tabModels/)
+    assert.match(textOf(models), /Kimi Coding Plan/)
+    assert.equal(page.calls.length, 1)
+
+    const gateway = await page.click('tabGateway')
+    assert.match(textOf(gateway), /gatewayTitle/)
+    assert.match(textOf(gateway), /gatewayListen/)
+    assert.match(textOf(gateway), /127\.0\.0\.1:17840/)
+
+    const quota = await page.click('tabQuota')
+    assert.match(textOf(quota), /accountsTitle/)
+
+    const back = await page.click('tabModels')
+    assert.match(textOf(back), /Kimi Coding Plan/)
+    assert.equal(page.calls.length, 1, 'tab switches never read or act')
+  } finally {
+    page.restore()
+  }
+})
+
+test('the catalog drills into a provider and adds one model through a previewed action', async () => {
+  const bodies = []
+  const joinedState = {
+    ...connected,
+    catalog: {
+      ...connected.catalog,
+      providers: connected.catalog.providers.map(provider => provider.id !== 'kimi'
+        ? provider
+        : {
+            ...provider,
+            entries: [{ name: 'kimi', relayed: false, protocols: ['responses'] }],
+            entry: 'kimi',
+            joinedCount: 1,
+            models: provider.models.map(model => ({ ...model, joined: true, joinedProtocols: ['responses'] })),
+          }),
+    },
+  }
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: connected }
+    if (path === '/_tmax/action') {
+      const body = JSON.parse(record.body)
+      bodies.push(body)
+      const plan = {
+        provider: 'kimi',
+        model: 'k3.1-pro',
+        protocol: 'responses',
+        target: 'dsh-main',
+        entry: { name: 'kimi', mode: 'create' },
+        steps: ['provider_add', 'model_add', 'apply'],
+      }
+      if (body.dryRun === true) {
+        return {
+          status: 200,
+          body: { ok: true, action: 'add_model', dryRun: true, result: { code: 'ok', status: 'dry_run', data: plan }, state: connected },
+        }
+      }
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          action: 'add_model',
+          dryRun: false,
+          result: { code: 'awaiting_native_reload', status: 'success', data: { ...plan, steps: [] } },
+          state: joinedState,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    let tree = await page.mount()
+    const provider = collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0]
+    assert.ok(provider, 'a provider row is a drill-in control')
+    provider.props.onClick()
+    tree = await page.settle()
+    assert.match(textOf(tree), /k3\.1-pro/)
+    assert.match(textOf(tree), /joinModel/)
+
+    const add = collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0]
+    assert.ok(add, 'an unjoined model offers the add control')
+    add.props.onClick()
+    tree = await page.settle()
+    assert.equal(bodies.length, 1)
+    assert.deepEqual(bodies[0], { action: 'add_model', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses', dryRun: true })
+    assert.match(textOf(tree), /addNewEntry/)
+    assert.match(textOf(tree), /addProtocol/)
+    assert.ok(buttonByText(tree, 'addConfirm'))
+
+    tree = await page.click('addConfirm')
+    assert.equal(bodies.length, 2)
+    assert.equal(bodies[1].dryRun, false)
+    assert.match(textOf(tree), /addApplied/)
+    assert.match(textOf(tree), /addReloadHint/)
+    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1, 'the action state is adopted without a GET')
+  } finally {
+    page.restore()
+  }
+})
+
+test('typing in the catalog search switches to grouped model results', async () => {
+  const page = await mountPage(withState(connected))
+  try {
+    let tree = await page.mount()
+    const input = collectNodes(tree, node => node.props?.type === 'search')[0]
+    assert.ok(input, 'the catalog has a search field')
+    input.props.onChange({ target: { value: 'k3' } })
+    tree = await page.settle()
+    const text = textOf(tree)
+    assert.match(text, /Kimi Coding Plan/)
+    assert.match(text, /k3\.1-pro/)
+    assert.match(text, /joinModel/)
+    assert.equal(page.calls.length, 1, 'search is local to the read model')
+  } finally {
+    page.restore()
+  }
+})
+
+test('a disabled provider offers only a disabled add control for its models', async () => {
+  const disabled = {
+    ...connected,
+    catalog: {
+      ...connected.catalog,
+      providers: connected.catalog.providers.map(provider => provider.id !== 'kimi'
+        ? provider
+        : { ...provider, enabled: false }),
+    },
+  }
+  const page = await mountPage(withState(disabled))
+  try {
+    let tree = await page.mount()
+    const provider = collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0]
+    provider.props.onClick()
+    tree = await page.settle()
+    const add = collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0]
+    assert.ok(add, 'the model row is still visible')
+    assert.equal(add.props.disabled, true, 'a disabled provider cannot be selected into the target')
+  } finally {
+    page.restore()
+  }
+})
+
+test('a malformed add preview never offers confirmation', async () => {
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: connected }
+    if (path === '/_tmax/action') {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          action: 'add_model',
+          dryRun: true,
+          result: { code: 'ok', status: 'dry_run', data: { provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' } },
+          state: connected,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    let tree = await page.mount()
+    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
+    tree = await page.settle()
+    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
+    tree = await page.settle()
+    assert.match(textOf(tree), /addInvalidPreview/)
+    assert.equal(buttonByText(tree, 'addConfirm'), undefined, 'no write is offered without the approved entry preview')
+  } finally {
+    page.restore()
+  }
+})
+
+test('a partial add failure adopts the fresh state and reports the failed step', async () => {
+  const joinedState = {
+    ...connected,
+    catalog: {
+      ...connected.catalog,
+      providers: connected.catalog.providers.map(provider => provider.id !== 'kimi'
+        ? provider
+        : {
+            ...provider,
+            entries: [{ name: 'kimi', relayed: false, protocols: ['responses'] }],
+            entry: 'kimi',
+            joinedCount: 1,
+            models: provider.models.map(model => ({ ...model, joined: true, joinedProtocols: ['responses'] })),
+          }),
+    },
+  }
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: connected }
+    if (path === '/_tmax/action') {
+      const body = JSON.parse(record.body)
+      if (body.dryRun === true) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            action: 'add_model',
+            dryRun: true,
+            result: {
+              code: 'ok',
+              status: 'dry_run',
+              data: {
+                provider: 'kimi',
+                model: 'k3.1-pro',
+                protocol: 'responses',
+                target: 'dsh-main',
+                entry: { name: 'kimi', mode: 'create' },
+                steps: ['provider_add', 'model_add', 'apply'],
+              },
+            },
+            state: connected,
+          },
+        }
+      }
+      return {
+        status: 409,
+        body: {
+          ok: false,
+          action: 'add_model',
+          dryRun: false,
+          code: 'model_add_failed',
+          message: 'the model selection was not written',
+          result: {
+            code: 'model_add_failed',
+            status: 'error',
+            message: 'the model selection was not written',
+            data: { provider: 'kimi', model: 'k3.1-pro', protocol: 'responses', entry: { name: 'kimi', mode: 'create' }, steps: [], failedStep: 'model_add' },
+          },
+          state: joinedState,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    let tree = await page.mount()
+    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
+    tree = await page.settle()
+    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
+    tree = await page.settle()
+    tree = await page.click('addConfirm')
+    assert.match(textOf(tree), /addFailed/)
+    assert.match(textOf(tree), /addStepModelAdd/)
+    assert.match(textOf(tree), /joined/)
+    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1, 'the partial state is adopted without another GET')
+  } finally {
+    page.restore()
+  }
+})
+
+test('changing the add protocol re-previews and confirms the same protocol', async () => {
+  const bodies = []
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: connected }
+    if (path === '/_tmax/action') {
+      const body = JSON.parse(record.body)
+      bodies.push(body)
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          action: 'add_model',
+          dryRun: body.dryRun,
+          result: body.dryRun
+            ? {
+                code: 'ok',
+                status: 'dry_run',
+                data: {
+                  provider: 'kimi',
+                  model: 'k3.1-pro',
+                  protocol: body.protocol,
+                  target: 'dsh-main',
+                  entry: { name: 'kimi', mode: 'create' },
+                  steps: ['provider_add', 'model_add', 'apply'],
+                },
+              }
+            : { code: 'awaiting_native_reload', status: 'success', data: {} },
+          state: connected,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    let tree = await page.mount()
+    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
+    tree = await page.settle()
+    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
+    tree = await page.settle()
+    const select = collectNodes(tree, node => node.props?.className === 'tmx-addSelect')[0]
+    select.props.onChange({ target: { value: 'chat-completions' } })
+    tree = await page.settle()
+    assert.equal(bodies.at(-1).protocol, 'chat-completions')
+    assert.equal(bodies.at(-1).dryRun, true)
+    tree = await page.click('addConfirm')
+    assert.equal(bodies.at(-1).protocol, 'chat-completions')
+    assert.equal(bodies.at(-1).dryRun, false)
+  } finally {
+    page.restore()
+  }
+})
+
+test('an unconfigured gateway offers only a disabled add control', async () => {
+  const gatewayOff = {
+    ...connected,
+    gateway: { ...connected.gateway, configured: false, ready: null },
+  }
+  const page = await mountPage(withState(gatewayOff))
+  try {
+    let tree = await page.mount()
+    collectNodes(tree, node => node.props?.['data-provider'] === 'tmax')[0].props.onClick()
+    tree = await page.settle()
+    const add = collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0]
+    assert.ok(add)
+    assert.equal(add.props.disabled, true)
+  } finally {
+    page.restore()
+  }
+})
+
+test('an unavailable catalog reports unavailability instead of an empty provider list', async () => {
+  const unavailable = {
+    ...connected,
+    errors: [...connected.errors, { section: 'providers', code: 'unknown_resource', message: 'provider list failed' }],
+    catalog: { ...connected.catalog, state: 'unavailable', providers: [] },
+  }
+  const page = await mountPage(withState(unavailable))
+  try {
+    const text = textOf(await page.mount())
+    assert.match(text, /catalogUnavailable/)
+    assert.doesNotMatch(text, /noProviders/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a pending add offers a contextual Apply and resumes the add after it', async () => {
+  const pending = {
+    ...connected,
+    target: { ...connected.target, appliedState: 'pending_native_changes', pendingNativeChanges: [{ change: 'release', field: ['llm-tmax', 'config'] }] },
+  }
+  const clean = {
+    ...pending,
+    target: { ...pending.target, appliedState: 'applied', pendingNativeChanges: [] },
+  }
+  const bodies = []
+  let actionCount = 0
+  const plan = {
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    target: 'dsh-main',
+    entry: { name: 'kimi', mode: 'create' },
+    steps: ['provider_add', 'model_add', 'apply'],
+  }
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: pending }
+    if (path === '/_tmax/connect') {
+      const body = JSON.parse(record.body)
+      bodies.push({ path, body })
+      if (body.dryRun === true) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            dryRun: true,
+            connect: { target: 'dsh-main', files: [{ path: '/home/szf/.dsh/cordis.patch.yml' }], effects: { native_writes: false } },
+            state: pending,
+          },
+        }
+      }
+      return { status: 200, body: { ok: true, dryRun: false, connect: { changed: true, target: 'dsh-main' }, state: clean } }
+    }
+    if (path === '/_tmax/action') {
+      const body = JSON.parse(record.body)
+      bodies.push({ path, body })
+      actionCount += 1
+      if (actionCount === 1) {
+        return {
+          status: 409,
+          body: {
+            ok: false,
+            action: 'add_model',
+            dryRun: true,
+            code: 'pending_native_changes',
+            message: 'the target has pending native changes',
+          },
+        }
+      }
+      return { status: 200, body: { ok: true, action: 'add_model', dryRun: true, result: { code: 'ok', status: 'dry_run', data: plan }, state: clean } }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    let tree = await page.mount()
+    assert.equal(buttonByText(tree, 'connect'), undefined, 'pending alone does not add a top-level Apply')
+    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
+    tree = await page.settle()
+    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
+    tree = await page.settle()
+    assert.match(textOf(tree), /pending_native_changes/)
+    const apply = buttonByText(tree, 'addApplyPending')
+    assert.ok(apply, 'the refusal offers the contextual Apply')
+    apply.props.onClick()
+    tree = await page.settle()
+    assert.match(textOf(tree), /connectPreview/)
+    assert.deepEqual(bodies.find(item => item.path === '/_tmax/connect').body, { dryRun: true })
+    // Navigate away while Apply is on screen; the resumed preview must come
+    // back to the Models/provider context rather than complete off-screen.
+    tree = await page.click('tabQuota')
+    tree = await page.click('connectApply')
+    tree = await page.settle()
+    assert.match(textOf(tree), /connectApplied/)
+    assert.match(textOf(tree), /Kimi Coding Plan/)
+    assert.match(textOf(tree), /addNewEntry/)
+    assert.equal(bodies.filter(item => item.path === '/_tmax/action').at(-1).body.dryRun, true)
   } finally {
     page.restore()
   }

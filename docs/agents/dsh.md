@@ -143,20 +143,23 @@ read tool, one skill, and exact authenticated web routes. The page, seats, and
 command read one host model; the page reads the model composed from tmax's
 effect-free commands — `agent list` when no target is configured, `agent inspect
 TARGET`, `status`, `gateway status`, `provider list`, `provider inspect`,
-`config validate`, and `model explain` — and adds only the DSH-side facts tmax
+`model list`, `config validate`, and `model explain` — and adds only the DSH-side facts tmax
 cannot know. There is no `tmax dsh` command, no snapshot contract, and no
 fallback source: `diagnostics.readModel` reports `inventory`, and a failed read
 is a visible section error.
 
 The page's Apply action is the previewed `tmax agent apply TARGET [--dry-run]`
 operation: it writes the target's native DSH files (the profile's `llm-pi-ai`
-provider settings and the credential reference) and is the page's only DSH or
+provider settings and the credential reference) and is the page's only bare
 native write. It never edits the home patch, per the shared
 [DSH plugin boundary](../../specs/integrations/spec.md#dsh-plugin-boundary).
-Seats are additive and non-authoritative. The page also performs only previewed,
-allowlisted tmax operations, including provider observation, quota resume,
-failure reset, management-listener open, and gateway start, stop, and restart; it
-does not manage DSH profiles and does not author tmax configuration. Page
+The page's **Add to DSH** action is one fixed, previewed target-selection write:
+it creates the target entry when needed, adds one existing catalog model
+selection, and applies the target. It never edits provider, model, alias,
+priority, or schedule definitions. Seats are additive and non-authoritative.
+The page also performs only previewed, allowlisted tmax operations, including
+provider observation, quota resume, failure reset, management-listener open, and
+gateway start, stop, and restart; it does not manage DSH profiles. Page
 behavior is owned by the
 [DSH plugin contract](../../specs/integrations/dsh-plugin/spec.md); installation
 and use are in the [plugin README](../../dsh-plugin/README.md).
@@ -330,6 +333,7 @@ and [`headless` bundle](https://github.com/deepseek-ai/deepseek-harness/blob/687
 | Configuration contract | Native home target declaration, selection, explicit apply/restore, the installed `tmax` bundle and its entry ownership, unchanged credential handoff, and the safety boundaries in the owning specification. |
 | Source inspection | The pinned 0.2.1-rc.2 checkout implements the cited patch layers, whole-entry configuration replacement, shared runtime and provider directory, reusable protocol adapter, model schema, credential service, and headless disablement. Source inspection is not a native parser or inference run. |
 | Profile plugin API fit, 2026-11-23 | The running DSH 0.2.3-alpha.2 (source launch, profile `web`) and the installed tmax 0.1.0 were inspected through `cordis_inspect` and source reads. The plugin's host and client rely on the exact authenticated web-route API (`auth` defaults to `required`), the provider registry, credential `describe`, redacted settings and the configurable-provider directory, client slots and locale registration, the optional `commands` service, and effective default-model selection that this version provides. This establishes API fit; the actual temporary-profile loads are recorded in the pre-port and ported render rows below. |
+| Catalog and target-selection page, 2026-11-25 | The page reads one catalog composition from `model list` plus the target dossier, renders Models/Gateway/Quota tabs, and offers one previewed `add_model` action. Host, action, command, and client tests cover catalog unknown-versus-zero, provider/model/joined projection, search grouping, provider drill-in, gateway/quota tabs, add preview versus execute, exact provider/model/apply argv, pending and unreadable-target refusals, already-selected and unsupported refusals, partial-step failure and preserved apply evidence, and schema `3`; the full plugin Node suite passed. The worktree was installed into the live `web` profile and the page was rendered in the running DSH 0.2.3-alpha.2 against the real tmax 0.1.0 state: 11 providers, 19 concrete models, 9 aliases, joined ratios, search, provider drill-in, the gateway tab, and the quota tab rendered; Add and Apply previews were exercised. A live `add_model` execution was not run: the real target reports pending native changes and the page refused it with `pending_native_changes`. |
 | Profile plugin inventory, actions, command, and tests, 2026-11-24 | The ported host composes one `/_tmax/state` contract from `agent list` (when no target is configured), `agent inspect TARGET`, `status`, `gateway status`, `provider list`/`provider inspect`, `config validate`, and `model explain`; no host path runs `tmax dsh`, and `diagnostics.readModel` reports `inventory`. Connect is the previewed `tmax agent apply TARGET [--dry-run]` native write. Host, action, command, history, and observation tests cover route ownership and liveness, credential readiness, section `errors`, allowlist validation, exact argv, preview versus execute, gateway guards and deadlines, busy, typed 409 refusals, 502 transport, secret-free results, every `/tmax` subcommand and its bounded output, the 45 s history read and its typed-unavailable split, and the page's explicit load state and unknown-count handling. The full plugin Node suite passed, including its host, actions, command, client, history, observations, quota, adapter, and package tests. |
 | Ported inventory real-CLI check, 2026-11-24 | A latest-main binary was built for a read-only smoke check. The real user store is still configuration format 1, so the composed success path could not be exercised against it; the success path is covered by hermetic fake-CLI tests. Real-CLI reads covered target resolution, the typed `unsupported_tmax` gate against the older installed CLI, and the typed `invalid_configuration` answer against the latest binary. That check performed no mutation, apply, refresh, or profile load; the separate ported profile render row records the synthetic-inventory load. |
 | Ported profile page render, 2026-11-24 | A temporary DSH 0.2.3-alpha.2 profile loaded the ported root package with a synthetic inventory executable; it did not use a real tmax store. Real authenticated HTTP returned `GET /_tmax/state` `200` with `diagnostics.readModel` `inventory`, target `dsh-main`, one live route, two providers, two routing rows, and gateway `identified`/`loaded`; the page rendered with route and gateway facts and action controls. This exercises the real package-load, host-composition, HTTP, and client-render path for the ported read model. It does not exercise a real format-2 tmax store, a real workspace session, a browser click on an action control, non-dry-run Apply, Refresh, or actions, a successful history-table load, the settings footer, the model menu option and routing pane, the `tmax_status` tool card, or the `/tmax` command. |

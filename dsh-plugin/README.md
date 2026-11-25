@@ -4,16 +4,24 @@ Use tmax-managed model access inside DeepSeek Harness. The plugin projects the
 DSH target tmax declares into DSH: a first-level page, three seats on DSH-owned
 pages, a read-only `/tmax` command, one read tool, and one skill. It reads
 tmax's effect-free inventory — `agent list`, `agent inspect`, `status`,
-`gateway status`, `provider list`/`provider inspect`, `config validate`, and
-`model explain` — and never copies keys, starts the gateway, or becomes a second
-configuration authority.
+`gateway status`, `provider list`/`provider inspect`, `config validate`,
+`model list`, and `model explain` — and never copies keys, starts the gateway,
+or becomes a second provider/model definition authority. Its one write adds an
+existing catalog model to the declared DSH target through a fixed, previewed
+target-selection action.
 
 Qualified against DSH **0.2.3-alpha.2** and tmax **0.1.0**: the plugin's host and
 client API fit, the composed inventory read model, the action and command tests,
 and a temporary-profile page render with a synthetic inventory were exercised at
-that revision. The render did not use a real format-2 tmax store. The package
-declares `engines.dsh` `>=0.2.3-alpha.2 <0.3.0`; no other DSH version has been
-tested. The contract is owned by the
+that revision. The tabbed catalog page was also rendered from this worktree in
+the live `web` profile against the real tmax 0.1.0 store: all 11 providers, the
+19 concrete models and 9 aliases, joined ratios, search, provider drill-in, the
+gateway tab, and the quota tab rendered. An Add and an Apply preview were
+exercised; neither wrote. A live `add_model` execution was not run: the real
+target reports pending native changes, and the action refused with
+`pending_native_changes` by design. The earlier temporary-profile render did not
+use a real format-2 tmax store. The package declares `engines.dsh`
+`>=0.2.3-alpha.2 <0.3.0`; no other DSH version has been tested. The contract is owned by the
 [DSH plugin specification](../specs/integrations/dsh-plugin/spec.md); the
 [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits) records what
 was and was not exercised, including the browser surfaces that remain
@@ -93,6 +101,7 @@ bounded deadline:
 | `tmax provider list` | The tmax provider rows: authentication, affected targets, integration, quota state, and suspension/failure summaries. |
 | `tmax provider inspect <ID>` | One provider's billing observations, freshness, quota suspension, and failure detail. |
 | `tmax config validate` | Whether the saved configuration is valid, its revision, and its errors. |
+| `tmax model list` | Every configured concrete model and gateway alias with its published protocols, availability, and kind. |
 | `tmax model explain <MODEL> --protocol <P>` | The selected route candidate, priorities, exclusions, and availability for one projected model. |
 
 A failing inspect is reported as an error, with tmax's own code and message,
@@ -171,12 +180,18 @@ tmax agent apply "$TARGET" --dry-run
 tmax agent apply "$TARGET"
 ```
 
-Apply is the only DSH or native write this page offers. Observation publishes
-provider evidence, which can feed tmax's automatic quota suspension, but writes
-no DSH or native state. Quota resume and failure reset are separate previewed
-tmax mutations. Gateway start, stop, and restart are separate previewed tmax
-operations; native restore, provider authentication, and profile or preset
-changes stay explicit CLI or tmax Web operations. No action chains into another.
+Apply is the only bare native write this page offers. The **Add to DSH** action
+is the one fixed target-selection write: it creates the target entry when needed,
+adds one model selection, and applies the target. Observation publishes provider
+evidence, which can feed tmax's automatic quota suspension, but writes no DSH or
+native state. Quota resume and failure reset are separate previewed tmax
+mutations. Gateway start, stop, and restart are separate previewed tmax
+operations; native restore, provider authentication, provider/model definition
+edits, and profile or preset changes stay explicit CLI or tmax Web operations.
+The page never chains one action into another; `add_model` is one allowlisted
+action with a fixed host sequence. A successful contextual Apply may reopen the
+same Add preview once, but never executes the Add; that is a UI resume, not a
+second action.
 
 ## Actions
 
@@ -197,6 +212,7 @@ the same apply and observation operations.
 | **Stop gateway** (`gateway_stop`) | Not offered by the page; the CLI stops a gateway | `gateway stop --dry-run` | Stops the tmax inference gateway (not the Web listener) and reports interrupted work. |
 | **Restart gateway** (`gateway_restart`) | Not offered by the page; the CLI restarts a gateway | `gateway restart --dry-run` | Recycles the tmax inference gateway through its native manager and reports readiness. |
 | **Apply** (`connect`) | The Apply next action | `tmax agent apply TARGET --dry-run` | Writes the target's native DSH files. The page uses its own Apply panel. |
+| **Add to DSH** (`add_model`) | A model row in the Models tab that is enabled, has a published protocol, and is not selected. The preview refuses a target with pending or unreadable native changes. | Catalog-derived plan: entry, protocol, and step names; writes nothing | Fixed sequence: `agent provider add` when no matching entry exists, `agent model add`, then `agent apply TARGET`. It refuses `pending_native_changes` or `target_uninspectable`; apply the target first. The first refusal stops it and reports the completed prefix and failed step; no rollback. |
 
 Every action is previewed first and then explicitly confirmed or cancelled. A
 preview writes nothing and is reported separately from execution. The verdict
@@ -228,16 +244,19 @@ Action paths are covered by host/action tests; the temporary-profile HTTP checks
 are recorded in the [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits).
 The pre-port page was rendered in both light and dark themes and in English and
 Chinese locales, and the ported page was rendered in a temporary profile with a
-synthetic inventory executable. Browser clicks on action controls, non-dry-run
-actions, and seat interactions beyond the sidebar marker and gateway card have
-not been browser-verified.
+synthetic inventory executable. The live page's tabs, search, provider drill-in,
+Add preview, and Apply preview were exercised in the browser. Non-dry-run
+actions (including `add_model` execution and Apply confirmation), Refresh, the
+dark theme, the phone layout, and seat interactions beyond the sidebar marker and
+gateway card have not been browser-verified.
 
 ## The page
 
 The plugin claims a first-level page: `sidebar.panellist` adds the **tmax** row
-beside Plugins and Schedules, and `main` renders the page itself. It answers two
-questions and shows nothing else: is model access working, and how much of each
-account's quota is spent and when it comes back.
+beside Plugins and Schedules, and `main` renders the page itself. The page has
+three tabs — **Models**, **Gateway**, and **Quota** — and answers whether model
+access is working, what tmax is configured with, and how much of each account's
+quota is spent.
 
 - **Header** — the page name, when the state was generated, one reachability
   verdict, and the one control that changes it when the page has it: **Start
@@ -249,27 +268,40 @@ account's quota is spent and when it comes back.
   again and never observes. **Refresh** observes every listed provider that
   reports a quota source; a provider with none is not queried and never reads as
   a failure. A failed read keeps the last good table, labels it last known, and
-  shows the failure once.
-- **Accounts** — one card per tmax account that reports a quota window, closest
-  to its limit first. Every window the account reports is one bar filled with
-  what it has used, its name, what it used of what, and when it resets, whatever
+  shows the failure once. The tab bar never reads or acts.
+- **Models** — every tmax provider and every concrete model and alias under it,
+  with the target's `joined/total` ratio. No provider-level "joined/not joined"
+  label. Search matches provider name/id, model id, and protocol, and groups
+  results by provider. A provider drills into its model rows: model id, published
+  protocols, default mark, joined mark, and **Add to DSH** for an unselected,
+  enabled model with a published protocol. The add preview is one line — the
+  entry and protocol — and confirmation runs the fixed selection-and-apply
+  sequence. If the target has pending native changes, the add bar refuses and
+  offers **Apply current changes first**; that opens the ordinary Apply preview.
+  After it succeeds, the page restores the Models view and reopens the same add
+  preview. Pending alone adds no page-level Apply button.
+- **Gateway** — configured and ready state, listener address, shared-key loaded
+  state, and tmax's reason when not ready; **Start gateway** when configured and
+  not ready. Full supervision and autostart detail stay in the CLI.
+- **Quota** — one card per tmax account that reports a quota window, closest to
+  its limit first. Every window the account reports is one bar filled with what
+  it has used, its name, what it used of what, and when it resets, whatever
   basis the account reports in: a percentage window states its share of 100%, a
   reported quantity states what was used of it, and an unknown reset time is
-  left out. A window whose share cannot be computed is text, never a bar.
-  A card carries a tag only for a state a person must act on or know about
-  (disabled, suspended, failing) and the one action its evidence calls for:
-  **Resume quota** for a reported suspension, **Reset failure** for an active
-  failure. Colour marks what needs attention — amber from 75% used, red from 90%
-  — and a reset states its clock within a day, its date after that, and its year
-  only when that is not the current one; an unqualified epoch reads as Unix
+  left out. A window whose share cannot be computed is text, never a bar. A card
+  carries a tag only for a state a person must act on or know about (disabled,
+  suspended, failing) and the one action its evidence calls for: **Resume
+  quota** for a reported suspension, **Reset failure** for an active failure.
+  Colour marks what needs attention — amber from 75% used, red from 90% — and a
+  reset states its clock within a day, its date after that, and its year only
+  when that is not the current one; an unqualified epoch reads as Unix
   milliseconds and prints as approximate with its caveat.
-- **Models** — every projected model and the account its routing selects; the
-  target's default is marked.
 
-The page reports no revision, schema number, read-model source, gateway
-supervision detail, route protocol or base URL, and no retained request
-history: each is a CLI read. On a phone the account cards stack to one column and
-every bar spans its card; on a touch screen every control keeps a 44px target.
+The page reports no revision, schema number, read-model source, full gateway
+supervision, route protocol or base URL, or retained request history: each is a
+CLI read. On a phone the account cards stack to one column, the tabs span the
+row, and every bar spans its card; on a touch screen controls keep a comfortable
+target.
 
 ## Seats
 
@@ -349,13 +381,13 @@ JSON media-type, 16 KiB body-size, and single-flight checks to its POST actions.
 
 | Route | Effect |
 | --- | --- |
-| `GET /_tmax/state` | The host read model used by the page: `ok`, `schemaVersion`, `generatedAt`, `configurationRevision`, `tmaxVersion`, `authority`, `target`, `ownership` including its mode, `gateway`, `config`, `routes`, `providers` (tmax), `routing`, `diagnostics` including `readModel` (`inventory`), and a top-level `errors` list naming every failed section read. Reads cached state only; `502` only when the host cannot produce any state. |
+| `GET /_tmax/state` | The host read model used by the page: `ok`, `schemaVersion`, `generatedAt`, `configurationRevision`, `tmaxVersion`, `authority`, `target`, `ownership` including its mode, `gateway`, `config`, `routes`, `providers` (tmax), `catalog`, `routing`, `diagnostics` including `readModel` (`inventory`), and a top-level `errors` list naming every failed section read. Reads cached state only; `502` only when the host cannot produce any state. |
 | `GET /_tmax/status` | First-generation page compatibility summary of the same read model. Reads cached state only. |
 | `GET /_tmax/usage` | First-generation provider and usage rows from the same read model. Reads cached state only. |
 | `GET /_tmax/history` | Explicit retained-history read. One read-only `tmax history list` (45 s) mapped to `{ ok, generatedAt, coverage, records, truncated?, omitted? }` with at most 50 compact rows; a typed unavailable daemon/history answer is `200` with `ok:false` and its reason (never an empty history), while a missing transport envelope is `502` `history_unavailable`. Bodies, headers, URLs, and secrets never cross. |
 | `POST /_tmax/observe` | Explicit observation. Body `{ "dryRun": false }`. One quota-scope `tmax provider refresh` per provider that reports a quota source. Returns per-provider outcomes and fresh state: `200` when no item failed, `207` when one did, `409` when an observation is already running, and `502` when the host cannot run the observation at all. |
 | `POST /_tmax/connect` | Explicit Apply. Body `{ "dryRun": true }` or `{ "preview": true }` previews through `tmax agent apply TARGET --dry-run`; `{ "dryRun": false }` or `{ "preview": false }` executes; a `?dry-run=1`/`?preview=1` query previews only. A request that states neither preview nor execution is `400` `invalid_dry_run` before any tmax call. Returns the typed result and fresh state (`200`). A typed refusal from tmax is `409` with the refusal and fresh state; an unresolved target is `409` with its typed code and writes nothing; a busy Apply is `409` `busy` with no state; a transport failure, timeout, or output that is not a JSON envelope is `502` `connect_unavailable`. |
-| `POST /_tmax/action` | The allowlisted action surface used by the page for provider and management actions. Body `{ "action": "...", "provider"?: "...", "scope"?: "...", "dryRun": true }` for `connect`, `observe_provider`, `resume_quota`, `reset_failure`, `open_management`, `gateway_start`, `gateway_stop`, and `gateway_restart`. `200`: typed `result` plus fresh state. `409`: typed refusal plus fresh state, or an unknown-provider, gateway guard, or busy refusal with neither. `400`: invalid request with neither. `502`: `state_unavailable` with neither, or a transport/no-envelope failure with a typed `result` and state when a read is available. |
+| `POST /_tmax/action` | The allowlisted action surface used by the page for provider and management actions. Body `{ "action": "...", "provider"?: "...", "scope"?: "...", "dryRun": true }` for `connect`, `observe_provider`, `resume_quota`, `reset_failure`, `open_management`, `gateway_start`, `gateway_stop`, and `gateway_restart`; `add_model` additionally names `model` and `protocol`, and the host derives the entry. `200`: typed `result` plus fresh state. `409`: typed refusal plus fresh state, or an unknown-provider, gateway guard, or busy refusal with neither. `400`: invalid request with neither. `502`: `state_unavailable` with neither, or a transport/no-envelope failure with a typed `result` and state when a read is available. |
 | `POST /_tmax/usage/refresh` | First-generation explicit tmax observation. Same rules as `/_tmax/observe`; a `dryRun`/`preview` body or `?dry-run=1`/`?preview=1` performs no real observation. |
 
 `POST /_tmax/connect` and `POST /_tmax/observe` remain supported compatibility
@@ -378,9 +410,10 @@ The page keeps no tmax data in browser storage.
   rather than given a guessed value; unknown input modalities are advertised as
   text-only.
 - The page has no configuration editor: provider, model, alias, priority, and
-  schedule edits stay in the tmax CLI or Web. Apply is its only DSH or native
-  write; its other operations are observation, the previewed provider repairs,
-  and the previewed gateway lifecycle actions.
+  schedule edits stay in the tmax CLI or Web. Apply is its only bare DSH or
+  native write; the fixed target-selection action adds one existing model and
+  ends in Apply. Its other operations are observation, the previewed provider
+  repairs, and the previewed gateway lifecycle actions.
 - Request bodies, headers, URLs, model output, error-log viewing, and history
   clear or export controls are not shipped. The page shows no history;
   `/tmax history` lists retained metadata only, and a typed unavailable answer

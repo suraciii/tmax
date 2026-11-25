@@ -153,6 +153,7 @@ function providerList() {
           name: 'Kimi Coding Plan',
           enabled: true,
           authentication: 'api-key',
+          source: 'upstream',
           affected_targets: 3,
           observations: {
             billing_kind: 'plan_allowance',
@@ -166,7 +167,22 @@ function providerList() {
           name: null,
           enabled: true,
           authentication: 'api-key',
+          source: 'upstream',
           affected_targets: 3,
+          observations: {
+            billing_kind: 'unknown',
+            billing_state: 'unknown',
+            observations: [{ scope: 'quota', state: 'unknown', last_attempt_outcome: 'unavailable', last_attempt_reason_code: 'unsupported_source' }],
+          },
+          quota_suspension: { state: 'unsupported' },
+        },
+        {
+          id: 'tmax',
+          name: 'tmax gateway',
+          enabled: true,
+          authentication: 'shared-key',
+          source: 'gateway',
+          affected_targets: 1,
           observations: {
             billing_kind: 'unknown',
             billing_state: 'unknown',
@@ -346,6 +362,39 @@ function connectExec() {
   }
 }
 
+/** `tmax model list`: every configured concrete model and gateway alias. */
+function modelList() {
+  const concrete = (provider, id, protocols) => ({
+    id: `${provider}/${id}`,
+    kind: 'concrete',
+    enabled: true,
+    availability: 'unverified',
+    published_protocols: protocols,
+  })
+  const alias = (id, protocols) => ({
+    id,
+    kind: 'alias',
+    enabled: true,
+    availability: 'unverified',
+    protocols,
+    published_protocols: protocols,
+  })
+  return {
+    code: 'ok',
+    status: 'success',
+    data: {
+      models: [
+        concrete('kimi', 'k3.1-pro', ['chat-completions', 'responses']),
+        concrete('cpa-us2', 'gpt-6-astra', ['chat-completions', 'responses']),
+        alias('public-model', ['chat-completions', 'responses']),
+        alias('text-only', ['responses']),
+        alias('no-context', ['responses']),
+        alias('deepseek-v4.1-flash', ['chat-completions', 'responses']),
+      ],
+    },
+  }
+}
+
 function baseScenario() {
   return {
     agentList: agentList(),
@@ -353,6 +402,7 @@ function baseScenario() {
     gatewayStatus: gatewayStatus(),
     tmaxStatus: tmaxStatus(),
     providerList: providerList(),
+    modelList: modelList(),
     inspect: { kimi: kimiInspect(), 'cpa-us2': cpaInspect() },
     configValidate: configValidate(),
     explain: {
@@ -420,6 +470,7 @@ function pick() {
   if (a[0] === 'gateway' && a[1] === 'status') return scenario.gatewayStatus
   if (a[0] === 'status') return scenario.tmaxStatus
   if (a[0] === 'provider' && a[1] === 'list') return scenario.providerList
+  if (a[0] === 'model' && a[1] === 'list') return scenario.modelList
   if (a[0] === 'provider' && a[1] === 'inspect') return scenario.inspect && scenario.inspect[a[2]]
   if (a[0] === 'provider' && a[1] === 'refresh') {
     const entry = scenario.refresh && scenario.refresh[a[2]]
@@ -871,7 +922,9 @@ test('no declared target matching the DSH home is a visible typed error', async 
   assert.equal(body.errors[0].section, 'projection')
   assert.equal(body.errors[0].code, 'unknown_resource')
   assert.match(body.errors[0].message, /No declared DSH target matches the DSH home/)
-  assert.equal(body.providers.tmax.length, 2, 'readable sections are not erased by the failed target read')
+  assert.equal(body.providers.tmax.length, 3, 'readable sections are not erased by the failed target read')
+  assert.equal(body.catalog.state, 'available', 'provider and model reads still compose a catalog')
+  assert.equal(body.catalog.entriesState, 'unknown', 'the failed target read owns only the entry side')
   assert.equal(body.diagnostics.readModel, 'inventory')
   const status = (await getJson(state, '/_tmax/status')).body
   assert.ok(status.blockers.some(blocker => blocker.source === 'projection' && blocker.code === 'unknown_resource'))
@@ -1008,7 +1061,7 @@ test('a missing tmax CLI does not fail activation and is reported as a blocker',
   const stateBody = (await getJson(state, '/_tmax/state')).body
   // Nothing answered: the target, provider, and configuration reads each name
   // their own failure instead of one generic claim.
-  assert.deepEqual([...new Set(stateBody.errors.map(error => error.section))].sort(), ['config', 'projection', 'providers'])
+  assert.deepEqual([...new Set(stateBody.errors.map(error => error.section))].sort(), ['catalog', 'config', 'projection', 'providers'])
   assert.ok(stateBody.errors.every(error => typeof error.code === 'string' && error.code !== '' && typeof error.message === 'string'))
   assert.equal(JSON.stringify(stateBody).includes('/definitely/missing/tmax'), false, 'no section error echoes the executable path')
   assert.equal(stateBody.diagnostics.readModel, 'inventory')
@@ -1233,7 +1286,7 @@ test('a provider inspect failure stays a per-provider error record', async () =>
   const { state } = await applied({ scenario })
   const body = (await getJson(state, '/_tmax/state')).body
   assert.equal(body.ok, true)
-  assert.deepEqual(body.providers.tmax.map(provider => provider.id), ['kimi', 'cpa-us2'])
+  assert.deepEqual(body.providers.tmax.map(provider => provider.id), ['kimi', 'cpa-us2', 'tmax'])
   assert.equal(body.providers.tmax[0].error, null)
   assert.equal(body.providers.tmax[1].error.code, 'unknown_resource')
   assert.equal(typeof body.providers.tmax[1].error.message, 'string')
@@ -1462,7 +1515,7 @@ test('a dry-run observation previews with --dry-run and publishes nothing', asyn
   assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged'])
   assert.ok(preview.body.items.every(item => item.code === 'dry_run'))
   // The preview still returns a fresh read model, under the current schema.
-  assert.equal(preview.body.state.schemaVersion, 2)
+  assert.equal(preview.body.state.schemaVersion, 3)
 })
 
 test('explicit observe reports all-failed and partial outcomes without claiming success', async () => {
@@ -1511,7 +1564,7 @@ test('the legacy usage refresh route observes explicitly and reports per-item re
   assert.equal(body.statusCode, 200)
   assert.equal(body.body.ok, true)
   assert.equal(body.body.dryRun, false)
-  assert.equal(body.body.providers.length, 2)
+  assert.equal(body.body.providers.length, 3)
   assert.deepEqual(body.body.items.map(item => item.status), ['refreshed'])
 })
 
@@ -1743,7 +1796,7 @@ test('tmax_status returns compact sections and triggers no observation', async (
     assert.ok(key in value, `tmax_status exposes ${key}`)
   }
   assert.deepEqual(value.routes.map(route => route.provider), ['tmax'])
-  assert.equal(value.providers.tmax.length, 2)
+  assert.equal(value.providers.tmax.length, 3)
   assert.equal(value.routing[0].selection.qualifiedModel, 'opencode-go-2/public-model')
   const calls = await fake.calls()
   assert.equal(calls.some(argv => argv[0] === 'provider' && argv[1] === 'refresh'), false)
@@ -1944,4 +1997,72 @@ test('without the entry-list parser, ownership is unreadable rather than guessed
   assert.equal(body.ownership.owner, 'unknown')
   assert.equal(body.ownership.reason, 'settings_unreadable')
   assert.equal(body.ownership.conflict, null)
+})
+
+test('the catalog projects provider source, aliases, joined state, default, and protocols', async () => {
+  const scenario = baseScenario()
+  delete scenario.providerList.data.providers[0].source
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  const catalog = body.catalog
+  assert.equal(catalog.state, 'available')
+  assert.equal(catalog.entriesState, 'available')
+  const tmax = catalog.providers.find(provider => provider.id === 'tmax')
+  assert.equal(tmax.source, 'gateway')
+  assert.equal(tmax.entry, 'tmax')
+  assert.deepEqual(tmax.entries.map(entry => entry.name), ['tmax'])
+  assert.equal(tmax.totalCount, 4)
+  assert.equal(tmax.joinedCount, 3)
+  assert.equal(tmax.models.find(model => model.id === 'deepseek-v4.1-flash').default, true)
+  assert.equal(tmax.models.find(model => model.id === 'public-model').joined, true)
+  assert.deepEqual(tmax.models.find(model => model.id === 'public-model').joinedProtocols, ['responses'])
+  const kimi = catalog.providers.find(provider => provider.id === 'kimi')
+  assert.equal(kimi.source, 'upstream', 'provider-inspect data.source is the fallback')
+  assert.equal(kimi.entry, null)
+  assert.equal(kimi.totalCount, 1)
+  assert.equal(kimi.joinedCount, 0)
+  assert.deepEqual(kimi.models[0].protocols, ['chat-completions', 'responses'])
+  assert.equal(kimi.models[0].declaredProtocols, null, 'unreported is not a readable empty list')
+  assert.equal(catalog.default.provider, 'tmax')
+  assert.equal(catalog.default.model, 'deepseek-v4.1-flash')
+})
+
+test('the catalog default maps a direct entry name back to its provider', async () => {
+  const scenario = baseScenario()
+  const inspect = JSON.parse(JSON.stringify(scenario.agentInspect.data))
+  inspect.providers.push({
+    name: 'kimi-entry',
+    source: { provider: 'kimi' },
+    relayed: false,
+    models: [{ id: 'k3.1-pro', protocol: 'responses' }],
+  })
+  inspect.default = { provider: 'kimi-entry', id: 'k3.1-pro', protocol: 'responses' }
+  scenario.agentInspect = { code: 'ok', status: 'success', data: inspect }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  const kimi = body.catalog.providers.find(provider => provider.id === 'kimi')
+  assert.equal(body.catalog.default.provider, 'kimi')
+  assert.equal(kimi.models[0].default, true)
+  assert.equal(kimi.models[0].joined, true)
+})
+
+test('an unreadable catalog source reports unavailable, not an empty catalog', async () => {
+  const scenario = baseScenario()
+  scenario.modelList = { code: 'unknown_resource', status: 'error', data: null }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.catalog.state, 'unavailable')
+  assert.equal(body.catalog.providers.find(provider => provider.id === 'kimi').totalCount, null)
+  assert.equal(body.catalog.providers.find(provider => provider.id === 'kimi').joinedCount, null)
+  assert.ok(body.errors.some(error => error.section === 'catalog' && error.code === 'unknown_resource'))
+})
+
+test('a provider-list failure makes the catalog unavailable even when models are readable', async () => {
+  const scenario = baseScenario()
+  scenario.providerList = { code: 'unknown_resource', status: 'error', data: null }
+  const { state } = await applied({ scenario })
+  const body = (await getJson(state, '/_tmax/state')).body
+  assert.equal(body.catalog.state, 'unavailable')
+  assert.deepEqual(body.catalog.providers, [])
+  assert.ok(body.errors.some(error => error.section === 'providers' && error.code === 'unknown_resource'))
 })

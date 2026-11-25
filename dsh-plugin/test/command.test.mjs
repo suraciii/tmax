@@ -353,6 +353,12 @@ function baseScenario() {
       'gateway status': success(gatewayStatusData()),
       status: success({ config_path: '/tmp/tmax/tmax.toml', file_revision: 'rev-1', configuration_state: 'valid', daemon: gatewayStatusData() }),
       'provider list': success(providerListData()),
+      'model list': success({ models: [
+        { id: 'kimi/k3.1-pro', kind: 'concrete', enabled: true, availability: 'unverified', published_protocols: ['chat-completions', 'responses'] },
+        { id: 'cpa-us2/gpt-6-astra', kind: 'concrete', enabled: true, availability: 'unverified', published_protocols: ['chat-completions', 'responses'] },
+        { id: 'deepseek-v4.1-flash', kind: 'alias', enabled: true, availability: 'unverified', protocols: ['responses'], published_protocols: ['responses'] },
+        { id: 'glm-5.4', kind: 'alias', enabled: true, availability: 'unverified', protocols: ['responses'], published_protocols: ['responses'] },
+      ] }),
       'provider inspect kimi': success(kimiInspectData()),
       'provider inspect cpa-us2': success(cpaInspectData()),
       'config validate': success({ valid: true, revision: 'rev-1', snapshot_state: 'available' }),
