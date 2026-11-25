@@ -36,6 +36,10 @@ check-python-cache:
 check-python:
     python3 -B -c 'from pathlib import Path; [compile(p.read_bytes(), str(p), "exec") for p in Path("scripts").rglob("*.py")]'
 
+# Validate the GitHub Actions workflow files.
+check-workflows:
+    actionlint
+
 # Exercise verification tooling in isolated temporary repositories.
 test-scripts:
     python3 -B -m unittest discover -s scripts -p 'test_*.py'
@@ -54,7 +58,7 @@ smoke:
     cargo run --locked -p tmax-cli -- --version
 
 # Required pull request gate.
-ci-pr: check-python-cache check-python fmt check clippy test test-scripts test-plugin check-web smoke
+ci-pr: check-python-cache check-python check-workflows fmt check clippy test test-scripts test-plugin check-web smoke
 
 # Full local and main-branch gate.
 ci: ci-pr build
