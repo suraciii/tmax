@@ -869,7 +869,7 @@ mod tests {
         assert_eq!(store.read_json::<Value>(STATE).unwrap(), expected);
         assert_eq!(
             Snapshot::capture_loaded(&store, &config, None).destination_identity("p", "m"),
-            Some(identity)
+            Some(identity.clone())
         );
     }
 
@@ -1094,7 +1094,7 @@ mod tests {
         // Configuration-shaped content is rebuilt from the saved configuration;
         // the identity a credential names is not, or every key is orphaned.
         assert!(rebuilt.saved.config.model_aliases.is_empty());
-        assert_eq!(rebuilt.saved.providers["p"].identity, identity);
+        assert_eq!(rebuilt.saved.providers["p"].identity, identity.clone());
         assert_eq!(
             rebuilt.authorization.get(&identity),
             runtime.authorization.get(&identity)
@@ -1111,7 +1111,7 @@ mod tests {
             Snapshot::capture(&store, &config)
                 .destination_identity("p", "m")
                 .map(|(identity, _, _)| identity),
-            Some(identity)
+            Some(identity.clone())
         );
         let explained = crate::routing::explain(
             &store,
@@ -1129,6 +1129,13 @@ mod tests {
                 .all(|candidate| candidate["reason_code"] != "credential_unavailable"),
             "{explained}"
         );
+        // The identity follows an explicit rename made after the migration too.
+        let mut renamed = config.clone();
+        let provider = renamed.providers.remove("p").unwrap();
+        renamed.providers.insert("q".into(), provider);
+        reconcile(&store, &config, &renamed, &[("p".into(), "q".into())]).unwrap();
+        let after = read_runtime(&store).unwrap();
+        assert_eq!(after.saved.providers["q"].identity, identity);
     }
 
     #[test]

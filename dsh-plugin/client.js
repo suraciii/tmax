@@ -65,15 +65,11 @@ window.__ModuleLoader__.load({
       ownerUnapplied: 'not applied yet',
       ownerNone: 'none',
       scopeProfileScoped: 'profile-scoped',
-      present: 'present',
-      absent: 'absent',
       conflict: 'Conflict',
       applied: 'Applied',
       appliedApplied: 'applied',
       appliedPending: 'pending',
       pending: 'Pending reload',
-      differs: 'differs',
-      matches: 'matches',
       credentialsTitle: 'Credentials',
       credentialPath: 'path',
       credentialState: 'state',
@@ -89,8 +85,6 @@ window.__ModuleLoader__.load({
       gatewayListen: 'Address',
       gatewayDaemon: 'Daemon',
       gatewayReason: 'reason',
-      registration: 'registration',
-      unit: 'unit',
       daemonIdentified: 'identified',
       daemonUnidentified: 'unidentified',
       supervisionAvailable: 'available',
@@ -109,40 +103,23 @@ window.__ModuleLoader__.load({
       noAccounts: 'No account reports a quota window yet.',
       defaultTag: 'default',
       providerFailing: 'failing',
-      capabilities: 'Capabilities',
-      contextWindow: 'Context',
-      inputModalities: 'Input',
-      reasoningEfforts: 'Efforts',
       kindAlias: 'alias',
       kindConcrete: 'concrete',
       continuityStateless: 'stateless',
       continuityStateful: 'stateful',
       availabilityUnverified: 'unverified',
       availabilityVerified: 'verified',
-      selected: 'selected',
       // Providers and limits.
       providerDisabled: 'disabled',
       providerSuspended: 'suspended',
-      quotaSuspended: 'Quota exhausted',
-      integration: 'integration',
       blocker: 'Blocker',
       billingPlanAllowance: 'plan allowance',
       billingUnknown: 'unknown',
-      freshness: 'freshness',
       freshnessFresh: 'fresh',
       freshnessStale: 'stale',
       freshnessMissing: 'missing',
       freshnessUnqualified: 'unqualified',
-      lastAttempt: 'last attempt',
-      unknownQuota: 'quota unknown (no observation reported)',
-      unknownQuotaUnsupported: 'quota unknown (no supported source)',
-      noQuotaRows: 'no quota rows reported',
-      failureOverride: 'failure override',
       failureActive: 'active',
-      consecutiveFailures: 'consecutive failures',
-      expires: 'expires',
-      plan: 'plan',
-      renewal: 'renewal',
       usedShare: 'used',
       left: 'left',
       reset: 'resets',
@@ -156,7 +133,6 @@ window.__ModuleLoader__.load({
       unitMinute: 'min',
       unitHour: 'h',
       quotaUnreadable: 'quota format not understood',
-      notes: 'notes',
       noteCountersUnitUnqualified: 'counter units unqualified',
       noteUsageMayOverlap: 'usage and limits may overlap',
       noteStatusEnumsUnqualified: 'status enums unqualified',
@@ -167,14 +143,6 @@ window.__ModuleLoader__.load({
       agentObserved: 'observed',
       agentNotObserved: 'not observed',
       agentFailed: 'failed',
-      reasonCredential: 'credential unavailable',
-      reasonUpstream: 'the vendor refused the quota read',
-      reasonFormat: 'the vendor answered in a shape this page does not understand',
-      reasonTransport: 'the vendor is unreachable',
-      reasonDeadline: 'the vendor did not answer in time',
-      reasonFailed: 'the vendor reports this plan as unusable',
-      reasonUnsupported: 'no supported quota source',
-      reasonUnknown: 'the quota read failed',
       // Diagnostics.
       historyAvailable: 'available',
       historyUnavailable: 'unavailable',
@@ -184,10 +152,6 @@ window.__ModuleLoader__.load({
       // Observation results.
       observeRunning: 'Observing provider sources…',
       observeFailed: 'Observation failed',
-      observeStatusRefreshed: 'refreshed',
-      observeStatusBlocked: 'blocked',
-      observeStatusFailed: 'failed',
-      observeStatusUnchanged: 'unchanged',
       // Apply. The host route keeps its compatibility name `/_tmax/connect`; the
       // user-facing operation is `tmax agent apply`, which writes the target's
       // native DSH files.
@@ -285,6 +249,18 @@ window.__ModuleLoader__.load({
       hostStatus: 'The tmax host answered',
       hostUnreachable: 'Cannot reach the tmax host',
       staleNotice: 'showing the last successful read',
+      modelsCredential: 'The tmax route has no usable credential reference.',
+      modelsCredentialUnknown: 'The tmax route credential readiness is unknown.',
+      modelsInactive: 'The tmax route is configured but not active in DSH.',
+      modelsNone: 'No tmax model is projected for this profile.',
+      modelsReload: 'A DSH reload is pending before the tmax route can be used.',
+      connectChangedFiles: 'changed files',
+      connectUnchangedFiles: 'unchanged files',
+      effectLocksCreated: 'locks created',
+      effectNativeWrites: 'native writes',
+      effectProcessesStarted: 'processes started',
+      effectSecretReads: 'secret reads',
+      observeDone: 'Observation finished',
     }
     const zh = {
       // Shared chrome.
@@ -332,15 +308,11 @@ window.__ModuleLoader__.load({
       ownerUnapplied: '尚未应用',
       ownerNone: '无',
       scopeProfileScoped: '仅当前 profile',
-      present: '存在',
-      absent: '缺失',
       conflict: '冲突',
       applied: '已应用',
       appliedApplied: '已应用',
       appliedPending: '待应用',
       pending: '待重新加载',
-      differs: '不一致',
-      matches: '一致',
       credentialsTitle: '凭据',
       credentialPath: '路径',
       credentialState: '状态',
@@ -356,8 +328,6 @@ window.__ModuleLoader__.load({
       gatewayListen: '监听地址',
       gatewayDaemon: '守护进程',
       gatewayReason: '原因',
-      registration: '注册状态',
-      unit: '单元',
       daemonIdentified: '已识别',
       daemonUnidentified: '未识别',
       supervisionAvailable: '可用',
@@ -376,40 +346,23 @@ window.__ModuleLoader__.load({
       noAccounts: '还没有账号上报额度窗口。',
       defaultTag: '默认',
       providerFailing: '故障',
-      capabilities: '能力',
-      contextWindow: '上下文',
-      inputModalities: '输入',
-      reasoningEfforts: '推理强度',
       kindAlias: '别名',
       kindConcrete: '具体模型',
       continuityStateless: '无状态',
       continuityStateful: '有状态',
       availabilityUnverified: '未验证',
       availabilityVerified: '已验证',
-      selected: '已选中',
       // Providers and limits.
       providerDisabled: '已停用',
       providerSuspended: '已暂停',
-      quotaSuspended: '额度已用尽',
-      integration: '集成',
       blocker: '阻塞项',
       billingPlanAllowance: '套餐额度',
       billingUnknown: '未知',
-      freshness: '新鲜度',
       freshnessFresh: '新鲜',
       freshnessStale: '过期',
       freshnessMissing: '缺失',
       freshnessUnqualified: '未定级',
-      lastAttempt: '最近尝试',
-      unknownQuota: '额度未知（未报告观测）',
-      unknownQuotaUnsupported: '额度未知（没有支持的来源）',
-      noQuotaRows: '未报告额度明细',
-      failureOverride: '故障覆盖',
       failureActive: '生效中',
-      consecutiveFailures: '连续失败',
-      expires: '到期',
-      plan: '套餐',
-      renewal: '续期',
       usedShare: '已用',
       left: '剩余',
       reset: '重置',
@@ -423,7 +376,6 @@ window.__ModuleLoader__.load({
       unitMinute: '分钟',
       unitHour: '小时',
       quotaUnreadable: '额度格式无法解析',
-      notes: '备注',
       noteCountersUnitUnqualified: '计数单位未定级',
       noteUsageMayOverlap: '用量与额度可能重叠',
       noteStatusEnumsUnqualified: '状态枚举未定级',
@@ -434,14 +386,6 @@ window.__ModuleLoader__.load({
       agentObserved: '已观测',
       agentNotObserved: '未观测',
       agentFailed: '失败',
-      reasonCredential: '凭据不可用',
-      reasonUpstream: '厂商拒绝了这次额度读取',
-      reasonFormat: '厂商返回的格式无法解析',
-      reasonTransport: '无法连接到厂商',
-      reasonDeadline: '厂商未在时限内响应',
-      reasonFailed: '厂商报告该套餐当前不可用',
-      reasonUnsupported: '没有支持的额度来源',
-      reasonUnknown: '额度读取失败',
       // Diagnostics.
       historyAvailable: '可用',
       historyUnavailable: '不可用',
@@ -451,10 +395,6 @@ window.__ModuleLoader__.load({
       // Observation results.
       observeRunning: '正在观测供应商来源…',
       observeFailed: '观测失败',
-      observeStatusRefreshed: '已刷新',
-      observeStatusBlocked: '被阻止',
-      observeStatusFailed: '失败',
-      observeStatusUnchanged: '未变化',
       // 应用。Host 路由保留兼容名称 `/_tmax/connect`；面向用户的操作是
       // `tmax agent apply`，它写入目标的 DSH 原生文件。
       connect: '应用',
@@ -551,6 +491,18 @@ window.__ModuleLoader__.load({
       hostStatus: 'tmax Host 返回',
       hostUnreachable: '无法连接到 tmax Host',
       staleNotice: '显示上次成功读取的结果',
+      modelsCredential: 'tmax 路由没有可用的凭据引用。',
+      modelsCredentialUnknown: '无法确定 tmax 路由的凭据就绪状态。',
+      modelsInactive: 'tmax 路由已配置，但在 DSH 中未生效。',
+      modelsNone: '此配置未投影任何 tmax 模型。',
+      modelsReload: '需要重新加载 DSH 后 tmax 路由才能使用。',
+      connectChangedFiles: '变更文件',
+      connectUnchangedFiles: '未变文件',
+      effectLocksCreated: '创建锁',
+      effectNativeWrites: '原生写入',
+      effectProcessesStarted: '启动进程',
+      effectSecretReads: '密钥读取',
+      observeDone: '观测完成',
     }
 
     // Enum tables: the host reports machine values; the page translates the
@@ -577,16 +529,6 @@ window.__ModuleLoader__.load({
     const FAILURE_STATES = { active: 'failureActive' }
     const AGENT_STATES = { observed: 'agentObserved', not_observed: 'agentNotObserved', failed: 'agentFailed', unknown: 'unknown' }
     const REASONS = { daemon_identity_unavailable: 'reasonDaemonIdentity', service_manager_unavailable: 'reasonServiceManager' }
-    const AGENT_REASONS = {
-      credential_unavailable: 'reasonCredential',
-      upstream_rejection: 'reasonUpstream',
-      source_format_error: 'reasonFormat',
-      transport_error: 'reasonTransport',
-      observation_deadline: 'reasonDeadline',
-      observation_failed: 'reasonFailed',
-      unsupported_source: 'reasonUnsupported',
-      observation_unknown: 'reasonUnknown',
-    }
     const NOTE_KEYS = {
       status_enums_unqualified: 'noteStatusEnumsUnqualified',
       percent_consumed_floored: 'notePercentFloored',
@@ -604,12 +546,6 @@ window.__ModuleLoader__.load({
       gateway: ['gateway', 'gateway_read', 'gateway_status'],
       config: ['config', 'config_read', 'config_validate'],
       agentSettings: ['agent_settings', 'agent-settings', 'agent_providers', 'observations'],
-    }
-    const OBSERVE_STATUS = {
-      refreshed: 'observeStatusRefreshed',
-      blocked: 'observeStatusBlocked',
-      failed: 'observeStatusFailed',
-      unchanged: 'observeStatusUnchanged',
     }
     const REFERENCE_ACTIONS = { would_write: 'actionWouldWrite', written: 'actionWritten', unchanged: 'actionUnchanged' }
     // Only an explicit state names the web listener's lifecycle; a null record
@@ -668,7 +604,6 @@ window.__ModuleLoader__.load({
 @media (pointer: coarse) { .tmx-button { min-height: 44px; padding: 0 18px; font-size: 15px; } }
 .tmx-section { margin-top: 28px; }
 .tmx-sectionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 10px; font-size: 14px; line-height: 22px; font-weight: 500; }
-.tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
 /*
  * An account is one object a person checks one at a time, so it gets a wide
  * card; every window it reports keeps its own bar, named, with what is left and
@@ -682,7 +617,7 @@ window.__ModuleLoader__.load({
 .tmx-tag[data-tone='error'] { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-windows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .tmx-window { display: grid; grid-template-columns: auto minmax(48px, 1fr) auto minmax(80px, auto); align-items: center; gap: 10px; min-height: 18px; }
-.tmx-windowName { font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.tmx-windowName { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
 /* The bar is what is left, the same quantity the value states; colour marks what needs attention. */
 .tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-success-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease), background-color var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
@@ -718,27 +653,21 @@ window.__ModuleLoader__.load({
 .tmx-panelTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
 .tmx-panelNote { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-panelActions { display: flex; flex-wrap: wrap; gap: 12px; }
-.tmx-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.tmx-listItem { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; line-height: 18px; }
-.tmx-listMain { min-width: 0; overflow-wrap: anywhere; }
 .tmx-connectLines { display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .tmx-connectGroup dt { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-connectGroup dd { margin: 0 0 4px; }
 .tmx-inlineList { margin: 0; padding: 0 0 0 14px; font-size: 12px; line-height: 18px; }
-.tmx-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .tmx-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); font-size: 12px; line-height: 18px; }
 .tmx-chip[data-tone='error'] { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
 .tmx-chip[data-tone='warn'] { border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 .tmx-chip[data-tone='ok'] { border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%, var(--dsw-alias-label-primary)); }
-.tmx-chipKind { font-size: 11px; color: var(--dsw-alias-label-secondary); }
-.tmx-factNote { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
 /* Phone: one column, and a window becomes two lines so its bar spans the whole card. */
 @media (max-width: 720px) {
   .tmx-page { font-size: 15px; }
   .tmx-account { padding: 14px; }
   .tmx-windows { gap: 10px; }
   .tmx-window { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
-  .tmx-windowName { order: 1; font-size: 14px; line-height: 22px; }
+  .tmx-windowName { order: 1; max-width: 100%; overflow: visible; overflow-wrap: anywhere; white-space: normal; font-size: 14px; line-height: 22px; }
   .tmx-windowReset { order: 2; font-size: 14px; line-height: 22px; text-align: start; }
   .tmx-windowReset[data-empty='true'] { display: none; }
   .tmx-resetWord { display: inline; }
@@ -925,7 +854,10 @@ window.__ModuleLoader__.load({
       const reset = resetAt(row.reset)
       const resetIsUnqualified = resetUnqualified(row.reset)
       const percent = numeric(row.percent)
-      if (percent !== undefined) {
+      // A share is computable only on the two bases that name it. A basis the
+      // contract does not define is not read as consumed by default: that would
+      // draw a bar nobody measured.
+      if (percent !== undefined && (row.basis === 'remaining_percent' || row.basis === 'consumed_percent')) {
         const consumed = row.basis === 'remaining_percent' ? 100 - percent : percent
         const rounded = Math.round(Math.max(0, Math.min(100, consumed)))
         return {
@@ -979,41 +911,7 @@ window.__ModuleLoader__.load({
       })
     }
 
-    /** The oldest observation the page is actually drawing, never the newest. */
-    function observedAtOf(record) {
-      if (record === null || typeof record !== 'object') return undefined
-      for (const value of [record.observedAt, record.billing?.observedAt]) {
-        if (typeof value !== 'string' || value === '') continue
-        const at = new Date(value).getTime()
-        if (!Number.isNaN(at)) return at
-      }
-      return undefined
-    }
-
-    function oldestReading(records) {
-      let oldest
-      for (const record of Array.isArray(records) ? records : []) {
-        const at = observedAtOf(record)
-        if (at === undefined) continue
-        if (oldest === undefined || at < oldest) oldest = at
-      }
-      return oldest === undefined ? undefined : new Date(oldest).toISOString()
-    }
-
     // ------------------------------------------------------------- state reads
-
-    function routeReadiness(route) {
-      if (route?.credentialConfigured === true) return 'usable'
-      if (route?.credentialConfigured === false) return 'registered'
-      return 'unknown'
-    }
-
-    /** Is DSH actually serving this route right now? Unknown is not "no". */
-    function routeActiveState(route) {
-      if (route?.active === true) return 'active'
-      if (route?.active === false) return 'inactive'
-      return 'unknown'
-    }
 
     /**
      * A route is usable only when DSH serves it and its credential is
@@ -1023,17 +921,6 @@ window.__ModuleLoader__.load({
       const routes = Array.isArray(state?.routes) ? state.routes : []
       return routes.filter(route => route !== null && typeof route === 'object'
         && route.active === true && route.credentialConfigured === true)
-    }
-
-    /** Route-level blockers are host evidence: code first, bounded text. */
-    function routeBlockerTexts(route) {
-      const blockers = Array.isArray(route?.blockers) ? route.blockers : []
-      return blockers
-        .slice(0, 10)
-        .map(blocker => blocker !== null && typeof blocker === 'object'
-          ? hostCodeText(blocker.code, blocker.message)
-          : hostCodeText(undefined, blocker))
-        .filter(text => text !== '')
     }
 
     /** tmax evidence about a model, never a DSH availability claim. */
@@ -1143,12 +1030,20 @@ window.__ModuleLoader__.load({
       }
 
       const gateway = state.gateway ?? {}
-      if (gateway.ready === false) return { kind: 'gateway', code: gateway.reasonCode }
+      // A readiness that is unknown because its own read failed is not evidence
+      // of anything: read again before acting on it.
+      if (gateway.ready !== true && sectionErrors(state).some(error => error.section === 'gateway')) {
+        return { kind: 'retry', reason: 'section' }
+      }
+      // Unknown readiness is not readiness: the page offers Start for a
+      // configured gateway that has not reported ready, and the preview itself
+      // reports the blocker instead of performing anything.
+      if (gateway.configured === true && gateway.ready !== true) return { kind: 'gateway', code: gateway.reasonCode }
       const blockers = Array.isArray(state.target?.blockers) ? state.target.blockers : []
       if (blockers.length > 0) {
         const blocker = blockers[0]
         // The blocker itself asks for the start, so the page offers it.
-        if (blocker?.code === 'gateway_not_ready' && gatewayActions(state.gateway ?? {}).some(action => action.action === 'gateway_start')) {
+        if (blocker?.code === 'gateway_not_ready' && state.gateway?.configured === true) {
           return { kind: 'gateway', code: 'gateway_not_ready' }
         }
         return {
@@ -1173,17 +1068,6 @@ window.__ModuleLoader__.load({
       if (typeof conflict.message === 'string') return conflict.message
       const names = conflict.names ?? conflict.routes
       return Array.isArray(names) ? names.join(', ') : undefined
-    }
-
-    /** Do tmax's target default and DSH's effective default name one model? */
-    function defaultsMatch(tmaxDefault, effectiveDefault) {
-      if (tmaxDefault === null || typeof tmaxDefault !== 'object') return undefined
-      if (effectiveDefault === null || typeof effectiveDefault !== 'object') return undefined
-      if (typeof tmaxDefault.provider !== 'string' || typeof effectiveDefault.provider !== 'string') return undefined
-      const left = typeof tmaxDefault.id === 'string' ? tmaxDefault.id : typeof tmaxDefault.model === 'string' ? tmaxDefault.model : undefined
-      const right = typeof effectiveDefault.model === 'string' ? effectiveDefault.model : typeof effectiveDefault.id === 'string' ? effectiveDefault.id : undefined
-      if (left === undefined || right === undefined) return undefined
-      return tmaxDefault.provider === effectiveDefault.provider && left === right
     }
 
     /** External links are limited to http/https; anything else is not a link. */
@@ -1250,72 +1134,6 @@ window.__ModuleLoader__.load({
       const explicit = errorsForSection(state, 'projection')
       if (explicit.length > 0) return explicit
       return projectionFailed(state) ? errorsForSection(state, 'target') : []
-    }
-
-    /** Ownership mode from the host: 'auto', true, false, or unknown. */
-
-    /** The unknown-quota sentence for one provider, with its last attempt. */
-    function limitMessage(provider, t) {
-      const limit = limitState(provider)
-      if (limit === 'rows' || limit === 'error') return undefined
-      const billing = provider?.billing
-      const reason = typeof billing?.reasonCode === 'string' ? billing.reasonCode : ''
-      const lastAttempt = typeof billing?.lastAttempt === 'string' && billing.lastAttempt !== ''
-        ? boundedText(billing.lastAttempt, 48)
-        : undefined
-      const base = limit === 'noRows'
-        ? t('noQuotaRows')
-        : reason === 'unsupported_source' ? t('unknownQuotaUnsupported') : t('unknownQuota')
-      return lastAttempt === undefined ? base : `${base} · ${t('lastAttempt')} ${lastAttempt}`
-    }
-
-    function billingNoteTexts(provider, t) {
-      const notes = Array.isArray(provider?.billing?.notes) ? provider.billing.notes : []
-      return notes.slice(0, 8).map(note => NOTE_KEYS[note] === undefined ? boundedText(note, 40) : t(NOTE_KEYS[note]))
-    }
-
-    function capabilityFacts(capabilities, t) {
-      if (capabilities === null || typeof capabilities !== 'object') {
-        return [{ label: t('capabilities'), value: t('notReported') }]
-      }
-      const context = numeric(capabilities.contextWindow)
-      const input = capabilities.input
-      const efforts = capabilities.reasoningEfforts
-      return [
-        { label: t('contextWindow'), value: context === undefined ? t('unknown') : compact(context) },
-        {
-          label: t('inputModalities'),
-          value: Array.isArray(input)
-            ? (input.length === 0 ? t('none') : input.map(item => boundedText(item, 24)).join(', '))
-            : t('unknown'),
-        },
-        {
-          label: t('reasoningEfforts'),
-          value: efforts !== null && typeof efforts === 'object'
-            ? (Object.keys(efforts).length === 0 ? t('none') : Object.keys(efforts).map(item => boundedText(item, 24)).join(', '))
-            : t('unknown'),
-        },
-      ]
-    }
-
-    function limitState(provider) {
-      if (provider?.error !== null && provider?.error !== undefined) return 'error'
-      const billing = provider?.billing
-      if (billing === null || typeof billing !== 'object') return 'unknown'
-      const rows = Array.isArray(billing.rows) ? billing.rows : []
-      if (rows.length > 0) return 'rows'
-      if (billing.state === 'observed') return 'noRows'
-      return 'unknown'
-    }
-
-    function historyFact(diagnostics, t) {
-      const history = diagnostics?.history
-      if (history === null || typeof history !== 'object') return { value: t('unknown') }
-      const state = enumText(history.state, HISTORY_STATES, t)
-      const reason = history.reasonCode === null || history.reasonCode === undefined
-        ? undefined
-        : enumText(history.reasonCode, REASONS, t)
-      return { value: reason === undefined ? state : `${state} (${reason})` }
     }
 
     function lastErrorFact(diagnostics, t) {
@@ -1523,14 +1341,6 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The management page is a real tmax surface, but only a configured gateway
-     * has one to open. One rule decides both the button and the availability.
-     */
-    function managementAction(gateway) {
-      return gateway?.configured === true ? { action: 'open_management' } : undefined
-    }
-
-    /**
      * Gateway lifecycle actions only where they can change the reported state:
      * start when it is not ready, stop/restart only when a daemon is actually
      * identified or the gateway reports ready. An unknown readiness never
@@ -1539,16 +1349,6 @@ window.__ModuleLoader__.load({
     /** Whether the reported daemon discovery token names an identified daemon. */
     function daemonIdentified(gateway) {
       return gateway?.daemonDiscoveryState === 'identified' || gateway?.daemonDiscoveryState === 'compatible'
-    }
-
-    function gatewayActions(gateway) {
-      if (gateway?.configured !== true) return []
-      const ready = gateway.ready === true
-      const daemon = daemonIdentified(gateway)
-      const actions = []
-      if (!ready) actions.push({ action: 'gateway_start' })
-      if (ready || daemon) actions.push({ action: 'gateway_stop' }, { action: 'gateway_restart' })
-      return actions
     }
 
     /**
@@ -2311,44 +2111,11 @@ window.__ModuleLoader__.load({
       return value === true ? t('yes') : value === false ? t('no') : t('unknown')
     }
 
-    function boolWord(value, t, whenTrue, whenFalse) {
-      return value === true ? whenTrue : value === false ? whenFalse : t('unknown')
-    }
-
     function windowsFor(provider, t) {
       const readings = (Array.isArray(provider?.billing?.rows) ? provider.billing.rows : [])
         .map((row, index) => windowReading(row, index, t))
         .filter(Boolean)
       return disambiguate(readings)
-    }
-
-    function suspensionLine(suspension, t) {
-      if (suspension?.state !== 'suspended') return undefined
-      const parts = [t('quotaSuspended')]
-      if (typeof suspension.window === 'string' && LABEL_KEYS[suspension.window] !== undefined) {
-        parts.push(t(LABEL_KEYS[suspension.window]))
-      }
-      const reset = resetAt(suspension.resetAt)
-      if (reset !== undefined) parts.push(`${t('reset')} ${formatDate(reset)}`)
-      if (typeof suspension.reasonCode === 'string' && suspension.reasonCode !== '') {
-        parts.push(boundedText(suspension.reasonCode, 48))
-      }
-      return parts.join(' · ')
-    }
-
-    function failureLine(failure, t) {
-      if (failure === null || typeof failure !== 'object') return undefined
-      const failures = numeric(failure.consecutiveFailures) ?? 0
-      const state = typeof failure.state === 'string' ? failure.state : undefined
-      // A normal provider reports an uninvolved state; only an actual failure
-      // or an active override is evidence worth drawing.
-      if (failures === 0 && state !== 'active') return undefined
-      const parts = [`${t('failureOverride')} ${enumText(state, FAILURE_STATES, t)}`]
-      if (failures > 0) parts.push(`${t('consecutiveFailures')} ${failures}`)
-      const expires = typeof failure.expiresAt === 'string' ? new Date(failure.expiresAt) : undefined
-      if (expires !== undefined && !Number.isNaN(expires.getTime())) parts.push(`${t('expires')} ${formatDate(expires)}`)
-      if (typeof failure.reasonCode === 'string' && failure.reasonCode !== '') parts.push(boundedText(failure.reasonCode, 48))
-      return parts.join(' · ')
     }
 
 
@@ -2359,8 +2126,6 @@ window.__ModuleLoader__.load({
     // reports an unavailable read as unavailable rather than an empty list.
 
     /** Rows rendered per read; the rest is named as retained but not drawn. */
-    const HISTORY_ROW_LIMIT = 20
-
     function observePanel(observe, t, loadFailed) {
       if (observe === null || observe === undefined || observe.phase === 'idle' || observe.phase === 'running') return null
       // A completed or partially refused observation names only the accounts it
@@ -2521,6 +2286,23 @@ window.__ModuleLoader__.load({
       }
       if (load.phase === 'failed' && load.message !== undefined) {
         return `${t('hostError')}${t('colon')} ${describeError(load.message, t)}`
+      }
+      // A completed step is announced too: a reader who cannot see the cards
+      // change must still learn that the refresh, preview, or repair finished.
+      if (connect.phase === 'previewing' || connect.phase === 'executing'
+        || (repair !== null && repair !== undefined && (repair.phase === 'previewing' || repair.phase === 'executing'))) {
+        return t('actionWorking')
+      }
+      if (connect.phase === 'preview') return t('connectPreview')
+      if (connect.phase === 'applied') return t('connectApplied')
+      if (repair !== null && repair !== undefined && repair.phase === 'preview') return t('actionPreviewTitle')
+      if (repair !== null && repair !== undefined && repair.phase === 'applied') {
+        const code = typeof repair.result?.code === 'string' ? boundedText(repair.result.code, 48) : ''
+        return code === '' ? t('actionDone') : `${t('actionDone')}${t('colon')} ${code}`
+      }
+      if (observe.phase === 'done') {
+        const missed = observe.items.filter(item => item.tone !== 'ok').length
+        return missed === 0 ? t('observeDone') : `${t('observeFailed')}${t('colon')} ${missed}`
       }
       return verdict
     }
@@ -3065,21 +2847,15 @@ window.__ModuleLoader__.load({
       windowReading,
       disambiguate,
       toneFor,
-      oldestReading,
-      routeReadiness,
-      routeActiveState,
       stateGate,
       sectionErrors,
       errorsForSection,
       projectionFailed,
       projectionErrors,
       sectionErrorText,
-      limitMessage,
-      billingNoteTexts,
       resetQualified,
       resetUnqualified,
       resetAt,
-      routeBlockerTexts,
       usableRoutes,
       modelCatalogOf,
       accountsOf,
@@ -3088,18 +2864,12 @@ window.__ModuleLoader__.load({
       accountOfModel,
       verdict,
       nextAction,
-      defaultsMatch,
       safeDashboard,
-      capabilityFacts,
-      limitState,
-      historyFact,
       lastErrorFact,
       connectLines,
       observeItems,
       failureIsActive,
       providerActions,
-      gatewayActions,
-      managementAction,
       actionPayload,
       actionSucceeded,
       actionResultLines,

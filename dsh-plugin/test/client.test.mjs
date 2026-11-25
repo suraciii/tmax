@@ -146,6 +146,11 @@ function textOf(node) {
   return textOf(node.children)
 }
 
+/** The polite live region's text: what a screen reader is told. */
+function liveText(tree) {
+  return collectNodes(tree, node => node.props?.role === 'status' && node.props?.['aria-live'] === 'polite').map(textOf).join(' ')
+}
+
 function collectButtons(node, found = []) {
   if (node === null || node === undefined || typeof node !== 'object') return found
   if (Array.isArray(node)) {
@@ -502,40 +507,6 @@ test('window readings only become meters when a share is computable', async () =
   assert.deepEqual(split.map(item => item.name), ['windowGeneric 1', 'windowGeneric 2'])
 })
 
-test('oldest reading is the oldest visible observation, not the newest', async () => {
-  const { oldestReading } = (await moduleWith(inertReact())).__pure
-  assert.equal(oldestReading([]), undefined)
-  assert.equal(oldestReading([{ observedAt: null }]), undefined)
-  assert.equal(oldestReading([{ observedAt: 'not a date' }]), undefined)
-  assert.equal(oldestReading([
-    { observedAt: '2026-11-23T09:10:00Z' },
-    { billing: { observedAt: '2026-11-23T06:26:05Z' } },
-    { observedAt: null },
-  ]), '2026-11-23T06:26:05.000Z')
-})
-
-test('route readiness and liveness are read from each route record', async () => {
-  const { routeReadiness, routeActiveState, usableRoutes } = (await moduleWith(inertReact())).__pure
-  const state = {
-    ok: true,
-    routes: [
-      { provider: 'custom-tmax', credentialConfigured: true, active: true },
-      { provider: 'renamed', credentialConfigured: false, active: true },
-      { provider: 'idle', credentialConfigured: true, active: false },
-    ],
-  }
-  // Readiness and liveness come from the record, three-valued on each.
-  assert.equal(routeReadiness({ credentialConfigured: true }), 'usable')
-  assert.equal(routeReadiness({ credentialConfigured: false }), 'registered')
-  assert.equal(routeReadiness({}), 'unknown')
-  assert.equal(routeReadiness(undefined), 'unknown')
-  assert.equal(routeActiveState({ active: true }), 'active')
-  assert.equal(routeActiveState({ active: false }), 'inactive')
-  assert.equal(routeActiveState({}), 'unknown')
-  // Only an active route with a configured credential is usable.
-  assert.deepEqual(usableRoutes(state).map(route => route.provider), ['custom-tmax'])
-})
-
 test('host-derived names are bounded before they reach the DOM', async () => {
   const pure = (await moduleWith(inertReact())).__pure
   const long = 'x'.repeat(500)
@@ -563,34 +534,6 @@ test('host-derived names are bounded before they reach the DOM', async () => {
   } finally {
     page.restore()
   }
-})
-
-test('route liveness, usability and route blockers are separate facts', async () => {
-  const pure = (await moduleWith(inertReact())).__pure
-  assert.equal(pure.routeActiveState({ active: true }), 'active')
-  assert.equal(pure.routeActiveState({ active: false }), 'inactive')
-  assert.equal(pure.routeActiveState({ active: null }), 'unknown')
-  assert.equal(pure.routeActiveState({}), 'unknown')
-  assert.equal(pure.routeActiveState(undefined), 'unknown')
-
-  const routes = [
-    { provider: 'a', active: true, credentialConfigured: true },
-    { provider: 'b', active: true, credentialConfigured: false },
-    { provider: 'c', active: false, credentialConfigured: true },
-    { provider: 'd', active: null, credentialConfigured: true },
-  ]
-  assert.deepEqual(pure.usableRoutes({ routes }).map(route => route.provider), ['a'])
-  assert.deepEqual(pure.usableRoutes({}), [])
-  // The fixture's connected case is live and usable; no route blockers.
-  assert.equal(pure.usableRoutes(connected).length, 1)
-  assert.equal(pure.routeActiveState(connected.routes[0]), 'active')
-  assert.deepEqual(pure.routeBlockerTexts(connected.routes[0]), [])
-
-  assert.deepEqual(
-    pure.routeBlockerTexts({ blockers: [{ code: 'model_hidden', message: 'model excluded' }, 'plain blocker', null] }),
-    ['model_hidden: model excluded', 'plain blocker'])
-  assert.deepEqual(pure.routeBlockerTexts({}), [])
-  assert.deepEqual(pure.routeBlockerTexts(undefined), [])
 })
 
 test('section read failures are typed, bounded and routed to their section', async () => {
@@ -668,33 +611,43 @@ test('projection failures are recognized in both host section spellings', async 
 })
 
 
-test('unknown quota names an unsupported source and its last attempt', async () => {
+test('quota is stated as remaining on every basis, sorted least left first, and toned by what is left', async () => {
   const pure = (await moduleWith(inertReact())).__pure
-  const cpa = connected.providers.tmax[1]
-  assert.equal(cpa.billing.reasonCode, 'unsupported_source')
-  assert.equal(pure.limitMessage(cpa, t), 'unknownQuotaUnsupported · lastAttempt unavailable')
-  assert.equal(pure.limitMessage({ billing: { state: 'unknown', rows: [] } }, t), 'unknownQuota')
-  assert.equal(pure.limitMessage({ billing: { state: 'observed', rows: [] } }, t), 'noQuotaRows')
-  assert.equal(pure.limitMessage({ billing: { state: 'observed', rows: [{}] } }, t), undefined)
-
-  const notes = [
-    'status_enums_unqualified',
-    'percent_consumed_floored',
-    'credit_not_tokens',
-    'fields_unqualified',
-    'counters_unit_unqualified',
-    'usage_and_limits_may_overlap',
-  ]
-  assert.deepEqual(pure.billingNoteTexts({ billing: { notes } }, t), [
-    'noteStatusEnumsUnqualified',
-    'notePercentFloored',
-    'noteCreditNotTokens',
-    'noteFieldsUnqualified',
-    'noteCountersUnitUnqualified',
-    'noteUsageMayOverlap',
+  const t = key => key
+  const row = (basis, extra = {}) => ({ basis, label: { key: 'weekly' }, reset: { at: '2026-11-30T00:00:00Z', kind: 'announced' }, ...extra })
+  const provider = (id, rows) => ({ id, billing: { state: 'observed', rows } })
+  const state = {
+    providers: { tmax: [
+      provider('consumed', [row('consumed_percent', { percent: 96 })]),
+      provider('remaining', [row('remaining_percent', { percent: 25 })]),
+      provider('counters', [row('counters', { counters: { limit: '100', remaining: '40' } })]),
+      provider('credit', [row('credit', { counters: { total: '8000000000', remaining: '7712000000' }, label: { key: 'credit', kind: 'subscription' } })]),
+      provider('unmeasurable', [row('unknown_basis', { percent: 50 })]),
+      provider('full', [row('remaining_percent', { percent: 100 })]),
+      provider('no-window', []),
+    ], agent: [] },
+  }
+  const accounts = pure.accountsOf(state, t)
+  // An account without a window takes no card; every other account is ordered
+  // by what is least left, and an account nothing can measure follows them.
+  assert.deepEqual(accounts.map(account => account.provider.id), [
+    'consumed', 'remaining', 'counters', 'credit', 'full', 'unmeasurable',
   ])
-  assert.deepEqual(pure.billingNoteTexts({ billing: { notes: ['vendor_specific_note'] } }, t), ['vendor_specific_note'])
-  assert.deepEqual(pure.billingNoteTexts({}, t), [])
+  const remaining = id => accounts.find(account => account.provider.id === id).readings[0].remaining
+  assert.equal(remaining('consumed'), 4, 'a consumed share becomes what is left')
+  assert.equal(remaining('counters'), 40, 'counters become a share of the limit')
+  assert.equal(remaining('credit'), 96, 'credit becomes a whole-percent share of the total')
+  assert.equal(remaining('remaining'), 25)
+  assert.equal(remaining('unmeasurable'), undefined, 'a basis nobody computes is text, never a bar')
+  assert.equal(accounts.find(account => account.provider.id === 'unmeasurable').tightest, undefined)
+  // Tones: ten is exhausted, twenty-five is running low, twenty-six is fine.
+  assert.equal(pure.windowTone(10), 'error')
+  assert.equal(pure.windowTone(10.5), 'warn')
+  assert.equal(pure.windowTone(25), 'warn')
+  assert.equal(pure.windowTone(26), 'ok')
+  assert.equal(pure.windowTone(undefined), '')
+  // Counters keep their own text beside the share.
+  assert.equal(accounts.find(account => account.provider.id === 'counters').readings[0].counterText, '40 / 100')
 })
 
 test('unqualified reset times are marked, never dated', async () => {
@@ -815,46 +768,6 @@ test('next action is the one step that can change the reported state', async () 
   assert.deepEqual(
     nextAction({ phase: 'ready', value: { ok: true, routes: [{ ...inactive, credentialConfigured: null }], ownership: applied, config: { state: 'valid' } } }),
     { kind: 'reload' })
-})
-
-test('defaults, dashboard URLs, capabilities and provider limit states stay distinct', async () => {
-  const pure = (await moduleWith(inertReact())).__pure
-
-  assert.equal(pure.defaultsMatch({ provider: 'tmax', id: 'a' }, { provider: 'tmax', model: 'a' }), true)
-  assert.equal(pure.defaultsMatch({ provider: 'tmax', id: 'a' }, { provider: 'tmax', model: 'b' }), false)
-  assert.equal(pure.defaultsMatch({ provider: 'tmax', id: 'a' }, {}), undefined)
-  assert.equal(pure.defaultsMatch(undefined, undefined), undefined)
-
-  assert.equal(pure.safeDashboard('https://www.kimi.com/code/console'), 'https://www.kimi.com/code/console')
-  assert.equal(pure.safeDashboard('http://127.0.0.1:17840/'), 'http://127.0.0.1:17840/')
-  assert.equal(pure.safeDashboard('javascript:alert(1)'), undefined)
-  assert.equal(pure.safeDashboard('data:text/html,hi'), undefined)
-  assert.equal(pure.safeDashboard('ftp://example.test/'), undefined)
-  assert.equal(pure.safeDashboard('/relative'), undefined)
-  assert.equal(pure.safeDashboard(null), undefined)
-
-  const absent = pure.capabilityFacts(undefined, t)
-  assert.deepEqual(absent, [{ label: 'capabilities', value: 'notReported' }])
-  const zeroContext = pure.capabilityFacts({ contextWindow: 0, input: [], reasoningEfforts: {} }, t)
-  assert.deepEqual(zeroContext.map(item => item.value), ['0', 'none', 'none'])
-  const known = pure.capabilityFacts(connected.routes[0].models[0].capabilities, t)
-  assert.equal(known[0].value, '500K')
-  assert.equal(known[1].value, 'text, image')
-  assert.equal(known[2].value, 'max')
-
-  const [kimi, cpa] = connected.providers.tmax
-  assert.equal(pure.limitState(kimi), 'rows')
-  assert.equal(pure.limitState(cpa), 'unknown')
-  assert.equal(pure.limitState({ billing: { state: 'observed', rows: [] } }), 'noRows')
-  assert.equal(pure.limitState({ error: { code: 'inspect_failed' } }), 'error')
-
-  const history = pure.historyFact(connected.diagnostics, t)
-  assert.equal(history.value, 'historyUnavailable (reasonDaemonIdentity)')
-  assert.equal(pure.historyFact({}, t).value, 'unknown')
-  assert.equal(pure.lastErrorFact({ lastError: null }, t).value, 'noLastError')
-  assert.equal(pure.lastErrorFact({}, t).value, 'unknown')
-  assert.equal(pure.lastErrorFact({ lastError: { code: 'host_read_failed', message: 'boom' } }, t).value,
-    'host_read_failed: boom')
 })
 
 test('apply preview and observe results are bounded host evidence', async () => {
@@ -992,6 +905,31 @@ function localeLiteral(name) {
   return { keys, body }
 }
 
+test('every key reached through a table or a pair exists in both dictionaries', async () => {
+  const module = await moduleWith(inertReact())
+  const dictionaries = module.__pure.locales
+  // Keys reached as values of a state table or as the second member of a
+  // [field, key] pair never appear in a t('…') literal, so a literal scan misses
+  // them and the page would print the raw key.
+  // A translation key is camelCase; plain words beside it ('en', 'locale', 'auto')
+  // are enum values, not keys.
+  const camel = /^([a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*)$/
+  const reached = new Set()
+  for (const match of source.matchAll(/\['[a-z_]+', '([^']+)'\]/g)) {
+    if (camel.test(match[1])) reached.add(match[1])
+  }
+  for (const match of source.matchAll(/^    const [A-Z_]+ = \{[\s\S]*?\}\n/gm)) {
+    for (const key of match[0].matchAll(/: '([^']+)'/g)) {
+      if (camel.test(key[1])) reached.add(key[1])
+    }
+  }
+  assert.ok(reached.size > 40, `keys reached through tables: ${reached.size}`)
+  for (const key of reached) {
+    assert.equal(typeof dictionaries.en[key], 'string', `en.${key}`)
+    assert.equal(typeof dictionaries.zh[key], 'string', `zh.${key}`)
+  }
+})
+
 test('English and Chinese locales are complete, unique and colon-correct', async () => {
   const module = await moduleWith(inertReact())
   const { en, zh } = module.__pure.locales
@@ -1029,7 +967,7 @@ test('client reads one state route and carries no auto-observation path', async 
   const module = await moduleWith(inertReact())
   const pure = module.__pure
 
-  for (const helper of ['windowReading', 'oldestReading', 'verdict', 'nextAction', 'routeReadiness', 'routeActiveState', 'safeDashboard', 'clockOf', 'formatDate', 'providerActions', 'gatewayActions', 'managementAction', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'remainingReading', 'windowTone', 'accountOfModel']) {
+  for (const helper of ['windowReading', 'verdict', 'nextAction', 'safeDashboard', 'clockOf', 'formatDate', 'providerActions', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'remainingReading', 'windowTone', 'accountOfModel']) {
     assert.equal(typeof pure[helper], 'function', `__pure.${helper} is exported`)
   }
 
@@ -1659,41 +1597,16 @@ test('an unreadable tmax state names the host failure and offers a retry', async
 // Explicit repair actions (Phase 2)
 // ---------------------------------------------------------------------------
 
-test('action availability follows provider evidence and gateway configuration', async () => {
-  const pure = (await moduleWith(inertReact())).__pure
-  const base = {
-    id: 'kimi',
-    suspension: { state: 'unsupported' },
-    failure: { state: 'not_configured', consecutiveFailures: 0 },
-  }
-  // A healthy provider still offers its explicit observation, and nothing else.
-  assert.deepEqual(pure.providerActions(base), [{ action: 'observe_provider', provider: 'kimi', scope: 'quota' }])
-  assert.deepEqual(pure.providerActions({ ...base, suspension: { state: 'suspended' } }).map(entry => entry.action),
-    ['resume_quota', 'observe_provider'])
-  assert.deepEqual(pure.providerActions({ ...base, failure: { state: 'not_configured', consecutiveFailures: 2 } }).map(entry => entry.action),
-    ['reset_failure', 'observe_provider'])
-  assert.deepEqual(pure.providerActions({ ...base, failure: { state: 'active', consecutiveFailures: 0 } }).map(entry => entry.action),
-    ['reset_failure', 'observe_provider'])
-  assert.equal(pure.failureIsActive(undefined), false)
-  assert.equal(pure.failureIsActive({ state: 'not_configured', consecutiveFailures: 0 }), false)
-  // No id means no exact operand, and therefore no button at all.
-  assert.deepEqual(pure.providerActions({ suspension: { state: 'suspended' } }), [])
-  assert.deepEqual(pure.providerActions(undefined), [])
-
-  const providers = [
-    { ...base, suspension: { state: 'suspended' } },
-    { ...base, id: 'cpa-us2', failure: { state: 'active', consecutiveFailures: 0 } },
-  ]
-  // Each provider card offers exactly its own evidence's actions.
-  assert.deepEqual(providers.flatMap(provider => pure.providerActions(provider).map(entry => entry.action)),
-    ['resume_quota', 'observe_provider', 'reset_failure', 'observe_provider'])
-  // The gateway card offers management only when a gateway is configured.
-  assert.deepEqual(pure.managementAction({ configured: true }), { action: 'open_management' })
-  assert.equal(pure.managementAction({ configured: false }), undefined)
-  assert.equal(pure.managementAction(undefined), undefined)
-  // An unknown readiness still justifies Start: it can change the state.
-  assert.deepEqual(pure.gatewayActions({ configured: true }).map(entry => entry.action), ['gateway_start'])
-  assert.deepEqual(pure.gatewayActions({ configured: false }), [])
+test('action availability follows provider evidence', async () => {
+  const providerActionsOf = (await moduleWith(inertReact())).__pure.providerActions
+  const quiet = { id: 'p', suspension: { state: 'unsupported' }, failure: { state: 'not_configured', consecutiveFailures: 0 } }
+  const suspended = { id: 'p', suspension: { state: 'suspended' }, failure: { state: 'not_configured', consecutiveFailures: 0 } }
+  const failing = { id: 'p', suspension: { state: 'unsupported' }, failure: { state: 'active', consecutiveFailures: 3 } }
+  assert.deepEqual(providerActionsOf(quiet).map(action => action.action), ['observe_provider'])
+  assert.deepEqual(providerActionsOf(suspended).map(action => action.action), ['resume_quota', 'observe_provider'])
+  assert.deepEqual(providerActionsOf(failing).map(action => action.action), ['reset_failure', 'observe_provider'])
+  // A provider without an id cannot be an operand at all.
+  assert.deepEqual(providerActionsOf({ suspension: { state: 'suspended' } }), [])
 })
 
 test('action payloads carry one exact allowlisted operation', async () => {
@@ -2182,30 +2095,6 @@ test('unknown credential readiness is never drawn as a missing credential', asyn
   assert.deepEqual(pure.verdict(load(active(false)), t), { tone: 'warn', text: 'stateNotUsable' })
 })
 
-test('gateway lifecycle offers only the verb the reported state allows', async () => {
-  const pure = (await moduleWith(inertReact())).__pure
-  assert.deepEqual(pure.gatewayActions(undefined), [])
-  assert.deepEqual(pure.gatewayActions({ configured: false, ready: true }), [])
-  // Unknown readiness: only Start can change the reported state.
-  assert.deepEqual(pure.gatewayActions({ configured: true, ready: null, daemonDiscoveryState: 'unidentified' }).map(entry => entry.action),
-    ['gateway_start'])
-  // A ready gateway can be stopped or restarted, not started.
-  assert.deepEqual(pure.gatewayActions({ configured: true, ready: true, daemonDiscoveryState: 'identified' }).map(entry => entry.action),
-    ['gateway_stop', 'gateway_restart'])
-  // An identified daemon without a ready gateway can be started, stopped, or restarted.
-  assert.deepEqual(pure.gatewayActions({ configured: true, ready: false, daemonDiscoveryState: 'identified' }).map(entry => entry.action),
-    ['gateway_start', 'gateway_stop', 'gateway_restart'])
-  // tmax's real `compatible` token is the same fact as the normalized `identified`.
-  assert.deepEqual(pure.gatewayActions({ configured: true, ready: false, daemonDiscoveryState: 'compatible' }).map(entry => entry.action),
-    ['gateway_start', 'gateway_stop', 'gateway_restart'])
-  assert.deepEqual(pure.gatewayActions({ configured: true, ready: true, daemonDiscoveryState: 'compatible' }).map(entry => entry.action),
-    ['gateway_stop', 'gateway_restart'])
-  assert.deepEqual(pure.gatewayActions({ configured: true, ready: true, daemonDiscoveryState: 'incompatible' }).map(entry => entry.action),
-    ['gateway_stop', 'gateway_restart'])
-  assert.deepEqual(pure.actionPayload({ action: 'gateway_restart' }, true), { action: 'gateway_restart', dryRun: true })
-  assert.deepEqual(pure.actionPayload({ action: 'gateway_stop' }, false), { action: 'gateway_stop', dryRun: false })
-})
-
 test('the tmax_status tool text is parsed as data, never as a success claim', async () => {
   const pure = (await moduleWith(inertReact())).__pure
   const value = {
@@ -2464,6 +2353,22 @@ test('the tmax_status card falls back to bounded text for pending and unreadable
   assert.equal(broken.calls, 0)
 })
 
+test('Start is offered for a configured gateway whose readiness is unknown, never for an unconfigured one', async () => {
+  for (const [gateway, offered] of [
+    [{ ...connected.gateway, configured: true, ready: null }, true],
+    [{ ...connected.gateway, configured: false, ready: false }, false],
+  ]) {
+    const state = { ...connected, gateway, target: { ...connected.target, blockers: [] } }
+    const page = await mountPage(withState(state))
+    try {
+      const tree = await page.mount()
+      assert.equal(buttonByText(tree, 'actionStartGateway') !== undefined, offered, JSON.stringify(gateway))
+    } finally {
+      page.restore()
+    }
+  }
+})
+
 test('a gateway that is not ready is started from the verdict line, and a ready one offers no lifecycle control', async () => {
   const running = {
     ...connected,
@@ -2513,12 +2418,15 @@ test('a gateway that is not ready is started from the verdict line, and a ready 
     assert.match(previewText, /actionPreviewTitle/)
     assert.match(previewText, /actionGatewayNote/)
     assert.match(previewText, /webRunning/)
+    // A reader who cannot see the panel learns that the preview arrived.
+    assert.match(liveText(preview), /actionPreviewTitle/)
 
     const executed = await page.click('actionConfirm')
     assert.equal(page.calls.length, 3)
     assert.equal(page.calls[2].body, JSON.stringify({ action: 'gateway_start', dryRun: false }))
     const executedText = textOf(executed)
     assert.match(executedText, /actionDone/)
+    assert.match(liveText(executed), /actionDone: gateway_started/)
     // The returned read model is adopted: nothing is left to start, and the
     // page offers no stop or restart, which belong to the CLI.
     assert.match(executedText, /stateReady/)

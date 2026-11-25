@@ -1,3 +1,4 @@
+import { parseBlocks } from './fake-yaml.mjs'
 import assert from 'node:assert/strict'
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -357,6 +358,7 @@ async function fakeTmax(scenario, home = '') {
 function fakeContext() {
   const state = { routes: [], httpRoutes: [] }
   const modules = {
+    '@deepseek-ai/cordis-plugin-include': { parseEntryYaml: parseBlocks },
     '@deepseek-ai/dsh-llm-pi-ai': {
       PiAiAdapter: class {
         constructor(options) {

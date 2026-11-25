@@ -271,3 +271,88 @@ async fn apply_reports_every_environment_obstacle_in_one_run() {
         );
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_foreign_provider_of_the_same_name_blocks_before_writes_and_an_identical_one_is_adopted()
+{
+    if !isolated(
+        "a_foreign_provider_of_the_same_name_blocks_before_writes_and_an_identical_one_is_adopted",
+    ) {
+        return;
+    }
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().join("authority"));
+        let (home, profile, _) = home(directory.path());
+        home_patch(&home);
+        let reference = secrets::put(&store, "provider:p", b"synthetic-managed").unwrap();
+        let mut target = inspection_target(home.clone());
+        target.agent = "dsh".into();
+        target.default = None;
+        let mut config = Config::empty();
+        config.providers.insert(
+            "p".into(),
+            config::Provider {
+                integration: Some("custom".into()),
+                auth: Some(Auth::ApiKey { key_ref: reference }),
+                endpoints: BTreeMap::from([(
+                    "chat-completions".into(),
+                    "https://example.invalid/v1".into(),
+                )]),
+                models: BTreeMap::from([("first".into(), config::Model::default())]),
+                ..Default::default()
+            },
+        );
+        config.agents.insert("managed".into(), target);
+        store
+            .write_raw("tmax.toml", toml::to_string(&config).unwrap().as_bytes())
+            .unwrap();
+
+        // A provider named like the target's entry, configured by the user with
+        // other values, is not tmax's to edit: refuse before any write.
+        let foreign = "- id: llm-pi-ai\n  config:\n    providers:\n      local:\n        api: openai-responses\n        baseURL: https://user.invalid/v1\n";
+        fs::write(profile.join("cordis.patch.yml"), foreign).unwrap();
+        let error = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "native_namespace_conflict", "{error}");
+        assert_eq!(
+            error.field.as_deref(),
+            Some("llm-pi-ai.config.providers.local")
+        );
+        assert_eq!(
+            fs::read_to_string(profile.join("cordis.patch.yml")).unwrap(),
+            foreign
+        );
+        assert!(
+            !home.join(".credentials.yaml").exists(),
+            "no write happened"
+        );
+
+        // The same name carrying exactly what apply would write is adopted: the
+        // content is already right, so nothing is overwritten and no re-entry is
+        // needed.
+        let credential_ref =
+            super::adapters::dsh_credential_ref_for(&home, "desktop", "local", "chat-completions");
+        let identical = format!(
+            "- id: llm-pi-ai\n  config:\n    providers:\n      local:\n        api: openai-completions\n        apiKeyEnv: {credential_ref}\n        baseURL: https://example.invalid/v1\n        models:\n          - id: first\n"
+        );
+        fs::write(profile.join("cordis.patch.yml"), &identical).unwrap();
+        let adopted = apply(&store, &config, "managed", false, None)
+            .await
+            .unwrap();
+        assert_ne!(adopted["_code"], "native_namespace_conflict", "{adopted}");
+        let value =
+            dsh_patch::parse(&fs::read_to_string(profile.join("cordis.patch.yml")).unwrap())
+                .unwrap();
+        assert_eq!(
+            value["llm-pi-ai"]["config"]["providers"]["local"]["apiKeyEnv"],
+            credential_ref
+        );
+        assert_eq!(
+            value["llm-pi-ai"]["config"]["providers"]["local"]["models"][0]["id"],
+            "first"
+        );
+    }
+}
