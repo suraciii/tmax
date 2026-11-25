@@ -23,12 +23,10 @@ window.__ModuleLoader__.load({
       // Shared chrome.
       panel: 'tmax',
       title: 'tmax',
-      subtitle: 'Model access and provider limits managed by tmax.',
       colon: ':',
       unknown: 'unknown',
       none: 'none',
       notReported: 'not reported',
-      neverObserved: 'never observed',
       loading: 'Reading tmax state…',
       checking: 'Checking…',
       refresh: 'Refresh',
@@ -38,7 +36,6 @@ window.__ModuleLoader__.load({
       yes: 'yes',
       no: 'no',
       updated: 'updated',
-      configRevision: 'config',
       schema: 'schema',
       // Header verdict. It answers reachability only.
       stateReady: 'Reachable',
@@ -49,16 +46,12 @@ window.__ModuleLoader__.load({
       stateNotUsable: 'Registered, not usable',
       stateNotApplied: 'Not applied yet',
       stateReload: 'Reload pending',
-      stateConflict: 'Route conflict',
       stateProjection: 'Routes unavailable',
       stateSchemaUnsupported: 'Unsupported state schema',
       stateLastKnown: 'Last known',
       // Next action: only an action that can change the reported state is offered.
-      nextActionTitle: 'Next action',
-      nextConnect: 'Apply the tmax routes and credential reference to this profile so DSH can use them.',
       nextReload: 'The routes are applied but DSH has not loaded them yet. Restart DSH to activate them.',
       nextConflict: 'A route ownership conflict is reported; resolve it before changing access.',
-      nextGateway: 'The tmax gateway is not ready; inspect it in the tmax CLI.',
       nextBlocker: 'tmax reports a blocker that prevents access.',
       nextConfig: 'The tmax configuration is invalid; fix it in the tmax CLI.',
       nextConfigUnavailable: 'The tmax configuration could not be validated; inspect it in the tmax CLI.',
@@ -66,12 +59,8 @@ window.__ModuleLoader__.load({
       nextSectionRetry: 'A section of the host state could not be read; retry the state read.',
       nextRetry: 'The tmax host state could not be read.',
       // Status and access.
-      accessTitle: 'Status and access',
       target: 'Target',
       targetPath: 'Home path',
-      authority: 'tmax authority',
-      dshInstallation: 'DSH install',
-      ownership: 'Route ownership',
       ownerSettings: 'applied settings',
       ownerUnapplied: 'not applied yet',
       ownerNone: 'none',
@@ -83,44 +72,25 @@ window.__ModuleLoader__.load({
       appliedApplied: 'applied',
       appliedPending: 'pending',
       pending: 'Pending reload',
-      pendingNone: 'none',
-      tmaxDefault: 'tmax default',
-      effectiveDefault: 'DSH effective default',
       differs: 'differs',
       matches: 'matches',
-      routesTitle: 'Routes',
-      routeProtocol: 'Protocol',
-      routeBaseUrl: 'Base URL',
-      routeScope: 'Scope',
-      routeCredential: 'Credential',
-      credentialConfigured: 'configured',
-      credentialMissing: 'registered, not usable',
-      credentialRef: 'ref',
       credentialsTitle: 'Credentials',
       credentialPath: 'path',
       credentialState: 'state',
       credentialPermissions: 'permissions',
       noRoutes: 'The host reported no routes.',
-      routeActive: 'Active',
       routeLive: 'live',
       routeNotApplied: 'not applied',
       routeBlockers: 'Route blockers',
       // Gateway detail.
       gatewayTitle: 'Gateway',
-      gatewayConfigured: 'Configured',
       gatewayReady: 'Ready',
       gatewayNotReady: 'Not ready',
       gatewayListen: 'Address',
       gatewayDaemon: 'Daemon',
       gatewayReason: 'reason',
-      gatewaySupervision: 'Supervision',
-      gatewayAutostart: 'Autostart',
-      savedIntent: 'saved intent',
       registration: 'registration',
       unit: 'unit',
-      unitMatches: 'matches',
-      unitDrift: 'drift',
-      sharedKey: 'Shared key',
       daemonIdentified: 'identified',
       daemonUnidentified: 'unidentified',
       supervisionAvailable: 'available',
@@ -130,19 +100,15 @@ window.__ModuleLoader__.load({
       registrationRegistered: 'registered',
       registrationUnavailable: 'unavailable',
       // Config.
-      configTitle: 'Config',
-      configState: 'State',
       configValid: 'valid',
       configInvalid: 'invalid',
       configUnavailable: 'unavailable',
-      configErrors: 'Errors',
       // Models and routing.
-      modelsTitle: 'Models and routing',
-      modelsNote: 'Availability is tmax evidence, not a DSH claim.',
-      modelKind: 'Kind',
-      modelContinuity: 'Continuity',
-      modelCandidates: 'Candidates',
-      modelAvailability: 'Availability',
+      modelsTitle: 'Models',
+      accountsTitle: 'Accounts',
+      noAccounts: 'No account reports a quota window yet.',
+      defaultTag: 'default',
+      providerFailing: 'failing',
       capabilities: 'Capabilities',
       contextWindow: 'Context',
       inputModalities: 'Input',
@@ -153,30 +119,13 @@ window.__ModuleLoader__.load({
       continuityStateful: 'stateful',
       availabilityUnverified: 'unverified',
       availabilityVerified: 'verified',
-      routingSelected: 'Selects',
-      routingPriority: 'Priority',
-      routingCandidates: 'Candidates',
-      routingExcluded: 'Excluded',
-      routingError: 'Routing error',
-      routingNone: 'No routing evidence reported for this model.',
       selected: 'selected',
-      modelsUnit: 'models',
       // Providers and limits.
-      providersTitle: 'Providers and limits',
-      tmaxProviders: 'tmax providers',
-      tmaxProvidersNote: 'Quota readings are tmax observations with their own time; they are not live facts.',
-      agentProviders: 'Providers this DSH profile configures',
-      agentProvidersNote: 'Observed independently of tmax; kept separate and never summed.',
-      tmaxProvidersNone: 'tmax lists no providers.',
-      agentProvidersNone: 'This DSH profile configures no providers.',
       providerDisabled: 'disabled',
       providerSuspended: 'suspended',
       quotaSuspended: 'Quota exhausted',
-      affectedTargets: 'targets affected',
-      authentication: 'auth',
       integration: 'integration',
       blocker: 'Blocker',
-      billingKind: 'quota kind',
       billingPlanAllowance: 'plan allowance',
       billingUnknown: 'unknown',
       freshness: 'freshness',
@@ -184,25 +133,19 @@ window.__ModuleLoader__.load({
       freshnessStale: 'stale',
       freshnessMissing: 'missing',
       freshnessUnqualified: 'unqualified',
-      observedAt: 'observed',
       lastAttempt: 'last attempt',
-      oldestReading: 'oldest reading',
       unknownQuota: 'quota unknown (no observation reported)',
       unknownQuotaUnsupported: 'quota unknown (no supported source)',
       noQuotaRows: 'no quota rows reported',
-      providerError: 'provider error',
       failureOverride: 'failure override',
       failureActive: 'active',
       consecutiveFailures: 'consecutive failures',
       expires: 'expires',
       plan: 'plan',
       renewal: 'renewal',
-      dashboard: 'Provider dashboard',
-      windowsCaption: 'window · value · reset',
       usedShare: 'used',
       left: 'left',
       reset: 'resets',
-      resetUnqualified: 'reset time unqualified',
       windowRolling: 'rolling',
       windowWeekly: 'weekly',
       windowMonthly: 'monthly',
@@ -220,9 +163,7 @@ window.__ModuleLoader__.load({
       notePercentFloored: 'consumed percent floored',
       noteCreditNotTokens: 'credit is not tokens',
       noteFieldsUnqualified: 'fields unqualified',
-      baseUrl: 'base URL',
       models: 'models',
-      agentState: 'state',
       agentObserved: 'observed',
       agentNotObserved: 'not observed',
       agentFailed: 'failed',
@@ -235,29 +176,14 @@ window.__ModuleLoader__.load({
       reasonUnsupported: 'no supported quota source',
       reasonUnknown: 'the quota read failed',
       // Diagnostics.
-      diagnosticsTitle: 'Diagnostics',
-      readModelSource: 'read model source',
-      tmaxVersion: 'tmax version',
-      projectionSchema: 'state schema',
-      generatedAt: 'state generated',
-      lastProjection: 'last inventory read',
-      history: 'Request history',
       historyAvailable: 'available',
       historyUnavailable: 'unavailable',
       reasonDaemonIdentity: 'daemon identity unavailable',
       reasonServiceManager: 'service manager unavailable',
-      lastError: 'last error',
       noLastError: 'none reported',
-      revision: 'configuration revision',
       // Observation results.
       observeRunning: 'Observing provider sources…',
-      observeDone: 'Observation finished',
       observeFailed: 'Observation failed',
-      observeAt: 'finished',
-      observeSourceTmax: 'tmax',
-      observeSourceAgent: 'agent',
-      observeNoItems: 'No observation outcome reported.',
-      observeHint: 'Only this button contacts provider sources; opening the page reads cached state.',
       observeStatusRefreshed: 'refreshed',
       observeStatusBlocked: 'blocked',
       observeStatusFailed: 'failed',
@@ -282,8 +208,6 @@ window.__ModuleLoader__.load({
       connectDetail: 'detail',
       connectState: 'state',
       connectFiles: 'planned files',
-      connectChangedFiles: 'changed files',
-      connectUnchangedFiles: 'unchanged files',
       connectRecovery: 'recovery',
       recoveryPlanned: 'planned',
       recoveryRetained: 'retained',
@@ -291,12 +215,7 @@ window.__ModuleLoader__.load({
       actionWouldWrite: 'would write',
       actionWritten: 'written',
       actionUnchanged: 'unchanged',
-      effectNativeWrites: 'native writes',
-      effectSecretReads: 'secret reads',
-      effectProcessesStarted: 'processes started',
-      effectLocksCreated: 'locks created',
       // Explicit repair actions. Each button names one fixed tmax operation.
-      actionsLabel: 'Actions',
       actionResumeQuota: 'Resume quota',
       actionResetFailure: 'Reset failure',
       actionObserveQuota: 'Observe quota',
@@ -345,17 +264,11 @@ window.__ModuleLoader__.load({
       footerReadFailed: 'read failed',
       footerReason: 'why no models appear',
       modelsAvailable: 'tmax models are listed.',
-      modelsNone: 'No tmax model is projected for this profile.',
-      modelsInactive: 'The tmax route is configured but not active in DSH.',
-      modelsCredential: 'The tmax route has no usable credential reference.',
-      modelsCredentialUnknown: 'The tmax route credential readiness is unknown.',
-      modelsReload: 'A DSH reload is pending before the tmax route can be used.',
       modelsUnknown: 'The tmax state could not be read.',
       footerOpenPage: 'Open tmax',
       footerPageUnavailable: 'The tmax page is not available in this composition.',
       footerReload: 'Reload',
       footerLoading: 'Reading tmax state…',
-      routingUnknown: 'The tmax routing evidence could not be read.',
       toolTitle: 'tmax status',
       toolPending: 'reading tmax state…',
       toolUnreadable: 'the tmax status result could not be read',
@@ -366,36 +279,6 @@ window.__ModuleLoader__.load({
       toolBlockers: 'blockers',
       toolModels: 'models',
       // Request history detail (explicit load; never read on mount).
-      historyAvailability: 'availability',
-      historyLoad: 'Load history',
-      historyReload: 'Reload history',
-      historyLoading: 'Loading retained request history…',
-      historyReadUnavailable: 'Request history is unavailable.',
-      historyEmpty: 'No retained request records were reported.',
-      historyCoverage: 'Coverage',
-      historyProcess: 'process',
-      historyProcessStarted: 'process started',
-      historyLastClear: 'last clear',
-      historyRetained: 'retained records',
-      historyEvicted: 'evicted records',
-      historyIncomplete: 'incomplete captures',
-      historyPriorProcesses: 'prior processes',
-      historyDirectTraffic: 'direct traffic',
-      historyRange: 'range',
-      historyRetention: 'retention',
-      historyLimits: 'storage limits',
-      historyLimitRecords: 'records',
-      historyLimitBytes: 'record bytes',
-      historyGap: 'gap',
-      historyMore: 'more retained',
-      historyTime: 'time',
-      historyOutcome: 'outcome',
-      historyRequestedModel: 'requested',
-      historySelectedModel: 'selected',
-      historyRoute: 'target / provider',
-      historyReason: 'reason',
-      historyGeneratedAt: 'generated',
-      historyUnknown: 'coverage unknown',
       // Failures.
       readFailed: 'Read failed',
       hostError: 'Host error',
@@ -407,12 +290,10 @@ window.__ModuleLoader__.load({
       // Shared chrome.
       panel: 'tmax',
       title: 'tmax',
-      subtitle: '由 tmax 管理的模型访问与供应商额度。',
       colon: '：',
       unknown: '未知',
       none: '无',
       notReported: '未报告',
-      neverObserved: '从未观测',
       loading: '正在读取 tmax 状态…',
       checking: '检查中…',
       refresh: '刷新',
@@ -422,7 +303,6 @@ window.__ModuleLoader__.load({
       yes: '是',
       no: '否',
       updated: '更新于',
-      configRevision: '配置',
       schema: 'schema',
       // Header verdict.
       stateReady: '可用',
@@ -432,17 +312,13 @@ window.__ModuleLoader__.load({
       stateDisconnected: '未连接',
       stateNotUsable: '已注册，但不可用',
       stateReload: '待重新加载',
-      stateConflict: '路由冲突',
       stateNotApplied: '尚未应用',
       stateProjection: '路由不可用',
       stateSchemaUnsupported: '状态 schema 不受支持',
       stateLastKnown: '上次已知',
       // Next action.
-      nextActionTitle: '下一步',
-      nextConnect: '将 tmax 路由和凭据引用应用到当前 profile，使 DSH 可以使用它们。',
       nextReload: '已安装 home 集成，但其路由尚未生效。重新加载 DSH 以启用。',
       nextConflict: '上报了路由归属冲突；先解决冲突再更改访问。',
-      nextGateway: 'tmax 网关未就绪；请在 tmax CLI 中检查。',
       nextBlocker: 'tmax 上报了阻止访问的阻塞项。',
       nextConfig: 'tmax 配置无效；请在 tmax CLI 中修复。',
       nextConfigUnavailable: '无法校验 tmax 配置；请在 tmax CLI 中检查。',
@@ -450,12 +326,8 @@ window.__ModuleLoader__.load({
       nextSectionRetry: 'host 状态中有部分内容读取失败；请重新读取状态。',
       nextRetry: '无法读取 tmax host 状态。',
       // Status and access.
-      accessTitle: '状态与访问',
       target: '目标',
       targetPath: 'Home 路径',
-      authority: 'tmax 数据目录',
-      dshInstallation: 'DSH 安装',
-      ownership: '路由归属',
       ownerSettings: '已应用的设置',
       ownerUnapplied: '尚未应用',
       ownerNone: '无',
@@ -467,44 +339,25 @@ window.__ModuleLoader__.load({
       appliedApplied: '已应用',
       appliedPending: '待应用',
       pending: '待重新加载',
-      pendingNone: '无',
-      tmaxDefault: 'tmax 默认',
-      effectiveDefault: 'DSH 生效默认',
       differs: '不一致',
       matches: '一致',
-      routesTitle: '路由',
-      routeProtocol: '协议',
-      routeBaseUrl: 'Base URL',
-      routeScope: '作用域',
-      routeCredential: '凭据',
-      credentialConfigured: '已配置',
-      credentialMissing: '已注册，但不可用',
-      credentialRef: '引用',
       credentialsTitle: '凭据',
       credentialPath: '路径',
       credentialState: '状态',
       credentialPermissions: '权限',
       noRoutes: 'Host 未报告任何路由。',
-      routeActive: '生效状态',
       routeLive: '已生效',
       routeNotApplied: '未应用',
       routeBlockers: '路由阻塞项',
       // Gateway detail.
       gatewayTitle: '网关',
-      gatewayConfigured: '已配置',
       gatewayReady: '就绪',
       gatewayNotReady: '未就绪',
       gatewayListen: '监听地址',
       gatewayDaemon: '守护进程',
       gatewayReason: '原因',
-      gatewaySupervision: '服务托管',
-      gatewayAutostart: '开机自启',
-      savedIntent: '保存的意图',
       registration: '注册状态',
       unit: '单元',
-      unitMatches: '匹配',
-      unitDrift: '偏离',
-      sharedKey: '共享密钥',
       daemonIdentified: '已识别',
       daemonUnidentified: '未识别',
       supervisionAvailable: '可用',
@@ -514,19 +367,15 @@ window.__ModuleLoader__.load({
       registrationRegistered: '已注册',
       registrationUnavailable: '不可用',
       // Config.
-      configTitle: '配置',
-      configState: '状态',
       configValid: '有效',
       configInvalid: '无效',
       configUnavailable: '不可用',
-      configErrors: '错误',
       // Models and routing.
-      modelsTitle: '模型与路由',
-      modelsNote: '可用性属于 tmax 的证据，不是 DSH 的声明。',
-      modelKind: '类型',
-      modelContinuity: '连续性',
-      modelCandidates: '候选数',
-      modelAvailability: '可用性',
+      modelsTitle: '模型',
+      accountsTitle: '账号额度',
+      noAccounts: '还没有账号上报额度窗口。',
+      defaultTag: '默认',
+      providerFailing: '故障',
       capabilities: '能力',
       contextWindow: '上下文',
       inputModalities: '输入',
@@ -537,30 +386,13 @@ window.__ModuleLoader__.load({
       continuityStateful: '有状态',
       availabilityUnverified: '未验证',
       availabilityVerified: '已验证',
-      routingSelected: '选中',
-      routingPriority: '优先级',
-      routingCandidates: '候选',
-      routingExcluded: '排除',
-      routingError: '路由错误',
-      routingNone: 'Host 未报告该模型的路由证据。',
       selected: '已选中',
-      modelsUnit: '个模型',
       // Providers and limits.
-      providersTitle: '供应商与额度',
-      tmaxProviders: 'tmax 供应商',
-      tmaxProvidersNote: '额度读数是带自身时间的 tmax 观测，不是实时事实。',
-      agentProviders: '当前 DSH profile 配置的供应商',
-      agentProvidersNote: '独立于 tmax 观测；单独列出，从不合并。',
-      tmaxProvidersNone: 'tmax 未列出任何供应商。',
-      agentProvidersNone: '当前 DSH profile 未配置任何供应商。',
       providerDisabled: '已停用',
       providerSuspended: '已暂停',
       quotaSuspended: '额度已用尽',
-      affectedTargets: '影响目标数',
-      authentication: '认证',
       integration: '集成',
       blocker: '阻塞项',
-      billingKind: '额度类型',
       billingPlanAllowance: '套餐额度',
       billingUnknown: '未知',
       freshness: '新鲜度',
@@ -568,25 +400,19 @@ window.__ModuleLoader__.load({
       freshnessStale: '过期',
       freshnessMissing: '缺失',
       freshnessUnqualified: '未定级',
-      observedAt: '观测于',
       lastAttempt: '最近尝试',
-      oldestReading: '最早读数',
       unknownQuota: '额度未知（未报告观测）',
       unknownQuotaUnsupported: '额度未知（没有支持的来源）',
       noQuotaRows: '未报告额度明细',
-      providerError: '供应商错误',
       failureOverride: '故障覆盖',
       failureActive: '生效中',
       consecutiveFailures: '连续失败',
       expires: '到期',
       plan: '套餐',
       renewal: '续期',
-      dashboard: '供应商后台',
-      windowsCaption: '窗口 · 数值 · 重置',
       usedShare: '已用',
       left: '剩余',
       reset: '重置',
-      resetUnqualified: '重置时间未定级',
       windowRolling: '滚动',
       windowWeekly: '周',
       windowMonthly: '月',
@@ -604,9 +430,7 @@ window.__ModuleLoader__.load({
       notePercentFloored: '已用百分比已取整',
       noteCreditNotTokens: '额度不是 token 计量',
       noteFieldsUnqualified: '字段未定级',
-      baseUrl: 'Base URL',
       models: '模型',
-      agentState: '状态',
       agentObserved: '已观测',
       agentNotObserved: '未观测',
       agentFailed: '失败',
@@ -619,29 +443,14 @@ window.__ModuleLoader__.load({
       reasonUnsupported: '没有支持的额度来源',
       reasonUnknown: '额度读取失败',
       // Diagnostics.
-      diagnosticsTitle: '诊断',
-      readModelSource: '读取模型来源',
-      tmaxVersion: 'tmax 版本',
-      projectionSchema: 'state schema',
-      generatedAt: '状态生成于',
-      lastProjection: '最近清单读取',
-      history: '请求历史',
       historyAvailable: '可用',
       historyUnavailable: '不可用',
       reasonDaemonIdentity: '守护进程身份不可用',
       reasonServiceManager: '服务管理器不可用',
-      lastError: '最近错误',
       noLastError: '未报告',
-      revision: '配置版本',
       // Observation results.
       observeRunning: '正在观测供应商来源…',
-      observeDone: '观测完成',
       observeFailed: '观测失败',
-      observeAt: '完成于',
-      observeSourceTmax: 'tmax',
-      observeSourceAgent: 'agent',
-      observeNoItems: '未报告观测结果。',
-      observeHint: '只有此按钮会访问供应商来源；打开页面只读取缓存状态。',
       observeStatusRefreshed: '已刷新',
       observeStatusBlocked: '被阻止',
       observeStatusFailed: '失败',
@@ -665,8 +474,6 @@ window.__ModuleLoader__.load({
       connectDetail: '细节',
       connectState: '状态',
       connectFiles: '计划写入的文件',
-      connectChangedFiles: '变更文件',
-      connectUnchangedFiles: '未变文件',
       connectRecovery: '恢复',
       recoveryPlanned: '计划',
       recoveryRetained: '保留',
@@ -674,12 +481,7 @@ window.__ModuleLoader__.load({
       actionWouldWrite: '将写入',
       actionWritten: '已写入',
       actionUnchanged: '未变化',
-      effectNativeWrites: '原生写入',
-      effectSecretReads: '密钥读取',
-      effectProcessesStarted: '启动进程',
-      effectLocksCreated: '创建锁',
       // 显式修复操作：每个按钮对应一项固定的 tmax 操作。
-      actionsLabel: '操作',
       actionResumeQuota: '恢复额度',
       actionResetFailure: '重置失败状态',
       actionObserveQuota: '观测额度',
@@ -728,17 +530,11 @@ window.__ModuleLoader__.load({
       footerReadFailed: '读取失败',
       footerReason: '未显示模型的原因',
       modelsAvailable: '已列出 tmax 模型。',
-      modelsNone: '此配置未投影任何 tmax 模型。',
-      modelsInactive: 'tmax 路由已配置，但在 DSH 中未生效。',
-      modelsCredential: 'tmax 路由没有可用的凭据引用。',
-      modelsCredentialUnknown: '无法确定 tmax 路由的凭据就绪状态。',
-      modelsReload: '需要重新加载 DSH 后 tmax 路由才能使用。',
       modelsUnknown: '无法读取 tmax 状态。',
       footerOpenPage: '打开 tmax',
       footerPageUnavailable: '当前组合中不可打开 tmax 页面。',
       footerReload: '重新读取',
       footerLoading: '正在读取 tmax 状态…',
-      routingUnknown: '无法读取 tmax 路由信息。',
       toolTitle: 'tmax 状态',
       toolPending: '正在读取 tmax 状态…',
       toolUnreadable: '无法读取 tmax 状态结果',
@@ -749,36 +545,6 @@ window.__ModuleLoader__.load({
       toolBlockers: '阻塞项',
       toolModels: '模型',
       // 请求历史详情：只在显式加载时读取，挂载时不读取。
-      historyAvailability: '可用性',
-      historyLoad: '加载历史',
-      historyReload: '重新加载历史',
-      historyLoading: '正在加载保留的请求历史…',
-      historyReadUnavailable: '请求历史不可用。',
-      historyEmpty: '未报告保留的请求记录。',
-      historyCoverage: '覆盖范围',
-      historyProcess: '进程',
-      historyProcessStarted: '进程启动于',
-      historyLastClear: '上次清除',
-      historyRetained: '保留记录',
-      historyEvicted: '已淘汰记录',
-      historyIncomplete: '不完整记录',
-      historyPriorProcesses: '之前进程',
-      historyDirectTraffic: '直连流量',
-      historyRange: '时间范围',
-      historyRetention: '保留策略',
-      historyLimits: '存储上限',
-      historyLimitRecords: '记录数',
-      historyLimitBytes: '记录字节',
-      historyGap: '缺口',
-      historyMore: '条更多保留记录',
-      historyTime: '时间',
-      historyOutcome: '结果',
-      historyRequestedModel: '请求模型',
-      historySelectedModel: '选中模型',
-      historyRoute: '目标 / 供应商',
-      historyReason: '原因',
-      historyGeneratedAt: '生成于',
-      historyUnknown: '覆盖范围未知',
       // Failures.
       readFailed: '读取失败',
       hostError: 'Host 错误',
@@ -875,19 +641,23 @@ window.__ModuleLoader__.load({
     const LABEL_KEYS = { rolling: 'windowRolling', interval: 'windowRolling', weekly: 'windowWeekly', monthly: 'windowMonthly', weekly_allowance: 'windowWeekly' }
 
     const STYLE = `
-.tmx-page { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font-size: 14px; line-height: 1.6; }
+.tmx-page { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .tmx-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; --dsh-scrollbar-width: 9px; --dsh-scrollbar-thumb-border: 2px; }
-.tmx-content { max-width: 960px; margin: 0 auto; padding: 0 clamp(24px, 4vw, 48px) 48px; }
-.tmx-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; padding-top: 28px; margin-bottom: 8px; }
-.tmx-titleBlock { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tmx-heading h1 { flex: 0 1 auto; min-width: 0; max-width: 100%; margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; }
-.tmx-headState { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; font-size: 13px; line-height: 20px; font-weight: 400; color: var(--dsw-alias-label-secondary); vertical-align: middle; }
-.tmx-headState[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
-.tmx-headState[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
+.tmx-content { max-width: 1160px; margin: 0 auto; padding: 28px clamp(20px, 4vw, 48px) 48px; padding-left: max(clamp(20px, 4vw, 48px), env(safe-area-inset-left)); padding-right: max(clamp(20px, 4vw, 48px), env(safe-area-inset-right)); }
+.tmx-titleRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.tmx-title { margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; letter-spacing: -0.01em; }
+.tmx-tools { display: flex; align-items: center; gap: 12px; }
 .tmx-meta { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-/* A first-level page's header action is the sibling pages' 32px capsule. */
-.tmx-actions { display: flex; flex: none; align-items: center; gap: 12px; white-space: nowrap; }
-.tmx-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 16px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
+/* The verdict is the one line the page is read for. */
+.tmx-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0 0; font-size: 15px; line-height: 24px; font-weight: 500; }
+.tmx-nextStep { margin: 8px 0 0 20px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.tmx-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
+.tmx-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
+.tmx-dot[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
+.tmx-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
+.tmx-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
+/* A first-level page's header action is the sibling pages' 32px capsule; on a touch screen every control keeps a 44px target. */
+.tmx-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 16px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
 .tmx-button[data-kind='primary'] { border-color: transparent; background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
 @media (hover: hover) {
   .tmx-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-solid); }
@@ -895,45 +665,56 @@ window.__ModuleLoader__.load({
 }
 .tmx-button:disabled { opacity: 0.4; cursor: default; }
 .tmx-button[data-busy='true']:disabled { opacity: 1; background: var(--dsw-alias-interactive-bg-hover); }
-.tmx-sub { margin: 0 0 28px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
-.tmx-dot { box-sizing: border-box; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; }
-.tmx-dot[data-tone='ok'] { background: var(--dsw-alias-state-success-primary); }
-.tmx-dot[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
-.tmx-dot[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
-.tmx-dot[data-tone='idle'] { background: var(--dsw-alias-label-tertiary); }
-.tmx-section { margin-bottom: 24px; }
-.tmx-sectionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
-/* The section's own count is an annotation, never a second title. */
+@media (pointer: coarse) { .tmx-button { min-height: 44px; padding: 0 18px; font-size: 15px; } }
+.tmx-section { margin-top: 28px; }
+.tmx-sectionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 10px; font-size: 14px; line-height: 22px; font-weight: 500; }
 .tmx-sectionNote { font-size: 12px; line-height: 18px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
-.tmx-subhead { margin: 20px 0 8px; font-size: 14px; line-height: 22px; font-weight: 500; }
-.tmx-caption { margin: -4px 0 10px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-.tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; }
-.tmx-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 24px; margin: 0; }
-@media (max-width: 900px) { .tmx-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.tmx-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tmx-fact dt { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-.tmx-fact dd { margin: 0; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
-.tmx-factValue { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tmx-factNote { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
-.tmx-mono { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; }
-.tmx-break { overflow-wrap: anywhere; }
+/*
+ * An account is one object a person checks one at a time, so it gets a wide
+ * card; every window it reports keeps its own bar, named, with what is left and
+ * when it resets. Two columns on a desktop, one on a phone: the same card.
+ */
+.tmx-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.tmx-account { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); }
+.tmx-accountHead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 20px; }
+.tmx-accountName { font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
+.tmx-tag { display: inline-flex; align-items: center; padding: 0 8px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 12px; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.tmx-tag[data-tone='error'] { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
+.tmx-windows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.tmx-window { display: grid; grid-template-columns: auto minmax(48px, 1fr) auto minmax(80px, auto); align-items: center; gap: 10px; min-height: 18px; }
+.tmx-windowName { font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
+/* The bar is what is left, the same quantity the value states; colour marks what needs attention. */
+.tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-success-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease), background-color var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
+.tmx-barFill[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
+.tmx-barFill[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
+/* A measured zero is a fact, not an empty bar. */
+.tmx-barZero { position: absolute; inset-block: 0; inset-inline-start: 0; width: 3px; border-radius: 99px; background: var(--dsw-alias-state-error-primary); }
+.tmx-windowValue { font-size: 14px; line-height: 18px; font-weight: 600; text-align: end; white-space: nowrap; }
+.tmx-windowValue[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+.tmx-windowValue[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
+.tmx-windowReset { font-size: 13px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.tmx-windowReset[data-empty='true'] { visibility: hidden; }
+.tmx-resetWord { display: none; }
+.tmx-windowWide { grid-column: 1 / -1; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-accountActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+/* A model answers one question: which account it uses. */
+.tmx-models { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.tmx-model { padding: 8px 14px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); }
+.tmx-modelId { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 13.5px; line-height: 20px; overflow-wrap: anywhere; }
+.tmx-modelVia { font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-skeletonBar { display: block; width: 60%; height: 10px; border-radius: 4px; background: var(--dsw-alias-interactive-bg-hover); }
-.tmx-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.tmx-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); font-size: 12px; line-height: 18px; }
-.tmx-chip[data-tone='error'] { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
-.tmx-chip[data-tone='warn'] { border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
-.tmx-chip[data-tone='ok'] { border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%, var(--dsw-alias-label-primary)); }
-.tmx-chipKind { font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.tmx-skeletonName { width: 30%; margin-bottom: 4px; }
+.tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .tmx-note { margin: 8px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-errorText { font-size: 12px; line-height: 18px; color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); overflow-wrap: anywhere; }
+.tmx-break { overflow-wrap: anywhere; }
+.tmx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* Reads that failed, and the preview, confirmation, and result of one action. */
+.tmx-card { border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); padding: 12px 14px; }
 .tmx-cardNote { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
-.tmx-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0 0 20px; padding: 10px 12px; border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-border-l3)); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-settings-card-fill); }
-.tmx-next { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 24px; padding: 14px 16px; border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, var(--dsw-alias-border-l3)); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
-.tmx-nextHead { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; line-height: 18px; font-weight: 500; letter-spacing: 0.03em; color: var(--dsw-alias-label-secondary); }
-.tmx-nextText { margin: 0; font-size: 13px; line-height: 20px; }
-.tmx-nextCode { margin: 0; font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; line-height: 18px; color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); overflow-wrap: anywhere; }
-.tmx-nextActions { margin-top: 2px; }
-.tmx-panel { display: flex; flex-direction: column; gap: 8px; margin: 0 0 24px; padding: 14px 16px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
+.tmx-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 12px 0 0; padding: 10px 12px; border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-border-l3)); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-settings-card-fill); }
+.tmx-panel { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 0; padding: 14px 16px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
 .tmx-panelTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
 .tmx-panelNote { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-panelActions { display: flex; flex-wrap: wrap; gap: 12px; }
@@ -944,62 +725,32 @@ window.__ModuleLoader__.load({
 .tmx-connectGroup dt { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-connectGroup dd { margin: 0 0 4px; }
 .tmx-inlineList { margin: 0; padding: 0 0 0 14px; font-size: 12px; line-height: 18px; }
-.tmx-route { display: flex; flex-direction: column; gap: 4px; }
-.tmx-routes { display: flex; flex-direction: column; gap: 12px; }
-.tmx-routeHead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 14px; line-height: 22px; font-weight: 500; }
-.tmx-model { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
-.tmx-models { display: flex; flex-direction: column; }
-.tmx-modelHead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
-.tmx-routing { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
-.tmx-routingLine { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-size: 12px; line-height: 18px; }
-.tmx-candidates { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 0; padding: 0; list-style: none; }
-.tmx-candidate { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; line-height: 18px; }
-.tmx-providers { display: flex; flex-direction: column; gap: 12px; }
-.tmx-provider { display: flex; flex-direction: column; gap: 8px; }
-.tmx-providerHead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
-.tmx-providerName { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; font-size: 14px; line-height: 22px; font-weight: 500; color: var(--dsw-alias-label-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-a.tmx-providerName:hover { text-decoration: underline; text-underline-offset: 2px; }
-.tmx-external { flex: none; margin-top: 1px; color: var(--dsw-alias-label-secondary); }
-a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); }
-.tmx-providerMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-/* One repair action per evidence fact, beside the fact it repairs. */
-.tmx-providerActions { display: flex; flex-wrap: wrap; gap: 8px; }
-.tmx-evidence { margin: 0; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
-/* One grid per provider card, so every row and every card shares one 100% end. */
-.tmx-windows { display: grid; grid-template-columns: 104px minmax(120px, 1fr) 118px 104px; align-items: center; gap: 8px 12px; margin: 0; padding: 0; list-style: none; }
-.tmx-window { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; }
-.tmx-windowName { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
-.tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-business-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
-.tmx-barFill[data-tone='warn'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 65%, var(--dsw-alias-label-primary)); }
-.tmx-barFill[data-tone='error'] { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 82%, var(--dsw-alias-label-primary)); }
-/* A measured zero is a fact, not an empty bar. */
-.tmx-barZero { position: absolute; inset-block: 0; inset-inline-start: 0; width: 3px; border-radius: 99px; background: var(--dsw-alias-state-business-primary); }
-.tmx-windowValue { font-size: 12px; line-height: 18px; text-align: end; font-variant-numeric: tabular-nums; }
-.tmx-windowValue[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
-.tmx-windowValue[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
-.tmx-windowReset { font-size: 12px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
-.tmx-windowReset[data-empty='true'] { visibility: hidden; }
-.tmx-windowWide { grid-column: 2 / 4; text-align: start; color: var(--dsw-alias-label-secondary); }
-.tmx-suspend { margin: 0; font-size: 12px; line-height: 18px; color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
-.tmx-empty { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
-.tmx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-@media (prefers-reduced-motion: reduce) { .tmx-barFill { transition: none; } }
-@media (max-width: 760px) {
-  /* The bar keeps a fixed cap so every card shares one 100% end. */
-  .tmx-windows { grid-template-columns: 84px minmax(72px, 1fr) 96px 96px; }
-}
-@media (max-width: 560px) {
-  /* The bar spans the row, so every card keeps one shared 100% end; the value
-     and the reset move beneath it rather than competing for its width. */
-  .tmx-windows { grid-template-columns: minmax(0, 1fr) auto; }
-  .tmx-windowName { grid-column: 1; grid-row: 1; }
-  .tmx-windowValue { grid-column: 2; grid-row: 1; }
-  .tmx-bar { grid-column: 1 / -1; grid-row: 2; }
-  .tmx-windowReset { grid-column: 1 / -1; grid-row: 3; text-align: start; }
+.tmx-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tmx-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); font-size: 12px; line-height: 18px; }
+.tmx-chip[data-tone='error'] { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
+.tmx-chip[data-tone='warn'] { border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
+.tmx-chip[data-tone='ok'] { border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%, var(--dsw-alias-label-primary)); }
+.tmx-chipKind { font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.tmx-factNote { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+/* Phone: one column, and a window becomes two lines so its bar spans the whole card. */
+@media (max-width: 720px) {
+  .tmx-page { font-size: 15px; }
+  .tmx-account { padding: 14px; }
+  .tmx-windows { gap: 10px; }
+  .tmx-window { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+  .tmx-windowName { order: 1; font-size: 14px; line-height: 22px; }
+  .tmx-windowReset { order: 2; font-size: 14px; line-height: 22px; text-align: start; }
   .tmx-windowReset[data-empty='true'] { display: none; }
-  .tmx-windowWide { grid-column: 1 / -1; grid-row: 1; text-align: end; }
+  .tmx-resetWord { display: inline; }
+  .tmx-windowValue { order: 3; margin-left: auto; font-size: 15px; line-height: 22px; }
+  .tmx-bar { order: 4; flex-basis: 100%; height: 10px; align-self: center; }
+  .tmx-windowWide { flex-basis: 100%; font-size: 14px; }
+  .tmx-modelId { font-size: 14px; }
+  .tmx-modelVia { font-size: 14px; }
+  .tmx-nextStep { font-size: 14px; }
 }
+@media (max-width: 420px) { .tmx-meta { display: none; } }
+@media (prefers-reduced-motion: reduce) { .tmx-barFill { transition: none; } }
 /* Seats: navigation marker, Settings > Models card, tool card. */
 .tmx-navMark { display: inline-flex; align-items: center; gap: 4px; }
 .tmx-navMark[data-tone='warn'] .tmx-dot { background: var(--dsw-alias-state-warn-primary); }
@@ -1011,17 +762,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 .tmx-seatActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .tmx-toolCard { display: flex; flex-direction: column; gap: 6px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-md); padding: 10px 12px; }
 .tmx-toolHead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; }
-.tmx-historyCard { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding: 12px 14px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-settings-card-fill); }
-.tmx-historyHead { margin: 0; font-size: 14px; line-height: 22px; font-weight: 500; }
-.tmx-historyAvailability { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-.tmx-historyCoverageCard { min-width: 0; }
-.tmx-historyCoverage { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 0; list-style: none; }
-.tmx-historyCoverageItem { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-.tmx-historyCoverageItem[data-gap='true'] { color: var(--dsw-alias-label-primary); }
-.tmx-historyTableWrap { max-width: 100%; overflow-x: auto; }
-.tmx-historyTable { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 18px; }
-.tmx-historyTable th, .tmx-historyTable td { padding: 4px 8px; text-align: start; vertical-align: top; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
-.tmx-historyTable th { font-weight: 500; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 `
 
     // ---------------------------------------------------------------- formatting
@@ -1208,6 +948,7 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         return {
           name,
           consumed,
+          counterText: `${compact(left)} / ${compact(total)}`,
           text: `${t('left')} ${compact(left)} / ${compact(total)}`,
           spoken: `${t('usedShare')} ${consumed}%`,
           meterNow: consumed,
@@ -1406,6 +1147,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       const blockers = Array.isArray(state.target?.blockers) ? state.target.blockers : []
       if (blockers.length > 0) {
         const blocker = blockers[0]
+        // The blocker itself asks for the start, so the page offers it.
+        if (blocker?.code === 'gateway_not_ready' && gatewayActions(state.gateway ?? {}).some(action => action.action === 'gateway_start')) {
+          return { kind: 'gateway', code: 'gateway_not_ready' }
+        }
         return {
           kind: 'blocker',
           code: blocker !== null && typeof blocker === 'object' ? blocker.code : undefined,
@@ -2236,41 +1981,293 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return h('div', { className: 'tmx-page', 'data-tmax-page': '1' },
         h('div', { className: 'tmx-scroll' },
           h('div', { className: 'tmx-content' }, [
-            headerBlock(state, verdictInfo, t, state === undefined && load.phase === 'failed' ? retryButton : refreshButton),
-            h('p', { className: 'tmx-sub', key: 'sub' }, t('subtitle')),
+            pageHeader(state, state === undefined && load.phase === 'failed' ? retryButton : refreshButton, t),
+            verdictLine(verdictInfo, primaryAction(action, busy, { start: () => repairHandlers.run({ action: 'gateway_start' }), connect: previewConnect }, t), t),
             h('p', { className: 'tmx-sr', key: 'live', role: 'status', 'aria-live': 'polite' },
               announce({ load, observe, connect, repair, verdict: verdictInfo.text }, t)),
+            state !== undefined && load.phase === 'failed' ? null
+              : nextStep(action, t, { retry: loadState, failures: state === undefined ? [] : [...sectionErrors(state), ...configErrors(state)] }),
+            state === undefined ? null : routeBlockerLine(state, t),
             staleBanner(load, t, loadState),
             state === undefined && load.phase === 'failed' ? initialError(load, t, loadState) : null,
-            action === undefined ? null : nextActionPanel(action, t, { connect: previewConnect, retry: loadState, disabled: busy }),
             repairPanel(repair, t, { confirm: confirmRepair, cancel: cancelRepair, disabled: busy }),
-            observePanel(observe, t),
             connectPanel(connect, t, { execute: executeConnect, cancel: cancelConnect }),
-            state === undefined && load.phase === 'loading' ? loadingSection(t) : null,
-            state === undefined ? null : accessSection(state, t, repairHandlers),
+            observePanel(observe, t, load.phase === 'failed'),
+            state === undefined && load.phase === 'loading' ? skeleton(t) : null,
+            state === undefined ? null : accountsSection(state, t, repairHandlers),
             state === undefined ? null : modelsSection(state, t),
-            state === undefined ? null : providersSection(state, t, repairHandlers),
-            state === undefined ? null : diagnosticsSection(state, t),
           ])))
     }
 
-    function headerBlock(state, verdictInfo, t, action) {
-      const meta = state === undefined
-        ? null
-        : `${t('updated')} ${state.generatedAt === undefined ? t('unknown') : clockOf(state.generatedAt) || t('unknown')} · ${t('configRevision')} ${shortRevision(state.configurationRevision) ?? t('unknown')} · ${t('schema')} ${state.schemaVersion === undefined ? t('unknown') : state.schemaVersion}`
-      return h('div', { className: 'tmx-heading', key: 'heading' }, [
-        h('div', { className: 'tmx-titleBlock', key: 'titleBlock' }, [
-          h('h1', { key: 'title' }, [
-            t('title'),
-            h('span', { className: 'tmx-headState', key: 'state', 'data-tone': verdictInfo.tone }, [
-              h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': verdictInfo.tone, 'aria-hidden': 'true' }),
-              verdictInfo.text,
-            ]),
-          ]),
-          meta === null ? null : h('div', { className: 'tmx-meta', key: 'meta' }, meta),
-        ]),
-        h('div', { className: 'tmx-actions', key: 'actions' }, action),
+    /** The name, when the state was generated, and the one control that reads again. */
+    function pageHeader(state, action, t) {
+      const updated = typeof state?.generatedAt === 'string'
+        ? h('span', { className: 'tmx-meta', key: 'meta' }, `${t('updated')} ${clockOf(state.generatedAt) || t('unknown')}`)
+        : null
+      return h('div', { className: 'tmx-titleRow', key: 'titleRow' }, [
+        h('h1', { className: 'tmx-title', key: 'title' }, t('title')),
+        h('div', { className: 'tmx-tools', key: 'tools' }, [updated, action]),
       ])
+    }
+
+    /**
+     * The one control that changes the verdict when the page has it: starting a
+     * gateway that is down, or applying what DSH has not been given. Every
+     * other next step is a fact to read, so it takes no button.
+     */
+    function primaryAction(action, busy, handlers, t) {
+      if (action === undefined || busy) return undefined
+      if (action.kind === 'gateway') return { label: t('actionStartGateway'), run: handlers.start }
+      if (action.kind === 'connect') return { label: t('connect'), run: handlers.connect }
+      return undefined
+    }
+
+    /** The verdict in one line: reachability, then the control that changes it. */
+    function verdictLine(verdictInfo, primary, t) {
+      return h('p', { className: 'tmx-verdict', key: 'verdict' }, [
+        dot(verdictInfo.tone),
+        h('span', { key: 'text' }, verdictInfo.text),
+        primary === undefined
+          ? null
+          : h('button', {
+            type: 'button',
+            className: 'tmx-button',
+            'data-kind': 'primary',
+            key: 'primary',
+            onClick: primary.run,
+          }, primary.label),
+      ])
+    }
+
+    /**
+     * What stands between the reader and a working model, when the answer is a
+     * fact rather than a button. A retry is the header's own control, and the
+     * gateway and Apply steps sit on the verdict line, so they are not repeated.
+     */
+    function nextStep(action, t, handlers) {
+      if (action === undefined) return null
+      let text
+      // A failed read is retried by reading again, never by observing, so this
+      // step keeps its own control beside the header's Refresh.
+      let retry = false
+      switch (action.kind) {
+        case 'reload': text = t('nextReload'); break
+        case 'conflict': text = `${t('nextConflict')} ${hostCodeText(action.code, action.message)}`.trim(); break
+        case 'blocker': text = hostCodeText(action.code, action.message) || t('nextBlocker'); break
+        case 'config': text = action.reason === 'unavailable' ? t('nextConfigUnavailable') : t('nextConfig'); break
+        case 'retry':
+          text = action.reason === 'projection'
+            ? t('nextProjectionRetry')
+            : action.reason === 'section' ? t('nextSectionRetry') : t('nextRetry')
+          retry = handlers !== undefined
+          break
+        default: return null
+      }
+      // Every failed section read follows the sentence, code first and bounded:
+      // a section whose read failed must say so, wherever the next step points.
+      const detail = handlers.failures.map(error => error.text).join(' · ')
+      return h('p', { className: 'tmx-nextStep', key: 'step' }, [
+        h('span', { key: 'text' }, detail === '' ? text : `${text} ${detail}`),
+        retry ? h('button', { type: 'button', className: 'tmx-button', key: 'retry', onClick: handlers.retry }, t('retry')) : null,
+      ])
+    }
+
+    /**
+     * A route the host could not build names why: an unsupported protocol, a
+     * credential reference DSH cannot use, a missing base URL. Each blocker is
+     * said once, beside the route it belongs to.
+     */
+    function routeBlockerLine(state, t) {
+      const lines = []
+      for (const route of Array.isArray(state.routes) ? state.routes : []) {
+        if (route === null || typeof route !== 'object') continue
+        for (const blocker of Array.isArray(route.blockers) ? route.blockers : []) {
+          const text = hostCodeText(blocker?.code, blocker?.message) || entryText(blocker)
+          if (text !== '') lines.push(`${boundedText(route.provider ?? route.name, 80)}${t('colon')} ${text}`)
+        }
+      }
+      if (lines.length === 0) return null
+      return h('p', { className: 'tmx-nextStep tmx-break', key: 'routeBlockers' }, lines.join(' · '))
+    }
+
+    /** A configuration's own validation errors, bounded and code first. */
+    function configErrors(state) {
+      const config = state.config !== null && typeof state.config === 'object' ? state.config : {}
+      return (Array.isArray(config.errors) ? config.errors : []).slice(0, 12)
+        .map(error => hostCodeText(error?.code, error?.message))
+        .filter(text => text !== '')
+        .map(text => ({ section: 'config', code: '', message: '', text }))
+    }
+
+    /** One window as what is left, whatever basis the account reports it in. */
+    function remainingReading(item) {
+      if (item.unreadable) return { ...item, remaining: undefined }
+      return { ...item, remaining: item.consumed === undefined ? undefined : 100 - item.consumed }
+    }
+
+    /** Colour is spent on what needs attention; a comfortable window stays green. */
+    function windowTone(remaining) {
+      if (remaining === undefined) return ''
+      return remaining <= 10 ? 'error' : remaining <= 25 ? 'warn' : 'ok'
+    }
+
+    /**
+     * Every tmax account that reports a quota window, least left first. An
+     * account without any window takes no card: it would only say "unknown".
+     */
+    function accountsOf(state, t) {
+      const providers = state.providers !== null && typeof state.providers === 'object' ? state.providers : {}
+      const list = []
+      for (const provider of Array.isArray(providers.tmax) ? providers.tmax : []) {
+        if (provider === null || typeof provider !== 'object') continue
+        const readings = windowsFor(provider, t).map(remainingReading)
+        if (readings.length === 0) continue
+        const measured = readings.filter(item => item.remaining !== undefined)
+        const tightest = measured.length === 0 ? undefined : Math.min(...measured.map(item => item.remaining))
+        list.push({ provider, readings, tightest })
+      }
+      // An account whose windows cannot be measured follows the measured ones.
+      return list.sort((a, b) => (a.tightest ?? 101) - (b.tightest ?? 101))
+    }
+
+    function quotaRow(item, index, t) {
+      const name = boundedText(item.name, 48)
+      const key = `window:${index}`
+      if (item.remaining === undefined) {
+        // A row that yields no share names itself and takes no bar: a bar would
+        // claim a proportion nobody measured.
+        return h('li', { className: 'tmx-window', key }, [
+          h('span', { className: 'tmx-windowName', key: 'name' }, name),
+          h('span', { className: 'tmx-windowWide', key: 'value' }, boundedText(item.text, 80)),
+        ])
+      }
+      const tone = windowTone(item.remaining)
+      const value = item.counterText ?? `${Math.round(item.remaining)}%`
+      const reset = item.reset === undefined ? '' : formatDate(item.reset)
+      const share = Math.round(item.remaining)
+      return h('li', { className: 'tmx-window', key }, [
+        h('span', { className: 'tmx-windowName', key: 'name' }, name),
+        h('span', {
+          className: 'tmx-bar',
+          key: 'bar',
+          role: 'img',
+          'aria-label': `${name} ${t('left')} ${value}`,
+        }, share === 0
+          ? h('span', { className: 'tmx-barZero', key: 'zero' })
+          : h('span', { className: 'tmx-barFill', 'data-tone': tone, style: { width: `${share}%` }, key: 'fill' })),
+        h('span', { className: 'tmx-windowValue', 'data-tone': tone, key: 'value' }, value),
+        h('span', {
+          className: 'tmx-windowReset',
+          'data-empty': reset === '' ? 'true' : undefined,
+          key: 'reset',
+        }, [h('span', { className: 'tmx-resetWord', key: 'word' }, `${t('reset')} `), reset]),
+      ])
+    }
+
+    function accountCard({ provider, readings }, index, t, handlers) {
+      const name = boundedText(
+        typeof provider?.id === 'string' && provider.id !== '' ? provider.id : t('unknown'), 120)
+      // A tag exists only for a state a person can act on or must know about.
+      const tags = [
+        provider?.enabled === false ? h('span', { className: 'tmx-tag', key: 'disabled' }, t('providerDisabled')) : null,
+        provider?.suspension?.state === 'suspended'
+          ? h('span', { className: 'tmx-tag', 'data-tone': 'error', key: 'suspended' }, t('providerSuspended'))
+          : null,
+        failureIsActive(provider?.failure)
+          ? h('span', { className: 'tmx-tag', 'data-tone': 'error', key: 'failure' }, t('providerFailing'))
+          : null,
+      ]
+      // Resuming and resetting sit beside the evidence they repair; observing
+      // is the page's Refresh, so no card repeats it.
+      const actions = handlers === undefined ? [] : providerActions(provider)
+        .filter(descriptor => descriptor.action !== 'observe_provider')
+        .map(descriptor => h('button', {
+          type: 'button',
+          className: 'tmx-button',
+          key: `action:${descriptor.action}`,
+          'data-action': descriptor.action,
+          onClick: () => handlers.run(descriptor),
+          disabled: handlers.disabled,
+        }, t(ACTION_LABELS[descriptor.action])))
+      return h('li', { className: 'tmx-account', key: `account:${provider?.id ?? index}` }, [
+        h('div', { className: 'tmx-accountHead', key: 'head' },
+          [h('span', { className: 'tmx-accountName', key: 'name' }, name), ...tags]),
+        h('ul', { className: 'tmx-windows', key: 'windows' }, readings.map((item, windowIndex) => quotaRow(item, windowIndex, t))),
+        actions.length === 0 ? null : h('div', { className: 'tmx-accountActions', key: 'actions' }, actions),
+      ])
+    }
+
+    function accountsSection(state, t, handlers) {
+      const accounts = accountsOf(state, t)
+      // A failed account read is named where the accounts would be, so an empty
+      // list caused by the failure never reads as "no account".
+      const failures = sectionErrors(state).filter(error => error.section === 'providers')
+      return h('section', { className: 'tmx-section', key: 'accounts' }, [
+        h('h2', { className: 'tmx-sectionTitle', key: 'title' }, t('accountsTitle')),
+        ...failures.map((error, index) =>
+          h('p', { className: 'tmx-errorText', key: `failure:${index}` }, `${t('readFailed')}${t('colon')} ${error.text}`)),
+        accounts.length === 0
+          ? (failures.length > 0 ? null : h('p', { className: 'tmx-empty', key: 'empty' }, t('noAccounts')))
+          : h('ul', { className: 'tmx-accounts', key: 'accounts' }, accounts.map((account, index) => accountCard(account, index, t, handlers))),
+      ])
+    }
+
+    /** The account each model's routing selects, when the evidence reports one. */
+    function accountOfModel(routing, id) {
+      const entry = id === undefined
+        ? undefined
+        : routing.find(item => item !== null && typeof item === 'object' && item.model === id)
+      const selection = entry === undefined || entry.selection === null || typeof entry.selection !== 'object'
+        ? {}
+        : entry.selection
+      if (typeof selection.provider === 'string' && selection.provider !== '') return selection.provider
+      if (typeof selection.qualifiedModel === 'string' && selection.qualifiedModel !== '') {
+        return selection.qualifiedModel.split('/')[0]
+      }
+      return undefined
+    }
+
+    function modelsSection(state, t) {
+      const routes = Array.isArray(state.routes) ? state.routes : []
+      const routing = Array.isArray(state.routing) ? state.routing : []
+      const target = state.target !== null && typeof state.target === 'object' ? state.target : {}
+      const selected = target.default !== null && typeof target.default === 'object' ? target.default : undefined
+      const tiles = []
+      for (const route of routes) {
+        if (route === null || typeof route !== 'object') continue
+        for (const model of Array.isArray(route.models) ? route.models : []) {
+          if (model === null || typeof model !== 'object') continue
+          const id = typeof model.id === 'string' && model.id !== '' ? model.id : undefined
+          const account = accountOfModel(routing, id)
+          const isDefault = id !== undefined && selected !== undefined && selected.id === id
+            && (typeof selected.provider !== 'string' || selected.provider === route.provider)
+          tiles.push(h('li', { className: 'tmx-model', key: `model:${route.provider}:${id ?? tiles.length}` }, [
+            h('div', { className: 'tmx-modelId', key: 'id' }, [
+              boundedText(id ?? ((typeof model.name === 'string' ? model.name : '') || t('unknown')), 120),
+              isDefault ? h('span', { className: 'tmx-tag', key: 'default' }, t('defaultTag')) : null,
+            ]),
+            h('div', { className: 'tmx-modelVia', key: 'via' }, account === undefined ? '' : boundedText(account, 80)),
+          ]))
+        }
+      }
+      return h('section', { className: 'tmx-section', key: 'models' }, [
+        h('h2', { className: 'tmx-sectionTitle', key: 'title' }, t('modelsTitle')),
+        // "No routes" is a claim only a read projection can make; a failed one
+        // says nothing here, because its failure is already named above.
+        tiles.length === 0
+          ? (projectionFailed(state) ? null : h('p', { className: 'tmx-empty', key: 'empty' }, t('noRoutes')))
+          : h('ul', { className: 'tmx-models', key: 'models' }, tiles),
+      ])
+    }
+
+    /** Skeleton cards while the first read is in flight: never a spinner in the content. */
+    function skeleton(t) {
+      return h('div', { className: 'tmx-accounts', key: 'skeleton', role: 'status', 'aria-label': t('checking') },
+        [0, 1, 2, 3].map(index => h('div', { className: 'tmx-account', 'aria-hidden': 'true', key: index }, [
+          h('span', { className: 'tmx-skeletonBar tmx-skeletonName', key: 'name' }),
+          h('span', { className: 'tmx-skeletonBar', key: 'bar' }),
+          h('span', { className: 'tmx-skeletonBar', key: 'second' }),
+        ])))
     }
 
     function staleBanner(load, t, retry) {
@@ -2301,18 +2298,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       ])
     }
 
-    function loadingSection(t) {
-      return h('section', { className: 'tmx-section', key: 'loading' }, [
-        h('h2', { className: 'tmx-sectionTitle', key: 'title' }, t('accessTitle')),
-        h('div', { className: 'tmx-card', key: 'card' },
-          h('div', { className: 'tmx-facts' }, [0, 1, 2, 3].map(index =>
-            h('div', { className: 'tmx-fact', key: index }, [
-              h('dt', { key: 'dt' }, ' '),
-              h('dd', { key: 'dd' }, h('span', { className: 'tmx-skeletonBar' })),
-            ])))),
-      ])
-    }
-
     function dot(tone) {
       // Decorative: the adjacent text already states the fact.
       return h('span', { className: 'tmx-dot', key: 'dot', 'data-tone': tone, 'aria-hidden': 'true' })
@@ -2320,21 +2305,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
 
     function chip(text, tone) {
       return h('span', { className: 'tmx-chip', 'data-tone': tone }, text)
-    }
-
-    function fact(label, value, note) {
-      return h('div', { className: 'tmx-fact', key: label }, [
-        h('dt', { key: 'dt' }, label),
-        h('dd', { key: 'dd' }, value),
-        note === undefined ? null : h('span', { className: 'tmx-factNote', key: 'note' }, note),
-      ])
-    }
-
-    function textValue(value, t, max = 160) {
-      if (typeof value === 'string' && value !== '') return boundedText(value, max)
-      if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-      if (typeof value === 'boolean') return value ? t('yes') : t('no')
-      return t('unknown')
     }
 
     function word(value, t) {
@@ -2345,442 +2315,11 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return value === true ? whenTrue : value === false ? whenFalse : t('unknown')
     }
 
-    function defaultIdentity(value, modelField, effortField, t) {
-      if (value === null || typeof value !== 'object') return t('unknown')
-      const provider = typeof value.provider === 'string' && value.provider !== ''
-        ? boundedText(value.provider, 80)
-        : t('unknown')
-      const model = typeof value[modelField] === 'string'
-        ? boundedText(value[modelField], 80)
-        : typeof value.model === 'string' ? boundedText(value.model, 80) : t('unknown')
-      const effort = typeof value[effortField] === 'string' && value[effortField] !== '' ? value[effortField] : undefined
-      const base = `${provider}/${model}`
-      return effort === undefined ? base : `${base} (${boundedText(effort, 16)})`
-    }
-
-    function pendingText(value, t) {
-      if (value === null) return t('pendingNone')
-      if (value === undefined) return t('unknown')
-      if (typeof value === 'string') return boundedText(value, 160)
-      if (Array.isArray(value)) return value.length === 0 ? t('pendingNone') : `${value.length}`
-      if (typeof value === 'object') {
-        const text = entryText(value)
-        return text === '' ? t('unknown') : text
-      }
-      return boundedText(value, 160)
-    }
-
-    function sectionView(key, title, note, body) {
-      return h('section', { className: 'tmx-section', key }, [
-        h('h2', { className: 'tmx-sectionTitle', key: 'title' },
-          note === undefined ? title : [title, h('span', { className: 'tmx-sectionNote', key: 'note' }, note)]),
-        ...(Array.isArray(body) ? body : [body]),
-      ])
-    }
-
-    function readFailures(errors, t, prefix) {
-      return errors.map((error, index) =>
-        h('p', { className: 'tmx-errorText', key: `${prefix}:${index}` }, `${t('readFailed')}${t('colon')} ${error.text}`))
-    }
-
-    function accessSection(state, t, handlers) {
-      const target = state.target ?? {}
-      const ownership = state.ownership ?? {}
-      const routes = Array.isArray(state.routes) ? state.routes : []
-      const gateway = state.gateway ?? {}
-      const config = state.config ?? {}
-      const projectionFailures = projectionErrors(state)
-      // A projection failure already owns the routes block; do not repeat the
-      // same host error as a target note above it.
-      const targetErrors = projectionFailures.length > 0 ? [] : errorsForSection(state, 'target')
-      const gatewayErrors = errorsForSection(state, 'gateway')
-      const configErrors = errorsForSection(state, 'config')
-      const match = defaultsMatch(target.default, target.effectiveDefault)
-      const blockers = Array.isArray(target.blockers) ? target.blockers : []
-      const conflict = ownership.conflict
-      const conflictText = conflict === null || conflict === undefined
-        ? undefined
-        : hostCodeText(conflictCode(conflict), conflictMessage(conflict))
-      const facts = [
-        fact(t('target'), textValue(target.id, t)),
-        fact(t('targetPath'), h('span', { className: 'tmx-mono' }, textValue(target.path, t))),
-        fact(t('authority'), h('span', { className: 'tmx-mono' }, textValue(state.authority, t))),
-        fact(t('dshInstallation'), target.installation === undefined || target.installation === null
-          ? t('unknown')
-          : `${textValue(target.installation.version, t)} (${textValue(target.installation.state, t)})`),
-        fact(t('ownership'), `${enumText(ownership.owner, OWNER_STATES, t)} · ${enumText(ownership.scope, SCOPES, t)}`),
-        fact(t('applied'), enumText(target.appliedState, APPLIED_STATES, t)),
-        fact(t('pending'), pendingText(target.pendingNativeChanges, t)),
-        fact(t('tmaxDefault'), defaultIdentity(target.default, 'id', 'effort', t)),
-        fact(t('effectiveDefault'), h('span', { className: 'tmx-factValue' }, [
-          defaultIdentity(target.effectiveDefault, 'model', 'reasoningEffort', t),
-          match === undefined ? null : chip(match ? t('matches') : t('differs'), match ? 'idle' : 'warn'),
-        ])),
-      ]
-      const blockerText = blockers.slice(0, 5)
-        .map(blocker => blocker !== null && typeof blocker === 'object' ? hostCodeText(blocker.code, blocker.message) : hostCodeText(undefined, blocker))
-        .filter(text => text !== '')
-        .join('; ')
-      const body = [h('div', { className: 'tmx-card', key: 'facts' }, [
-        h('dl', { className: 'tmx-facts', key: 'dl' }, facts),
-        blockerText === '' ? null : h('p', { className: 'tmx-errorText', key: 'blockers' },
-          `${t('blocker')}${t('colon')} ${boundedText(blockerText, 480)}`),
-        conflictText === undefined ? null : h('p', { className: 'tmx-errorText', key: 'conflict' }, `${t('conflict')}${t('colon')} ${conflictText}`),
-        ...readFailures(targetErrors, t, 'targetFailure'),
-      ])]
-      body.push(h('h3', { className: 'tmx-subhead', key: 'routesHead' }, t('routesTitle')))
-      if (projectionFailures.length > 0) {
-        // A failed projection read means routes are unknown, not absent.
-        body.push(h('div', { className: 'tmx-card', key: 'projectionFailure' }, readFailures(projectionFailures, t, 'projectionFailure')))
-      }
-      if (routes.length > 0) {
-        body.push(h('div', { className: 'tmx-routes', key: 'routes' }, routes.map((route, index) => routeCard(route, index, t))))
-      } else if (projectionFailures.length === 0) {
-        body.push(h('div', { className: 'tmx-card', key: 'noRoutes' }, h('p', { className: 'tmx-empty' }, t('noRoutes'))))
-      }
-      body.push(h('h3', { className: 'tmx-subhead', key: 'gatewayHead' }, t('gatewayTitle')))
-      body.push(gatewayCard(gateway, gatewayErrors, t, handlers))
-      body.push(h('h3', { className: 'tmx-subhead', key: 'configHead' }, t('configTitle')))
-      body.push(configCard(config, configErrors, t))
-      return sectionView('access', t('accessTitle'), undefined, body)
-    }
-
-    function routeCard(route, index, t) {
-      const readiness = routeReadiness(route)
-      const credential = readiness === 'usable'
-        ? chip(t('credentialConfigured'), 'ok')
-        : readiness === 'registered'
-          ? chip(t('credentialMissing'), 'error')
-          : h('span', null, t('unknown'))
-      const activeState = routeActiveState(route)
-      const liveness = activeState === 'active'
-        ? chip(t('routeLive'), 'ok')
-        : activeState === 'inactive'
-          ? chip(t('routeNotApplied'), 'idle')
-          : h('span', null, t('unknown'))
-      const ref = typeof route?.credentialRef === 'string' && route.credentialRef !== ''
-        ? h('p', { className: 'tmx-factNote', key: 'ref' }, `${t('credentialRef')}${t('colon')} ${boundedText(route.credentialRef, 96)}`)
-        : null
-      const blockerText = routeBlockerTexts(route).join('; ')
-      return h('div', { className: 'tmx-card tmx-route', key: `route:${index}` }, [
-        h('h4', { className: 'tmx-routeHead', key: 'head' }, textValue(route?.provider, t)),
-        h('dl', { className: 'tmx-facts', key: 'facts' }, [
-          fact(t('routeActive'), h('span', { className: 'tmx-factValue' }, [liveness])),
-          fact(t('routeProtocol'), textValue(route?.protocol, t)),
-          fact(t('routeBaseUrl'), h('span', { className: 'tmx-mono tmx-break' }, textValue(route?.baseUrl, t, 200))),
-          fact(t('routeScope'), enumText(route?.scope, SCOPES, t)),
-          fact(t('routeCredential'), h('span', { className: 'tmx-factValue' }, [credential])),
-        ]),
-        ref,
-        blockerText === ''
-          ? null
-          : h('p', { className: 'tmx-errorText', key: 'blockers' },
-            `${t('routeBlockers')}${t('colon')} ${boundedText(blockerText, 480)}`),
-      ])
-    }
-
-    function gatewayCard(gateway, errors, t, handlers) {
-      const supervision = gateway.supervision ?? {}
-      const autostart = gateway.autostart ?? {}
-      const shared = gateway.sharedKey ?? {}
-      const readyWord = gateway.ready === true ? t('gatewayReady') : gateway.ready === false ? t('gatewayNotReady') : t('unknown')
-      const reasonText = typeof gateway.reasonCode === 'string' && gateway.reasonCode !== ''
-        ? enumText(gateway.reasonCode, REASONS, t)
-        : undefined
-      // One action row: the lifecycle verbs the reported state allows, then the
-      // management surface. Each previews through the repair panel first.
-      const actionButtons = handlers === undefined ? [] : gatewayActions(gateway).map(descriptor => h('button', {
-        type: 'button',
-        className: 'tmx-button',
-        key: `action:${descriptor.action}`,
-        'data-action': descriptor.action,
-        onClick: () => handlers.run(descriptor),
-        disabled: handlers.disabled,
-      }, t(ACTION_LABELS[descriptor.action])))
-      const management = managementAction(gateway)
-      if (handlers !== undefined && management !== undefined) {
-        actionButtons.push(h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          key: 'openManagement',
-          'data-action': management.action,
-          onClick: () => handlers.run(management),
-          disabled: handlers.disabled,
-        }, t('actionOpenManagement')))
-      }
-      const actionRow = actionButtons.length === 0
-        ? null
-        : h('div', { className: 'tmx-providerActions', key: 'actions' }, actionButtons)
-      return h('div', { className: 'tmx-card', key: 'gateway' }, [
-        h('dl', { className: 'tmx-facts', key: 'dl' }, [
-          fact(t('gatewayListen'), h('span', { className: 'tmx-mono' }, textValue(gateway.listen, t))),
-          fact(t('gatewayConfigured'), word(gateway.configured, t)),
-          fact(t('gatewayReady'), h('span', { className: 'tmx-factValue' }, [
-            dot(gateway.ready === true ? 'ok' : gateway.ready === false ? 'error' : 'idle'),
-            readyWord,
-          ]), reasonText),
-          fact(t('gatewayDaemon'), enumText(gateway.daemonDiscoveryState, DAEMON_STATES, t)),
-          fact(t('gatewaySupervision'), enumText(supervision.state, SUPERVISION_STATES, t),
-            supervision.reasonCode === null || supervision.reasonCode === undefined ? undefined : enumText(supervision.reasonCode, REASONS, t)),
-          fact(t('gatewayAutostart'), [
-            `${t('savedIntent')} ${word(autostart.savedIntent, t)} · `,
-            `${t('registration')} ${enumText(autostart.registration, REGISTRATION_STATES, t)} · `,
-            `${t('unit')} ${boolWord(autostart.unitMatches, t, t('unitMatches'), t('unitDrift'))}`,
-          ].join('')),
-          fact(t('sharedKey'), enumText(shared.loadedState, KEY_STATES, t),
-            shared.reasonCode === null || shared.reasonCode === undefined ? undefined : enumText(shared.reasonCode, REASONS, t)),
-        ]),
-        ...readFailures(errors, t, 'gatewayFailure'),
-        actionRow,
-      ])
-    }
-
-    function configCard(config, errors, t) {
-      const revisions = typeof config.revision === 'string' ? config.revision : undefined
-      const configErrors = Array.isArray(config.errors) ? config.errors : []
-      return h('div', { className: 'tmx-card', key: 'config' }, [
-        h('dl', { className: 'tmx-facts', key: 'dl' }, [
-          fact(t('configState'), enumText(config.state, CONFIG_STATES, t)),
-          fact(t('revision'), h('span', { className: 'tmx-mono tmx-break', title: revisions ?? undefined },
-            shortRevision(revisions) ?? t('unknown'))),
-          fact(t('configErrors'), configErrors.length === 0 ? t('none') : String(configErrors.length)),
-        ]),
-        ...readFailures(errors, t, 'configFailure'),
-      ])
-    }
-
-    function modelsSection(state, t) {
-      const routes = Array.isArray(state.routes) ? state.routes : []
-      const routing = Array.isArray(state.routing) ? state.routing : []
-      const projectionFailures = projectionErrors(state)
-      if (routes.length === 0) {
-        return sectionView('models', t('modelsTitle'), t('modelsNote'),
-          projectionFailures.length > 0
-            ? h('div', { className: 'tmx-card' }, readFailures(projectionFailures, t, 'modelsFailure'))
-            : h('div', { className: 'tmx-card' }, h('p', { className: 'tmx-empty' }, t('noRoutes'))))
-      }
-      const modelCount = modelCatalogOf(state).length
-      const note = `${t('modelsNote')} · ${modelCount} ${t('modelsUnit')}`
-      const body = []
-      if (projectionFailures.length > 0) {
-        body.push(h('div', { className: 'tmx-card', key: 'projectionFailure' }, readFailures(projectionFailures, t, 'modelsFailure')))
-      }
-      body.push(...routes.map((route, index) => {
-        const models = Array.isArray(route?.models) ? route.models : []
-        return h('div', { className: 'tmx-card', key: `models:${index}` }, [
-          h('h4', { className: 'tmx-routeHead', key: 'head' }, textValue(route?.provider, t)),
-          models.length === 0
-            ? h('p', { className: 'tmx-empty', key: 'empty' }, t('notReported'))
-            : h('div', { className: 'tmx-models', key: 'models' }, models.map((model, modelIndex) => modelCard(model, routing, modelIndex, t))),
-        ])
-      }))
-      return sectionView('models', t('modelsTitle'), note, body)
-    }
-
-    function modelCard(model, routing, index, t) {
-      const id = typeof model?.id === 'string' && model.id !== '' ? model.id : undefined
-      const rawName = typeof model?.name === 'string' && model.name !== '' ? model.name : id ?? t('unknown')
-      // Host-derived names are bounded for display; the raw id still drives the
-      // exact routing lookup below.
-      const name = boundedText(rawName, 120)
-      const routingEntry = id === undefined
-        ? undefined
-        : routing.find(item => item !== null && typeof item === 'object' && item.model === id)
-      const candidateCount = numeric(model?.candidateCount)
-      const capabilities = capabilityFacts(model?.capabilities, t)
-      return h('div', { className: 'tmx-model', key: `model:${id ?? index}` }, [
-        h('h4', { className: 'tmx-modelHead', key: 'head' }, [
-          name,
-          id === undefined || id === rawName ? null : h('span', { className: 'tmx-chipKind', key: 'id' }, boundedText(id, 120)),
-        ]),
-        h('dl', { className: 'tmx-facts', key: 'facts' }, [
-          fact(t('modelKind'), enumText(model?.kind, KIND_STATES, t)),
-          fact(t('modelContinuity'), enumText(model?.continuity, CONTINUITY_STATES, t)),
-          fact(t('modelCandidates'), candidateCount === undefined ? t('unknown') : String(candidateCount)),
-          fact(t('modelAvailability'), enumText(model?.availability, AVAILABILITY_STATES, t)),
-        ]),
-        h('dl', { className: 'tmx-facts', key: 'capabilities' }, capabilities.map(item => fact(item.label, item.value))),
-        routingBlock(routingEntry, t),
-      ])
-    }
-
-    function routingBlock(entry, t) {
-      if (entry === undefined) {
-        return h('p', { className: 'tmx-note', key: 'routing' }, t('routingNone'))
-      }
-      const selection = entry.selection ?? {}
-      const selected = typeof selection.qualifiedModel === 'string' && selection.qualifiedModel !== ''
-        ? selection.qualifiedModel
-        : [typeof selection.provider === 'string' ? selection.provider : undefined,
-          typeof selection.model === 'string' ? selection.model : undefined].filter(Boolean).join('/')
-      const priority = numeric(selection.priority)
-      const candidates = Array.isArray(entry.candidates) ? entry.candidates : []
-      const excluded = Array.isArray(entry.excluded) ? entry.excluded : []
-      const errorText = entry.error === null || entry.error === undefined
-        ? undefined
-        : typeof entry.error === 'object'
-          ? hostCodeText(entry.error.code, entry.error.message)
-          : hostCodeText(undefined, entry.error)
-      return h('div', { className: 'tmx-routing', key: 'routing' }, [
-        h('p', { className: 'tmx-routingLine', key: 'selection' }, [
-          h('span', { className: 'tmx-chipKind', key: 'label' }, t('routingSelected')),
-          h('span', { className: 'tmx-mono tmx-break', key: 'model' }, selected === '' ? t('unknown') : boundedText(selected, 160)),
-          priority === undefined ? null : h('span', { className: 'tmx-chipKind', key: 'priority' }, `${t('routingPriority')} ${priority}`),
-        ]),
-        candidates.length === 0 ? null : h('ul', { className: 'tmx-candidates', key: 'candidates' },
-          candidates.slice(0, 20).map((candidate, index) => h('li', { className: 'tmx-candidate', key: index }, [
-            h('span', { className: 'tmx-chipKind', key: 'label' }, t('routingCandidates')),
-            h('span', { className: 'tmx-mono tmx-break', key: 'model' }, textValue(candidate?.qualifiedModel, t, 160)),
-            numeric(candidate?.priority) === undefined
-              ? null
-              : h('span', { className: 'tmx-chipKind', key: 'priority' }, `${t('routingPriority')} ${numeric(candidate.priority)}`),
-            candidate?.selected === true ? chip(t('selected'), 'ok') : null,
-          ]))),
-        excluded.length === 0 ? null : h('ul', { className: 'tmx-candidates', key: 'excluded' },
-          excluded.slice(0, 20).map((item, index) => h('li', { className: 'tmx-candidate', key: index }, [
-            h('span', { className: 'tmx-chipKind', key: 'label' }, t('routingExcluded')),
-            h('span', { className: 'tmx-break', key: 'text' }, entryText(item) || t('unknown')),
-          ]))),
-        errorText === undefined ? null : h('p', { className: 'tmx-errorText', key: 'error' },
-          `${t('routingError')}${t('colon')} ${errorText}`),
-      ])
-    }
-
-    function providersSection(state, t, handlers) {
-      const providers = state.providers !== null && typeof state.providers === 'object' ? state.providers : {}
-      const tmaxProviders = Array.isArray(providers.tmax) ? providers.tmax : []
-      const agentProviders = Array.isArray(providers.agent) ? providers.agent : []
-      const providersErrors = errorsForSection(state, 'providers')
-      // The host reports an unavailable settings service in the providers
-      // section; it belongs beside the agent-configured list, not the tmax one.
-      const agentSettingErrors = providersErrors.filter(error => /agent.*settings/i.test(error.code))
-      const providerErrors = providersErrors.filter(error => !agentSettingErrors.includes(error))
-      const agentErrors = [...errorsForSection(state, 'agentSettings'), ...agentSettingErrors]
-      const oldest = oldestReading([...tmaxProviders, ...agentProviders])
-      const body = [
-        h('p', { className: 'tmx-caption', key: 'tmaxNote' }, oldest === undefined
-          ? t('tmaxProvidersNote')
-          : `${t('tmaxProvidersNote')} · ${t('oldestReading')} ${clockOf(oldest) || t('unknown')}`),
-        ...readFailures(providerErrors, t, 'providerFailure'),
-        h('h3', { className: 'tmx-subhead', key: 'tmaxHead' }, t('tmaxProviders')),
-      ]
-      if (tmaxProviders.length === 0) {
-        // A failed provider read is not an empty provider list. A readable
-        // empty list is a reported zero: say tmax lists none, never "unknown".
-        if (providerErrors.length === 0) {
-          body.push(h('div', { className: 'tmx-card', key: 'tmaxEmpty' }, h('p', { className: 'tmx-empty' }, t('tmaxProvidersNone'))))
-        }
-      } else {
-        body.push(h('div', { className: 'tmx-providers', key: 'tmaxList' }, tmaxProviders.map((provider, index) => providerCard(provider, index, t, handlers))))
-      }
-      body.push(h('h3', { className: 'tmx-subhead', key: 'agentHead' }, t('agentProviders')))
-      body.push(h('p', { className: 'tmx-caption', key: 'agentNote' }, t('agentProvidersNote')))
-      body.push(...readFailures(agentErrors, t, 'agentFailure'))
-      if (agentProviders.length === 0) {
-        // The provider-list read covers both lists; an agent-settings read can
-        // fail on its own. Either way, an empty list is not a fact.
-        if (agentErrors.length === 0 && providerErrors.length === 0) {
-          body.push(h('div', { className: 'tmx-card', key: 'agentEmpty' }, h('p', { className: 'tmx-empty' }, t('agentProvidersNone'))))
-        }
-      } else {
-        body.push(h('div', { className: 'tmx-providers', key: 'agentList' }, agentProviders.map((record, index) => agentCard(record, index, t))))
-      }
-      return sectionView('providers', t('providersTitle'), undefined, body)
-    }
-
     function windowsFor(provider, t) {
       const readings = (Array.isArray(provider?.billing?.rows) ? provider.billing.rows : [])
         .map((row, index) => windowReading(row, index, t))
         .filter(Boolean)
       return disambiguate(readings)
-    }
-
-    function providerCard(provider, index, t, handlers) {
-      const billing = provider?.billing !== null && typeof provider?.billing === 'object' ? provider.billing : undefined
-      const name = boundedText(typeof provider?.name === 'string' && provider.name !== ''
-        ? provider.name
-        : typeof provider?.id === 'string' && provider.id !== '' ? provider.id : t('unknown'), 120)
-      const dashboard = safeDashboard(billing?.dashboard)
-      const title = dashboard === undefined
-        ? h('span', { className: 'tmx-providerName', title: name, key: 'name' }, name)
-        : h('a', {
-          className: 'tmx-providerName',
-          href: dashboard,
-          target: '_blank',
-          rel: 'noreferrer',
-          title: `${name} · ${t('dashboard')}`,
-          key: 'name',
-        }, [name, h(ExternalMark, { key: 'mark' })])
-      const chips = [
-        provider?.enabled === false ? chip(t('providerDisabled'), 'idle') : null,
-        provider?.suspension?.state === 'suspended' ? chip(t('providerSuspended'), 'error') : null,
-      ]
-      const meta = []
-      if (typeof provider?.authentication === 'string' && provider.authentication !== '') {
-        meta.push(`${t('authentication')} ${boundedText(provider.authentication, 32)}`)
-      }
-      if (typeof provider?.integration === 'string' && provider.integration !== '') {
-        meta.push(`${t('integration')} ${boundedText(provider.integration, 48)}`)
-      }
-      const affected = numeric(provider?.affectedTargets)
-      if (affected !== undefined) meta.push(`${t('affectedTargets')} ${affected}`)
-      if (billing !== undefined) {
-        meta.push(`${t('billingKind')} ${enumText(billing.kind, BILLING_KINDS, t)}`)
-        meta.push(`${t('freshness')} ${enumText(billing.freshness, FRESHNESS_STATES, t)}`)
-        meta.push(`${t('observedAt')} ${billing.observedAt === null ? t('neverObserved') : clockOf(billing.observedAt) || t('unknown')}`)
-      }
-      const limit = limitState(provider)
-      const windows = limit === 'rows' ? windowsFor(provider, t) : []
-      const suspension = suspensionLine(provider?.suspension, t)
-      const failure = failureLine(provider?.failure, t)
-      const error = provider?.error === null || provider?.error === undefined
-        ? undefined
-        : hostCodeText(provider.error.code, provider.error.message)
-      const noteTexts = billingNoteTexts(provider, t)
-      const plan = subscriptionLine(billing?.subscription ?? provider?.subscription ?? provider?.plan, t)
-      const content = [
-        h('h4', { className: 'tmx-providerHead', key: 'head' }, [title, ...chips]),
-      ]
-      if (meta.length > 0) content.push(h('p', { className: 'tmx-providerMeta', key: 'meta' }, meta.join(' · ')))
-      if (plan !== undefined) content.push(harnessLine(plan, 'plan'))
-      if (limit === 'rows') {
-        content.push(h('p', { className: 'tmx-factNote', key: 'caption' }, t('windowsCaption')))
-        content.push(h('ul', { className: 'tmx-windows', key: 'windows' },
-          windows.map((item, windowIndex) => windowRow(item, windowIndex, name, t))))
-      } else {
-        content.push(h('p', { className: 'tmx-empty', key: 'limits' },
-          limit === 'error'
-            ? `${t('providerError')}${t('colon')} ${error ?? t('unknown')}`
-            : limitMessage(provider, t)))
-      }
-      if (suspension !== undefined) content.push(h('p', { className: 'tmx-suspend', key: 'suspension' }, suspension))
-      if (failure !== undefined) content.push(h('p', { className: 'tmx-suspend', key: 'failure' }, failure))
-      if (error !== undefined && limit !== 'error') {
-        content.push(h('p', { className: 'tmx-errorText', key: 'error' }, `${t('providerError')}${t('colon')} ${error}`))
-      }
-      if (noteTexts.length > 0) {
-        content.push(h('p', { className: 'tmx-evidence', key: 'notes' }, `${t('notes')}${t('colon')} ${noteTexts.join(' · ')}`))
-      }
-      // A button exists only where its evidence does: a suspension, an active
-      // failure, or an explicit observation. The observation is the page's only
-      // quota-scope contact with a provider source, and it is a deliberate click.
-      const actionButtons = handlers === undefined ? [] : providerActions(provider).map(descriptor => h('button', {
-        type: 'button',
-        className: 'tmx-button',
-        key: `action:${descriptor.action}`,
-        'data-action': descriptor.action,
-        onClick: () => handlers.run(descriptor),
-        disabled: handlers.disabled,
-      }, t(ACTION_LABELS[descriptor.action])))
-      if (actionButtons.length > 0) {
-        content.push(h('div', {
-          className: 'tmx-providerActions',
-          key: 'actions',
-          role: 'group',
-          'aria-label': t('actionsLabel'),
-        }, actionButtons))
-      }
-      return h('article', { className: 'tmx-card tmx-provider', key: `provider:${provider?.id ?? index}` }, content)
     }
 
     function suspensionLine(suspension, t) {
@@ -2812,100 +2351,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       return parts.join(' · ')
     }
 
-    function subscriptionLine(subscription, t) {
-      if (subscription === null || typeof subscription !== 'object') return undefined
-      const parts = []
-      const level = subscription.plan ?? subscription.level ?? subscription.kind
-      const planText = typeof level === 'string' ? boundedText(level, 32) : undefined
-      if (planText !== undefined) parts.push(`${t('plan')} ${planText}`)
-      const renewal = subscription.renewalAt ?? subscription.renewsAt ?? subscription.expiresAt ?? subscription.renewal
-      const renewalDate = typeof renewal === 'string' || typeof renewal === 'number' ? new Date(renewal) : undefined
-      if (renewalDate !== undefined && !Number.isNaN(renewalDate.getTime())) {
-        parts.push(`${t('renewal')} ${formatDate(renewalDate)}`)
-      }
-      if (parts.length === 0) return undefined
-      return parts.join(' · ')
-    }
-
-    function harnessLine(text, key) {
-      return h('p', { className: 'tmx-factNote', key: `line:${key}` }, text)
-    }
-
-    function agentCard(record, index, t) {
-      const name = boundedText(typeof record?.displayName === 'string' && record.displayName !== ''
-        ? record.displayName
-        : typeof record?.provider === 'string' && record.provider !== '' ? record.provider : t('unknown'), 120)
-      const meta = []
-      if (typeof record?.provider === 'string' && record.provider !== '') meta.push(boundedText(record.provider, 80))
-      if (typeof record?.baseURL === 'string' && record.baseURL !== '') meta.push(`${t('baseUrl')} ${boundedText(record.baseURL, 120)}`)
-      meta.push(`${t('agentState')} ${enumText(record?.state, AGENT_STATES, t)}`)
-      if (record?.observedAt === null) meta.push(`${t('observedAt')} ${t('neverObserved')}`)
-      else if (typeof record?.observedAt === 'string') meta.push(`${t('observedAt')} ${clockOf(record.observedAt) || t('unknown')}`)
-      const models = Array.isArray(record?.models) ? record.models : []
-      const rows = Array.isArray(record?.rows) ? record.rows : []
-      const readings = disambiguate(rows.map((row, rowIndex) => windowReading(row, rowIndex, t)).filter(Boolean))
-      const reasonCode = typeof record?.reasonCode === 'string' && record.reasonCode !== '' ? record.reasonCode : undefined
-      const reason = reasonCode === undefined ? undefined : enumText(reasonCode, AGENT_REASONS, t)
-      const message = boundedText(record?.message, 200)
-      const plan = subscriptionLine(record?.plan, t)
-      return h('article', { className: 'tmx-card tmx-provider', key: `agent:${record?.id ?? index}` }, [
-        h('h4', { className: 'tmx-providerHead', key: 'head' },
-          h('span', { className: 'tmx-providerName', title: name }, name)),
-        h('p', { className: 'tmx-providerMeta', key: 'meta' }, meta.join(' · ')),
-        models.length === 0 ? null : h('p', { className: 'tmx-factNote', key: 'models' }, `${t('models')}${t('colon')} ${models.slice(0, 20).map(model => boundedText(model, 48)).join(' · ')}`),
-        plan === undefined ? null : harnessLine(plan, 'plan'),
-        reason === undefined ? null : h('p', { className: 'tmx-suspend', key: 'reason' },
-          message === '' ? reason : `${reason}${t('colon')} ${message}`),
-        readings.length === 0
-          // The reason line already explains why no reading exists; two
-          // sentences for one absence would read like two facts.
-          ? (reasonCode === undefined
-            ? h('p', { className: 'tmx-empty', key: 'limits' }, t('unknownQuota'))
-            : null)
-          : h('ul', { className: 'tmx-windows', key: 'windows' },
-            readings.map((item, windowIndex) => windowRow(item, windowIndex, name, t))),
-      ])
-    }
-
-    function windowRow(item, index, providerName, t) {
-      const reset = item.resetUnqualified === true
-        ? h('span', { className: 'tmx-windowReset', key: 'reset' }, t('resetUnqualified'))
-        : item.reset === undefined
-          ? h('span', { className: 'tmx-windowReset', key: 'reset', 'data-empty': 'true' }, '')
-          : h('span', { className: 'tmx-windowReset', key: 'reset' }, `${t('reset')} ${formatDate(item.reset)}`)
-      if (item.unreadable === true) {
-        return h('li', { className: 'tmx-window', key: String(index) }, [
-          h('span', { className: 'tmx-windowName', title: item.raw ?? item.name, key: 'name' }, item.name),
-          h('span', { className: 'tmx-windowValue tmx-windowWide', key: 'value' }, item.text),
-          reset,
-        ])
-      }
-      const tone = toneFor(item.consumed)
-      const fill = item.zero === true
-        ? h('span', { className: 'tmx-barZero', key: 'zero' })
-        : h('span', {
-          className: 'tmx-barFill',
-          key: 'fill',
-          'data-tone': tone,
-          style: { width: `${Math.max(item.consumed, 1.5)}%` },
-        })
-      return h('li', { className: 'tmx-window', key: String(index) }, [
-        h('span', { className: 'tmx-windowName', title: item.raw ?? item.name, key: 'name' }, item.name),
-        h('span', {
-          className: 'tmx-bar',
-          key: 'bar',
-          role: 'meter',
-          'aria-valuenow': item.meterNow,
-          'aria-valuemin': 0,
-          'aria-valuemax': 100,
-          'aria-label': `${providerName} ${item.name}`,
-          'aria-valuetext': item.spoken,
-        }, fill),
-        h('span', { className: 'tmx-windowValue', key: 'value', 'data-tone': tone }, item.text),
-        reset,
-      ])
-    }
-
 
     // ---------------------------------------------------------- request history
     //
@@ -2916,352 +2361,22 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
     /** Rows rendered per read; the rest is named as retained but not drawn. */
     const HISTORY_ROW_LIMIT = 20
 
-    /**
-     * Coverage as the host reports it, with material gaps named. Accepts the
-     * host's camelCase mapping and tmax's own snake_case fields; absent or
-     * unreadable coverage is unknown, never an empty history.
-     */
-    function historyCoverageLines(coverage, t) {
-      if (coverage === null || typeof coverage !== 'object' || Array.isArray(coverage)) {
-        return [{ label: t('historyCoverage'), value: t('historyUnknown'), gap: true }]
+    function observePanel(observe, t, loadFailed) {
+      if (observe === null || observe === undefined || observe.phase === 'idle' || observe.phase === 'running') return null
+      // A completed or partially refused observation names only the accounts it
+      // could not read; every account it did is already on its card.
+      const missed = observe.items.filter(item => item.tone !== 'ok')
+      if (missed.length > 0) {
+        return h('p', { className: 'tmx-errorText', key: 'observe', role: 'status' }, [
+          `${t('observeFailed')}${t('colon')} `,
+          ...missed.map((item, index) => h('span', { className: 'tmx-break', key: item.key },
+            `${index === 0 ? '' : ' · '}${boundedText(item.id === '' ? item.source : item.id, 80)}${item.detail === '' ? '' : ` (${item.detail})`}`)),
+        ])
       }
-      const field = (camel, snake) => coverage[camel] !== undefined ? coverage[camel] : coverage[snake]
-      const lines = []
-      const process = field('processInstance', 'process_instance')
-      if (typeof process === 'string' && process !== '') lines.push({ label: t('historyProcess'), value: boundedText(process, 80) })
-      const processStarted = field('processStartedAt', 'process_started_at')
-      if (typeof processStarted === 'string' && processStarted !== '') {
-        lines.push({ label: t('historyProcessStarted'), value: clockOf(processStarted) || boundedText(processStarted, 40) })
-      }
-      const lastClear = field('lastClearAt', 'last_clear_at')
-      if (typeof lastClear === 'string' && lastClear !== '') {
-        lines.push({ label: t('historyLastClear'), value: clockOf(lastClear) || boundedText(lastClear, 40) })
-      }
-      const scope = coverage.scope
-      if (typeof scope === 'string' && scope !== '') lines.push({ label: t('historyCoverage'), value: boundedText(scope, 48) })
-      const retained = numeric(field('retainedCount', 'retained_count'))
-      if (retained !== undefined) lines.push({ label: t('historyRetained'), value: String(retained) })
-      const evicted = numeric(field('evicted'))
-      if (evicted !== undefined) lines.push({ label: t('historyEvicted'), value: String(evicted), gap: evicted > 0 })
-      const incomplete = field('incompleteCapture', 'incomplete_capture')
-      const incompleteCount = numeric(incomplete)
-      if (typeof incomplete === 'boolean') {
-        lines.push({ label: t('historyIncomplete'), value: incomplete ? t('yes') : t('no'), gap: incomplete })
-      } else if (incompleteCount !== undefined) {
-        lines.push({ label: t('historyIncomplete'), value: String(incompleteCount), gap: incompleteCount > 0 })
-      }
-      const prior = field('priorProcessCoverage', 'prior_process_coverage')
-      if (typeof prior === 'string' && prior !== '') {
-        lines.push({ label: t('historyPriorProcesses'), value: boundedText(prior, 48), gap: prior !== 'available' })
-      }
-      const direct = field('directTrafficCoverage', 'direct_traffic_coverage')
-      if (typeof direct === 'string' && direct !== '') {
-        lines.push({ label: t('historyDirectTraffic'), value: boundedText(direct, 48), gap: direct !== 'observed' })
-      }
-      const oldest = field('oldest')
-      const newest = field('newest')
-      if (typeof oldest === 'string' || typeof newest === 'string') {
-        const from = typeof oldest === 'string' ? clockOf(oldest) || boundedText(oldest, 40) : t('unknown')
-        const to = typeof newest === 'string' ? clockOf(newest) || boundedText(newest, 40) : t('unknown')
-        lines.push({ label: t('historyRange'), value: `${from} – ${to}` })
-      }
-      const retention = field('retention')
-      if (typeof retention === 'string' && retention !== '') lines.push({ label: t('historyRetention'), value: boundedText(retention, 120) })
-      // The host reports the retained-history storage limits; dropping them
-      // would hide part of the coverage the page claims to show.
-      const limits = coverage.limits
-      if (limits !== null && typeof limits === 'object' && !Array.isArray(limits)) {
-        const limitRecords = numeric(limits.records)
-        const limitBytes = numeric(limits.recordBytes ?? limits.record_bytes)
-        const parts = []
-        if (limitRecords !== undefined) parts.push(`${t('historyLimitRecords')} ${compact(limitRecords)}`)
-        if (limitBytes !== undefined) parts.push(`${t('historyLimitBytes')} ${compact(limitBytes)}`)
-        if (parts.length > 0) lines.push({ label: t('historyLimits'), value: parts.join(' · ') })
-      }
-      const gaps = field('gaps')
-      if (Array.isArray(gaps)) {
-        for (const gap of gaps.slice(0, 6)) {
-          const text = typeof gap === 'string' ? boundedText(gap, 80) : entryText(gap)
-          if (text !== '') lines.push({ label: t('historyGap'), value: text, gap: true })
-        }
-      }
-      if (lines.length === 0) return [{ label: t('historyCoverage'), value: t('historyUnknown'), gap: true }]
-      return lines
-    }
-
-    /**
-     * Map retained records to bounded table rows. Body/secret fields are never
-     * read: the contract carries metadata only, and only these fields are used.
-     */
-    function historyRows(records) {
-      const raw = Array.isArray(records) ? records : []
-      const rows = raw.slice(0, HISTORY_ROW_LIMIT).map((record, index) => {
-        const item = record !== null && typeof record === 'object' ? record : {}
-        const request = boundedText(item.request, 64)
-        const route = [boundedText(item.target, 60), boundedText(item.provider, 60), boundedText(item.agentProvider, 60)]
-          .filter(text => text !== '')
-          .join(' · ')
-        return {
-          key: `${request === '' ? 'row' : request}:${index}`,
-          time: typeof item.time === 'string' ? boundedText(item.time, 40) : '',
-          outcome: boundedText(item.outcome, 32),
-          requestedModel: boundedText(item.requestedModel ?? item.model, 80),
-          qualifiedModel: boundedText(item.qualifiedModel, 120),
-          route,
-          reason: boundedText(item.reasonCode, 64),
-          durationMs: numeric(item.durationMs),
-        }
-      })
-      return { rows, total: raw.length, shown: rows.length }
-    }
-
-    /** How many retained records the drawn table does not show. */
-    function historyRemaining(result) {
-      const records = Array.isArray(result?.records) ? result.records.length : 0
-      const omitted = numeric(result?.omitted)
-      const beyond = Math.max(0, records - HISTORY_ROW_LIMIT)
-      return beyond + (omitted === undefined ? 0 : Math.max(0, Math.trunc(omitted)))
-    }
-
-    /** A failed history read as code + bounded message + blockers; never success. */
-    function historyFailure(value, status) {
-      const record = value !== null && typeof value === 'object' ? value : {}
-      const code = typeof record.code === 'string' && record.code !== ''
-        ? boundedText(record.code, 48)
-        : status === 0 ? 'history_unreachable' : `http_${status}`
-      const message = typeof record.message === 'string' && record.message !== ''
-        ? boundedText(record.message, 240)
-        : typeof record.error === 'string' && record.error !== '' ? boundedText(record.error, 240) : ''
-      const blockers = Array.isArray(record.blockers)
-        ? record.blockers.slice(0, 6).map(blocker => hostCodeText(blocker?.code, blocker?.message) || entryText(blocker)).filter(text => text !== '')
-        : []
-      return { code, message, blockers }
-    }
-
-    /** Outcome tone for the history table; only known words get a colour. */
-    function historyTone(outcome) {
-      const text = typeof outcome === 'string' ? outcome.toLowerCase() : ''
-      if (text === 'failed' || text === 'error' || text === 'rejected' || text === 'blocked') return 'error'
-      if (text === 'completed' || text === 'succeeded' || text === 'success' || text === 'ok') return 'ok'
-      return 'idle'
-    }
-
-    function historyCoverageView(coverage, t) {
-      return h('ul', { className: 'tmx-historyCoverage' }, historyCoverageLines(coverage, t).map((line, index) =>
-        h('li', {
-          className: 'tmx-historyCoverageItem',
-          key: `${line.label}:${index}`,
-          'data-gap': line.gap === true ? 'true' : undefined,
-        }, [
-          h('span', { className: 'tmx-chipKind', key: 'label' }, line.label),
-          h('span', { className: 'tmx-break', key: 'value' }, line.value),
-          line.gap === true ? chip(t('historyGap'), 'warn') : null,
-        ])))
-    }
-
-    /**
-     * Explicit history detail. The only fetch runs from the button: a mount, a
-     * focus change, or a visibility change reads nothing.
-     */
-    function HistoryPanel(props) {
-      const t = props.t
-      const [load, setLoad] = React.useState({ phase: 'idle' })
-      const availability = historyFact({ history: props.history }, t).value
-
-      async function loadHistory() {
-        setLoad({ phase: 'loading' })
-        try {
-          const response = await fetch(new URL('/_tmax/history', document.baseURI), { credentials: 'same-origin' })
-          const value = await readBody(response)
-          if (!response.ok || value === null || typeof value !== 'object' || value.ok !== true) {
-            setLoad({
-              phase: 'failed',
-              failure: historyFailure(value, response.status),
-              coverage: value !== null && typeof value === 'object' ? value.coverage : undefined,
-            })
-            return
-          }
-          if (!Array.isArray(value.records)) {
-            // A success envelope without a record list is unknown coverage, not
-            // an empty history.
-            setLoad({
-              phase: 'failed',
-              failure: { code: 'history_unknown', message: t('historyUnknown'), blockers: [] },
-              coverage: value.coverage,
-            })
-            return
-          }
-          setLoad({ phase: 'ready', result: value })
-        } catch (error) {
-          setLoad({ phase: 'failed', failure: { code: 'history_unreachable', message: plainError(error), blockers: [] } })
-        }
-      }
-
-      const busy = load.phase === 'loading'
-      const actions = []
-      if (busy) {
-        actions.push(h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          key: 'busy',
-          disabled: true,
-          'data-busy': 'true',
-        }, t('historyLoading')))
-      } else {
-        const label = load.phase === 'ready' ? t('historyReload') : load.phase === 'failed' ? t('retry') : t('historyLoad')
-        actions.push(h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          key: 'load',
-          'data-kind': load.phase === 'idle' ? 'primary' : undefined,
-          'data-action': 'history_load',
-          onClick: () => { void loadHistory() },
-        }, label))
-      }
-      if (load.phase === 'ready' || load.phase === 'failed') {
-        actions.push(h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          key: 'close',
-          onClick: () => setLoad({ phase: 'idle' }),
-        }, t('close')))
-      }
-
-      const body = [h('p', { className: 'tmx-historyAvailability', key: 'availability' },
-        `${t('historyAvailability')}${t('colon')} ${availability}`)]
-      if (load.phase === 'loading') {
-        body.push(h('p', { className: 'tmx-note', key: 'loading' }, t('historyLoading')))
-      } else if (load.phase === 'failed') {
-        body.push(h('p', { className: 'tmx-errorText tmx-break', key: 'unavailable' },
-          `${t('historyReadUnavailable')} ${t('colon')} ${hostCodeText(load.failure.code, load.failure.message) || load.failure.code}`))
-        for (const blocker of load.failure.blockers) {
-          body.push(h('p', { className: 'tmx-errorText tmx-break', key: `blocker:${blocker}` },
-            `${t('toolBlockers')}${t('colon')} ${blocker}`))
-        }
-        if (load.coverage !== undefined && load.coverage !== null) {
-          body.push(h('div', { className: 'tmx-historyCoverageCard', key: 'coverage' }, historyCoverageView(load.coverage, t)))
-        }
-      } else if (load.phase === 'ready') {
-        const result = load.result
-        body.push(h('div', { className: 'tmx-historyCoverageCard', key: 'coverage' }, historyCoverageView(result.coverage, t)))
-        if (typeof result.generatedAt === 'string' && result.generatedAt !== '') {
-          body.push(h('p', { className: 'tmx-note', key: 'generated' },
-            `${t('historyGeneratedAt')}${t('colon')} ${clockOf(result.generatedAt) || boundedText(result.generatedAt, 40)}`))
-        }
-        const rows = historyRows(result.records)
-        if (rows.rows.length === 0) {
-          body.push(h('p', { className: 'tmx-empty', key: 'empty' }, t('historyEmpty')))
-        } else {
-          body.push(h('div', { className: 'tmx-historyTableWrap', key: 'table' },
-            h('table', { className: 'tmx-historyTable' }, [
-              h('thead', { key: 'head' }, h('tr', null, [
-                h('th', { key: 'time', scope: 'col' }, t('historyTime')),
-                h('th', { key: 'outcome', scope: 'col' }, t('historyOutcome')),
-                h('th', { key: 'requested', scope: 'col' }, t('historyRequestedModel')),
-                h('th', { key: 'selected', scope: 'col' }, t('historySelectedModel')),
-                h('th', { key: 'route', scope: 'col' }, t('historyRoute')),
-                h('th', { key: 'reason', scope: 'col' }, t('historyReason')),
-              ])),
-              h('tbody', { key: 'body' }, rows.rows.map(row => h('tr', { key: row.key }, [
-                h('td', { key: 'time' }, clockOf(row.time) || row.time || t('unknown')),
-                h('td', { key: 'outcome' }, row.outcome === '' ? t('unknown') : chip(row.outcome, historyTone(row.outcome))),
-                h('td', { className: 'tmx-mono tmx-break', key: 'requested' }, row.requestedModel || t('unknown')),
-                h('td', { className: 'tmx-mono tmx-break', key: 'selected' }, row.qualifiedModel || t('unknown')),
-                h('td', { className: 'tmx-break', key: 'route' }, row.route || t('unknown')),
-                h('td', { className: 'tmx-break', key: 'reason' }, row.reason || t('none')),
-              ]))),
-            ])))
-        }
-        const more = historyRemaining(result)
-        if (more > 0) body.push(h('p', { className: 'tmx-note', key: 'more' }, `${more} ${t('historyMore')}`))
-      }
-      return h('div', { className: 'tmx-historyCard', 'data-tmax-history': load.phase, key: 'history' }, [
-        h('h3', { className: 'tmx-historyHead', key: 'head' }, t('history')),
-        ...body,
-        h('div', { className: 'tmx-seatActions', key: 'actions' }, actions),
-      ])
-    }
-
-    function diagnosticsSection(state, t) {
-      const diagnostics = state.diagnostics ?? {}
-      const config = state.config ?? {}
-      const history = historyFact(diagnostics, t)
-      const lastError = lastErrorFact(diagnostics, t)
-      const revision = typeof state.configurationRevision === 'string' ? state.configurationRevision : undefined
-      const errors = Array.isArray(config.errors) ? config.errors : []
-      const facts = [
-        // The state contract names its read source explicitly; an absent value
-        // is unknown, never an inferred "inventory".
-        fact(t('readModelSource'), textValue(diagnostics.readModel, t, 40)),
-        fact(t('tmaxVersion'), textValue(state.tmaxVersion, t)),
-        fact(t('projectionSchema'), state.schemaVersion === undefined ? t('unknown') : String(state.schemaVersion)),
-        fact(t('generatedAt'), state.generatedAt === undefined ? t('unknown') : clockOf(state.generatedAt) || t('unknown')),
-        fact(t('lastProjection'), diagnostics.lastProjectionAt === undefined ? t('unknown') : clockOf(diagnostics.lastProjectionAt) || t('unknown')),
-        fact(t('history'), history.value),
-        fact(t('lastError'), lastError.value),
-        fact(t('revision'), h('span', { className: 'tmx-mono tmx-break', title: revision ?? undefined }, shortRevision(revision) ?? t('unknown'))),
-      ]
-      const body = [h('div', { className: 'tmx-card', key: 'facts' }, h('dl', { className: 'tmx-facts' }, facts))]
-      const readErrors = sectionErrors(state)
-      if (readErrors.length > 0) {
-        body.push(h('ul', { className: 'tmx-list', key: 'readErrors' }, readErrors.map((error, index) =>
-          h('li', { className: 'tmx-listItem', key: index }, h('span', { className: 'tmx-errorText tmx-break' },
-            `${t('readFailed')}${t('colon')} ${error.text}`)))))
-      }
-      if (errors.length > 0) {
-        body.push(h('ul', { className: 'tmx-list', key: 'errors' }, errors.slice(0, 20).map((error, index) => {
-          // A config error is host evidence too: its code leads, its text is bounded.
-          const text = error !== null && typeof error === 'object'
-            ? hostCodeText(error.code ?? error.reasonCode, error.message ?? error.error) || entryText(error)
-            : hostCodeText(undefined, error)
-          return h('li', { className: 'tmx-listItem', key: index }, h('span', { className: 'tmx-errorText tmx-break' },
-            text === '' ? t('unknown') : text))
-        })))
-      }
-      // Request history: availability first, then one explicit read on demand.
-      body.push(h(HistoryPanel, { t, history: diagnostics.history, key: 'historyPanel' }))
-      return sectionView('diagnostics', t('diagnosticsTitle'), undefined, body)
-    }
-
-    function statusLabel(status, t) {
-      return status === '' ? t('unknown') : enumText(status, OBSERVE_STATUS, t)
-    }
-
-    function sourceLabel(source, t) {
-      if (source === 'tmax') return t('observeSourceTmax')
-      if (source === 'agent') return t('observeSourceAgent')
-      return source === '' ? t('unknown') : source
-    }
-
-    function observePanel(observe, t) {
-      if (observe === null || observe === undefined || observe.phase === 'idle') return null
-      const title = observe.phase === 'failed'
-        ? t('observeFailed')
-        : observe.phase === 'running' ? t('observeRunning') : t('observeDone')
-      return h('div', { className: 'tmx-panel', key: 'observe' }, [
-        h('h2', { className: 'tmx-panelTitle', key: 'title' }, [
-          title,
-          observe.generatedAt === undefined
-            ? null
-            : h('span', { className: 'tmx-sectionNote', key: 'at' }, `${t('observeAt')} ${clockOf(observe.generatedAt) || t('unknown')}`),
-        ]),
-        observe.phase === 'failed' && observe.message !== undefined
-          ? h('p', { className: 'tmx-errorText', key: 'message' }, `${t('hostError')}${t('colon')} ${describeError(observe.message, t)}`)
-          : null,
-        observe.phase === 'running'
-          ? null
-          : observe.items.length === 0
-            ? h('p', { className: 'tmx-note', key: 'none' }, t('observeNoItems'))
-            : h('ul', { className: 'tmx-list', key: 'items' }, observe.items.map(item =>
-              h('li', { className: 'tmx-listItem', key: item.key }, [
-                dot(item.tone),
-                h('span', { className: 'tmx-listMain', key: 'main' },
-                  item.id === '' ? sourceLabel(item.source, t) : `${sourceLabel(item.source, t)} · ${item.id}`),
-                h('span', { className: 'tmx-chipKind', key: 'status' }, statusLabel(item.status, t)),
-                item.detail === '' ? null : h('span', { className: 'tmx-factNote tmx-break', key: 'detail' }, item.detail),
-              ]))),
-        h('p', { className: 'tmx-note', key: 'hint' }, t('observeHint')),
-      ])
+      // A refused request failed the read as well, and the banner names that
+      // failure once; repeating it here would be the same sentence twice.
+      if (observe.phase !== 'failed' || loadFailed || observe.message === undefined) return null
+      return h('p', { className: 'tmx-errorText', key: 'observe', role: 'status' }, `${t('observeFailed')}${t('colon')} ${describeError(observe.message, t)}`)
     }
 
     function connectPanel(connect, t, handlers) {
@@ -3386,55 +2501,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       ])
     }
 
-    function nextActionPanel(action, t, handlers) {
-      let text
-      switch (action.kind) {
-        case 'connect': text = t('nextConnect'); break
-        case 'reload': text = t('nextReload'); break
-        case 'conflict': text = t('nextConflict'); break
-        case 'gateway': text = t('nextGateway'); break
-        case 'blocker': text = t('nextBlocker'); break
-        case 'config': text = action.reason === 'unavailable' ? t('nextConfigUnavailable') : t('nextConfig'); break
-        case 'retry':
-          text = action.reason === 'projection'
-            ? t('nextProjectionRetry')
-            : action.reason === 'section' ? t('nextSectionRetry') : t('nextRetry')
-          break
-        default: text = t('unknown')
-      }
-      const code = action.kind === 'blocker' || action.kind === 'conflict'
-        ? hostCodeText(action.code, action.message)
-        : action.kind === 'gateway' && typeof action.code === 'string' ? boundedText(action.code, 48) : ''
-      const button = action.kind === 'connect'
-        ? h('button', {
-          type: 'button',
-          className: 'tmx-button',
-          key: 'connect',
-          'data-kind': 'primary',
-          onClick: handlers.connect,
-          disabled: handlers.disabled,
-        }, t('connect'))
-        : action.kind === 'retry'
-          ? h('button', {
-            type: 'button',
-            className: 'tmx-button',
-            key: 'retry',
-            onClick: handlers.retry,
-          }, t('retry'))
-          : null
-      const pendingKind = action.kind === 'connect' || action.kind === 'reload'
-        || action.kind === 'retry'
-      return h('div', { className: 'tmx-next', key: 'next' }, [
-        h('p', { className: 'tmx-nextHead', key: 'head' }, [
-          dot(pendingKind ? 'warn' : 'error'),
-          t('nextActionTitle'),
-        ]),
-        h('p', { className: 'tmx-nextText', key: 'text' }, text),
-        code === '' ? null : h('p', { className: 'tmx-nextCode', key: 'code' }, code),
-        button === null ? null : h('div', { className: 'tmx-nextActions', key: 'actions' }, button),
-      ])
-    }
-
     function announce({ load, observe, connect, repair, verdict }, t) {
       if (load.schemaUnsupported === true) return t('stateSchemaUnsupported')
       if (observe.phase === 'failed') {
@@ -3457,25 +2523,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
         return `${t('hostError')}${t('colon')} ${describeError(load.message, t)}`
       }
       return verdict
-    }
-
-    /** A drawn "opens elsewhere" mark, at the size of the text it follows. */
-    function ExternalMark() {
-      return h('svg', {
-        className: 'tmx-external',
-        width: 11,
-        height: 11,
-        viewBox: '0 0 12 12',
-        fill: 'none',
-        stroke: 'currentColor',
-        strokeWidth: 1.3,
-        strokeLinecap: 'round',
-        strokeLinejoin: 'round',
-        'aria-hidden': 'true',
-      },
-        h('path', { d: 'M4.5 2.5H2.5v7h7V7.5' }),
-        h('path', { d: 'M7 2.5h2.5V5' }),
-        h('path', { d: 'M9.5 2.5 5.5 6.5' }))
     }
 
     /** The sidebar glyph: a gauge, because "how much is left" is what the page answers. */
@@ -4035,6 +3082,10 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       routeBlockerTexts,
       usableRoutes,
       modelCatalogOf,
+      accountsOf,
+      remainingReading,
+      windowTone,
+      accountOfModel,
       verdict,
       nextAction,
       defaultsMatch,
@@ -4055,11 +3106,6 @@ a.tmx-providerName:hover .tmx-external { color: var(--dsw-alias-label-primary); 
       markerStatus,
       modelsAvailability,
       toolStatusSummary,
-      historyCoverageLines,
-      historyRows,
-      historyRemaining,
-      historyFailure,
-      historyTone,
       locales: { en, zh },
     }
 

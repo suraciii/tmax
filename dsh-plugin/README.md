@@ -240,13 +240,13 @@ the same apply and observation operations.
 
 | Action | Where it appears | Preview | What confirmation does |
 | --- | --- | --- | --- |
-| **Observe quota** (`observe_provider`) | Every listed tmax provider | Provider refresh dry run | Publishes provider evidence; scope is `quota` by default. |
+| **Observe quota** (`observe_provider`) | Not offered by the page; Refresh reads every listed provider at once | Provider refresh dry run | Publishes provider evidence; scope is `quota` by default. |
 | **Resume quota** (`resume_quota`) | Only a provider that reports a suspension | `provider quota-resume --dry-run` | Explicit tmax mutation that clears the suspension. |
 | **Reset failure** (`reset_failure`) | Only a provider with an active failure | `provider failure-reset --dry-run` | Explicit tmax mutation that clears the failure override. |
-| **Open management** (`open_management`) | Only a configured gateway | `tmax web status` listener readiness | Starts or reuses the tmax management listener and reports its ready URL. It does not start inference, reload configuration, or launch a browser. |
+| **Open management** (`open_management`) | Not offered by the page; the CLI opens the management UI | `tmax web status` listener readiness | Starts or reuses the tmax management listener and reports its ready URL. It does not start inference, reload configuration, or launch a browser. |
 | **Start gateway** (`gateway_start`) | Configured gateway that is not ready | `gateway start --dry-run` | Starts the tmax inference gateway, or reuses a compatible running owner. |
-| **Stop gateway** (`gateway_stop`) | Configured gateway that is ready or whose daemon is identified | `gateway stop --dry-run` | Stops the tmax inference gateway (not the Web listener) and reports interrupted work. |
-| **Restart gateway** (`gateway_restart`) | Configured gateway that is ready or whose daemon is identified | `gateway restart --dry-run` | Recycles the tmax inference gateway through its native manager and reports readiness. |
+| **Stop gateway** (`gateway_stop`) | Not offered by the page; the CLI stops a gateway | `gateway stop --dry-run` | Stops the tmax inference gateway (not the Web listener) and reports interrupted work. |
+| **Restart gateway** (`gateway_restart`) | Not offered by the page; the CLI restarts a gateway | `gateway restart --dry-run` | Recycles the tmax inference gateway through its native manager and reports readiness. |
 | **Apply** (`connect`) | The Apply next action | `tmax agent apply TARGET --dry-run` | Writes the target's native DSH files. The page uses its own Apply panel. |
 
 Every action is previewed first and then explicitly confirmed or cancelled. A
@@ -285,74 +285,36 @@ not been browser-verified.
 ## The page
 
 The plugin claims a first-level page: `sidebar.panellist` adds the **tmax** row
-beside Plugins and Schedules, and `main` renders the page itself.
+beside Plugins and Schedules, and `main` renders the page itself. It answers two
+questions and shows nothing else: is model access working, and how much quota is
+left in each account.
 
-- **Header** — one reachability verdict (Reachable, Gateway not ready, Status
-  unknown, Read failed, Not connected, Registered, not usable, Reload pending,
-  Configured, not active, Route conflict, Routes unavailable, Route management
-  disabled), one next action when an action can change the reported state, and
-  the state generation time, configuration revision, and state schema. A failed
-  refresh labels the retained table `Last known`.
-- **Status and access** — the DSH target and home, tmax authority, DSH
-  installation, route ownership, ownership mode, and the two home facts, applied
-  and pending state, tmax default versus DSH's effective default, each route's
-  protocol, base URL, scope, liveness, credential readiness, and blockers, the
-  gateway detail, configuration validation, a read failure for any part of this
-  section whose read failed, and the gateway's **Start**, **Stop**, and
-  **Restart** controls plus **Open management** as the reported state allows. If
-  the target inventory failed, routes and the target dossier are reported as
-  unavailable rather than partly invented.
-- **Models and routing** — projected models with kind, continuity, candidate
-  count, tmax availability, and capabilities; fields the target inspection does
-  not report stay unknown. Per model, the selected candidate, its effective
-  priority, the other candidates, and excluded candidates with their reasons.
-- **Providers and limits** — every provider tmax lists, including providers with
-  unknown quota: authentication, affected targets, subscription or renewal when
-  known, observation time, freshness, suspension, and failure. A provider with no
-  supported quota source says so, with its last attempt when the host reports
-  one, which is not the same as a provider that was never observed. Each provider
-  also carries the actions its evidence calls for: **Observe quota** always,
-  **Resume quota** only for a reported suspension, and **Reset failure** only for
-  an active failure. Providers this DSH profile configures appear in their own
-  subsection.
-- **Diagnostics** — read-model source (`inventory`), tmax version, state schema,
-  state generation time, last inventory read time, request-history availability
-  and its reason, last error, configuration revision, and the list of every
-  failed section read. The history area loads
-  only on **Load history** (no mount fetch), shows coverage and gaps with up to
-  20 retained rows and a more-count, keeps a typed unavailable answer distinct
-  from an empty history, and offers **Reload history** after a read. The
-  selected-model cell is unknown when the list record does not report it, there
-  is no duration column, and coverage includes the numeric incomplete-capture
-  count as a gap when positive.
-- **Action panel** — a previewed action's typed result, shown separately from
-  Refresh and Apply: code, status, message, data, blockers, next actions, and
-  effects, with explicit **Confirm** and **Cancel**.
+- **Header** — the page name, when the state was generated, one reachability
+  verdict, and the one control that changes it when the page has it: **Start
+  gateway** when the gateway is not ready, **Apply** when DSH has not been given
+  the declared routes or a credential tmax knows is missing. Otherwise one line
+  names what stands in the way — a pending reload, an invalid configuration with
+  its own errors, a route-ownership conflict, a tmax blocker — followed by every
+  failed section read and route blocker, code first, with a **Retry** that reads
+  again and never observes. **Refresh** observes every listed provider; an
+  observation names only the accounts it could not read. A failed read keeps the
+  last good table, labels it last known, and shows the failure once.
+- **Accounts** — one card per tmax account that reports a quota window, least
+  left first. Every window the account reports is one bar with its name, what is
+  left, and when it resets, stated as remaining whatever basis the account
+  reports in; an unknown reset time is left out. A window whose share cannot be
+  computed is text, never a bar; a window with nothing left keeps a visible mark.
+  A card carries a tag only for a state a person must act on or know about
+  (disabled, suspended, failing) and the one action its evidence calls for:
+  **Resume quota** for a reported suspension, **Reset failure** for an active
+  failure.
+- **Models** — every projected model and the account its routing selects; the
+  target's default is marked.
 
-Opening the page reads one cached host read model, once. It never observes a
-provider on mount, on a visibility change, or on a timer. A section whose read
-failed names that failure in place and must not look like an empty result; a
-failed target inventory reports the target and routes as unavailable, not
-absent. Diagnostics repeats the complete list of failed reads. If the whole read
-model is unavailable, the page lists the failures and offers Retry.
-
-**Refresh** observes the whole surface: tmax providers and the providers this
-DSH profile configures. A provider's **Observe quota** action observes that one
-provider without touching the rest. Both report each item as refreshed, blocked,
-failed, or unchanged, and a failed item is shown as a failure, never as a
-successful refresh. Agent-provider reads run with bounded concurrency and an
-overall deadline; a provider still unfinished at the deadline is reported as
-failed with `observation_deadline`, and any earlier reading stays.
-
-Unknown is not absent and not zero. A provider with no supported quota source
-says so and gets no zero meter. A quota row without a computable share is text,
-never a bar; a zero-consumed window keeps a visible mark; the accessible value
-and the drawn share describe the same quantity.
-
-Times come from the data: the header shows when the host composed the state,
-provider rows show their own observation time, and the providers section names
-the oldest reading on screen. The page never re-stamps an old reading. A failed
-read keeps the last good table and shows the failure next to it.
+The page reports no revision, schema number, read-model source, gateway
+supervision detail, route protocol or base URL, and no retained request
+history: each is a CLI read. On a phone the account cards stack to one column and
+every bar spans its card; on a touch screen every control keeps a 44px target.
 
 ## Seats
 
@@ -458,7 +420,7 @@ The page is not limited to providers tmax manages. It also reads the model
 configuration of the running DSH profile through `settings` and the
 configurable-provider directory, never by parsing profile files, and for the
 vendors tmax already implements it observes that vendor's quota endpoint only
-after an explicit Refresh or that provider's Observe quota action.
+after an explicit Refresh.
 
 Each vendor is implemented separately, because a subscription quota is not a
 protocol: every vendor has its own endpoint, its own auth style (GLM wants the key

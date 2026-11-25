@@ -549,11 +549,11 @@ test('host-derived names are bounded before they reach the DOM', async () => {
   assert.equal(summary.targetPath.length, 161)
   assert.ok(summary.targetPath.endsWith('…'))
 
-  // Route/provider/model names are host-owned too; the page clips them.
+  // Account and model names are host-owned too; the page clips them.
   const route = seatState().routes[0]
   const state = seatState({
-    routes: [{ ...route, models: [{ id: 'm1', name: long }] }],
-    providers: { tmax: [{ id: 'p1', name: long, billing: { state: 'observed', rows: [] } }], agent: [] },
+    routes: [{ ...route, models: [{ name: long }] }],
+    providers: { tmax: [{ id: long, billing: { state: 'observed', rows: [{ percent: 40, basis: 'remaining_percent', label: { key: 'weekly' } }] } }], agent: [] },
   })
   const page = await mountPage(withState(state))
   try {
@@ -1029,7 +1029,7 @@ test('client reads one state route and carries no auto-observation path', async 
   const module = await moduleWith(inertReact())
   const pure = module.__pure
 
-  for (const helper of ['windowReading', 'oldestReading', 'verdict', 'nextAction', 'routeReadiness', 'routeActiveState', 'safeDashboard', 'clockOf', 'formatDate', 'providerActions', 'gatewayActions', 'managementAction', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'historyCoverageLines', 'historyRows', 'historyRemaining', 'historyFailure', 'historyTone']) {
+  for (const helper of ['windowReading', 'oldestReading', 'verdict', 'nextAction', 'routeReadiness', 'routeActiveState', 'safeDashboard', 'clockOf', 'formatDate', 'providerActions', 'gatewayActions', 'managementAction', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'remainingReading', 'windowTone', 'accountOfModel']) {
     assert.equal(typeof pure[helper], 'function', `__pure.${helper} is exported`)
   }
 
@@ -1043,7 +1043,8 @@ test('client reads one state route and carries no auto-observation path', async 
   assert.doesNotMatch(source, /ctx\.remote/)
 
   const endpoints = [...source.matchAll(/\/_tmax\/[a-z-]+/g)].map(match => match[0])
-  assert.deepEqual([...new Set(endpoints)].sort(), ['/_tmax/action', '/_tmax/connect', '/_tmax/history', '/_tmax/observe', '/_tmax/state'])
+  // The page carries no history reader: retained history is a CLI read.
+  assert.deepEqual([...new Set(endpoints)].sort(), ['/_tmax/action', '/_tmax/connect', '/_tmax/observe', '/_tmax/state'])
 
   const tokens = [...source.matchAll(/var\((--[a-z0-9-]+)/g)].map(match => match[1])
   const foreign = [...new Set(tokens)].filter(token => !token.startsWith('--dsw-alias-') && !token.startsWith('--ds'))
@@ -1087,13 +1088,14 @@ test('an inventory-backed state renders with unknown model metadata', async () =
   try {
     const text = textOf(await page.mount())
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
-    // The failed enrichment read is visible evidence, bounded and code first.
+    // The failed enrichment read is visible evidence, bounded and code first,
+    // with a retry that reads again rather than observing a provider.
     assert.match(text, /authority_unavailable/)
-    // Unknown metadata stays unknown; nothing invents a kind, continuity or count.
-    assert.match(text, /modelKind unknown/)
-    assert.match(text, /modelContinuity unknown/)
-    assert.match(text, /modelCandidates unknown/)
-    assert.doesNotMatch(text, /modelCandidates 0/)
+    assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
+    // A model with no routing evidence names itself and claims no account;
+    // nothing on the page invents a kind, continuity, or candidate count.
+    assert.match(text, /m1/)
+    assert.doesNotMatch(text, /modelKind|modelContinuity|modelCandidates/)
   } finally {
     page.restore()
   }
@@ -1110,112 +1112,77 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     assert.equal(page.documentStub.listeners.includes('visibilitychange'), false)
 
     const text = textOf(tree)
-    // Verdict, evidence timestamp and revision come from the read model only.
+    // The verdict comes from the read model; internal identifiers do not reach
+    // the page: no revision, no schema number, no read-model source.
     assert.match(text, /stateUnknown/)
-    assert.match(text, /352a0e3f/)
-    assert.match(text, /schema 1/)
-    // tmax providers include the unknown-quota one; agent-configured providers
-    // stay in their own section.
-    assert.match(text, /Kimi Coding Plan/)
-    assert.match(text, /cpa-us2/)
-    // Unknown quota names the unsupported source and its last attempt.
-    assert.match(text, /unknownQuotaUnsupported/)
-    assert.match(text, /lastAttempt unavailable/)
-    // Ownership is evidence: who serves the routes, and where they live.
-    assert.match(text, /ownership/)
-    assert.match(text, /ownership/)
-    assert.doesNotMatch(text, /readFailed/)
-    assert.match(text, /GLM Coding CN/)
-    // The fixture's agent reset is unqualified, so it is marked, not dated.
-    assert.match(text, /resetUnqualified/)
-    assert.match(text, /agentProviders/)
-    // Route and provider names are real headings, taken from state.routes.
-    const headings = collectNodes(tree, node => node.type === 'h3' || node.type === 'h4')
-    const headingText = headings.map(textOf).join(' | ')
-    assert.match(headingText, /tmax/)
-    assert.match(headingText, /Kimi Coding Plan/)
-    assert.match(headingText, /GLM Coding CN/)
-
-    // Every meter describes the same quantity to the screen reader and to the
-    // eye: aria-valuenow is the used share aria-valuetext names.
-    const meters = collectNodes(tree, node => node.props?.role === 'meter')
-    assert.ok(meters.length >= 3, 'meter rows are rendered for observed quota')
-    for (const meter of meters) {
-      const spoken = String(meter.props['aria-valuetext'])
-      const share = /(\d+)%$/.exec(spoken)
-      assert.ok(share, `valuetext names a percentage: ${spoken}`)
-      assert.equal(Number(share[1]), meter.props['aria-valuenow'])
-      assert.ok(Number.isInteger(meter.props['aria-valuenow']))
-      assert.ok(meter.props['aria-valuenow'] >= 0 && meter.props['aria-valuenow'] <= 100)
+    assert.doesNotMatch(text, /352a0e3f/)
+    assert.doesNotMatch(text, /schema 1/)
+    assert.doesNotMatch(text, /inventory/)
+    // An account that reports no quota window takes no card, and nothing on the
+    // page explains an unreadable source: it is simply not listed.
+    assert.doesNotMatch(text, /cpa-us2/)
+    assert.doesNotMatch(text, /unknownQuotaUnsupported/)
+    assert.doesNotMatch(text, /GLM Coding CN/)
+    // Each bar states to a screen reader what it draws: the window, what is left,
+    // and the same value the eye reads.
+    const bars = collectNodes(tree, node => node.props?.role === 'img' && String(node.props.className) === 'tmx-bar')
+    assert.ok(bars.length >= 2, 'every reported window has a bar')
+    for (const bar of bars) {
+      const spoken = String(bar.props['aria-label'])
+      assert.match(spoken, /left \d+( \/ \d+)?$/, spoken)
     }
-    // A measured zero is drawn as a visible mark, not an empty bar.
-    const zeroMarks = collectNodes(tree, node => String(node.props?.className ?? '').includes('tmx-barZero'))
-    assert.ok(zeroMarks.length >= 1, 'the zero windows keep a visible mark')
-
-    // Route cards distinguish a live route from a configured one, and hide an
-    // empty blocker list rather than drawing an empty claim.
-    assert.match(text, /routeActive/)
-    assert.match(text, /routeLive/)
-    assert.doesNotMatch(text, /routeBlockers/)
-
-    // Routing evidence is joined by exact model id: selection and candidates.
-    assert.match(text, /routingSelected/)
-    assert.match(text, /opencode-go-2\/deepseek-v4.1-flash/)
-    assert.match(text, /routingCandidates/)
-    // Model capability fields come from the route models, absent vs zero apart.
-    assert.match(text, /500K/)
-    assert.match(text, /text, image/)
-    assert.match(text, /availabilityUnverified/)
-
-    // Blocker text carries its host code.
-    assert.match(text, /gateway_not_ready/)
+    // Nothing in this fixture is exhausted: every bar is a fill, none a zero mark.
+    assert.equal(collectNodes(tree, node => String(node.props?.className ?? '').includes('tmx-barZero')).length, 0)
+    // A window with nothing left is a measured zero: a visible mark, not an empty bar.
+    const exhausted = withProviderEvidence({ kimi: {} })
+    exhausted.providers.tmax[0].billing.rows = [{ label: { key: 'monthly' }, basis: 'consumed_percent', percent: 100, reset: { at: '2026-12-09T03:13:27Z', kind: 'announced' } }]
+    const drained = await mountPage(withState(exhausted))
+    try {
+      const drainedTree = await drained.mount()
+      assert.ok(collectNodes(drainedTree, node => String(node.props?.className ?? '').includes('tmx-barZero')).length === 1)
+      assert.match(textOf(drainedTree), /windowMonthly\s+0%/)
+    } finally {
+      drained.restore()
+    }
+    // A model names the account its routing selects, and the default is marked.
+    assert.match(text, /deepseek-v4.1-flash/)
+    assert.match(text, /opencode-go-2/)
+    assert.match(text, /default/)
+    // Routing detail is not the page's: no candidates, no priorities.
+    assert.doesNotMatch(text, /routingCandidates|routeActive|ownership/)
   } finally {
     page.restore()
   }
 })
 
-test('Diagnostics names the host read-model source', async () => {
-  const page = await mountPage(withState(connected))
-  try {
-    // The contract names its read source explicitly; the page must show it.
-    assert.match(textOf(await page.mount()), /readModelSource inventory/)
-  } finally {
-    page.restore()
-  }
-  // A state that omits the source is unknown, never an inferred inventory.
-  const absent = await mountPage(withState({
-    ...connected,
-    diagnostics: { ...connected.diagnostics, readModel: undefined },
-  }))
-  try {
-    assert.match(textOf(await absent.mount()), /readModelSource unknown/)
-  } finally {
-    absent.restore()
-  }
-})
 
 test('a registered route without a credential is not "connected"', async () => {
   const unusable = {
     ...connected,
     routes: connected.routes.map(route => ({ ...route, credentialConfigured: false })),
     gateway: { ...connected.gateway, ready: true },
+    target: { ...connected.target, blockers: [] },
   }
   const page = await mountPage(withState(unusable))
   try {
-    const text = textOf(await page.mount())
+    const tree = await page.mount()
+    const text = textOf(tree)
     assert.match(text, /stateNotUsable/)
-    assert.match(text, /credentialMissing/)
-    assert.match(text, /nextConnect/)
     assert.doesNotMatch(text, /stateReady/)
+    // Applying is the one thing that repairs a credential tmax knows is
+    // missing, so it is the verdict line's own control.
+    const apply = buttonByText(tree, 'connect')
+    assert.ok(apply, 'Apply sits on the verdict line')
+    assert.equal(page.calls.some(call => call.method === 'POST'), false, 'mount runs nothing')
   } finally {
     page.restore()
   }
 })
 
-test('route cards show not-registered routes and route-level blockers', async () => {
+test('declared routes DSH has not loaded say so, name their blockers, and offer no write', async () => {
   const state = {
     ...connected,
-    ownership: { owner: 'page', scope: 'profile_scoped', reason: null, homeIntegration: { present: false, entry: false, artifact: false }, conflict: null },
+    ownership: { owner: 'page', scope: 'profile_scoped', reason: null, conflict: null },
     routes: [{
       ...connected.routes[0],
       active: false,
@@ -1224,13 +1191,13 @@ test('route cards show not-registered routes and route-level blockers', async ()
   }
   const page = await mountPage(withState(state))
   try {
-    const text = textOf(await page.mount())
+    const tree = await page.mount()
+    const text = textOf(tree)
     assert.match(text, /stateReload/)
-    assert.match(text, /routeNotApplied/)
-    assert.doesNotMatch(text, /routeLive/)
-    assert.match(text, /routeBlockers/)
+    assert.match(text, /nextReload/)
+    // The host's own route blocker is named beside the route it belongs to.
     assert.match(text, /model_hidden: glm-5.4 excluded: no eligible candidate/)
-    assert.equal(buttonByText(await page.settle(), 'connect'), undefined)
+    assert.equal(buttonByText(tree, 'connect'), undefined)
     assert.equal(page.calls.some(call => call.method === 'POST'), false)
   } finally {
     page.restore()
@@ -1296,26 +1263,6 @@ test('section read failures replace empty and disconnected claims', async () => 
     // The failed projection offers a retry, and no observation happens.
     assert.ok(buttonByText(tree, 'retry'))
     assert.equal(page.calls.some(call => call.method === 'POST'), false)
-  } finally {
-    page.restore()
-  }
-})
-
-test('an agent-settings failure sits beside agent providers, not tmax ones', async () => {
-  const state = {
-    ...connected,
-    errors: [{ section: 'providers', code: 'agent_settings_unavailable', message: 'the DSH settings service is unavailable' }],
-    providers: { ...connected.providers, agent: [] },
-  }
-  const page = await mountPage(withState(state))
-  try {
-    const text = textOf(await page.mount())
-    assert.match(text, /agent_settings_unavailable/)
-    assert.match(text, /readFailed/)
-    assert.doesNotMatch(text, /notReported/)
-    // The tmax provider list answered, so it is still evidence.
-    assert.match(text, /Kimi Coding Plan/)
-    assert.match(text, /cpa-us2/)
   } finally {
     page.restore()
   }
@@ -1402,22 +1349,24 @@ test('a failed provider read does not hide live routes or claim an empty list', 
     assert.match(text, /readFailed/)
     assert.doesNotMatch(text, /unknownQuota/)
     assert.doesNotMatch(text, /notReported/)
-    // The route evidence is independent of the provider read.
-    assert.match(text, /routeLive/)
+    // An empty list the failure caused is never read as "no account", and the
+    // route evidence is independent of the provider read.
+    assert.doesNotMatch(text, /noAccounts/)
+    assert.match(text, /deepseek-v4.1-flash/)
   } finally {
     page.restore()
   }
 })
 
-test('readable empty provider lists say none instead of unknown or not reported', async () => {
+test('a readable empty account list says so instead of reading as a failure', async () => {
   // A readable empty list is a reported zero; it is not an unknown quota and
   // not a section that failed to report.
   const empty = { ...connected, providers: { tmax: [], agent: [] }, errors: [] }
   const page = await mountPage(withState(empty))
   try {
     const text = textOf(await page.mount())
-    assert.match(text, /tmaxProvidersNone/)
-    assert.match(text, /agentProvidersNone/)
+    assert.match(text, /noAccounts/)
+    assert.doesNotMatch(text, /readFailed/)
     assert.doesNotMatch(text, /unknownQuota/)
     assert.doesNotMatch(text, /notReported/)
   } finally {
@@ -1431,7 +1380,7 @@ test('an invalid or unreadable config is the next action before Apply', async ()
   const ownership = { owner: 'page', scope: 'profile_scoped', reason: null, homeIntegration: { present: false, entry: false, artifact: false }, conflict: null }
   for (const [config, expected] of [
     [{ state: 'invalid', revision: 'abc12345', errors: [{ code: 'bad_schema', message: 'configuration does not match the schema' }] }, [/nextConfig/, /bad_schema/]],
-    [{ state: 'unavailable', revision: null, errors: [{ code: 'config_validate_failed', message: 'config validate failed' }] }, [/nextConfigUnavailable/, /configUnavailable/, /config_validate_failed/]],
+    [{ state: 'unavailable', revision: null, errors: [{ code: 'config_validate_failed', message: 'config validate failed' }] }, [/nextConfigUnavailable/, /config_validate_failed/]],
   ]) {
     const state = { ...connected, routes: [], ownership, config }
     const page = await mountPage(withState(state))
@@ -1464,11 +1413,11 @@ test('a host state with absent sections renders unknowns instead of crashing', a
   const page = await mountPage(withState(minimal))
   try {
     const text = textOf(await page.mount())
+    // Absent sections are absent: the page says what it can and invents nothing.
     assert.match(text, /stateDisconnected/)
     assert.match(text, /noRoutes/)
-    assert.match(text, /history/)
-    assert.match(text, /lastError/)
-    assert.match(text, /unknown/)
+    assert.match(text, /noAccounts/)
+    assert.doesNotMatch(text, /unknown undefined|NaN/)
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
   } finally {
     page.restore()
@@ -1505,11 +1454,9 @@ test('Refresh is the only observation path: one explicit POST /_tmax/observe', a
     assert.equal(page.calls[1].body, JSON.stringify({ scope: 'all' }))
 
     const text = textOf(tree)
-    assert.match(text, /observeFailed/)
-    assert.match(text, /observeStatusFailed/)
-    assert.match(text, /upstream_rejection/)
-    // The fresh snapshot from the observation response is used without a GET.
-    assert.match(text, /bbbbbbbb/)
+    // The one account the observation could not read is named, code first.
+    assert.match(text, /observeFailed:\s+kimi \(upstream_rejection: refused\)/)
+    // The fresh snapshot from the observation response is adopted without a GET.
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
   } finally {
     page.restore()
@@ -1532,7 +1479,7 @@ test('a failed refresh keeps the old table and names the failure', async () => {
     assert.match(text, /observe_unavailable: transport failed/)
     // A failed observation must not erase a good reading, and the verdict now
     // says the table is last-known rather than current.
-    assert.match(text, /Kimi Coding Plan/)
+    assert.match(text, /kimi/)
     assert.match(text, /stateLastKnown/)
   } finally {
     page.restore()
@@ -1605,11 +1552,11 @@ test('a later refused read keeps the last good table and names its section error
     const tree = await page.click('retry')
     const text = textOf(tree)
     // A refused read model does not clear the last good table...
-    assert.match(text, /Kimi Coding Plan/)
+    assert.match(text, /kimi/)
     assert.match(text, /stateLastKnown/)
-    // ...and the refused read's own section failure is named beside it.
+    // ...and the refused read's own section failure is named once, beside it.
     assert.match(text, /readFailed: inventory_unavailable/)
-    assert.match(text, /inventory read failed/)
+    assert.equal(buttonByText(tree, 'retry') ? collectButtons(tree).filter(button => textOf(button).trim() === 'retry').length : 0, 1, 'one retry, not one per panel')
     assert.equal(buttonByText(tree, 'connect'), undefined, 'a refused read offers no write')
   } finally {
     page.restore()
@@ -1643,9 +1590,13 @@ test('Apply previews with dryRun before it writes, then uses the returned state'
     return { status: 404, body: { ok: false } }
   })
   try {
-    const before = textOf(await page.mount())
-    assert.match(before, /nextConnect/)
+    const ready = await page.mount()
+    const before = textOf(ready)
+    // Nothing declared: the verdict says so and Apply is its own control, with
+    // no explanatory sentence beside it.
     assert.match(before, /stateDisconnected/)
+    assert.ok(buttonByText(ready, 'connect'))
+    assert.doesNotMatch(before, /nextConnect/)
 
     const preview = await page.click('connect')
     assert.equal(page.calls.length, 2)
@@ -1673,7 +1624,7 @@ test('Apply previews with dryRun before it writes, then uses the returned state'
     assert.match(appliedText, /actionWritten/)
     assert.match(appliedText, /effectNativeWrites: yes/)
     // The mutation returned state; the page renders it without another GET.
-    assert.match(appliedText, /Kimi Coding Plan/)
+    assert.match(appliedText, /kimi/)
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
   } finally {
     page.restore()
@@ -1959,9 +1910,9 @@ test('a suspended provider previews then executes one resume, and mount runs no 
     assert.match(executedText, /actionDone/)
     assert.match(executedText, /quota_resumed/)
     assert.match(executedText, /effectNativeWrites: yes/)
-    // The returned read model is adopted without another GET, and the resume
-    // button is gone because the evidence changed.
-    assert.match(executedText, /cccccccc/)
+    // The returned read model is adopted without another GET, and the suspended
+    // tag and resume button are gone because the evidence changed.
+    assert.doesNotMatch(executedText, /providerSuspended/)
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
     assert.equal(buttonByText(executed, 'actionResumeQuota'), undefined)
   } finally {
@@ -1969,7 +1920,7 @@ test('a suspended provider previews then executes one resume, and mount runs no 
   }
 })
 
-test('Observe quota and Reset failure each send one exact provider operation', async () => {
+test('Reset failure sends one exact provider operation; observing is the page Refresh alone', async () => {
   const failing = withProviderEvidence({
     kimi: { failure: { state: 'active', consecutiveFailures: 3, activePriority: null, expiresAt: null, reasonCode: 'upstream_rejection' } },
   })
@@ -2000,110 +1951,20 @@ test('Observe quota and Reset failure each send one exact provider operation', a
     const mounted = await page.mount()
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/action').length, 0)
     assert.ok(buttonByText(mounted, 'actionResetFailure'), 'an active failure offers one reset')
-    assert.ok(buttonByText(mounted, 'actionObserveQuota'), 'every listed provider offers an explicit observation')
-
-    await page.click('actionObserveQuota')
-    assert.equal(page.calls.length, 2)
-    assert.equal(page.calls[1].body, JSON.stringify({ action: 'observe_provider', provider: 'kimi', scope: 'quota', dryRun: true }))
-    const cancelled = await page.click('actionCancel')
-    // Cancel clears the panel and executes nothing.
-    assert.equal(page.calls.length, 2)
-    assert.equal(buttonByText(cancelled, 'actionConfirm'), undefined)
+    // No card repeats the observation: one Refresh reads every account.
+    assert.equal(buttonByText(mounted, 'actionObserveQuota'), undefined)
 
     await page.click('actionResetFailure')
-    assert.equal(page.calls.length, 3)
-    assert.equal(page.calls[2].body, JSON.stringify({ action: 'reset_failure', provider: 'kimi', dryRun: true }))
+    assert.equal(page.calls.length, 2)
+    assert.equal(page.calls[1].body, JSON.stringify({ action: 'reset_failure', provider: 'kimi', dryRun: true }))
     await page.click('actionConfirm')
-    assert.equal(page.calls.length, 4)
-    assert.equal(page.calls[3].body, JSON.stringify({ action: 'reset_failure', provider: 'kimi', dryRun: false }))
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
-  } finally {
-    page.restore()
-  }
-})
-
-test('Open management previews the web status and executes only after confirmation', async () => {
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    if (path === '/_tmax/action') {
-      const body = JSON.parse(record.body)
-      assert.equal(body.action, 'open_management')
-      assert.equal(body.provider, undefined)
-      if (body.dryRun === true) {
-        return {
-          status: 200,
-          body: {
-            ok: true,
-            action: 'open_management',
-            dryRun: true,
-            result: {
-              code: 'ok',
-              status: 'success',
-              message: 'the listener is not running',
-              data: {
-                daemon: { discovery_state: 'unidentified', reason_code: 'daemon_identity_unavailable', web: { state: 'stopped', listen: null, url: null } },
-                gateway: { ready: false, listen: '127.0.0.1:17840' },
-              },
-              blockers: [{ code: 'listener_not_running', message: 'start the listener' }],
-            },
-            state: connected,
-          },
-        }
-      }
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          action: 'open_management',
-          dryRun: false,
-          result: { code: 'web_opened', status: 'succeeded', message: 'listener started', data: { ready: true }, effects: { processes_started: true } },
-          state: connected,
-        },
-      }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    const mounted = await page.mount()
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/action').length, 0)
-    assert.ok(buttonByText(mounted, 'actionOpenManagement'), 'a configured gateway offers management')
-
-    const preview = await page.click('actionOpenManagement')
-    assert.equal(page.calls.length, 2)
-    assert.equal(page.calls[1].body, JSON.stringify({ action: 'open_management', dryRun: true }))
-    const previewText = textOf(preview)
-    assert.match(previewText, /actionPreviewTitle/)
-    // The preview discloses the web readiness and the blocker before anything starts.
-    assert.match(previewText, /webListener/)
-    assert.match(previewText, /webStopped/)
-    assert.match(previewText, /gatewayDaemon/)
-    assert.match(previewText, /gatewayReason/)
-    assert.match(previewText, /gatewayReady/)
-    assert.match(previewText, /127\.0\.0\.1:17840/)
-    assert.match(previewText, /listener_not_running: start the listener/)
-
-    // Cancel clears the preview and executes nothing.
-    const cancelled = await page.click('actionCancel')
-    assert.equal(page.calls.length, 2)
-    assert.equal(buttonByText(cancelled, 'actionConfirm'), undefined)
-    assert.ok(buttonByText(cancelled, 'actionOpenManagement'))
-
-    await page.click('actionOpenManagement')
     assert.equal(page.calls.length, 3)
-    const executed = await page.click('actionConfirm')
-    assert.equal(page.calls.length, 4)
-    assert.equal(page.calls[3].body, JSON.stringify({ action: 'open_management', dryRun: false }))
-    const executedText = textOf(executed)
-    assert.match(executedText, /actionDone/)
-    assert.match(executedText, /web_opened/)
-    assert.match(executedText, /effectProcessesStarted: yes/)
+    assert.equal(page.calls[2].body, JSON.stringify({ action: 'reset_failure', provider: 'kimi', dryRun: false }))
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
   } finally {
     page.restore()
   }
 })
-
 test('a refused or unavailable action is a failure, never success, and keeps the last good state', async () => {
   const suspended = withProviderEvidence({
     kimi: { suspension: { state: 'suspended', reasonCode: 'quota_exhausted', resetAt: null, source: null, window: null } },
@@ -2141,8 +2002,8 @@ test('a refused or unavailable action is a failure, never success, and keeps the
     assert.match(refusedText, /actionStatus blocked/)
     assert.doesNotMatch(refusedText, /actionDone/)
     // A refused action keeps the last good read model, not the one in the error.
-    assert.match(refusedText, /352a0e3f/)
-    assert.doesNotMatch(refusedText, /dddddddd/)
+    assert.match(refusedText, /kimi/, 'the last good state stays on screen')
+    assert.doesNotMatch(refusedText, /unreachable-account/)
     assert.ok(buttonByText(refused, 'close'))
 
     await page.click('close')
@@ -2150,7 +2011,7 @@ test('a refused or unavailable action is a failure, never success, and keeps the
     assert.match(unavailableText, /actionFailed/)
     assert.match(unavailableText, /action_unavailable: tmax did not answer/)
     assert.doesNotMatch(unavailableText, /actionDone/)
-    assert.match(unavailableText, /352a0e3f/)
+    assert.match(unavailableText, /kimi/, 'the last good state stays on screen')
   } finally {
     page.restore()
   }
@@ -2191,9 +2052,6 @@ test('a pending action disables every action control until it settles', async ()
     const pendingButtons = collectButtons(pending)
     assert.ok(pendingButtons.length >= 3)
     for (const button of pendingButtons) {
-      // The history read is independent of a repair in flight; every control
-      // that could start another operation is disabled.
-      if (button.props['data-action'] === 'history_load') continue
       assert.equal(button.props.disabled, true, `"${textOf(button).trim()}" is disabled while busy`)
     }
     assert.match(textOf(pending), /actionWorking|actionPreviewTitle/)
@@ -2606,11 +2464,11 @@ test('the tmax_status card falls back to bounded text for pending and unreadable
   assert.equal(broken.calls, 0)
 })
 
-test('the page offers gateway lifecycle actions only where they can change the state', async () => {
+test('a gateway that is not ready is started from the verdict line, and a ready one offers no lifecycle control', async () => {
   const running = {
     ...connected,
-    configurationRevision: 'eeeeeeeeffffffff000000001111111122222222333333334444444455555555',
     gateway: { ...connected.gateway, ready: true, daemonDiscoveryState: 'identified' },
+    target: { ...connected.target, blockers: [] },
   }
   const page = await mountPage(async record => {
     const path = pathOf(record)
@@ -2639,19 +2497,21 @@ test('the page offers gateway lifecycle actions only where they can change the s
   })
   try {
     const mounted = await page.mount()
-    // Fixture gateway: configured, readiness unknown, daemon unidentified.
-    assert.ok(buttonByText(mounted, 'actionStartGateway'), 'Start is the only verb that can change this state')
+    // Fixture gateway: configured, readiness unknown. Starting is the only verb
+    // that can change that, and it is the verdict line's own control.
+    const start = buttonByText(mounted, 'actionStartGateway')
+    assert.ok(start, 'Start sits on the verdict line')
+    assert.equal(start.props['data-kind'], 'primary')
     assert.equal(buttonByText(mounted, 'actionStopGateway'), undefined)
     assert.equal(buttonByText(mounted, 'actionRestartGateway'), undefined)
 
+    // One click previews; nothing runs before the explicit confirmation.
     const preview = await page.click('actionStartGateway')
     assert.equal(page.calls.length, 2)
-    assert.equal(pathOf(page.calls[1]), '/_tmax/action')
     assert.equal(page.calls[1].body, JSON.stringify({ action: 'gateway_start', dryRun: true }))
     const previewText = textOf(preview)
     assert.match(previewText, /actionPreviewTitle/)
     assert.match(previewText, /actionGatewayNote/)
-    assert.match(previewText, /actionStartGateway/)
     assert.match(previewText, /webRunning/)
 
     const executed = await page.click('actionConfirm')
@@ -2659,11 +2519,11 @@ test('the page offers gateway lifecycle actions only where they can change the s
     assert.equal(page.calls[2].body, JSON.stringify({ action: 'gateway_start', dryRun: false }))
     const executedText = textOf(executed)
     assert.match(executedText, /actionDone/)
-    // The returned read model is adopted, so the offered verbs change.
-    assert.match(executedText, /eeeeeeee/)
-    assert.ok(buttonByText(executed, 'actionStopGateway'), 'a ready gateway offers Stop')
-    assert.ok(buttonByText(executed, 'actionRestartGateway'), 'a ready gateway offers Restart')
+    // The returned read model is adopted: nothing is left to start, and the
+    // page offers no stop or restart, which belong to the CLI.
+    assert.match(executedText, /stateReady/)
     assert.equal(buttonByText(executed, 'actionStartGateway'), undefined)
+    assert.equal(buttonByText(executed, 'actionStopGateway'), undefined)
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/observe').length, 0)
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
   } finally {
@@ -2904,332 +2764,8 @@ test('the tmax_status card suppresses zero counts on a failed result', async () 
   }
 })
 
-test('the gateway card accepts real tmax daemon and shared-key tokens', async () => {
-  const compatible = {
-    ...connected,
-    gateway: {
-      ...connected.gateway,
-      ready: false,
-      daemonDiscoveryState: 'compatible',
-      sharedKey: { loadedState: 'ready', reasonCode: null },
-    },
-  }
-  const page = await mountPage(withState(compatible))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    // Known tokens render as their known words, not the raw machine values.
-    assert.match(text, /daemonIdentified/)
-    assert.match(text, /keyLoaded/)
-    assert.doesNotMatch(text, /compatible/)
-    // A compatible daemon with a not-ready gateway can still be stopped/restarted.
-    assert.ok(buttonByText(tree, 'actionStopGateway'))
-    assert.ok(buttonByText(tree, 'actionRestartGateway'))
-    assert.equal(page.calls.filter(call => call.method === 'POST').length, 0)
-  } finally {
-    page.restore()
-  }
-
-  const odd = {
-    ...connected,
-    gateway: { ...connected.gateway, ready: true, daemonDiscoveryState: 'incompatible' },
-  }
-  const oddPage = await mountPage(withState(odd))
-  try {
-    assert.match(textOf(await oddPage.mount()), /incompatible/)
-  } finally {
-    oddPage.restore()
-  }
-})
-
 // ---------------------------------------------------------------------------
-// Request history detail: explicit load, coverage and gaps, unavailable ≠ empty
 // ---------------------------------------------------------------------------
-
-test('history mapping is bounded, gap-aware, and metadata-only', async () => {
-  const pure = (await moduleWith(inertReact())).__pure
-  const records = Array.from({ length: 25 }, (_, index) => ({
-    request: `req-${index}`,
-    time: '2026-11-23T10:00:00Z',
-    outcome: index % 3 === 0 ? 'failed' : 'completed',
-    requestedModel: `requested-${index}`,
-    qualifiedModel: `provider/selected-${index}`,
-    target: 'dsh-main',
-    provider: 'opencode-go-2',
-    agentProvider: 'agent-1',
-    reasonCode: 'upstream_rejection',
-    // Fields outside the contract must never cross into a table row.
-    apiKey: 'SECRET-KEY',
-    body: 'SECRET-BODY',
-    messages: ['SECRET-MESSAGE'],
-  }))
-  const mapped = pure.historyRows(records)
-  assert.equal(mapped.shown, 20)
-  assert.equal(mapped.total, 25)
-  assert.equal(mapped.rows.length, 20)
-  assert.equal(mapped.rows[0].requestedModel, 'requested-0')
-  assert.equal(mapped.rows[0].qualifiedModel, 'provider/selected-0')
-  assert.equal(mapped.rows[0].route, 'dsh-main · opencode-go-2 · agent-1')
-  assert.equal(mapped.rows[0].reason, 'upstream_rejection')
-  assert.equal(JSON.stringify(mapped.rows).includes('SECRET'), false)
-  assert.equal(pure.historyRemaining({ records: records.slice(0, 25), omitted: 3 }), 8)
-  assert.equal(pure.historyRemaining({ records: records.slice(0, 5) }), 0)
-  assert.equal(pure.historyRemaining(undefined), 0)
-  // The host's compact row spells the requested model `model`.
-  const hostRow = pure.historyRows([{
-    request: 'r', time: '2026-11-23T10:00:00Z', outcome: 'failed', model: 'deepseek-v4.1-flash',
-    protocol: 'responses', qualifiedModel: 'prov/selected', provider: 'prov', target: 'dsh', reasonCode: 'upstream_rejection',
-  }])
-  assert.equal(hostRow.rows[0].requestedModel, 'deepseek-v4.1-flash')
-  assert.equal(hostRow.rows[0].qualifiedModel, 'prov/selected')
-  // The host reports incomplete capture as a boolean.
-  const booleanCoverage = pure.historyCoverageLines({ incompleteCapture: true, retainedCount: 3 }, t)
-  assert.match(booleanCoverage.map(line => `${line.label}: ${line.value}${line.gap ? ' (gap)' : ''}`).join(' | '), /historyIncomplete: yes \(gap\)/)
-  assert.equal(pure.historyCoverageLines({ incompleteCapture: false }, t).find(line => line.label === 'historyIncomplete').gap, false)
-  // tmax can also report a numeric incomplete-capture count; it is a gap too.
-  const numericIncomplete = pure.historyCoverageLines({ incompleteCapture: 7 }, t)
-    .find(line => line.label === 'historyIncomplete')
-  assert.equal(numericIncomplete.value, '7')
-  assert.equal(numericIncomplete.gap, true)
-  assert.equal(pure.historyCoverageLines({ incomplete_capture: 0 }, t)
-    .find(line => line.label === 'historyIncomplete').gap, false)
-
-  const coverage = pure.historyCoverageLines({
-    process_instance: 'proc-1',
-    process_started_at: '2026-11-23T08:00:00Z',
-    last_clear_at: '2026-11-23T08:30:00Z',
-    retained_count: 4,
-    evicted: 2,
-    incomplete_capture: 1,
-    prior_process_coverage: 'unavailable',
-    direct_traffic_coverage: 'unobserved',
-    oldest: '2026-11-23T09:00:00Z',
-    newest: '2026-11-23T10:19:00Z',
-    limits: { records: 1000, record_bytes: 1048576 },
-    retention: 'oldest terminal record evicted first; no disk history',
-    gaps: ['no prior process history'],
-  }, t)
-  const flat = coverage.map(line => `${line.label}: ${line.value}${line.gap === true ? ' (gap)' : ''}`).join(' | ')
-  assert.match(flat, /historyProcess: proc-1/)
-  assert.match(flat, /historyProcessStarted: /)
-  assert.match(flat, /historyLastClear: /)
-  assert.match(flat, /historyRetained: 4/)
-  assert.match(flat, /historyEvicted: 2 \(gap\)/)
-  assert.match(flat, /historyIncomplete: 1 \(gap\)/)
-  assert.match(flat, /historyPriorProcesses: unavailable \(gap\)/)
-  assert.match(flat, /historyDirectTraffic: unobserved \(gap\)/)
-  // Storage limits are part of the coverage the host reports.
-  assert.match(flat, /historyLimits: historyLimitRecords \S+ · historyLimitBytes \S+/)
-  assert.match(flat, /historyRetention: oldest terminal record evicted first/)
-  assert.match(flat, /historyGap: no prior process history \(gap\)/)
-  // The host's camelCase mapping works too.
-  assert.match(pure.historyCoverageLines({ processInstance: 'p2', retainedCount: 1 }, t).map(line => line.value).join(','), /p2,1/)
-  assert.match(pure.historyCoverageLines({
-    processStartedAt: '2026-11-23T08:00:00Z',
-    lastClearAt: '2026-11-23T08:30:00Z',
-    limits: { records: 7, recordBytes: 4096 },
-  }, t).map(line => `${line.label}: ${line.value}`).join(' | '),
-  /historyProcessStarted: .*historyLastClear: .*historyLimits: historyLimitRecords \S+ · historyLimitBytes \S+/)
-  // Unreported process times and limits are omitted, never invented.
-  const bare = pure.historyCoverageLines({ retainedCount: 1 }, t)
-  assert.equal(bare.some(line => line.label === 'historyProcessStarted'), false)
-  assert.equal(bare.some(line => line.label === 'historyLastClear'), false)
-  assert.equal(bare.some(line => line.label === 'historyLimits'), false)
-  // Absent coverage is unknown, not an empty history.
-  assert.deepEqual(pure.historyCoverageLines(undefined, t),
-    [{ label: 'historyCoverage', value: 'historyUnknown', gap: true }])
-
-  assert.deepEqual(pure.historyFailure({ code: 'history_unavailable', message: 'no daemon', blockers: [{ code: 'b', message: 'c' }] }, 200),
-    { code: 'history_unavailable', message: 'no daemon', blockers: ['b: c'] })
-  assert.equal(pure.historyFailure(undefined, 502).code, 'http_502')
-  assert.equal(pure.historyFailure(undefined, 0).code, 'history_unreachable')
-  assert.equal(pure.historyTone('failed'), 'error')
-  assert.equal(pure.historyTone('completed'), 'ok')
-  assert.equal(pure.historyTone('queued'), 'idle')
-})
-
-test('history reads nothing until the explicit Load history click', async () => {
-  const page = await mountPage(withState(connected))
-  try {
-    const mounted = await page.mount()
-    // Mount is exactly one state GET: availability is shown, no history request.
-    assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/history').length, 0)
-    const text = textOf(mounted)
-    assert.match(text, /historyAvailability/)
-    // The fixture reports history as unavailable with a reason; that is shown.
-    assert.match(text, /historyUnavailable/)
-    assert.match(text, /reasonDaemonIdentity/)
-    assert.ok(buttonByText(mounted, 'historyLoad'), 'the explicit load control is offered')
-    assert.equal(buttonByText(mounted, 'historyReload'), undefined)
-    assert.equal(collectNodes(mounted, node => node.type === 'table').length, 0)
-  } finally {
-    page.restore()
-  }
-})
-
-test('Load history renders coverage, gaps, a capped table, and retained overflow', async () => {
-  const records = Array.from({ length: 25 }, (_, index) => ({
-    request: `req-${index}`,
-    time: '2026-11-23T10:00:00Z',
-    outcome: index % 3 === 0 ? 'failed' : 'completed',
-    requestedModel: `requested-model-${index}`,
-    protocol: 'responses',
-    kind: 'alias',
-    qualifiedModel: `provider/selected-${index}`,
-    provider: 'opencode-go-2',
-    target: 'dsh-main',
-    agentProvider: 'agent-1',
-    reasonCode: index % 3 === 0 ? 'upstream_rejection' : '',
-    durationMs: 12 + index,
-    apiKey: 'SECRET-KEY',
-    body: 'SECRET-BODY',
-  }))
-  const history = {
-    ok: true,
-    generatedAt: '2026-11-23T10:20:00Z',
-    coverage: {
-      process_instance: 'proc-1',
-      processStartedAt: '2026-11-23T08:00:00Z',
-      lastClearAt: '2026-11-23T08:30:00Z',
-      prior_process_coverage: 'unavailable',
-      direct_traffic_coverage: 'unobserved',
-      retained_count: 28,
-      evicted: 2,
-      incomplete_capture: 1,
-      oldest: '2026-11-23T09:00:00Z',
-      newest: '2026-11-23T10:19:00Z',
-      limits: { records: 1000, recordBytes: 1048576 },
-      retention: 'oldest terminal record evicted first; no disk history',
-    },
-    records,
-    omitted: 3,
-  }
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    if (path === '/_tmax/history') return { status: 200, body: history }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    await page.mount()
-    const tree = await page.click('historyLoad')
-    assert.equal(page.calls.length, 2)
-    assert.equal(page.calls[1].method, 'GET')
-    assert.equal(pathOf(page.calls[1]), '/_tmax/history')
-    const text = textOf(tree)
-    // Coverage and its material gaps are named explicitly.
-    assert.match(text, /historyProcess/)
-    assert.match(text, /proc-1/)
-    assert.match(text, /historyPriorProcesses/)
-    assert.match(text, /historyDirectTraffic/)
-    assert.match(text, /historyRetained/)
-    assert.match(text, /historyIncomplete/)
-    // The host's process times and storage limits are coverage evidence too.
-    assert.match(text, /historyProcessStarted/)
-    assert.match(text, /historyLastClear/)
-    assert.match(text, /historyLimits/)
-    assert.match(text, /historyLimitRecords/)
-    assert.match(text, /historyLimitBytes/)
-    const gapChips = collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-chip' && textOf(node).trim() === 'historyGap')
-    assert.ok(gapChips.length >= 3, 'the material gaps are marked')
-    // 20 rows at most, with the index-19 row present and index-20 absent.
-    const rows = collectNodes(tree, node => node.type === 'tr')
-    assert.equal(rows.length, 21, 'one header row and 20 record rows')
-    assert.match(text, /requested-model-19/)
-    assert.doesNotMatch(text, /requested-model-20/)
-    assert.match(text, /provider\/selected-0/)
-    assert.match(text, /upstream_rejection/)
-    assert.match(text, /8 historyMore/)
-    // Metadata only: extra record fields never reach the page.
-    assert.doesNotMatch(text, /SECRET/)
-    // Reload and close are the follow-up controls after a successful read.
-    assert.ok(buttonByText(tree, 'historyReload'))
-    assert.ok(buttonByText(tree, 'close'))
-  } finally {
-    page.restore()
-  }
-})
-
-test('an unavailable history read names code and message and draws no table', async () => {
-  async function renderHistory(respond) {
-    const page = await mountPage(async record => {
-      const path = pathOf(record)
-      if (path === '/_tmax/state') return { status: 200, body: connected }
-      if (path === '/_tmax/history') return respond(record)
-      return { status: 404, body: { ok: false } }
-    })
-    try {
-      await page.mount()
-      const tree = await page.click('historyLoad')
-      return { tree, calls: page.calls }
-    } finally {
-      page.restore()
-    }
-  }
-
-  // A typed refusal still carries coverage evidence; it is not an empty list.
-  const refused = await renderHistory(() => ({
-    status: 200,
-    body: { ok: false, code: 'history_unavailable', message: 'daemon identity unavailable', coverage: { prior_process_coverage: 'unavailable' } },
-  }))
-  const refusedText = textOf(refused.tree)
-  assert.match(refusedText, /historyReadUnavailable/)
-  assert.match(refusedText, /history_unavailable: daemon identity unavailable/)
-  assert.match(refusedText, /historyPriorProcesses/)
-  assert.equal(collectNodes(refused.tree, node => node.type === 'table').length, 0)
-  assert.doesNotMatch(refusedText, /historyRetained: 0/)
-
-  // Transport refusal.
-  const transport = await renderHistory(() => ({ status: 502, body: { ok: false, code: 'state_unavailable', message: 'tmax did not answer' } }))
-  assert.match(textOf(transport.tree), /history_unavailable|state_unavailable: tmax did not answer/)
-  assert.equal(collectNodes(transport.tree, node => node.type === 'table').length, 0)
-
-  // A success envelope without a record list is unknown, not empty.
-  const unknown = await renderHistory(() => ({ status: 200, body: { ok: true, generatedAt: '2026-11-23T10:20:00Z', coverage: { prior_process_coverage: 'unavailable' } } }))
-  const unknownText = textOf(unknown.tree)
-  assert.match(unknownText, /history_unknown/)
-  assert.equal(collectNodes(unknown.tree, node => node.type === 'table').length, 0)
-  assert.doesNotMatch(unknownText, /historyRetained: 0/)
-
-  // A dropped connection is unavailable with its own code.
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    throw new Error('socket closed')
-  })
-  try {
-    await page.mount()
-    const tree = await page.click('historyLoad')
-    const text = textOf(tree)
-    assert.match(text, /historyReadUnavailable/)
-    assert.match(text, /history_unreachable/)
-    assert.equal(collectNodes(tree, node => node.type === 'table').length, 0)
-  } finally {
-    page.restore()
-  }
-})
-
-test('a genuinely empty retained history says so instead of claiming unavailable', async () => {
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    if (path === '/_tmax/history') {
-      return { status: 200, body: { ok: true, generatedAt: '2026-11-23T10:20:00Z', coverage: { retained_count: 0, prior_process_coverage: 'unavailable', direct_traffic_coverage: 'unobserved' }, records: [] } }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    await page.mount()
-    const tree = await page.click('historyLoad')
-    const text = textOf(tree)
-    assert.match(text, /historyEmpty/)
-    assert.equal(collectNodes(tree, node => node.type === 'table').length, 0)
-    assert.equal(buttonByText(tree, 'historyReload') !== undefined, true)
-  } finally {
-    page.restore()
-  }
-})
 
 
 test('a projection failure is unknown footer evidence, not zero counts', async () => {

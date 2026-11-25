@@ -59,20 +59,19 @@ authority.
 
 ## Page content
 
-The page is one first-level DSH page. Its header answers reachability only and
-carries one next action when an action can change the reported state.
+The page is one first-level DSH page. It answers two questions and shows
+nothing else: is model access working, and how much quota is left in each
+account. Everything the CLI reports — configuration revisions, schemas, route
+detail, gateway supervision, diagnostics, retained request history — stays in
+the CLI.
 
 | Section | Required content |
 | --- | --- |
-| Header | One reachability verdict; one next action when one exists; state generation time, configuration revision, and state schema. |
-| Status and access | Target identity and home, tmax authority, DSH installation state, route ownership, ownership mode, and home facts, applied/pending state, tmax default versus DSH effective default, routes with protocol, base URL, scope, liveness, credential readiness, and route blockers, gateway detail, configuration state and errors, the read failure of any part that failed, and the management and gateway lifecycle actions the reported state allows. A failed target inventory reports the target and routes as unavailable; the host does not invent a partial dossier. |
-| Models and routing | Every projected model with kind, continuity, candidate count, tmax availability, and capabilities; fields the target inspection does not report stay unknown. Routing selection, candidates, effective priorities, and exclusions. |
-| Providers and limits | Every provider tmax lists, including unknown quota, with authentication, affected targets, subscription or renewal when known, evidence time, freshness, suspension, and failure; providers this DSH profile configures in a separate subsection; and one explicit action per evidence: observe quota for every listed provider, resume quota only for a reported suspension, and reset failure only for an active failure. |
-| Actions | The preview and result of one confirmed provider, gateway, or management action: typed code, status, message, data, blockers, next actions, and effects. Preview and confirmation are separate; cancel clears. |
-| Diagnostics | Read-model source, tmax version, state schema, state generation time, last inventory read time, request-history availability and reason, last error, configuration revision, every failed section read, and the retained-history area: an explicit **Load history** control that reads on demand, a table of up to 20 retained rows with coverage and gaps, a more-count when the response was truncated, and a failure state that never looks like an empty history. |
+| Header | The page name, when the state was generated, one reachability verdict, and the one control that changes it when the page has it: **Start gateway** when the gateway is not ready, **Apply** when DSH has not been given the declared routes or a credential tmax knows is missing. Otherwise one line names what stands in the way — a pending reload, an invalid or unavailable configuration with its own errors, a route-ownership conflict, or a tmax blocker — followed by every failed section read and every route blocker, bounded and code first, with a **Retry** that reads again and never observes. **Refresh** observes every listed provider. A failed read keeps the last good table, labels it last known, and shows the failure once. |
+| Accounts | One card per tmax account that reports a quota window, least left first; an account without any window takes no card. Every window the account reports is one bar with its name, what is left, and when it resets, stated as remaining whatever basis the account reports in; an unknown reset time is left out. A window whose share cannot be computed is text, never a bar, and a window with nothing left keeps a visible mark. A card carries a tag only for a state a person must act on or know about — disabled, suspended, failing — and the one action its evidence calls for: resume for a reported suspension, reset for an active failure. |
+| Models | Every projected model and the account its routing selects; the target's default is marked. |
+| Actions | The preview and result of one confirmed provider, gateway, or Apply action: typed code, status, message, data, blockers, next actions, and effects. Preview and confirmation are separate; cancel clears. An observation names only the accounts it could not read. |
 
-A section whose read failed must say so. It must not disappear or silently
-shrink to the values that happened to load.
 
 ## Seats
 
@@ -278,8 +277,8 @@ shares the mutation preview gate, it may publish tmax and vendor quota readings,
 and a refreshed reading can feed tmax's automatic quota suspension. It is not a
 DSH or native write; [Apply](#apply) is the only such write.
 
-The page exposes the whole-surface form as **Refresh** and the per-provider form
-as that provider's **Observe quota** action ([Actions](#actions)).
+The page exposes the whole-surface form as **Refresh**; it offers no
+per-provider observation, so a reader never has to pick which account to read.
 
 `scope` is one of `all`, `tmax`, or `agent`; an absent scope means `all`.
 `dryRun` is a boolean; an absent value means `false`. An invalid value is refused
@@ -393,14 +392,14 @@ for the same apply and observation operations. The allowlist also accepts
 
 Rules:
 
-- The page offers `observe_provider` for every listed provider. It offers
-  `resume_quota` only when the provider reports a suspension, `reset_failure`
-  only when the provider reports an active failure, and `open_management` only
-  when the gateway is configured. It offers `gateway_start` whenever the
-  configured gateway is not ready, including when readiness is unknown; that
+- The page offers `resume_quota` only when the provider reports a suspension and
+  `reset_failure` only when the provider reports an active failure. It offers
+  `gateway_start` whenever the configured gateway is not ready, including when
+  readiness is unknown and when tmax's own blocker asks for the start; that
   preview reports the current blocker instead of performing anything. It offers
-  `gateway_stop` or `gateway_restart` only when the gateway reports ready or its
-  daemon is identified. No evidence, no action.
+  no `observe_provider`, `open_management`, `gateway_stop`, or `gateway_restart`:
+  Refresh reads every account at once, and the rest belong to the CLI. The
+  action route still accepts them for other callers. No evidence, no action.
 - A provider operand must be exactly one provider id from the current read model.
   Anything else is refused before argv. `scope` is a closed set.
 - `dryRun: true` previews; `dryRun: false` executes. Every action the page offers
