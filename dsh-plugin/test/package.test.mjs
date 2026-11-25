@@ -86,6 +86,15 @@ test('every declared resource, document, and runtime module exists in the checko
   }
 })
 
+test('every literal files entry exists in the checkout', () => {
+  // A module removed from the bundle must not leave `files` with a stale literal
+  // entry: it ships nothing and fails only for an install from a URL.
+  for (const pattern of files) {
+    if (pattern.includes('*')) continue
+    assert.ok(existsSync(join(root, pattern)), `files lists ${pattern}, which is missing from the checkout`)
+  }
+})
+
 test('the bundle declares the resources DSH resolves', () => {
   const exports = manifest.exports ?? {}
   for (const key of ['.', './client', './icon', './locale/*.json']) {

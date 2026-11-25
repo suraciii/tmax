@@ -10,7 +10,6 @@ import { createActionService } from './host/actions.js'
 import { CONNECT_TIMEOUT_MS, readEnvelope, resolveHome, usableBaseUrl, usableCredentialRef } from './host/cli.js'
 import { createHistoryService, HISTORY_READ_TIMEOUT_MS } from './host/history.js'
 import { readInventory, resolveTarget } from './host/inventory.js'
-import { createObservations } from './host/observations.js'
 import {
   appliedProviderNames,
   liveProviderIds,
@@ -148,10 +147,10 @@ export function formatTmaxStatus(state, { blockers = [] } = {}) {
   lines.push(`gateway: configured ${commandTriState(gateway.configured)}; ready ${commandTriState(gateway.ready)}`)
   if (providersError !== null) {
     lines.push(unavailableLine('providers', providersError, 'providers_unavailable'))
-  } else if (!Array.isArray(providers.tmax) || !Array.isArray(providers.agent)) {
+  } else if (!Array.isArray(providers.tmax)) {
     lines.push('providers: unavailable (providers_unavailable: the providers section was not reported)')
   } else {
-    lines.push(`providers: ${providers.tmax.length} tmax, ${providers.agent.length} agent-configured`)
+    lines.push(`providers: ${providers.tmax.length}`)
   }
   const blockerRows = commandRows(blockers)
   lines.push(`blockers: ${blockerRows.length}`)
@@ -231,21 +230,6 @@ export function formatTmaxProviders(state) {
     lines.push(`tmax providers: ${tmaxRows.length}`)
     for (const row of tmaxRows.slice(0, COMMAND_PROVIDER_LIMIT)) appendProvider(lines, row)
     if (tmaxRows.length > COMMAND_PROVIDER_LIMIT) lines.push(`${tmaxRows.length - COMMAND_PROVIDER_LIMIT} more provider(s) omitted`)
-  }
-  const agentRows = Array.isArray(providers.agent) ? providers.agent : []
-  const agentError = commandObject(providersError).code === 'agent_settings_unavailable' ? providersError : null
-  if (agentRows.length > 0) {
-    lines.push(`agent-configured providers: ${agentRows.length}`)
-    for (const row of agentRows.slice(0, COMMAND_PROVIDER_LIMIT)) {
-      const provider = commandObject(row)
-      const details = [`state ${commandCell(provider.state, 'unknown')}`]
-      if (typeof provider.reasonCode === 'string' && provider.reasonCode !== '') details.push(commandText(provider.reasonCode))
-      if (typeof provider.observedAt === 'string' && provider.observedAt !== '') details.push(`observed ${commandText(provider.observedAt)}`)
-      lines.push(`- ${commandCell(provider.provider, 'unknown provider')}: ${details.join('; ')}`)
-    }
-    if (agentRows.length > COMMAND_PROVIDER_LIMIT) lines.push(`${agentRows.length - COMMAND_PROVIDER_LIMIT} more agent provider(s) omitted`)
-  } else if (agentError !== null) {
-    lines.push(unavailableLine('agent-configured providers', agentError, 'agent_settings_unavailable'))
   }
   return lines.join('\n')
 }
@@ -430,8 +414,6 @@ export async function apply(ctx, config = {}) {
   let disposed = false
   let timer
 
-  const observations = createObservations({ ctx })
-
   function getOwnership() {
     return ownershipDecision
   }
@@ -439,7 +421,6 @@ export async function apply(ctx, config = {}) {
   const snapshot = createSnapshotService({
     config,
     ctx,
-    observations,
     getOwnership,
     getRouteBlockers: () => skippedBlockers,
     getLiveNames: () => liveProviderIds(ctx),
@@ -672,7 +653,6 @@ export async function apply(ctx, config = {}) {
     const routes = createRoutes({
       config,
       snapshot,
-      observations,
       actions,
       history,
       locks,
@@ -723,7 +703,6 @@ export async function apply(ctx, config = {}) {
           failure: provider.failure,
           error: provider.error,
         })),
-        agent: state.providers?.agent ?? [],
       },
       routing: state.routing,
       diagnostics: state.diagnostics,
@@ -751,7 +730,7 @@ export async function apply(ctx, config = {}) {
             ownership: null,
             gateway: null,
             routes: [],
-            providers: { tmax: [], agent: [] },
+            providers: { tmax: [] },
             routing: [],
             diagnostics: { history: { state: 'unavailable', reasonCode: 'tmax_unavailable' }, lastProjectionAt: null, lastError: message, readModel: 'inventory' },
             errors: [{ section: 'projection', code: 'tmax_unavailable', message }],

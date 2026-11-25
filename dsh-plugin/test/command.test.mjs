@@ -538,7 +538,7 @@ test('empty input and status summarize the read model without observing or writi
   assert.match(summary.text, /routes: 1/)
   assert.match(summary.text, /  - tmax: not active; credential missing; 2 model\(s\)/)
   assert.match(summary.text, /gateway: configured yes; ready unknown/)
-  assert.match(summary.text, /providers: 2 tmax, 0 agent-configured/)
+  assert.match(summary.text, /providers: 2/)
   assert.match(summary.text, /blockers: /)
 
   const explicit = await runCommand(state, 'status')
@@ -671,7 +671,7 @@ test('a failed providers, routing, or inventory read is stated, not counted as z
   assert.match(status.text, /routes: unavailable \(unknown_target: /)
   assert.equal(/routes: 0/.test(status.text), false, 'a failed inventory read is not zero routes')
   // Readable sections still summarize.
-  assert.match(status.text, /providers: 2 tmax, 0 agent-configured/)
+  assert.match(status.text, /providers: 2/)
 })
 
 test('history lists bounded retained records and states unavailability with the reason', async () => {

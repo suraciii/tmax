@@ -14,7 +14,6 @@ import { TmaxError } from './cli.js'
 import { observeTmax } from './observations.js'
 
 export const MAX_BODY_BYTES = 16 * 1024
-const SEARCH_SCOPES = new Set(['all', 'tmax', 'agent'])
 const PREVIEW_QUERY = /[?&](?:preview|dry-run)=1(&|$)/u
 
 function headerOf(req, name) {
@@ -301,7 +300,6 @@ export function deriveBlockers(state, declaredBlockers = []) {
  * @param {object} input
  * @param {object} input.config
  * @param {object} input.snapshot - state service with `state()`/`invalidate()`
- * @param {object} input.observations - observation cache
  * @param {{run: (body: object) => Promise<{status: number, body: object}>}} input.actions - action service
  * @param {{read: () => Promise<{status: number, body: object}>}} input.history - retained-history read service
  * @param {Set<string>} [input.locks] - single-flight set shared with the action service
@@ -311,7 +309,7 @@ export function deriveBlockers(state, declaredBlockers = []) {
  * @param {() => object[]} input.getDeclaredBlockers
  * @param {(message: string) => void} [input.log]
  */
-export function createRoutes({ config, snapshot, observations, actions, history, locks = new Set(), connectTmax, refreshOwnership, getDeclaredBlockers, log }) {
+export function createRoutes({ config, snapshot, actions, history, locks = new Set(), connectTmax, refreshOwnership, getDeclaredBlockers, log }) {
   // The action service shares this set: legacy `/connect` and action `connect`
   // are one lock, legacy `observe` and action observations are one lock.
   const running = locks
@@ -383,20 +381,6 @@ export function createRoutes({ config, snapshot, observations, actions, history,
       },
     },
     {
-      path: '/_tmax/dsh-usage',
-      method: 'GET',
-      handler(req, res) {
-        if (req?.method !== 'GET') return methodNotAllowed(res, 'GET')
-        // Cache-only. A GET never resolves a credential or contacts a vendor;
-        // the absence of a reading is reported as `not_observed`.
-        try {
-          sendJson(res, 200, observations.usageRecords())
-        } catch (error) {
-          sendJson(res, 502, { ok: false, code: 'usage_unavailable', message: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    {
       path: '/_tmax/history',
       method: 'GET',
       async handler(req, res) {
@@ -417,11 +401,6 @@ export function createRoutes({ config, snapshot, observations, actions, history,
       async handler(req, res) {
         const body = await readJsonPost(req, res)
         if (body === undefined) return
-        const scope = body.scope ?? 'all'
-        if (typeof scope !== 'string' || !SEARCH_SCOPES.has(scope)) {
-          sendJson(res, 400, { ok: false, code: 'invalid_scope', message: "scope must be 'all', 'tmax', or 'agent'" })
-          return
-        }
         const dryRun = body.dryRun ?? false
         if (typeof dryRun !== 'boolean') {
           sendJson(res, 400, { ok: false, code: 'invalid_dry_run', message: 'dryRun must be a boolean' })
@@ -432,9 +411,9 @@ export function createRoutes({ config, snapshot, observations, actions, history,
           return
         }
         try {
-          const items = []
-          if (scope === 'tmax' || scope === 'all') items.push(...(await observeTmax(config, { dryRun })).items)
-          if (scope === 'agent' || scope === 'all') items.push(...(await observations.observeAgent({ dryRun })).items)
+          // Every observed provider is one tmax provider: the plugin owns no
+          // quota read of its own.
+          const { items } = await observeTmax(config, { dryRun })
           snapshot.invalidate()
           const state = await snapshot.state({ force: true })
           const ok = !items.some(item => item.status === 'failed')

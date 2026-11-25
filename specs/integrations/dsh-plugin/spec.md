@@ -124,8 +124,8 @@ a model-facing tool: its output never enters a model turn.
 
 | Subcommand | Required content |
 | --- | --- |
-| `status` | State readability, target and effective default, applied and pending state, route count and per-route liveness and credential readiness, gateway readiness, tmax and agent-provider counts, and declared blockers. This is also the empty-input default. |
-| `providers` | Every tmax provider with authentication, integration, quota state and kind, freshness, observation time, suspension, failure, and any provider error; agent-configured providers in their own list. Unknown quota stays unknown and is never zero. |
+| `status` | State readability, target and effective default, applied and pending state, route count and per-route liveness and credential readiness, gateway readiness, provider count, and declared blockers. This is also the empty-input default. |
+| `providers` | Every tmax provider with authentication, integration, quota state and kind, freshness, observation time, suspension, failure, and any provider error. Unknown quota stays unknown and is never zero. |
 | `routing` | Every projected model with selection, candidate count, selected count, exclusions, and any per-model error. |
 | `gateway` | Configured and ready state, listener, daemon discovery and reason, supervision, autostart facts, and shared-key state. |
 | `diagnostics` | Read-model source, generation time, revision, tmax version, history availability and reason, last inventory read time, last error, and every section error. |
@@ -140,9 +140,9 @@ Rules:
   fresh state read but must not re-stamp an observation time.
 - The subcommand set is closed and single-word. Empty input is `status`; any
   other input returns an error naming the usage and performs no read.
-- Output is bounded: at most 20 routes, 40 tmax providers, 40 agent-configured
-  providers, 40 routing rows, 20 section errors, 10 history records, and 10
-  blockers; each cell is capped at 120 characters. A truncated list states how
+- Output is bounded: at most 20 routes, 40 providers, 40 routing rows, 20
+  section errors, 10 history records, and 10 blockers; each cell is capped at
+  120 characters. A truncated list states how
   many rows were omitted. Unreadable values render as unknown or not reported,
   never as zero. When a section read failed or its data is absent, the command
   prints an `unavailable (code: message)` line for that section instead of zero
@@ -217,7 +217,6 @@ serves the same names.
 | `/_tmax/state` | GET | The host read model for the page: one plugin-owned state contract composed from effect-free tmax reads, plus DSH-only facts. Cache only. |
 | `/_tmax/status` | GET | Compatibility summary of the same read model for the first-generation page. Cache only. |
 | `/_tmax/usage` | GET | Compatibility provider and usage rows derived from the same read model. Cache only. |
-| `/_tmax/dsh-usage` | GET | Compatibility cached readings for providers the DSH profile configures. Cache only. |
 | `/_tmax/history` | GET | One explicit, read-only retained-history read: compact request metadata, coverage, and bounded rows. It never observes, refreshes, starts a service, clears, or writes. |
 
 Read purity:
@@ -256,30 +255,24 @@ provider fact.
 
 ```http
 POST /_tmax/observe
-{ "scope": "all", "dryRun": false }
+{ "dryRun": false }
 ```
 
 Observation publishes evidence. It is the only explicit way to publish provider
 evidence. tmax treats an explicit provider refresh as an effectful operation: it
-shares the mutation preview gate, it may publish tmax and vendor quota readings,
-and a refreshed reading can feed tmax's automatic quota suspension. It is not a
+shares the mutation preview gate, it may publish quota readings, and a
+refreshed reading can feed tmax's automatic quota suspension. It is not a
 DSH or native write; [Apply](#apply) is the only such write.
 
 The page exposes the whole-surface form as **Refresh**; it offers no
 per-provider observation, so a reader never has to pick which account to read.
 
-`scope` is one of `all`, `tmax`, or `agent`; an absent scope means `all`.
 `dryRun` is a boolean; an absent value means `false`. An invalid value is refused
-without an observation.
+without an observation. One observation previews or publishes one quota-scope
+`tmax provider refresh` for every provider tmax lists; the plugin holds no vendor
+endpoint, credential resolution, or quota reading of its own.
 
-| Scope | Effect |
-| --- | --- |
-| `tmax` | Preview or publish one quota-scope observation for every provider tmax lists. |
-| `agent` | Preview or read one vendor quota source for every provider this DSH profile configures and a vendor implementation covers. Providers sharing one vendor and one credential reference produce one read. |
-| `all` | Both scopes, `tmax` first. |
-
-Each result item identifies its source (`tmax` or `agent`), the provider id, and
-one status:
+Each result item identifies its source (`tmax`), the provider id, and one status:
 
 | Status | Meaning |
 | --- | --- |
@@ -301,18 +294,13 @@ Rules:
 - A failure must not be presented as success. The response is `200` only when no
   item failed and `207` when at least one item failed. `ok` is false when any
   item failed.
-- An `agent`-scope observation runs with bounded concurrency and one overall
-  deadline. A provider whose read is still unfinished at the deadline reports
-  `failed` with code `observation_deadline`, and a previous reading it had is
-  retained. Completed items keep their own result.
 - A concurrent observation is refused with a busy result instead of being
   queued.
 - A completed observation returns a freshly composed read model so the page can
   show the new and retained readings.
 
-`POST /_tmax/usage/refresh` performs the `tmax`-scope observation with the same
-rules for the first-generation page; its `dryRun`/`preview` form performs no real
-observation.
+`POST /_tmax/usage/refresh` performs the same observation for the
+first-generation page; its `dryRun`/`preview` form performs no real observation.
 
 ## Apply
 
@@ -446,7 +434,6 @@ refusal, and no outcome carries secret material.
 | Read-model source | Not shown on the page; a CLI read. A failed source read is a visible error, never a silently empty section. |
 | Route readiness | `active` means DSH currently serves a route with that provider name. It is independent of configured route membership and of credential readiness, and the read model reports each separately; the page folds them into its verdict rather than listing them. |
 | tmax providers | One card per provider tmax lists that reports a quota window, closest to its limit first; a provider without a window takes no card. A failed provider read is named where the cards would be, never read as "no account". |
-| Profile providers | Not shown on the page; a CLI read. They are independent of tmax providers and are never summed with them. A provider whose vendor has no implementation is reported as having no supported source. |
 | Quota window | Draw a share only from a computable fraction. No fraction means text only, never a bar. The bar, the printed value, and the accessible label describe the same quantity: the share used. A reported used amount wins over subtracting what is left, and the quota prints beside the used amount — the reported quantity, or 100% for a percentage window. |
 | Quota tone and reset | Colour marks what needs attention, never decoration: usage warns from 75% used and errors from 90%. A reset within a day (today or tomorrow) states its clock, any other day states its date, and the year appears only when it is not the current one. |
 | History | Availability and reason come from the state; the retained list is an explicit read, never a mount fetch. Missing history is missing evidence, not proof of no requests; a typed unavailable answer is not an empty table; a successful read with zero retained records is a reported zero. |
@@ -459,7 +446,7 @@ refusal, and no outcome carries secret material.
 
 ## State consumer contract
 
-The plugin state contract is plugin-owned and has `schemaVersion: 1`. It is not a
+The plugin state contract is plugin-owned and has `schemaVersion: 2`. It is not a
 tmax CLI contract: the host composes it from effect-free tmax reads and adds the
 DSH-only facts tmax cannot know. `null` means unknown or not reported unless the
 row says otherwise; it is never a stand-in for zero or for an empty list.
@@ -467,8 +454,8 @@ row says otherwise; it is never a stand-in for zero or for an empty list.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `ok` | boolean | Whether the host produced a usable read model. A failed target inventory keeps `ok` true when the provider-list or configuration-validation read answered, and sets it false only when neither answered; the failure is still a `projection` error with a null target. Section-level failures inside a usable model are reported in `errors` and do not hide the model; an invalid configuration is reported inside `config`. |
-| `errors` | array of `{section, code, message}` (strings) | One entry per failed section read. Sections are `projection` (the target inventory and route source), `authority` (tmax data directory and CLI version), `providers`, `gateway`, and `config`; an unavailable agent-settings read is reported under `providers`. Empty when every read answered. Per-provider and per-model failures stay in their own records; this list is for section-level reads only. A section must show its own entry and must not render an empty result in place of a failed read. |
-| `schemaVersion` | integer | Plugin state schema, currently `1`. |
+| `errors` | array of `{section, code, message}` (strings) | One entry per failed section read. Sections are `projection` (the target inventory and route source), `authority` (tmax data directory and CLI version), `providers`, `gateway`, and `config`; Empty when every read answered. Per-provider and per-model failures stay in their own records; this list is for section-level reads only. A section must show its own entry and must not render an empty result in place of a failed read. |
+| `schemaVersion` | integer | Plugin state schema, currently `2`. |
 | `generatedAt` | string | RFC 3339 time when the host composed this state. |
 | `configurationRevision` | string or null | tmax saved-configuration revision. |
 | `tmaxVersion` | string or null | Producing CLI version. |
@@ -478,7 +465,7 @@ row says otherwise; it is never a stand-in for zero or for an empty list.
 | `gateway` | object or null | `configured` and three-valued `ready` (boolean or null), `listen` (string or null), `daemonDiscoveryState` (`identified`, `unidentified`, or `unknown`), `reasonCode` (string or null), `supervision` (`state`, `reasonCode` strings or null), `autostart` (`savedIntent` boolean or null; `registration` string or null; `unitMatches` boolean or null), and `sharedKey` (`loadedState` `loaded`, `absent`, or `unknown`; `reasonCode` string or null). |
 | `config` | object | `state` (`valid`, `invalid`, or `unavailable`), `revision` (string or null), and `errors` (array of `{code, message}`). An absent saved configuration is a valid empty configuration; a missing revision stays null rather than invented. |
 | `routes` | array | Per route: `name` and `provider` (string or null), `protocol` (string or null), `baseUrl` (string), `credentialRef` (string or null), `credentialConfigured` (`true`, `false`, or null), `scope` (`home_wide`, `profile_scoped`, or null), `models` (array; each `id`, `name`, `kind`, `continuity`, `availability` strings or null, `candidateCount` integer or null, and `capabilities` object; the target inspection currently reports no kind, continuity, or candidate count, so those stay null, and availability stays `unverified`), `active` (boolean), and `blockers` (array of `{code, message, models?}`). Route `blockers` describe only the profile-scoped fallback this plugin owns or attempts to register; they are empty when it registers nothing. |
-| `providers` | object | Two separate arrays, `tmax` and `agent`. The tmax array holds every listed provider: `id` and `name` strings, `enabled` (boolean or null), `authentication` (string or null), `affectedTargets` (integer), `accountIdentity` (string or null), `subscription` (object or null), `integration` (string or null), `billing` (object), `suspension` (object), `failure` (object), and `error` (`{code, message}` or null). A tmax provider's `billing` carries `reasonCode` and `lastAttempt` only when the listed attempt reported them (for example `unsupported_source` with `lastAttempt: unavailable`), so a provider with no supported source is distinct from one that was never observed. Each agent record carries its own state, observation time, reason code, and rows. |
+| `providers` | object | One `tmax` array holding every provider tmax lists: `id` and `name` strings, `enabled` (boolean or null), `authentication` (string or null), `affectedTargets` (integer), `accountIdentity` (string or null), `subscription` (object or null), `integration` (string or null), `billing` (object), `suspension` (object), `failure` (object), and `error` (`{code, message}` or null). A provider's `billing` carries `reasonCode` and `lastAttempt` only when the listed attempt reported them (for example `unsupported_source` with `lastAttempt: unavailable`), so a provider with no supported source is distinct from one that was never observed. |
 | `routing` | array | One row per projected model: `model`, `protocol`, `kind`, `continuity`, `availability` (string or null), `candidateCount` (integer or null), `selection` (`{qualifiedModel, provider, model, priority}` or null), `candidates` (array of `{qualifiedModel, priority, selected}`), `excluded` (array of `{qualifiedModel, reasonCode}`), and a typed `error` (`{code, message}` or null). |
 | `diagnostics` | object | `readModel` (`inventory`), `history` (`state` `available` or `unavailable`; `reasonCode` string or null), `lastProjectionAt` (string or null; the last inventory read time), and `lastError` (string or null). |
 

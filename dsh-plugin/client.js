@@ -142,9 +142,6 @@ window.__ModuleLoader__.load({
       noteCreditNotTokens: 'credit is not tokens',
       noteFieldsUnqualified: 'fields unqualified',
       models: 'models',
-      agentObserved: 'observed',
-      agentNotObserved: 'not observed',
-      agentFailed: 'failed',
       // Diagnostics.
       historyAvailable: 'available',
       historyUnavailable: 'unavailable',
@@ -387,9 +384,6 @@ window.__ModuleLoader__.load({
       noteCreditNotTokens: '额度不是 token 计量',
       noteFieldsUnqualified: '字段未定级',
       models: '模型',
-      agentObserved: '已观测',
-      agentNotObserved: '未观测',
-      agentFailed: '失败',
       // Diagnostics.
       historyAvailable: '可用',
       historyUnavailable: '不可用',
@@ -531,7 +525,6 @@ window.__ModuleLoader__.load({
     const BILLING_KINDS = { plan_allowance: 'billingPlanAllowance', unknown: 'billingUnknown' }
     const HISTORY_STATES = { available: 'historyAvailable', unavailable: 'historyUnavailable', unknown: 'unknown' }
     const FAILURE_STATES = { active: 'failureActive' }
-    const AGENT_STATES = { observed: 'agentObserved', not_observed: 'agentNotObserved', failed: 'agentFailed', unknown: 'unknown' }
     const REASONS = { daemon_identity_unavailable: 'reasonDaemonIdentity', service_manager_unavailable: 'reasonServiceManager' }
     const NOTE_KEYS = {
       status_enums_unqualified: 'noteStatusEnumsUnqualified',
@@ -549,7 +542,6 @@ window.__ModuleLoader__.load({
       target: ['target', 'target_read', 'agent', 'agent_inspect', 'agent_inspect_read'],
       gateway: ['gateway', 'gateway_read', 'gateway_status'],
       config: ['config', 'config_read', 'config_validate'],
-      agentSettings: ['agent_settings', 'agent-settings', 'agent_providers', 'observations'],
     }
     const REFERENCE_ACTIONS = { would_write: 'actionWouldWrite', written: 'actionWritten', unchanged: 'actionUnchanged' }
     // Only an explicit state names the web listener's lifecycle; a null record
@@ -1570,14 +1562,14 @@ window.__ModuleLoader__.load({
 
     /**
      * The one consumer gate for a host read model, shared by the page and every
-     * seat. Only an object carrying `schemaVersion === 1` and `ok === true` is
+     * seat. Only an object carrying `schemaVersion === 2` and `ok === true` is
      * a state; an unsupported schema is a typed failure, and a refused model is
      * an error. Neither is ever adopted as evidence.
      * @returns {{ object: boolean, state?: object, schemaUnsupported?: boolean, message?: string }}
      */
     function stateGate(value, response) {
       if (value === null || typeof value !== 'object') return { object: false }
-      if (value.schemaVersion !== 1) {
+      if (value.schemaVersion !== 2) {
         return { object: true, schemaUnsupported: true, message: boundedText(value.schemaVersion, 24) }
       }
       if (value.ok !== true) return { object: true, message: stateError(value, response?.status) }
@@ -1637,7 +1629,7 @@ window.__ModuleLoader__.load({
           // The state schema is a hard consumer gate: an unknown version is a
           // failure, never a payload this page guesses at. A last-known state
           // stays on screen, labeled, instead of being cleared.
-          if (value.schemaVersion !== 1) {
+          if (value.schemaVersion !== 2) {
             setLoad(previous => ({
               phase: 'failed',
               value: previous.value,
@@ -1672,7 +1664,7 @@ window.__ModuleLoader__.load({
       const refresh = React.useCallback(async () => {
         setObserve({ phase: 'running', items: [] })
         try {
-          const { response, value } = await postJson('/_tmax/observe', { scope: 'all' })
+          const { response, value } = await postJson('/_tmax/observe', {})
           const ok = response.ok && value?.ok === true
           const nextState = value?.state !== null && typeof value?.state === 'object' ? value.state : undefined
           const adopted = adoptState(setLoad, nextState, response, t)
@@ -2359,7 +2351,7 @@ window.__ModuleLoader__.load({
 
     /** Record a read model the page or a seat just adopted, so the seats agree. */
     function rememberState(state) {
-      if (state === null || typeof state !== 'object' || state.schemaVersion !== 1 || state.ok !== true) return
+      if (state === null || typeof state !== 'object' || state.schemaVersion !== 2 || state.ok !== true) return
       snapshotCache = { at: Date.now(), result: { state } }
     }
 
@@ -2383,7 +2375,7 @@ window.__ModuleLoader__.load({
           if (value === null || typeof value !== 'object') return { message: `HTTP ${response.status}` }
           // The same schema gate the page applies: an unknown version is a
           // failure, never a payload a seat guesses at.
-          if (value.schemaVersion !== 1) return { schemaUnsupported: true, message: String(value.schemaVersion) }
+          if (value.schemaVersion !== 2) return { schemaUnsupported: true, message: String(value.schemaVersion) }
           if (value.ok !== true) return { message: stateError(value, response.status) }
           return { state: value }
         } catch (error) {
@@ -2533,7 +2525,6 @@ window.__ModuleLoader__.load({
           ? undefined
           : routes.reduce((count, route) => count + (Array.isArray(route?.models) ? route.models.length : 0), 0),
         providerCount: Array.isArray(providers.tmax) ? providers.tmax.length : undefined,
-        agentProviderCount: Array.isArray(providers.agent) ? providers.agent.length : undefined,
         blockerCount: blockers === undefined ? undefined : blockers.length,
         blockers: blockers === undefined
           ? []
@@ -2773,13 +2764,10 @@ window.__ModuleLoader__.load({
       const routeCount = healthy ? summary.routeCount : undefined
       const modelCount = healthy ? summary.modelCount : undefined
       const providerCount = healthy ? summary.providerCount : undefined
-      const agentProviderCount = healthy ? summary.agentProviderCount : undefined
       const routeText = routeCount === undefined
         ? t('unknown')
         : `${routeCount}${summary.routeNames.length === 0 ? '' : ` (${summary.routeNames.join(', ')})`}`
-      const providerText = providerCount === undefined && agentProviderCount === undefined
-        ? t('unknown')
-        : `${providerCount ?? t('unknown')} tmax · ${agentProviderCount ?? t('unknown')} agent`
+      const providerText = providerCount === undefined ? t('unknown') : `${providerCount} tmax`
       const facts = [
         `${t('toolTarget')}${t('colon')} ${summary.targetId ?? t('unknown')}${summary.targetPath === undefined ? '' : ` (${summary.targetPath})`}`,
         `${t('toolRoutes')}${t('colon')} ${routeText}`,

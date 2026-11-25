@@ -318,7 +318,7 @@ function seatState(overrides) {
   const base = {
     ok: true,
     errors: [],
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: '2026-11-23T10:15:00Z',
     configurationRevision: 'abc123def4567890abc123def4567890abc123def4567890',
     tmaxVersion: '0.1.0',
@@ -363,7 +363,7 @@ function seatState(overrides) {
         capabilities: { contextWindow: 500000, input: ['text', 'image'], reasoningEfforts: { max: 'max' } },
       }],
     }],
-    providers: { tmax: [], agent: [] },
+    providers: { tmax: [] },
     routing: [{
       model: 'deepseek-v4.1-flash',
       protocol: 'responses',
@@ -549,7 +549,7 @@ test('host-derived names are bounded before they reach the DOM', async () => {
   const route = seatState().routes[0]
   const state = seatState({
     routes: [{ ...route, models: [{ name: long }] }],
-    providers: { tmax: [{ id: long, billing: { state: 'observed', rows: [{ percent: 40, basis: 'remaining_percent', label: { key: 'weekly' } }] } }], agent: [] },
+    providers: { tmax: [{ id: long, billing: { state: 'observed', rows: [{ percent: 40, basis: 'remaining_percent', label: { key: 'weekly' } }] } }] },
   })
   const page = await mountPage(withState(state))
   try {
@@ -582,7 +582,6 @@ test('section read failures are typed, bounded and routed to their section', asy
   assert.equal(all[6].text, 'agent_inspect_unavailable')
   assert.deepEqual(pure.errorsForSection(state, 'providers').map(error => error.code),
     ['provider_list_unavailable', 'camel_case_section'])
-  assert.deepEqual(pure.errorsForSection(state, 'agentSettings').map(error => error.section), ['agent_settings'])
   assert.deepEqual(pure.errorsForSection(state, 'target').map(error => error.code), ['agent_inspect_unavailable'])
   assert.deepEqual(pure.sectionErrors({}), [])
   assert.deepEqual(pure.errorsForSection({}, 'projection'), [])
@@ -705,8 +704,7 @@ test('unqualified reset times are marked, never dated', async () => {
   }, 0, t)
   assert.equal(qualifiedReading.resetUnqualified, false)
   assert.ok(qualifiedReading.reset instanceof Date)
-  // The fixture's agent row is the unqualified case; its tmax rows are qualified.
-  assert.equal(pure.windowReading(connected.providers.agent[0].rows[0], 0, t).resetUnqualified, true)
+  // The fixture's tmax row is the qualified case.
   assert.equal(pure.windowReading(connected.providers.tmax[0].billing.rows[0], 0, t).resetUnqualified, false)
 })
 
@@ -1189,7 +1187,7 @@ test('declared routes DSH has not loaded say so, name their blockers, and offer 
 
 
 test('an unsupported state schema is a visible failure, not a payload', async () => {
-  const page = await mountPage(withState({ ...connected, schemaVersion: 2 }))
+  const page = await mountPage(withState({ ...connected, schemaVersion: 3 }))
   try {
     const tree = await page.mount()
     const text = textOf(tree)
@@ -1219,7 +1217,7 @@ test('section read failures replace empty and disconnected claims', async () => 
     target: null,
     routes: [],
     routing: [],
-    providers: { tmax: [], agent: [] },
+    providers: { tmax: [] },
   }
   const page = await mountPage(withState(failed))
   try {
@@ -1323,7 +1321,7 @@ test('a failed provider read does not hide live routes or claim an empty list', 
   const state = {
     ...connected,
     errors: [{ section: 'providers', code: 'provider_list_unavailable', message: 'provider list failed' }],
-    providers: { tmax: [], agent: [] },
+    providers: { tmax: [] },
   }
   const page = await mountPage(withState(state))
   try {
@@ -1344,7 +1342,7 @@ test('a failed provider read does not hide live routes or claim an empty list', 
 test('a readable empty account list says so instead of reading as a failure', async () => {
   // A readable empty list is a reported zero; it is not an unknown quota and
   // not a section that failed to report.
-  const empty = { ...connected, providers: { tmax: [], agent: [] }, errors: [] }
+  const empty = { ...connected, providers: { tmax: [] }, errors: [] }
   const page = await mountPage(withState(empty))
   try {
     const text = textOf(await page.mount())
@@ -1382,11 +1380,11 @@ test('an invalid or unreadable config is the next action before Apply', async ()
 test('a host state with absent sections renders unknowns instead of crashing', async () => {
   const minimal = {
     ok: true,
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: '2026-11-23T10:15:00Z',
     configurationRevision: 'abc12345',
     routes: [],
-    providers: { tmax: [], agent: [] },
+    providers: { tmax: [] },
     routing: [],
     target: { id: 'dsh-main' },
     gateway: {},
@@ -1434,7 +1432,7 @@ test('Refresh is the only observation path: one explicit POST /_tmax/observe', a
     assert.equal(page.calls.length, 2)
     assert.equal(page.calls[1].method, 'POST')
     assert.equal(pathOf(page.calls[1]), '/_tmax/observe')
-    assert.equal(page.calls[1].body, JSON.stringify({ scope: 'all' }))
+    assert.equal(page.calls[1].body, JSON.stringify({}))
 
     const text = textOf(tree)
     // The one account the observation could not read is named, code first.
@@ -1535,12 +1533,12 @@ test('a later refused read keeps the last good table and names its section error
   let phase = 'good'
   const refused = {
     ok: false,
-    schemaVersion: 1,
+    schemaVersion: 2,
     errors: [{ section: 'projection', code: 'inventory_unavailable', message: 'inventory read failed' }],
     target: null,
     routes: [],
     routing: [],
-    providers: { tmax: [], agent: [] },
+    providers: { tmax: [] },
     diagnostics: { lastError: null },
   }
   const page = await mountPage(async record => {
@@ -1640,11 +1638,11 @@ test('Apply previews with dryRun before it writes, then uses the returned state'
 test('an unreadable tmax state names the host failure and offers a retry', async () => {
   const unreadable = {
     ok: false,
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: '2026-11-23T10:15:00Z',
     target: null,
     routes: [],
-    providers: { tmax: [], agent: [] },
+    providers: { tmax: [] },
     routing: [],
     diagnostics: { lastError: { code: 'tmax_unreadable', message: 'tmax CLI timed out' } },
   }
@@ -2110,20 +2108,20 @@ test('Settings > Models availability names why tmax models are absent', async ()
   }), 'unknown')
 })
 
-test('the state gate accepts only schemaVersion 1 with ok true', async () => {
+test('the state gate accepts only schemaVersion 2 with ok true', async () => {
   const pure = (await moduleWith(inertReact())).__pure
-  const good = { schemaVersion: 1, ok: true, routes: [] }
+  const good = { schemaVersion: 2, ok: true, routes: [] }
   assert.deepEqual(pure.stateGate(good, { status: 200 }), { object: true, state: good })
   // A non-object payload is not a state and is never adopted.
   assert.equal(pure.stateGate(null, { status: 200 }).object, false)
   assert.equal(pure.stateGate(undefined, { status: 200 }).object, false)
   // An unsupported schema is a typed failure carrying the value it saw.
-  assert.deepEqual(pure.stateGate({ schemaVersion: 2 }, { status: 200 }),
-    { object: true, schemaUnsupported: true, message: '2' })
+  assert.deepEqual(pure.stateGate({ schemaVersion: 3 }, { status: 200 }),
+    { object: true, schemaUnsupported: true, message: '3' })
   // A refused model is an error, never evidence.
-  assert.equal(pure.stateGate({ schemaVersion: 1, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
+  assert.equal(pure.stateGate({ schemaVersion: 2, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
     'state_unavailable: no answer')
-  assert.equal(pure.stateGate({ schemaVersion: 1, ok: 'yes' }, { status: 200 }).state, undefined)
+  assert.equal(pure.stateGate({ schemaVersion: 2, ok: 'yes' }, { status: 200 }).state, undefined)
 })
 
 test('unknown credential readiness is never drawn as a missing credential', async () => {
@@ -2170,7 +2168,7 @@ test('the tmax_status tool text is parsed as data, never as a success claim', as
     target: { id: 'dsh-main', path: '/home/user/.dsh' },
     gateway: { ready: false },
     routes: [{ provider: 'tmax', models: ['a', 'b'] }, { provider: 'other', models: ['c'] }],
-    providers: { tmax: [{ id: 'kimi' }, { id: 'cpa' }], agent: [{ id: 'glm' }] },
+    providers: { tmax: [{ id: 'kimi' }, { id: 'cpa' }] },
     blockers: [{ code: 'gateway_not_ready', message: 'start it' }],
     errors: [],
     routing: [],
@@ -2186,7 +2184,6 @@ test('the tmax_status tool text is parsed as data, never as a success claim', as
   assert.deepEqual(summary.routeNames, ['tmax', 'other'])
   assert.equal(summary.modelCount, 3)
   assert.equal(summary.providerCount, 2)
-  assert.equal(summary.agentProviderCount, 1)
   assert.equal(summary.blockerCount, 1)
   assert.deepEqual(summary.blockers, ['gateway_not_ready: start it'])
   // Non-JSON text is kept bounded and is not a parsed success.
@@ -2367,7 +2364,7 @@ test('the tmax_status card renders the tool result without another read', async 
       target: { id: 'dsh-main', path: '/home/user/.dsh' },
       gateway: { ready: false },
       routes: [{ provider: 'tmax', models: ['a', 'b'] }],
-      providers: { tmax: [{ id: 'kimi' }, { id: 'cpa' }], agent: [] },
+      providers: { tmax: [{ id: 'kimi' }, { id: 'cpa' }] },
       blockers: [{ code: 'gateway_not_ready', message: 'start it' }],
       errors: [],
       routing: [],
@@ -2388,7 +2385,7 @@ test('the tmax_status card renders the tool result without another read', async 
     assert.match(text, /toolRoutes/)
     assert.match(text, /gatewayNotReady/)
     assert.match(text, /toolProviders/)
-    assert.match(text, /2 tmax · 0 agent/)
+    assert.match(text, /2 tmax/)
     assert.match(text, /toolModels/)
     assert.match(text, /toolBlockers/)
     assert.match(text, /gateway_not_ready: start it/)
@@ -2628,8 +2625,8 @@ test('an apply-returned read model is adopted only through the state gate', asyn
   const cases = [
     {
       name: 'unsupported schema',
-      state: { ...seatState(), schemaVersion: 2 },
-      pattern: /hostError: schema 2/,
+      state: { ...seatState(), schemaVersion: 3 },
+      pattern: /hostError: schema 3/,
     },
     {
       name: 'refused read model',
@@ -2712,7 +2709,7 @@ test('the tmax_status card suppresses zero counts on a failed result', async () 
     ownership: null,
     gateway: null,
     routes: [],
-    providers: { tmax: [], agent: [] },
+    providers: { tmax: [] },
     routing: [],
     diagnostics: { history: { state: 'unavailable', reasonCode: 'tmax_unavailable' }, lastProjectionAt: null, lastError: 'unavailable' },
     errors: [{ section: 'target', code: 'tmax_unavailable', message: 'tmax unavailable' }],

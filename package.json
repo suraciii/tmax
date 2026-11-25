@@ -13,7 +13,6 @@
   "files": [
     "dsh-plugin/index.js",
     "dsh-plugin/client.js",
-    "dsh-plugin/quota.js",
     "dsh-plugin/host/",
     "dsh-plugin/cordis.patch.yml",
     "dsh-plugin/icon.svg",

@@ -1,11 +1,11 @@
 {
   "contract": "dsh-plugin host state, consumed by the tmax page and seats",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "cases": {
     "connectedHomeOwned": {
       "ok": true,
       "errors": [],
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "generatedAt": "2026-11-23T10:15:00Z",
       "configurationRevision": "352a0e3fc342e94777e1a819244e016d98ad211fa7bdd0a082d85bc15a4cbe15",
       "tmaxVersion": "0.1.0",
@@ -241,58 +241,6 @@
               "reasonCode": null
             },
             "error": null
-          }
-        ],
-        "agent": [
-          {
-            "id": "dsh:glm-coding-cn",
-            "provider": "glm-coding-cn",
-            "displayName": "GLM Coding CN",
-            "vendor": "glm-coding-plan",
-            "baseURL": "https://open.bigmodel.cn/api/coding/paas/v4",
-            "models": [
-              "glm-5.4"
-            ],
-            "state": "observed",
-            "observedAt": "2026-11-23T09:10:00Z",
-            "reasonCode": null,
-            "message": null,
-            "plan": {
-              "level": "pro"
-            },
-            "rows": [
-              {
-                "label": {
-                  "key": "limit",
-                  "type": "tokens",
-                  "unit": 5,
-                  "number": 1
-                },
-                "basis": "consumed_percent",
-                "percent": 37,
-                "reset": {
-                  "kind": "unqualified_epoch_millis",
-                  "raw": 1795073471000,
-                  "encoding": "epoch_milliseconds_unqualified"
-                }
-              }
-            ]
-          },
-          {
-            "id": "dsh:proxy",
-            "provider": "proxy",
-            "displayName": "Custom proxy",
-            "vendor": null,
-            "baseURL": "https://llm.example.test/v1",
-            "models": [
-              "custom-model"
-            ],
-            "state": "not_observed",
-            "observedAt": null,
-            "reasonCode": "unsupported_source",
-            "message": null,
-            "plan": null,
-            "rows": []
           }
         ]
       },

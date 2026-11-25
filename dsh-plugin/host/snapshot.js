@@ -13,11 +13,9 @@ import { readEnvelope, READ_TIMEOUT_MS } from './cli.js'
 import { composeInventory, readInventoryFacts } from './inventory.js'
 import { liveProviderIds } from './ownership.js'
 
-export const STATE_SCHEMA_VERSION = 1
+export const STATE_SCHEMA_VERSION = 2
 const CACHE_TTL_MS = 5_000
 const PROTOCOLS = new Set(['chat-completions', 'responses', 'messages'])
-const AGENT_SETTINGS_UNAVAILABLE =
-  'the DSH settings service is unavailable, so agent-configured providers cannot be listed'
 
 function list(value) {
   return Array.isArray(value) ? value : []
@@ -373,12 +371,11 @@ function diagnosticsSection(inventory, statusRead) {
  * @param {object} input
  * @param {object} input.config
  * @param {object} input.ctx
- * @param {object} input.observations - observation cache
  * @param {() => object|undefined} input.getOwnership - latest route-ownership decision
  * @param {() => object[]} [input.getRouteBlockers] - declared route-build blockers
  * @param {() => string[]} [input.getLiveNames] - live provider route ids
  */
-export function createSnapshotService({ config, ctx, observations, getOwnership, getRouteBlockers, getLiveNames }) {
+export function createSnapshotService({ config, ctx, getOwnership, getRouteBlockers, getLiveNames }) {
   let cache = { at: 0, value: undefined }
   let inFlight
 
@@ -421,7 +418,7 @@ export function createSnapshotService({ config, ctx, observations, getOwnership,
    * still composed and their own failures named. Empty never stands in for
    * unknown.
    */
-  function inventoryFailureState(error, { startedAt, providerRows, listedRead, configRead, agentRecords }) {
+  function inventoryFailureState(error, { startedAt, providerRows, listedRead, configRead }) {
     const code = typeof error?.code === 'string' && error.code !== '' ? error.code : 'inventory_unavailable'
     const message = typeof error?.message === 'string' && error.message !== ''
       ? error.message
@@ -431,9 +428,6 @@ export function createSnapshotService({ config, ctx, observations, getOwnership,
     else if (!listedRead.ok) errors.push({ section: 'providers', code: listedRead.code, message: listedRead.message ?? listedRead.code })
     if (configRead.envelope === undefined) errors.push({ section: 'config', code: configRead.code, message: configRead.message ?? configRead.code })
     else if (!configRead.ok) errors.push({ section: 'config', code: configRead.code, message: configRead.message ?? configRead.code })
-    if (!agentRecords.available) {
-      errors.push({ section: 'providers', code: 'agent_settings_unavailable', message: AGENT_SETTINGS_UNAVAILABLE })
-    }
     // Availability is "tmax answered something": a failed target read must not
     // hide provider or configuration evidence that did answer.
     const ok = listedRead.envelope !== undefined || configRead.envelope !== undefined
@@ -450,7 +444,7 @@ export function createSnapshotService({ config, ctx, observations, getOwnership,
       gateway: null,
       config: configSection(configRead),
       routes: [],
-      providers: { tmax: providerRows, agent: agentRecords.providers },
+      providers: { tmax: providerRows },
       routing: [],
       diagnostics: {
         history: { state: 'unavailable', reasonCode: code },
@@ -484,9 +478,8 @@ export function createSnapshotService({ config, ctx, observations, getOwnership,
       return readEnvelope(config, ['provider', 'inspect', id], { timeoutMs: READ_TIMEOUT_MS })
     }))
     const providerRows = listed.map((entry, index) => mapProvider(entry, inspected[index], object(entry).id))
-    const agentRecords = observations.providerRecords()
     if (!inventoryRead.ok) {
-      return inventoryFailureState(inventoryRead.error, { startedAt, providerRows, listedRead, configRead, agentRecords })
+      return inventoryFailureState(inventoryRead.error, { startedAt, providerRows, listedRead, configRead })
     }
     const inventory = composeInventory(inventoryRead.data)
     const facts = inventoryRead.data
@@ -558,7 +551,6 @@ export function createSnapshotService({ config, ctx, observations, getOwnership,
     else if (!facts.gateway.ok) addError('gateway', facts.gateway.code, facts.gateway.message)
     if (facts.status.envelope === undefined) addError('authority', facts.status.code, facts.status.message)
     else if (!facts.status.ok) addError('authority', facts.status.code, facts.status.message)
-    if (!agentRecords.available) addError('providers', 'agent_settings_unavailable', AGENT_SETTINGS_UNAVAILABLE)
 
     return {
       ok: true,
@@ -573,10 +565,7 @@ export function createSnapshotService({ config, ctx, observations, getOwnership,
       gateway: gatewaySection(inventory, facts.gateway),
       config: configSection(configRead),
       routes,
-      providers: {
-        tmax: providerRows,
-        agent: agentRecords.providers,
-      },
+      providers: { tmax: providerRows },
       routing,
       diagnostics: diagnosticsSection(inventory, facts.gateway),
     }
