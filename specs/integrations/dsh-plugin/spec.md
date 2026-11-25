@@ -60,15 +60,15 @@ authority.
 ## Page content
 
 The page is one first-level DSH page. It answers two questions and shows
-nothing else: is model access working, and how much quota is left in each
-account. Everything the CLI reports — configuration revisions, schemas, route
+nothing else: is model access working, and how much of each account's quota is
+spent and when it comes back. Everything the CLI reports — configuration revisions, schemas, route
 detail, gateway supervision, diagnostics, retained request history — stays in
 the CLI.
 
 | Section | Required content |
 | --- | --- |
 | Header | The page name, when the state was generated, one reachability verdict, and the one control that changes it when the page has it: **Start gateway** when the gateway is not ready, **Apply** when DSH has not been given the declared routes or a credential tmax knows is missing. Otherwise one line names what stands in the way — a pending reload, an invalid or unavailable configuration with its own errors, a route-ownership conflict, or a tmax blocker — followed by every failed section read and every route blocker, bounded and code first, with a **Retry** that reads again and never observes. **Refresh** observes every listed provider. A failed read keeps the last good table, labels it last known, and shows the failure once. |
-| Accounts | One card per tmax account that reports a quota window, least left first; an account without any window takes no card. Every window the account reports is one bar with its name, what is left, and when it resets, stated as remaining whatever basis the account reports in; an unknown reset time is left out. A window whose share cannot be computed is text, never a bar, and a window with nothing left keeps a visible mark. A card carries a tag only for a state a person must act on or know about — disabled, suspended, failing — and the one action its evidence calls for: resume for a reported suspension, reset for an active failure. |
+| Accounts | One card per tmax account that reports a quota window, closest to its limit first; an account without any window takes no card. Every window the account reports is one bar filled with the share it has used, stating its name, what it used of what, and when it resets, whatever basis the account reports in: a percentage window states its share of 100%, a reported quantity states what was used of it; an unknown reset time is left out. A window whose share cannot be computed is text, never a bar. A card carries a tag only for a state a person must act on or know about — disabled, suspended, failing — and the one action its evidence calls for: resume for a reported suspension, reset for an active failure. |
 | Models | Every projected model and the account its routing selects; the target's default is marked. |
 | Actions | The preview and result of one confirmed provider, gateway, or Apply action: typed code, status, message, data, blockers, next actions, and effects. Preview and confirmation are separate; cancel clears. An observation names only the accounts it could not read. |
 
@@ -445,9 +445,10 @@ refusal, and no outcome carries secret material.
 | State schema | The plugin state `schemaVersion` is gated, not displayed: an unsupported value is a visible failure, not a guess. |
 | Read-model source | Not shown on the page; a CLI read. A failed source read is a visible error, never a silently empty section. |
 | Route readiness | `active` means DSH currently serves a route with that provider name. It is independent of configured route membership and of credential readiness, and the read model reports each separately; the page folds them into its verdict rather than listing them. |
-| tmax providers | One card per provider tmax lists that reports a quota window, least left first; a provider without a window takes no card. A failed provider read is named where the cards would be, never read as "no account". |
+| tmax providers | One card per provider tmax lists that reports a quota window, closest to its limit first; a provider without a window takes no card. A failed provider read is named where the cards would be, never read as "no account". |
 | Profile providers | Not shown on the page; a CLI read. They are independent of tmax providers and are never summed with them. A provider whose vendor has no implementation is reported as having no supported source. |
-| Quota window | Draw a share only from a computable fraction. No fraction means text only, never a bar. A zero share keeps a visible mark. The accessible value and the drawn value describe the same quantity. |
+| Quota window | Draw a share only from a computable fraction. No fraction means text only, never a bar. The bar, the printed value, and the accessible label describe the same quantity: the share used. A reported used amount wins over subtracting what is left, and the quota prints beside the used amount — the reported quantity, or 100% for a percentage window. |
+| Quota tone and reset | Colour marks what needs attention, never decoration: usage warns from 75% used and errors from 90%. A reset within a day (today or tomorrow) states its clock, any other day states its date, and the year appears only when it is not the current one. |
 | History | Availability and reason come from the state; the retained list is an explicit read, never a mount fetch. Missing history is missing evidence, not proof of no requests; a typed unavailable answer is not an empty table; a successful read with zero retained records is a reported zero. |
 | History coverage | Show the process scope, retained count, range, storage limits, eviction, the numeric incomplete-capture count (positive is a gap, zero is none reported), prior-process and direct-traffic coverage, and material gaps. Unknown coverage stays unknown, and a gap is a warning rather than a normal state. |
 | Action availability | Offer an action only when the reported evidence calls for it. No evidence, no action. |
