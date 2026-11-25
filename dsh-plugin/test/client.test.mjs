@@ -482,7 +482,11 @@ test('window readings only become meters when a share is computable', async () =
   assert.equal(zero.text, 'left 100 / 100')
   assert.equal(zero.spoken, 'usedShare 0%')
 
-  const half = windowReading({ counters: { total: 10, remaining: 4 } }, 0, t)
+  const half = windowReading({ basis: 'counters', counters: { total: 10, remaining: 4 } }, 0, t)
+  // Counters are a share only on the bases that define them; any other basis is text.
+  const foreignBasis = windowReading({ basis: 'unknown_basis', counters: { total: 50, remaining: 100 } }, 0, t)
+  assert.equal(foreignBasis.unreadable, true)
+  assert.equal(foreignBasis.consumed, undefined)
   assert.equal(half.consumed, 60)
   assert.equal(toneFor(half.consumed), 'ok')
 

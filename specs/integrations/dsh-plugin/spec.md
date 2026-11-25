@@ -129,7 +129,7 @@ a model-facing tool: its output never enters a model turn.
 | `routing` | Every projected model with selection, candidate count, selected count, exclusions, and any per-model error. |
 | `gateway` | Configured and ready state, listener, daemon discovery and reason, supervision, autostart facts, and shared-key state. |
 | `diagnostics` | Read-model source, generation time, revision, tmax version, history availability and reason, last inventory read time, last error, and every section error. |
-| `history` | One read-only `tmax history list` call: coverage, requested range, matched and omitted counts, and a bounded record listing. It shares the retained-history contract with the page's history route; an unavailable daemon or history is stated with its reason, never as an empty history and never as zero requests. |
+| `history` | One read-only `tmax history list` call: coverage, requested range, matched and omitted counts, and a bounded record listing. It shares the retained-history contract with the HTTP `history` route; an unavailable daemon or history is stated with its reason, never as an empty history and never as zero requests. |
 
 Rules:
 
@@ -150,8 +150,8 @@ Rules:
 - A command failure is returned as error text; it must not be reported as a
   successful empty result.
 - Retained-history records are request metadata only. Bodies, headers, URLs,
-  credential values, and model output never cross; the page's history table and
-  the command's `history` subcommand read the same compact evidence.
+  credential values, and model output never cross; the command's `history`
+  subcommand and the HTTP `history` route read the same compact evidence.
 
 ## Request history
 
@@ -206,8 +206,9 @@ serves the same names.
   mounts an adapter of its own.
 - Every declared route stays in the state read model with its blockers; a route
   with no usable model, credential, or base URL is reported, not hidden.
-- The page shows a credential reference name and readiness state, never a
-  credential value.
+- No credential value ever reaches the page. The state names a credential by
+  reference and reports whether it is configured; the page draws the verdict a
+  missing credential implies and never the reference itself.
 
 ## Reads
 
@@ -436,7 +437,7 @@ refusal, and no outcome carries secret material.
 | Evidence | Required rule |
 | --- | --- |
 | Unknown, absent, zero | A missing reading is unknown. An unsupported source is reported as no supported source, with its last attempt when the host reports one; it is not the same as no observation. A zero reading is reported as zero. None of these may render as another, and none means unlimited. |
-| Observation time | Copy the time from the reading's own data. The page shows it; the response time, the request time, and the browser clock never substitute for it. |
+| Observation time | The state carries the time from the reading's own data; the page shows only when the state was generated, and the response time, the request time, and the browser clock never substitute for a reading's time. |
 | Freshness | Use tmax's reported freshness and notes. The page must not invent a staleness threshold or relabel a reading stale by its own clock. |
 | Catalog availability | Availability is tmax evidence about its own routing, not a DSH availability claim and not a request result. |
 | Subscription and renewal | Show the plan and renewal only when tmax reports them. An absent subscription stays absent; it is not a zero allowance. |

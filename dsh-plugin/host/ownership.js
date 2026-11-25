@@ -17,17 +17,20 @@ import { join } from 'node:path'
  * provider, and a document that fails to parse contributes nothing.
  * @param {string[]} documents - profile `cordis.patch.yml` texts, if any
  * @param {(text: string) => unknown} parse - DSH's entry-list parser
- * @returns {Set<string>} every provider name any document declares
+ * @returns {{names: Set<string>, parsed: boolean}} every provider name any
+ *   document declares, and whether every document parsed
  */
 export function appliedProviderNames(documents, parse) {
   const names = new Set()
-  if (typeof parse !== 'function') return names
+  if (typeof parse !== 'function') return { names, parsed: false }
+  let parsed = true
   for (const text of documents || []) {
     if (typeof text !== 'string') continue
     let rows
     try {
       rows = parse(text)
     } catch {
+      parsed = false
       continue
     }
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -37,7 +40,7 @@ export function appliedProviderNames(documents, parse) {
       for (const name of Object.keys(providers)) if (name !== '') names.add(name)
     }
   }
-  return names
+  return { names, parsed }
 }
 
 /** Route ids the registry reports, from either strings or `{id}` objects. */

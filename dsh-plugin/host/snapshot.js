@@ -517,7 +517,8 @@ export function createSnapshotService({ config, ctx, observations, getOwnership,
       const source = object(route)
       const credentialRef = text(source.credential_ref)
       const name = text(source.name)
-      const provider = name === null ? null : `${config.providerPrefix ?? ''}${name}`
+      // The route name is the provider name as the settings and the registry spell it.
+      const provider = name
       return {
         name,
         provider,

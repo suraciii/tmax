@@ -69,7 +69,6 @@ home when `target` is empty.
 | --- | --- |
 | `home` | DSH home to inspect. Defaults to `DSH_HOME`, then `~/.dsh`. |
 | `target` | Declared tmax target ID. When empty, the one DSH target whose path matches the home is used. |
-| `providerPrefix` | Prefix reported in front of each route name the state lists. Empty by default; it never renames a provider DSH already has. |
 | `refreshSeconds` | Inventory refresh interval in seconds; an integer of at least 10, default `60`. It only re-reads tmax; it never observes a provider. |
 | `tmaxPath` | `tmax` executable to run. Defaults to `tmax` on `PATH`. |
 
@@ -324,9 +323,8 @@ read model in bounded text:
   revision, tmax version, history availability, last inventory read time, last
   error, and every section error.
 - `history` — a read-only `tmax history list`: coverage, range, matched and
-  omitted counts, and a bounded record list. It reads the same retained metadata
-  as the page's history area; an unavailable daemon or history is reported with
-  its reason, never as an empty history.
+  omitted counts, and a bounded record list. An unavailable daemon or history is
+  reported with its reason, never as an empty history.
 
 Output is bounded: at most 20 routes, 40 tmax providers and 40 agent-configured
 providers, 40 routing rows, 20 section errors, and 10 history records; at most
@@ -334,8 +332,9 @@ providers, 40 routing rows, 20 section errors, and 10 history records; at most
 many rows were omitted. An unknown or multi-word subcommand returns an error
 with the usage and performs no read. A failed or absent section prints
 `unavailable (code: message)` for that section instead of zero counts. The
-page's `GET /_tmax/history` table and this subcommand share one retained-history
-contract; neither returns bodies, headers, or secrets.
+HTTP `GET /_tmax/history` route and this subcommand share one retained-history
+contract; neither returns bodies, headers, or secrets, and the page shows no
+history table.
 
 ## HTTP routes
 
