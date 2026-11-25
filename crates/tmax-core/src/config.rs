@@ -757,6 +757,12 @@ pub fn load(store: &crate::storage::Store) -> Result<LoadedFile> {
         exists: true,
     })
 }
+/// A stable revision of one target's desired configuration, independent of file
+/// formatting or unrelated targets. The page compares it with the revision the
+/// last successful apply captured.
+pub fn target_revision(target: &AgentTarget) -> String {
+    revision(&serde_json::to_vec(target).unwrap_or_default())
+}
 pub fn raw_revision(store: &crate::storage::Store) -> Result<String> {
     match std::fs::read(store.root.join("tmax.toml")) {
         Ok(v) => Ok(revision(&v)),

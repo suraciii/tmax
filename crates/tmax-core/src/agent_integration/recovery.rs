@@ -58,6 +58,11 @@ pub(super) struct Record {
     pub(super) files: Vec<FileRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) delivery: Option<Delivery>,
+    /// The target revision captured when this record's apply completed. A
+    /// write_pending or recovery_required record has no applied revision; a
+    /// record written before this field existed also has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) applied_revision: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct FileRecord {
@@ -709,6 +714,7 @@ mod tests {
             state: "applied_reload_pending".into(),
             files: vec![],
             delivery: None,
+            applied_revision: None,
         };
         let view = record_view(&store, &record);
         assert_eq!(view["available_actions"], json!([]));
@@ -732,6 +738,7 @@ mod tests {
             state: "applied_reload_pending".into(),
             files: vec![],
             delivery: None,
+            applied_revision: None,
         };
         let request = Request {
             command: vec!["agent".into(), "recovery".into(), "discard".into()],
@@ -948,6 +955,7 @@ mod tests {
             state: "discarded".into(),
             files: vec![],
             delivery: None,
+            applied_revision: None,
         };
         store
             .write_json(
@@ -985,6 +993,7 @@ mod tests {
             state: "write_pending".into(),
             files: vec![],
             delivery: None,
+            applied_revision: None,
         };
         store
             .write_json(

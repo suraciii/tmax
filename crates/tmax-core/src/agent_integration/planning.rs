@@ -251,6 +251,18 @@ fn readiness_matrix(blockers: &[Value]) -> Value {
     })
 }
 
+/// Whether the retained record leaves the current target revision unapplied.
+/// A record's captured applied revision only counts when the record represents
+/// completed actual configuration; an interrupted or restored record is never
+/// current, even if it carries a revision from a previous attempt.
+fn target_unapplied(record: Option<&Record>, current: &str) -> bool {
+    let Some(record) = record else { return true };
+    if record.state != "applied_reload_pending" && record.state != "accepted" {
+        return true;
+    }
+    record.applied_revision.as_deref() != Some(current)
+}
+
 pub async fn inspect(
     store: &Store,
     config: &Config,
@@ -346,8 +358,17 @@ pub async fn inspect(
             })
             .unwrap_or("not_applied")
     };
+    // Desired configuration is a local revision, not a native diff: compare
+    // the target's current revision with the one the last apply captured.
+    let target_revision = config::target_revision(target);
+    let applied_target_revision = record.and_then(|r| r.applied_revision.as_deref());
+    let unapplied = if available {
+        Some(target_unapplied(record, &target_revision))
+    } else {
+        None
+    };
     Ok(
-        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,dsh_profile.as_deref().unwrap_or_default(),name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"dsh_profile":dsh_profile,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view_in(&target.agent,&path,dsh_profile.as_deref()),"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
+        json!({"target":id,"agent":target.agent,"path":path,"scope_state":if available{"available"}else{"unavailable"},"scope_reason_code":if available{None}else{Some(scope_reason)},"configuration_revision":config::raw_revision(store).ok(),"target_revision":target_revision,"applied_target_revision":applied_target_revision,"unapplied":unapplied,"providers":target.providers.iter().map(|(name,p)|{let relayed=p.is_relayed(config);let base_url=config.gateway.as_ref().filter(|_|relayed).map(|gateway|format!("http://{}",gateway.listen));let protocols=p.models.iter().map(|selection|selection.protocol.as_str()).collect::<BTreeSet<_>>();let credential_ref=if relayed&&target.agent=="dsh"&&protocols.len()==1{protocols.iter().next().map(|protocol|adapters::dsh_credential_ref_for(&target.scope,dsh_profile.as_deref().unwrap_or_default(),name,protocol))}else{None};json!({"name":name,"source":{"provider":p.provider},"relayed":relayed,"base_url":base_url,"credential_ref":credential_ref,"applied_delivery":if relayed{delivery.clone()}else{Value::Null},"models":p.models})}).collect::<Vec<_>>(),"default":target.default,"roles":target.roles,"supported_roles":adapters::supported_roles(&target.agent),"native_projection":native_projection,"fact_gaps":fact_gaps,"installation":installed,"dsh_profile":dsh_profile,"precedence":adapters::precedence(&target.agent),"files":if available{safe_files(&target.agent,&path)}else{Vec::new()},"credential_handoff":{"owner":target.agent,"plaintext_in_native_configuration":target.agent == "hermes","plaintext_private_native_credential_file":target.agent != "hermes","reference":if target.agent == "hermes" {"native api_key in current-user-restricted config.yaml"} else {"native command/file helper"},"secret_reads":false,"native_auth_import":false},"applied_state":applied_state,"native_default":super::native_default::view_in(&target.agent,&path,dsh_profile.as_deref()),"blockers":blockers,"readiness":readiness_matrix,"recovery":record.map(|r|record_view(store,r))}),
     )
 }
 
@@ -1308,6 +1329,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unapplied_requires_completed_configuration_and_the_current_revision() {
+        let mut record = super::Record {
+            id: "r".into(),
+            owner: "o".into(),
+            target: "t".into(),
+            agent: "pi".into(),
+            scope: PathBuf::from("/tmp/scope"),
+            payload_ref: "p".into(),
+            secret_refs: Vec::new(),
+            state: "applied_reload_pending".into(),
+            files: Vec::new(),
+            delivery: None,
+            applied_revision: Some("rev-a".into()),
+        };
+        assert!(!super::target_unapplied(Some(&record), "rev-a"));
+        assert!(super::target_unapplied(Some(&record), "rev-b"));
+        assert!(super::target_unapplied(None, "rev-a"));
+        record.applied_revision = None;
+        assert!(super::target_unapplied(Some(&record), "rev-a"));
+        record.applied_revision = Some("rev-a".into());
+        record.state = "write_pending".into();
+        assert!(
+            super::target_unapplied(Some(&record), "rev-a"),
+            "an incomplete write is not applied"
+        );
+        record.state = "recovery_required".into();
+        assert!(
+            super::target_unapplied(Some(&record), "rev-a"),
+            "a recovery-required record is not applied"
+        );
+        record.state = "restored".into();
+        assert!(
+            super::target_unapplied(Some(&record), "rev-a"),
+            "a restored target is not applied"
+        );
+    }
+
     fn delivery_record(config: &Config, target: &AgentTarget) -> super::Record {
         let delivery = config::gateway_delivery_for(config, &config.relayed_route_pairs(target))
             .map(Into::into);
@@ -1322,6 +1381,7 @@ mod tests {
             state: "applied_reload_pending".into(),
             files: Vec::new(),
             delivery,
+            applied_revision: None,
         }
     }
 
