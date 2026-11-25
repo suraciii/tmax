@@ -18,25 +18,35 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: just
+      - name: Install actionlint
+        run: |
+          version=1.7.12
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          sha256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          curl -fsSL -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          echo "${sha256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}" actionlint
+          echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
       - name: Run full gate with evidence
         run: just verify "$RUNNER_TEMP/verification"
       - name: Preserve verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: main-verification-evidence
           path: ${{ runner.temp }}/verification
@@ -47,16 +57,25 @@ jobs:
     needs: verify
     strategy:
       fail-fast: false
+      # The Linux stable release build already runs inside the `verify` gate,
+      # and the 1.88.0 entry below exercises that same Linux release binary at
+      # the minimum supported version. A separate stable Linux entry repeats
+      # work without adding coverage.
       matrix:
-        os: [ubuntu-24.04, macos-latest, windows-latest]
-        rust: [stable]
         include:
           - os: ubuntu-24.04
             rust: '1.88.0'
+          - os: macos-latest
+            rust: stable
+          - os: windows-latest
+            rust: stable
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # A cold cache rebuilds the whole dependency graph with thin LTO, and the
+    # macOS runners are slower than Linux. The previous 15-minute cap cancelled
+    # a healthy macOS build.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust }}
@@ -73,4 +92,7 @@ jobs:
       # the ones that exercise it; the rest of the suite stays on the Linux gate.
       - name: Exercise Windows service identity
         if: runner.os == 'Windows'
-        run: cargo test --locked -p tmax-core --lib -- service::windows_supervisor::
+        # The final `::` must not end an unquoted YAML scalar: YAML reads it as
+        # a mapping value and rejects the whole workflow file before any job
+        # starts. Quoting makes the filter an explicit string.
+        run: "cargo test --locked -p tmax-core --lib -- service::windows_supervisor::"

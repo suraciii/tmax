@@ -14,6 +14,10 @@ Verification additionally requires:
 - `just` — the command runner the gates use.
 - Python 3.10 or newer — the verification and hygiene scripts under `scripts/`.
 - Node.js 22 or newer — the DSH plugin's tests run under `node --test`.
+- `actionlint` — validates the GitHub Actions workflow files. Install it from
+  the project's [releases](https://github.com/rhysd/actionlint/releases) or with
+  `go install github.com/rhysd/actionlint/cmd/actionlint@latest`. It also checks
+  `run:` scripts when `shellcheck` is on `PATH`, as it is on CI runners.
 - `git` — the scripts read the index and the working tree to record source
   provenance.
 
@@ -128,24 +132,25 @@ verification. Run only explicitly requested paid probes with authorized access.
 ## Verification gates
 
 ```bash
-just fmt       # check formatting without modifying source
-just check     # type-check every workspace target
-just clippy    # lint the workspace, warnings denied
-just test      # run the workspace test suite
-just test-scripts  # run the verification tooling's own tests
-just test-plugin   # run the DSH plugin's tests
-just smoke     # exercise the CLI entrypoint
-just ci-pr     # the required pull request gate
-just ci        # the full gate: ci-pr plus the release build
+just fmt             # check formatting without modifying source
+just check           # type-check every workspace target
+just clippy          # lint the workspace, warnings denied
+just check-workflows # validate the GitHub Actions workflow files
+just test            # run the workspace test suite
+just test-scripts    # run the verification tooling's own tests
+just test-plugin     # run the DSH plugin's tests
+just smoke           # exercise the CLI entrypoint
+just ci-pr           # the required pull request gate
+just ci              # the full gate: ci-pr plus the release build
 ```
 
 `just ci-pr` is the required check on every pull request. `just ci` runs the full
 gate after merge into `main` and on manual dispatch. A gate stops at the first
 recipe that fails.
 
-After the main gate passes, CI builds and exercises the release CLI on Linux,
-macOS, and Windows with stable Rust. A separate Linux job uses Rust 1.88.0 to
-check the minimum supported version.
+The main gate builds the release CLI on Linux with stable Rust. After it passes,
+CI builds and exercises the release CLI on macOS and Windows with stable Rust,
+and on Linux with the minimum supported Rust 1.88.0.
 
 ## Verification evidence
 

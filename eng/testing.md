@@ -4,9 +4,9 @@
 never weaken assertions.**
 
 **Pull request — `ci-pr`:** Check formatting, type-check the workspace, lint it
-with warnings denied, run the workspace, verification-tool, and DSH plugin
-tests, and exercise the CLI entrypoint. This is the pull request verification
-gate.
+with warnings denied, validate the GitHub Actions workflow files, run the
+workspace, verification-tool, and DSH plugin tests, and exercise the CLI
+entrypoint. This is the pull request verification gate.
 
 **Main — `ci`:** Everything in `ci-pr` plus the release build. This gate runs
 after merge into `main` and on manual dispatch. A failure is handled as a
