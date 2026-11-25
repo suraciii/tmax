@@ -1428,6 +1428,29 @@ test('a failed refresh keeps the old table and names the failure', async () => {
   }
 })
 
+test('an unreadable ownership withholds Apply and offers a read retry', async () => {
+  // The settings could not be parsed, so nothing can say whether the routes
+  // are applied. Writing on that guess could overwrite a working home.
+  const state = {
+    ...connected,
+    routes: [],
+    routing: [],
+    target: { ...connected.target, blockers: [] },
+    ownership: { owner: 'unknown', scope: null, reason: 'settings_unreadable', conflict: null },
+  }
+  const page = await mountPage(withState(state))
+  try {
+    const tree = await page.mount()
+    const text = textOf(tree)
+    assert.equal(buttonByText(tree, 'connect'), undefined, 'no write is offered')
+    assert.match(text, /nextSettingsUnreadable/)
+    assert.ok(buttonByText(tree, 'retry'), 'a read retry is offered')
+    assert.equal(page.calls.some(call => call.method === 'POST'), false)
+  } finally {
+    page.restore()
+  }
+})
+
 test('a failed read withdraws Apply and leaves only a read retry', async () => {
   const pageOwned = {
     ...connected,

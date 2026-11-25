@@ -444,7 +444,7 @@ refusal, and no outcome carries secret material.
 | Configuration revision | Not shown on the page; a CLI read. A revision change is not proof that an agent applied or reloaded it. |
 | State schema | The plugin state `schemaVersion` is gated, not displayed: an unsupported value is a visible failure, not a guess. |
 | Read-model source | Not shown on the page; a CLI read. A failed source read is a visible error, never a silently empty section. |
-| Route readiness | `active` means DSH currently serves a route with that provider name. It is independent of configured route membership and of credential readiness; the page shows all three separately. |
+| Route readiness | `active` means DSH currently serves a route with that provider name. It is independent of configured route membership and of credential readiness, and the read model reports each separately; the page folds them into its verdict rather than listing them. |
 | tmax providers | One card per provider tmax lists that reports a quota window, least left first; a provider without a window takes no card. A failed provider read is named where the cards would be, never read as "no account". |
 | Profile providers | Not shown on the page; a CLI read. They are independent of tmax providers and are never summed with them. A provider whose vendor has no implementation is reported as having no supported source. |
 | Quota window | Draw a share only from a computable fraction. No fraction means text only, never a bar. A zero share keeps a visible mark. The accessible value and the drawn value describe the same quantity. |

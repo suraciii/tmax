@@ -58,6 +58,7 @@ window.__ModuleLoader__.load({
       nextProjectionRetry: 'The route projection could not be read; retry the host read.',
       nextSectionRetry: 'A section of the host state could not be read; retry the state read.',
       nextRetry: 'The tmax host state could not be read.',
+      nextSettingsUnreadable: 'The profile settings could not be read, so whether the routes are applied is unknown; read again.',
       // Status and access.
       target: 'Target',
       targetPath: 'Home path',
@@ -301,6 +302,7 @@ window.__ModuleLoader__.load({
       nextProjectionRetry: '无法读取路由投影；请重试 host 读取。',
       nextSectionRetry: 'host 状态中有部分内容读取失败；请重新读取状态。',
       nextRetry: '无法读取 tmax host 状态。',
+      nextSettingsUnreadable: '无法读取 profile 设置，无法判断路由是否已应用；请重新读取。',
       // Status and access.
       target: '目标',
       targetPath: 'Home 路径',
@@ -1020,6 +1022,10 @@ window.__ModuleLoader__.load({
         if (conflict !== null && conflict !== undefined) {
           return { kind: 'conflict', code: conflictCode(conflict), message: conflictMessage(conflict) }
         }
+        // Whether the routes are applied is unknown when the settings could
+        // not be read; applying on a guess could write over a working home.
+        if (ownership.owner === 'unknown') return { kind: 'retry', reason: 'settings' }
+
         // Nothing is declared: applying is the step that gives DSH something.
         if (routes.length === 0) return { kind: 'connect' }
         // A credential tmax knows is missing is the one thing Apply repairs;
@@ -1859,6 +1865,7 @@ window.__ModuleLoader__.load({
         case 'retry':
           text = action.reason === 'projection'
             ? t('nextProjectionRetry')
+            : action.reason === 'settings' ? t('nextSettingsUnreadable')
             : action.reason === 'section' ? t('nextSectionRetry') : t('nextRetry')
           retry = handlers !== undefined
           break
