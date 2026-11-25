@@ -236,8 +236,8 @@ not been browser-verified.
 
 The plugin claims a first-level page: `sidebar.panellist` adds the **tmax** row
 beside Plugins and Schedules, and `main` renders the page itself. It answers two
-questions and shows nothing else: is model access working, and how much quota is
-left in each account.
+questions and shows nothing else: is model access working, and how much of each
+account's quota is spent and when it comes back.
 
 - **Header** — the page name, when the state was generated, one reachability
   verdict, and the one control that changes it when the page has it: **Start
@@ -249,15 +249,18 @@ left in each account.
   again and never observes. **Refresh** observes every listed provider; an
   observation names only the accounts it could not read. A failed read keeps the
   last good table, labels it last known, and shows the failure once.
-- **Accounts** — one card per tmax account that reports a quota window, least
-  left first. Every window the account reports is one bar with its name, what is
-  left, and when it resets, stated as remaining whatever basis the account
-  reports in; an unknown reset time is left out. A window whose share cannot be
-  computed is text, never a bar; a window with nothing left keeps a visible mark.
+- **Accounts** — one card per tmax account that reports a quota window, closest
+  to its limit first. Every window the account reports is one bar filled with
+  what it has used, its name, what it used of what, and when it resets, whatever
+  basis the account reports in: a percentage window states its share of 100%, a
+  reported quantity states what was used of it, and an unknown reset time is
+  left out. A window whose share cannot be computed is text, never a bar.
   A card carries a tag only for a state a person must act on or know about
   (disabled, suspended, failing) and the one action its evidence calls for:
   **Resume quota** for a reported suspension, **Reset failure** for an active
-  failure.
+  failure. Colour marks what needs attention — amber from 75% used, red from 90%
+  — and a reset states its clock within a day, its date after that, and its year
+  only when that is not the current one.
 - **Models** — every projected model and the account its routing selects; the
   target's default is marked.
 

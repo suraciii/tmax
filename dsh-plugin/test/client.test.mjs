@@ -457,48 +457,69 @@ test('the sidebar glyph is decorative for assistive technology', async () => {
 // Pure truth rules
 // ---------------------------------------------------------------------------
 
-test('window readings only become meters when a share is computable', async () => {
-  const { windowReading, toneFor } = (await moduleWith(inertReact())).__pure
+test('a window reading states the share of the quota it has used', async () => {
+  const { windowReading } = (await moduleWith(inertReact())).__pure
 
   const consumed = windowReading({ label: { key: 'weekly_allowance' }, basis: 'consumed_percent', percent: 37 }, 0, t)
   assert.equal(consumed.name, 'windowWeekly')
-  assert.equal(consumed.consumed, 37)
-  assert.equal(consumed.meterNow, 37)
-  assert.equal(consumed.text, '37%')
-  assert.equal(consumed.spoken, 'usedShare 37%')
-  assert.equal(consumed.zero, false)
-  assert.equal(toneFor(consumed.consumed), 'ok')
+  assert.equal(consumed.used, 37)
+  assert.equal(consumed.value, '37%')
+  assert.equal(consumed.quota, '100%', 'a percentage is a share of its own 100% limit')
+  assert.equal(consumed.spoken, 'usedShare 37% / 100%')
 
   const remainingPercent = windowReading({ label: { key: 'credit' }, basis: 'remaining_percent', percent: 80 }, 0, t)
-  assert.equal(remainingPercent.consumed, 20)
-  assert.equal(remainingPercent.spoken, 'usedShare 20%')
+  assert.equal(remainingPercent.used, 20)
+  assert.equal(remainingPercent.value, '20%')
+  assert.equal(remainingPercent.spoken, 'usedShare 20% / 100%')
 
-  // Counter values arrive as strings; a full remaining counter is a measured
-  // zero, not an unknown and not a missing meter.
-  const zero = windowReading({ label: { key: 'weekly_allowance' }, basis: 'counters', counters: { limit: '100', remaining: '100' } }, 0, t)
-  assert.equal(zero.consumed, 0)
-  assert.equal(zero.meterNow, 0)
-  assert.equal(zero.zero, true)
-  assert.equal(zero.text, 'left 100 / 100')
-  assert.equal(zero.spoken, 'usedShare 0%')
+  // Counter values arrive as strings. A counter nothing has touched is a
+  // measured zero used: an empty bar, printed as 0 of its limit.
+  const untouched = windowReading({ label: { key: 'weekly_allowance' }, basis: 'counters', counters: { limit: '100', remaining: '100' } }, 0, t)
+  assert.equal(untouched.used, 0)
+  assert.equal(untouched.value, '0')
+  assert.equal(untouched.quota, '100')
+  assert.equal(untouched.spoken, 'usedShare 0 / 100')
 
   const half = windowReading({ basis: 'counters', counters: { total: 10, remaining: 4 } }, 0, t)
+  assert.equal(half.used, 60)
+  assert.equal(half.value, '6')
+  assert.equal(half.quota, '10')
+
+  // A reported used amount is the authority; subtracting from what is left is
+  // the fallback for accounts that never report it.
+  const reported = windowReading({ basis: 'counters', counters: { total: '100', remaining: '94', used: '6' } }, 0, t)
+  assert.equal(reported.used, 6)
+  assert.equal(reported.value, '6')
+
+  // Counters are independent fields: a used amount without what is left still
+  // measures the share, and is not read as unreadable.
+  const usedOnly = windowReading({ basis: 'counters', counters: { limit: '100', used: '6' } }, 0, t)
+  assert.equal(usedOnly.unreadable, undefined)
+  assert.equal(usedOnly.used, 6)
+  assert.equal(usedOnly.value, '6')
+  assert.equal(usedOnly.quota, '100')
+
+  // An account that reports running usage without a limit has no quota to
+  // print: the percentage is the reading, and no total is invented.
+  const usageOnly = windowReading({ basis: 'consumed_percent', percent: 0, counters: { currentValue: 0, remaining: 4000, usage: 4000 } }, 0, t)
+  assert.equal(usageOnly.value, '0%')
+  assert.equal(usageOnly.quota, '100%')
+
   // Counters are a share only on the bases that define them; any other basis is text.
   const foreignBasis = windowReading({ basis: 'unknown_basis', counters: { total: 50, remaining: 100 } }, 0, t)
   assert.equal(foreignBasis.unreadable, true)
-  assert.equal(foreignBasis.consumed, undefined)
-  assert.equal(half.consumed, 60)
-  assert.equal(toneFor(half.consumed), 'ok')
+  assert.equal(foreignBasis.used, undefined)
 
-  // No numeric remaining, or a zero total, is not a computable share.
+  // No used amount and no remaining, a zero total, and a row without a basis
+  // are each not a computable share: the guard is the counter, not the basis.
   for (const row of [
-    { label: { key: 'weekly_allowance' }, counters: { limit: '100' } },
-    { counters: { limit: 0, remaining: 0 } },
+    { basis: 'counters', label: { key: 'weekly_allowance' }, counters: { limit: '100' } },
+    { basis: 'counters', counters: { limit: 0, remaining: 0 } },
+    { basis: 'counters', label: { key: 'weekly_allowance' }, counters: { total: 0, used: '0' } },
     { label: { key: 'weekly_allowance' } },
   ]) {
     const reading = windowReading(row, 0, t)
-    assert.equal(reading.consumed, undefined)
-    assert.equal(reading.meterNow, undefined)
+    assert.equal(reading.used, undefined)
     assert.equal(reading.unreadable, true)
     assert.equal(reading.text, 'quotaUnreadable')
   }
@@ -615,7 +636,7 @@ test('projection failures are recognized in both host section spellings', async 
 })
 
 
-test('quota is stated as remaining on every basis, sorted least left first, and toned by what is left', async () => {
+test('accounts are ordered by what they used, and a window prints usage of its quota', async () => {
   const pure = (await moduleWith(inertReact())).__pure
   const t = key => key
   const row = (basis, extra = {}) => ({ basis, label: { key: 'weekly' }, reset: { at: '2026-11-30T00:00:00Z', kind: 'announced' }, ...extra })
@@ -632,26 +653,29 @@ test('quota is stated as remaining on every basis, sorted least left first, and 
     ], agent: [] },
   }
   const accounts = pure.accountsOf(state, t)
-  // An account without a window takes no card; every other account is ordered
-  // by what is least left, and an account nothing can measure follows them.
+  // An account without a window takes no card; the rest are ordered by what
+  // they have used, and an account nothing can measure follows them.
   assert.deepEqual(accounts.map(account => account.provider.id), [
     'consumed', 'remaining', 'counters', 'credit', 'full', 'unmeasurable',
   ])
-  const remaining = id => accounts.find(account => account.provider.id === id).readings[0].remaining
-  assert.equal(remaining('consumed'), 4, 'a consumed share becomes what is left')
-  assert.equal(remaining('counters'), 40, 'counters become a share of the limit')
-  assert.equal(remaining('credit'), 96, 'credit becomes a whole-percent share of the total')
-  assert.equal(remaining('remaining'), 25)
-  assert.equal(remaining('unmeasurable'), undefined, 'a basis nobody computes is text, never a bar')
-  assert.equal(accounts.find(account => account.provider.id === 'unmeasurable').tightest, undefined)
-  // Tones: ten is exhausted, twenty-five is running low, twenty-six is fine.
-  assert.equal(pure.windowTone(10), 'error')
-  assert.equal(pure.windowTone(10.5), 'warn')
-  assert.equal(pure.windowTone(25), 'warn')
-  assert.equal(pure.windowTone(26), 'ok')
+  const reading = id => accounts.find(account => account.provider.id === id).readings[0]
+  assert.equal(reading('consumed').used, 96)
+  assert.equal(reading('remaining').used, 75, 'a remaining share becomes what is used')
+  assert.equal(reading('counters').used, 60, 'counters become a share of the limit')
+  assert.equal(reading('credit').used, 4, 'credit becomes a whole-percent share of the total')
+  assert.equal(reading('full').used, 0, 'nothing used is a measured zero, not an unknown')
+  assert.equal(reading('unmeasurable').used, undefined, 'a basis nobody computes is text, never a bar')
+  assert.equal(accounts.find(account => account.provider.id === 'unmeasurable').mostUsed, undefined)
+  // Tones: ninety percent is nearly gone, seventy-five is running low.
+  assert.equal(pure.windowTone(90), 'error')
+  assert.equal(pure.windowTone(89), 'warn')
+  assert.equal(pure.windowTone(75), 'warn')
+  assert.equal(pure.windowTone(74), 'ok')
   assert.equal(pure.windowTone(undefined), '')
-  // Counters keep their own text beside the share.
-  assert.equal(accounts.find(account => account.provider.id === 'counters').readings[0].counterText, '40 / 100')
+  // A quantity window prints what it used beside the quota it used it from.
+  assert.equal(reading('counters').value, '60')
+  assert.equal(reading('counters').quota, '100')
+  assert.equal(reading('consumed').quota, '100%', 'a percentage prints the 100% limit it is a share of')
 })
 
 test('unqualified reset times are marked, never dated', async () => {
@@ -875,10 +899,19 @@ test('dates and counters format in the interface language', async () => {
   assert.equal(pure.clockOf('not a date'), '')
   assert.equal(pure.clockOf(undefined), '')
   assert.match(pure.clockOf('2026-11-23T10:15:00Z', 'en-US'), /\d/)
-  assert.equal(pure.formatDate(new Date('invalid')), '')
-  const far = pure.formatDate(new Date('2026-11-26T12:00:00Z'), 'en-US', Date.parse('2027-06-01T00:00:00Z'))
-  assert.match(far, /2026/)
-  assert.match(far, /Nov/)
+  assert.equal(pure.formatReset(new Date('invalid'), t), '')
+  // A reset kept today or tomorrow states its clock; a later day states only
+  // the day; the year appears only when it is not this one.
+  const now = new Date(2026, 10, 25, 9, 0, 0).getTime()
+  assert.match(pure.formatReset(new Date(2026, 10, 25, 16, 21), t, now), /^today \d/)
+  assert.match(pure.formatReset(new Date(2026, 10, 26, 8, 0), t, now), /^tomorrow \d/)
+  const later = pure.formatReset(new Date(2026, 11, 9, 11, 13), t, now)
+  assert.doesNotMatch(later, /2026/)
+  assert.match(later, /9/)
+  assert.match(pure.formatReset(new Date(2027, 0, 5, 0, 0), t, now), /2027/)
+  // A reset that already passed this year keeps the same short date: the year
+  // marks a different year, not a direction in time.
+  assert.doesNotMatch(pure.formatReset(new Date(2026, 10, 20, 8, 0), t, now), /2026/)
   assert.equal(pure.compact(0), '0')
   assert.equal(pure.compact(100), '100')
 })
@@ -971,7 +1004,7 @@ test('client reads one state route and carries no auto-observation path', async 
   const module = await moduleWith(inertReact())
   const pure = module.__pure
 
-  for (const helper of ['windowReading', 'verdict', 'nextAction', 'safeDashboard', 'clockOf', 'formatDate', 'providerActions', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'remainingReading', 'windowTone', 'accountOfModel']) {
+  for (const helper of ['windowReading', 'verdict', 'nextAction', 'safeDashboard', 'clockOf', 'formatReset', 'providerActions', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'windowTone', 'accountOfModel']) {
     assert.equal(typeof pure[helper], 'function', `__pure.${helper} is exported`)
   }
 
@@ -1065,24 +1098,32 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     assert.doesNotMatch(text, /cpa-us2/)
     assert.doesNotMatch(text, /unknownQuotaUnsupported/)
     assert.doesNotMatch(text, /GLM Coding CN/)
-    // Each bar states to a screen reader what it draws: the window, what is left,
-    // and the same value the eye reads.
+    // Each bar states to a screen reader what it draws: the window, what it has
+    // used, and the same value the eye reads.
     const bars = collectNodes(tree, node => node.props?.role === 'img' && String(node.props.className) === 'tmx-bar')
     assert.ok(bars.length >= 2, 'every reported window has a bar')
     for (const bar of bars) {
       const spoken = String(bar.props['aria-label'])
-      assert.match(spoken, /left \d+( \/ \d+)?$/, spoken)
+      assert.match(spoken, /usedShare \d+(.*\/ \d+%?)?$/, spoken)
     }
-    // Nothing in this fixture is exhausted: every bar is a fill, none a zero mark.
-    assert.equal(collectNodes(tree, node => String(node.props?.className ?? '').includes('tmx-barZero')).length, 0)
-    // A window with nothing left is a measured zero: a visible mark, not an empty bar.
+    // Nothing is used in this fixture: every window is an empty bar printed as
+    // zero of its quota, never as an unknown and never as a full bar.
+    const fills = collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-barFill')
+    assert.ok(fills.length >= 2)
+    for (const fill of fills) assert.equal(fill.props.style.width, '0%')
+    assert.match(text, /0\s+\/\s+100/)
+    // An exhausted window is a full bar in the error tone, and the same 100% the
+    // eye reads beside it.
     const exhausted = withProviderEvidence({ kimi: {} })
     exhausted.providers.tmax[0].billing.rows = [{ label: { key: 'monthly' }, basis: 'consumed_percent', percent: 100, reset: { at: '2026-12-09T03:13:27Z', kind: 'announced' } }]
     const drained = await mountPage(withState(exhausted))
     try {
       const drainedTree = await drained.mount()
-      assert.ok(collectNodes(drainedTree, node => String(node.props?.className ?? '').includes('tmx-barZero')).length === 1)
-      assert.match(textOf(drainedTree), /windowMonthly\s+0%/)
+      const spent = collectNodes(drainedTree, node => String(node.props?.className ?? '') === 'tmx-barFill')
+      assert.equal(spent.length, 1)
+      assert.equal(spent[0].props.style.width, '100%')
+      assert.equal(spent[0].props['data-tone'], 'error')
+      assert.match(textOf(drainedTree), /windowMonthly\s+100%/)
     } finally {
       drained.restore()
     }

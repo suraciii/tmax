@@ -122,8 +122,9 @@ window.__ModuleLoader__.load({
       freshnessUnqualified: 'unqualified',
       failureActive: 'active',
       usedShare: 'used',
-      left: 'left',
       reset: 'resets',
+      today: 'today',
+      tomorrow: 'tomorrow',
       windowRolling: 'rolling',
       windowWeekly: 'weekly',
       windowMonthly: 'monthly',
@@ -366,8 +367,9 @@ window.__ModuleLoader__.load({
       freshnessUnqualified: '未定级',
       failureActive: '生效中',
       usedShare: '已用',
-      left: '剩余',
       reset: '重置',
+      today: '今天',
+      tomorrow: '明天',
       windowRolling: '滚动',
       windowWeekly: '周',
       windowMonthly: '月',
@@ -608,8 +610,9 @@ window.__ModuleLoader__.load({
 .tmx-sectionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 10px; font-size: 14px; line-height: 22px; font-weight: 500; }
 /*
  * An account is one object a person checks one at a time, so it gets a wide
- * card; every window it reports keeps its own bar, named, with what is left and
- * when it resets. Two columns on a desktop, one on a phone: the same card.
+ * card. Every window it reports keeps its own bar, named, filled with what it
+ * has used and showing what it used of what, and when it resets. Two columns on
+ * a desktop, one on a phone: the same card.
  */
 .tmx-accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
 .tmx-account { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px; border: 0.5px solid var(--dsw-alias-settings-card-stroke); background: var(--dsw-alias-settings-card-fill); border-radius: var(--dsw-radius-xl); }
@@ -617,23 +620,25 @@ window.__ModuleLoader__.load({
 .tmx-accountName { font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
 .tmx-tag { display: inline-flex; align-items: center; padding: 0 8px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 12px; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .tmx-tag[data-tone='error'] { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent); color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
-.tmx-windows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.tmx-window { display: grid; grid-template-columns: auto minmax(48px, 1fr) auto minmax(80px, auto); align-items: center; gap: 10px; min-height: 18px; }
-.tmx-windowName { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+/* Every window in a card shares one column geometry, so a name, a bar, a value,
+   and a reset time line up from row to row. */
+.tmx-windows { display: grid; grid-template-columns: minmax(78px, max-content) minmax(48px, 1fr) minmax(80px, max-content) minmax(64px, max-content); align-items: center; column-gap: 10px; row-gap: 6px; margin: 0; padding: 0; list-style: none; }
+.tmx-window { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; column-gap: 10px; min-height: 18px; }
+.tmx-windowText { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.tmx-windowName { min-width: 78px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-bar { position: relative; box-sizing: border-box; height: 8px; border-radius: 99px; background: var(--dsw-alias-border-l2); overflow: hidden; }
-/* The bar is what is left, the same quantity the value states; colour marks what needs attention. */
+/* The bar fills with what the window has used, the same quantity its value states. */
 .tmx-barFill { display: block; height: 100%; border-radius: 99px; background: var(--dsw-alias-state-success-primary); transition: width var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease), background-color var(--ds-transition-duration, 200ms) var(--ds-ease-in-out, ease); }
 .tmx-barFill[data-tone='warn'] { background: var(--dsw-alias-state-warn-primary); }
 .tmx-barFill[data-tone='error'] { background: var(--dsw-alias-state-error-primary); }
-/* A measured zero is a fact, not an empty bar. */
-.tmx-barZero { position: absolute; inset-block: 0; inset-inline-start: 0; width: 3px; border-radius: 99px; background: var(--dsw-alias-state-error-primary); }
-.tmx-windowValue { font-size: 14px; line-height: 18px; font-weight: 600; text-align: end; white-space: nowrap; }
+.tmx-windowValue { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 14px; line-height: 18px; font-weight: 600; text-align: start; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tmx-windowQuota { font-size: 13px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
 .tmx-windowValue[data-tone='warn'] { color: color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary)); }
 .tmx-windowValue[data-tone='error'] { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-label-primary)); }
-.tmx-windowReset { font-size: 13px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.tmx-windowReset { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 18px; text-align: end; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 .tmx-windowReset[data-empty='true'] { visibility: hidden; }
 .tmx-resetWord { display: none; }
-.tmx-windowWide { grid-column: 1 / -1; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.tmx-windowWide { min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .tmx-accountActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 /* A model answers one question: which account it uses. */
 .tmx-models { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
@@ -667,15 +672,15 @@ window.__ModuleLoader__.load({
 @media (max-width: 720px) {
   .tmx-page { font-size: 15px; }
   .tmx-account { padding: 14px; }
-  .tmx-windows { gap: 10px; }
+  .tmx-windows { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
   .tmx-window { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
-  .tmx-windowName { order: 1; max-width: 100%; overflow: visible; overflow-wrap: anywhere; white-space: normal; font-size: 14px; line-height: 22px; }
+  .tmx-windowName { order: 1; min-width: 0; max-width: 100%; overflow: visible; overflow-wrap: anywhere; white-space: normal; font-size: 14px; line-height: 22px; }
   .tmx-windowReset { order: 2; font-size: 14px; line-height: 22px; text-align: start; }
   .tmx-windowReset[data-empty='true'] { display: none; }
   .tmx-resetWord { display: inline; }
   .tmx-windowValue { order: 3; margin-left: auto; font-size: 15px; line-height: 22px; }
   .tmx-bar { order: 4; flex-basis: 100%; height: 10px; align-self: center; }
-  .tmx-windowWide { flex-basis: 100%; font-size: 14px; }
+  .tmx-windowWide { order: 2; flex-basis: 100%; font-size: 14px; }
   .tmx-modelId { font-size: 14px; }
   .tmx-modelVia { font-size: 14px; }
   .tmx-nextStep { font-size: 14px; }
@@ -720,15 +725,25 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** A date in the reader's language; `now` is injectable so tests are stable. */
-    function formatDate(date, locale, now) {
+    /**
+     * A reset reads the same way on every row: today and tomorrow keep their
+     * clock time, a later day keeps its date, and the year appears only when it
+     * is not this one. `now` is injectable so tests are stable.
+     */
+    function formatReset(date, t, now) {
       if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
-      const reference = typeof now === 'number' ? now : Date.now()
-      const near = Math.abs(date.getTime() - reference) < 36 * 60 * 60 * 1000
+      const reference = new Date(typeof now === 'number' ? now : Date.now())
+      const midnight = value => Date.UTC(value.getFullYear(), value.getMonth(), value.getDate())
+      const days = Math.round((midnight(date) - midnight(reference)) / 86400000)
       try {
-        return new Intl.DateTimeFormat(locale ?? dateLocale, near
-          ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
-          : { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
+        if (days === 0 || days === 1) {
+          const clock = new Intl.DateTimeFormat(dateLocale, { hour: '2-digit', minute: '2-digit' }).format(date)
+          return `${days === 0 ? t('today') : t('tomorrow')} ${clock}`
+        }
+        return new Intl.DateTimeFormat(dateLocale,
+          date.getFullYear() === reference.getFullYear()
+            ? { month: 'short', day: 'numeric' }
+            : { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
       } catch {
         return date.toISOString().slice(0, 16).replace('T', ' ')
       }
@@ -836,18 +851,15 @@ window.__ModuleLoader__.load({
       return `${t('windowGeneric')} ${index + 1}`
     }
 
-    function toneFor(consumed) {
-      return consumed >= 100 ? 'error' : consumed >= 80 ? 'warn' : 'ok'
-    }
-
     /**
-     * One window as a share of what it started with. tmax reports some windows
-     * as consumed and others as remaining; both become the single consumed
-     * fraction a filling bar can show. When no share is computable there is no
-     * meter at all: a bar is a claim about proportion.
+     * One window as the share of its quota already used. tmax reports some
+     * windows as consumed and others as remaining; both become the single
+     * consumed fraction the bar fills with. When no share is computable there
+     * is no meter at all: a bar is a claim about proportion.
      *
-     * `meterNow` and `spoken` always describe the same quantity (used %), so a
-     * screen reader and the visible bar cannot disagree.
+     * `value` (and `quota`, when the account reports a quantity) is what the
+     * row prints, and `spoken` says the same thing to a screen reader, so the
+     * visible number, the bar, and the spoken label cannot disagree.
      */
     function windowReading(row, index, t) {
       if (row === null || typeof row !== 'object') return undefined
@@ -860,42 +872,45 @@ window.__ModuleLoader__.load({
       // contract does not define is not read as consumed by default: that would
       // draw a bar nobody measured.
       if (percent !== undefined && (row.basis === 'remaining_percent' || row.basis === 'consumed_percent')) {
-        const consumed = row.basis === 'remaining_percent' ? 100 - percent : percent
-        const rounded = Math.round(Math.max(0, Math.min(100, consumed)))
+        const used = Math.round(Math.max(0, Math.min(100, row.basis === 'remaining_percent' ? 100 - percent : percent)))
         return {
           name,
-          consumed: rounded,
-          text: `${rounded}%`,
-          spoken: `${t('usedShare')} ${rounded}%`,
-          meterNow: rounded,
+          used,
+          value: `${used}%`,
+          // A percentage is a share of its own limit, so the quota it is used
+          // of is 100%: printed beside it like every other window's quota.
+          quota: '100%',
+          spoken: `${t('usedShare')} ${used}% / 100%`,
           raw,
           reset,
           resetUnqualified: resetIsUnqualified,
-          zero: rounded === 0,
         }
       }
       const counters = row.counters !== null && typeof row.counters === 'object' ? row.counters : undefined
       const total = numeric(counters?.total ?? counters?.limit)
       const left = numeric(counters?.remaining)
-      // Counters are a share only on the two bases that define them.
-      if ((row.basis === 'counters' || row.basis === 'credit') && total !== undefined && left !== undefined && total > 0) {
-        const consumed = Math.round(Math.max(0, Math.min(100, ((total - left) / total) * 100)))
+      // Counters are a share only on the two bases that define them, and a
+      // counter is an independent field: a reported used amount measures the
+      // share without what is left, and the subtraction only covers accounts
+      // that report what is left and nothing else.
+      const spent = numeric(counters?.used)
+        ?? (total === undefined || left === undefined ? undefined : total - left)
+      if ((row.basis === 'counters' || row.basis === 'credit') && total !== undefined && total > 0 && spent !== undefined) {
+        const used = Math.round(Math.max(0, Math.min(100, (spent / total) * 100)))
         return {
           name,
-          consumed,
-          counterText: `${compact(left)} / ${compact(total)}`,
-          text: `${t('left')} ${compact(left)} / ${compact(total)}`,
-          spoken: `${t('usedShare')} ${consumed}%`,
-          meterNow: consumed,
+          used,
+          value: compact(spent),
+          quota: compact(total),
+          spoken: `${t('usedShare')} ${compact(spent)} / ${compact(total)}`,
           raw,
           reset,
           resetUnqualified: resetIsUnqualified,
-          zero: consumed === 0,
         }
       }
       // A row that exists but yields no share still names itself: a text line
       // with no meter, never a bar standing in for a measurement we cannot make.
-      return { name, consumed: undefined, text: t('quotaUnreadable'), unreadable: true, raw, reset, resetUnqualified: resetIsUnqualified }
+      return { name, used: undefined, text: t('quotaUnreadable'), unreadable: true, raw, reset, resetUnqualified: resetIsUnqualified }
     }
 
     /**
@@ -1907,63 +1922,61 @@ window.__ModuleLoader__.load({
         .map(text => ({ section: 'config', code: '', message: '', text }))
     }
 
-    /** One window as what is left, whatever basis the account reports it in. */
-    function remainingReading(item) {
-      if (item.unreadable) return { ...item, remaining: undefined }
-      return { ...item, remaining: item.consumed === undefined ? undefined : 100 - item.consumed }
-    }
-
-    /** Colour is spent on what needs attention; a comfortable window stays green. */
-    function windowTone(remaining) {
-      if (remaining === undefined) return ''
-      return remaining <= 10 ? 'error' : remaining <= 25 ? 'warn' : 'ok'
+    /** Colour is spent on what needs attention; a lightly used window stays green. */
+    function windowTone(used) {
+      if (used === undefined) return ''
+      return used >= 90 ? 'error' : used >= 75 ? 'warn' : 'ok'
     }
 
     /**
-     * Every tmax account that reports a quota window, least left first. An
-     * account without any window takes no card: it would only say "unknown".
+     * Every tmax account that reports a quota window, closest to its limit
+     * first. An account without any window takes no card: it would only say
+     * "unknown".
      */
     function accountsOf(state, t) {
       const providers = state.providers !== null && typeof state.providers === 'object' ? state.providers : {}
       const list = []
       for (const provider of Array.isArray(providers.tmax) ? providers.tmax : []) {
         if (provider === null || typeof provider !== 'object') continue
-        const readings = windowsFor(provider, t).map(remainingReading)
+        const readings = windowsFor(provider, t)
         if (readings.length === 0) continue
-        const measured = readings.filter(item => item.remaining !== undefined)
-        const tightest = measured.length === 0 ? undefined : Math.min(...measured.map(item => item.remaining))
-        list.push({ provider, readings, tightest })
+        const measured = readings.filter(item => item.used !== undefined)
+        const mostUsed = measured.length === 0 ? undefined : Math.max(...measured.map(item => item.used))
+        list.push({ provider, readings, mostUsed })
       }
       // An account whose windows cannot be measured follows the measured ones.
-      return list.sort((a, b) => (a.tightest ?? 101) - (b.tightest ?? 101))
+      return list.sort((a, b) => (b.mostUsed ?? -1) - (a.mostUsed ?? -1))
     }
 
     function quotaRow(item, index, t) {
       const name = boundedText(item.name, 48)
       const key = `window:${index}`
-      if (item.remaining === undefined) {
+      if (item.used === undefined) {
         // A row that yields no share names itself and takes no bar: a bar would
         // claim a proportion nobody measured.
-        return h('li', { className: 'tmx-window', key }, [
+        return h('li', { className: 'tmx-window tmx-windowText', key }, [
           h('span', { className: 'tmx-windowName', key: 'name' }, name),
           h('span', { className: 'tmx-windowWide', key: 'value' }, boundedText(item.text, 80)),
         ])
       }
-      const tone = windowTone(item.remaining)
-      const value = item.counterText ?? `${Math.round(item.remaining)}%`
-      const reset = item.reset === undefined ? '' : formatDate(item.reset)
-      const share = Math.round(item.remaining)
+      const tone = windowTone(item.used)
+      const reset = item.reset === undefined ? '' : formatReset(item.reset, t)
       return h('li', { className: 'tmx-window', key }, [
         h('span', { className: 'tmx-windowName', key: 'name' }, name),
         h('span', {
           className: 'tmx-bar',
           key: 'bar',
           role: 'img',
-          'aria-label': `${name} ${t('left')} ${value}`,
-        }, share === 0
-          ? h('span', { className: 'tmx-barZero', key: 'zero' })
-          : h('span', { className: 'tmx-barFill', 'data-tone': tone, style: { width: `${share}%` }, key: 'fill' })),
-        h('span', { className: 'tmx-windowValue', 'data-tone': tone, key: 'value' }, value),
+          'aria-label': `${name} ${item.spoken}`,
+        }, h('span', { className: 'tmx-barFill', 'data-tone': tone, style: { width: `${item.used}%` }, key: 'fill' })),
+        h('span', { className: 'tmx-windowValue', 'data-tone': tone, key: 'value' }, [
+          h('span', { key: 'used' }, item.value),
+          // The quota is context for the used amount, never a second headline;
+          // an account that reports only a percentage has no quantity to print.
+          item.quota === undefined
+            ? null
+            : h('span', { className: 'tmx-windowQuota', key: 'quota' }, ` / ${item.quota}`),
+        ]),
         h('span', {
           className: 'tmx-windowReset',
           'data-empty': reset === '' ? 'true' : undefined,
@@ -2850,11 +2863,10 @@ window.__ModuleLoader__.load({
       numeric,
       shortRevision,
       clockOf,
-      formatDate,
+      formatReset,
       compact,
       windowReading,
       disambiguate,
-      toneFor,
       stateGate,
       sectionErrors,
       errorsForSection,
@@ -2867,7 +2879,6 @@ window.__ModuleLoader__.load({
       usableRoutes,
       modelCatalogOf,
       accountsOf,
-      remainingReading,
       windowTone,
       accountOfModel,
       verdict,
