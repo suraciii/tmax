@@ -528,6 +528,7 @@ pub async fn apply(
         } else {
             None
         },
+        applied_revision: None,
     };
     if let Some(at) = index.records.iter().position(|r| r.id == recovery_id) {
         index.records[at] = record.clone();
@@ -619,6 +620,7 @@ pub async fn apply(
         }
     }
     record.state = "applied_reload_pending".into();
+    record.applied_revision = Some(crate::config::target_revision(target));
     if let Some(r) = index.records.iter_mut().find(|r| r.id == record.id) {
         *r = record.clone();
     }
@@ -889,6 +891,7 @@ mod tests {
             state: "applied_reload_pending".into(),
             files: Vec::new(),
             delivery: None,
+            applied_revision: None,
         };
         let mut index = super::super::recovery::Index {
             records: vec![record.clone()],

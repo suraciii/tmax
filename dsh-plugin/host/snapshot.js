@@ -10,10 +10,11 @@
 // short cache plus single-flight keeps the page from spawning a tmax process
 // storm.
 import { readEnvelope, READ_TIMEOUT_MS } from './cli.js'
+import { readHarnesses } from './harnesses.js'
 import { composeInventory, readInventoryFacts } from './inventory.js'
 import { liveProviderIds } from './ownership.js'
 
-export const STATE_SCHEMA_VERSION = 4
+export const STATE_SCHEMA_VERSION = 5
 const CACHE_TTL_MS = 5_000
 const PROTOCOLS = new Set(['chat-completions', 'responses', 'messages'])
 
@@ -531,7 +532,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
    * still composed and their own failures named. Empty never stands in for
    * unknown.
    */
-  function inventoryFailureState(error, { startedAt, providerRows, listedRead, configRead, modelListRead }) {
+  function inventoryFailureState(error, { startedAt, providerRows, listedRead, configRead, modelListRead, harnessesRead }) {
     const code = typeof error?.code === 'string' && error.code !== '' ? error.code : 'inventory_unavailable'
     const message = typeof error?.message === 'string' && error.message !== ''
       ? error.message
@@ -543,6 +544,9 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
     else if (!configRead.ok) errors.push({ section: 'config', code: configRead.code, message: configRead.message ?? configRead.code })
     if (modelListRead.envelope === undefined) errors.push({ section: 'catalog', code: modelListRead.code, message: modelListRead.message ?? modelListRead.code })
     else if (!modelListRead.ok) errors.push({ section: 'catalog', code: modelListRead.code, message: modelListRead.message ?? modelListRead.code })
+    if (harnessesRead.error !== null) {
+      errors.push({ section: 'harnesses', code: harnessesRead.error.code, message: harnessesRead.error.message })
+    }
     // Availability is "tmax answered something": a failed target read must not
     // hide provider or configuration evidence that did answer.
     const ok = listedRead.envelope !== undefined || configRead.envelope !== undefined
@@ -555,6 +559,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
       tmaxVersion: null,
       authority: null,
       target: null,
+      harnesses: harnessesRead.harnesses,
       ownership: ownershipSection(getOwnership?.()),
       gateway: null,
       config: configSection(configRead),
@@ -574,10 +579,14 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
   /** Compose one state payload from the inventory plus the remaining tmax reads. */
   async function compose() {
     const startedAt = new Date().toISOString()
-    const inventoryRead = await readInventoryFacts(config)
-      .then(data => ({ ok: true, data }))
-      .catch(error => ({ ok: false, error }))
-    const [listedRead, configRead, modelListRead] = await Promise.all([
+    // The declared-target section is independent of the DSH-target inventory:
+    // it reads every target the configuration declares, so a target outside
+    // this home stays visible even when the DSH target itself cannot resolve.
+    const [inventoryRead, harnessesRead, listedRead, configRead, modelListRead] = await Promise.all([
+      readInventoryFacts(config)
+        .then(data => ({ ok: true, data }))
+        .catch(error => ({ ok: false, error })),
+      readHarnesses(config),
       readEnvelope(config, ['provider', 'list']),
       readEnvelope(config, ['config', 'validate']),
       readEnvelope(config, ['model', 'list']),
@@ -596,7 +605,14 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
     }))
     const providerRows = listed.map((entry, index) => mapProvider(entry, inspected[index], object(entry).id))
     if (!inventoryRead.ok) {
-      return inventoryFailureState(inventoryRead.error, { startedAt, providerRows, listedRead, configRead, modelListRead })
+      return inventoryFailureState(inventoryRead.error, {
+        startedAt,
+        providerRows,
+        listedRead,
+        configRead,
+        modelListRead,
+        harnessesRead,
+      })
     }
     const inventory = composeInventory(inventoryRead.data)
     const facts = inventoryRead.data
@@ -666,6 +682,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
     else if (!configRead.ok) addError('config', configRead.code, configRead.message)
     if (modelListRead.envelope === undefined) addError('catalog', modelListRead.code, modelListRead.message)
     else if (!modelListRead.ok) addError('catalog', modelListRead.code, modelListRead.message)
+    if (harnessesRead.error !== null) addError('harnesses', harnessesRead.error.code, harnessesRead.error.message)
     if (facts.gateway.envelope === undefined) addError('gateway', facts.gateway.code, facts.gateway.message)
     else if (!facts.gateway.ok) addError('gateway', facts.gateway.code, facts.gateway.message)
     if (facts.status.envelope === undefined) addError('authority', facts.status.code, facts.status.message)
@@ -688,6 +705,7 @@ export function createSnapshotService({ config, ctx, getOwnership, getRouteBlock
       tmaxVersion: text(inventory.tmax_version),
       authority: text(inventory.authority),
       target: targetSection(inventory, facts.inspect, effectiveDefault()),
+      harnesses: harnessesRead.harnesses,
       ownership: ownershipSection(decision),
       gateway: gatewaySection(inventory, facts.gateway),
       config: configSection(configRead),

@@ -11,6 +11,13 @@ const STATE_NS = 'tmaxDshPage'
 
 const fixture = JSON.parse(await readFile(FIXTURE_URL, 'utf8'))
 const source = await readFile(CLIENT_URL, 'utf8')
+// The shared fixture is the host contract's own file and is not edited here.
+// The page consumes the current host contract, so each case is lifted in memory
+// to it; the same cases keep the route and account evidence they always had.
+for (const state of Object.values(fixture.cases)) {
+  state.schemaVersion = 5
+  if (!Array.isArray(state.harnesses)) state.harnesses = []
+}
 const connected = fixture.cases.connectedHomeOwned
 
 let loadedEntry
@@ -166,6 +173,37 @@ function buttonByText(tree, label) {
   return collectButtons(tree).find(button => textOf(button).trim() === label)
 }
 
+/** The inline Harness control one model row carries. */
+function harnessControlNode(tree, modelId) {
+  return collectNodes(tree, node => node?.type === 'button'
+    && node.props?.['data-model'] === modelId
+    && String(node.props?.className ?? '').split(' ').includes('tmx-harnessControl'))[0]
+}
+
+/** The open Harness picker, if any. */
+function popoverOf(tree) {
+  return collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-popover')[0]
+}
+
+/** One configured-Harness checkbox inside the open picker. */
+function popoverCheckbox(tree, harnessId) {
+  const item = collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-popoverItem'
+    && node.props?.['data-harness'] === harnessId)[0]
+  if (item === undefined) return undefined
+  return item.children.find(child => child?.type === 'input')
+}
+
+/** One declared-Harness row on the Harness tab. */
+function harnessGroupNode(tree, harnessId) {
+  return collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-harnessGroup'
+    && node.props?.['data-harness'] === harnessId)[0]
+}
+
+/** The Apply confirmation dialog, if one is open. */
+function applyDialogNode(tree) {
+  return collectNodes(tree, node => String(node.props?.className ?? '') === 'tmx-dialog')[0]
+}
+
 function collectNodes(node, predicate, found = []) {
   if (node === null || node === undefined || typeof node !== 'object') return found
   if (Array.isArray(node)) {
@@ -267,6 +305,16 @@ async function mountPage(respond) {
       return surface.runtime.settle(component)
     },
     async settle() { return surface.runtime.settle(component) },
+    async clickTab(id) {
+      const current = await surface.runtime.settle(component)
+      const button = collectNodes(current, node => node?.type === 'button'
+        && node.props?.['data-tab'] === id)[0]
+      assert.ok(button, `the "${id}" tab is rendered`)
+      assert.notEqual(button.props['aria-pressed'], undefined)
+      button.props.onClick()
+      return surface.runtime.settle(component)
+    },
+    current() { return surface.runtime.last() },
     restore: surface.restore,
   }
 }
@@ -303,9 +351,15 @@ function pathOf(call) {
   return new URL(call.url).pathname
 }
 
+/** Lift a hand-built state to the current host contract without touching its facts. */
+function currentContract(state) {
+  if (state === null || typeof state !== 'object' || state.schemaVersion !== 4) return state
+  return { ...state, schemaVersion: 5, harnesses: Array.isArray(state.harnesses) ? state.harnesses : [] }
+}
+
 function reply(record) {
   const url = new URL(record.url)
-  if (url.pathname === '/_tmax/state') return { status: 200, body: record.state }
+  if (url.pathname === '/_tmax/state') return { status: 200, body: currentContract(record.state) }
   return { status: 404, body: { ok: false, code: 'not_found', message: 'no route' } }
 }
 
@@ -318,8 +372,9 @@ function seatState(overrides) {
   const base = {
     ok: true,
     errors: [],
-    schemaVersion: 4,
+    schemaVersion: 5,
     generatedAt: '2026-11-23T10:15:00Z',
+    harnesses: [],
     configurationRevision: 'abc123def4567890abc123def4567890abc123def4567890',
     tmaxVersion: '0.1.0',
     authority: '/home/user/.tmax',
@@ -381,6 +436,58 @@ function seatState(overrides) {
   return overrides === undefined ? base : { ...base, ...overrides }
 }
 
+/** One declared Harness row, as the host reports it. */
+function harnessEntry(overrides = {}) {
+  return {
+    id: 'dsh-main',
+    agent: 'dsh',
+    path: '/home/user/.dsh',
+    providerCount: 1,
+    modelCount: 2,
+    defaultConfigured: false,
+    appliedState: 'not_applied',
+    unapplied: true,
+    blockers: [],
+    default: null,
+    providers: [{
+      name: 'tmax',
+      sourceProvider: 'tmax',
+      relayed: true,
+      models: [
+        { id: 'deepseek-v4.1-flash', protocol: 'responses' },
+        { id: 'glm-5.4', protocol: 'responses' },
+      ],
+    }],
+    ...overrides,
+  }
+}
+
+/** The connected catalog with two declared Harnesses: one pending, one applied. */
+function harnessState(overrides = {}) {
+  return {
+    ...connected,
+    ...overrides,
+    schemaVersion: 5,
+    harnesses: overrides.harnesses ?? [
+      harnessEntry(),
+      harnessEntry({
+        id: 'pi-main',
+        agent: 'pi',
+        path: '/home/user/.pi/agent',
+        modelCount: 1,
+        appliedState: 'applied_reload_pending',
+        unapplied: false,
+        providers: [{
+          name: 'kimi',
+          sourceProvider: 'kimi',
+          relayed: false,
+          models: [{ id: 'k3.1-pro', protocol: 'chat-completions' }],
+        }],
+      }),
+    ],
+  }
+}
+
 /** The connected fixture with per-provider evidence replaced by id. */
 function withProviderEvidence(changes) {
   return {
@@ -439,6 +546,16 @@ test('client registers one first-level page and its locale namespace', async () 
   assert.equal(toolview.options.key, 'tmax_status')
   assert.equal(toolview.options.locale, STATE_NS)
   for (const entry of slots) assert.equal(typeof entry.component, 'function', `${entry.options.name} renders`)
+})
+
+test('page styles keep the tab bar and anchored picker defined', () => {
+  // The page's own stylesheet is the only source of layout; a selector that
+  // disappears leaves the tab bar unstyled and the Harness picker unanchored.
+  assert.match(source, /\.tmx-tabs \{/)
+  assert.match(source, /\.tmx-tab \{/)
+  assert.match(source, /\.tmx-popover \{ position: absolute;/)
+  assert.match(source, /\.tmx-popover\[data-flip='true'\] \{ top: auto;/)
+  assert.match(source, /\.tmx-harnessRow \{/)
 })
 
 test('the sidebar glyph is decorative for assistive technology', async () => {
@@ -554,7 +671,7 @@ test('host-derived names are bounded before they reach the DOM', async () => {
   const page = await mountPage(withState(state))
   try {
     await page.mount()
-    const text = textOf(await page.click('tabQuota'))
+    const text = textOf(await page.clickTab('quota'))
     assert.equal(text.includes(long), false, 'no unbounded host name reaches the DOM')
     assert.match(text, /x{120}…/, 'the page draws the bounded prefix')
   } finally {
@@ -628,9 +745,7 @@ test('projection failures are recognized in both host section spellings', async 
   assert.equal(pure.projectionFailed(explicit), true)
   assert.deepEqual(pure.projectionErrors(explicit).map(error => error.code), ['projection_read_failed'])
 
-  // Verdict and next action agree on the host shape.
-  assert.deepEqual(pure.verdict({ phase: 'ready', value: { ok: true, ...targetShape, ownership: page } }, t),
-    { tone: 'error', text: 'stateProjection' })
+  // The read's own next step agrees with the host shape.
   assert.deepEqual(pure.nextAction({ phase: 'ready', value: { ok: true, ...targetShape, ownership: page, config: { state: 'valid' } } }),
     { kind: 'retry', reason: 'projection' })
 })
@@ -738,7 +853,7 @@ test('only an unqualified reset is printed as approximate', async () => {
   const page = await mountPage(withState(state))
   try {
     await page.mount()
-    const tree = await page.click('tabQuota')
+    const tree = await page.clickTab('quota')
     const text = textOf(tree)
     assert.equal(text.match(/resetApprox/g)?.length ?? 0, 1, 'only the unqualified reset carries the marker')
     const cells = collectNodes(tree, node => node.props?.className === 'tmx-windowReset')
@@ -754,52 +869,6 @@ test('only an unqualified reset is printed as approximate', async () => {
   } finally {
     page.restore()
   }
-})
-
-test('verdict answers reachability, never a catalog group name', async () => {
-  const { verdict } = (await moduleWith(inertReact())).__pure
-  const route = { provider: 'renamed-tmax', credentialConfigured: true, active: true }
-  const applied = { owner: 'settings', scope: 'profile_scoped' }
-  const unapplied = { owner: 'unapplied', reason: 'apply_not_run' }
-
-  assert.deepEqual(verdict({ phase: 'loading' }, t), { tone: 'idle', text: 'checking' })
-  assert.deepEqual(verdict({ phase: 'failed' }, t), { tone: 'error', text: 'stateUnreadable' })
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [] } }, t), { tone: 'idle', text: 'stateDisconnected' })
-
-  // Declared but not live: DSH has not loaded the applied settings yet.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }], ownership: applied } }, t),
-    { tone: 'idle', text: 'stateReload' })
-  // Declared but never applied: applying is the missing step.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: false }], ownership: unapplied } }, t),
-    { tone: 'warn', text: 'stateNotApplied' })
-
-  // A live route with a known-missing credential is registered, not usable.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, credentialConfigured: false }], gateway: {} } }, t),
-    { tone: 'warn', text: 'stateNotUsable' })
-  // Readiness that was never reported stays unknown.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, credentialConfigured: null }], gateway: {} } }, t),
-    { tone: 'idle', text: 'stateUnknown' })
-  // Liveness that was never reported cannot be called live; the reload hint is
-  // the only honest reading.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [{ ...route, active: null }] } }, t),
-    { tone: 'idle', text: 'stateReload' })
-
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [route], gateway: { ready: true } } }, t),
-    { tone: 'ok', text: 'stateReady' })
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [route], gateway: { ready: false } } }, t),
-    { tone: 'error', text: 'stateGateway' })
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [route], gateway: { ready: null } } }, t),
-    { tone: 'idle', text: 'stateUnknown' })
-
-  // A failed projection read cannot support a "not connected" claim.
-  assert.deepEqual(verdict({ phase: 'ready', value: { ok: true, routes: [], errors: [{ section: 'projection', code: 'x', message: 'y' }], ownership: applied } }, t),
-    { tone: 'error', text: 'stateProjection' })
-  // An unsupported schema is a visible failure.
-  assert.deepEqual(verdict({ phase: 'failed', schemaUnsupported: true }, t),
-    { tone: 'error', text: 'stateSchemaUnsupported' })
-  // A failed read with a last-good state says "last known".
-  assert.deepEqual(verdict({ phase: 'failed', value: { ok: true, routes: [route], gateway: { ready: true } } }, t),
-    { tone: 'ok', text: 'stateLastKnown: stateReady' })
 })
 
 test('next action is the one step that can change the reported state', async () => {
@@ -844,85 +913,8 @@ test('next action is the one step that can change the reported state', async () 
     { kind: 'reload' })
 })
 
-test('apply preview and observe results are bounded host evidence', async () => {
+test('observation results are bounded host evidence', async () => {
   const pure = (await moduleWith(inertReact())).__pure
-  const lines = pure.connectLines({
-    dryRun: true,
-    schema_version: 1,
-    target: { id: 'dsh-main', path: '/home/user/.dsh' },
-    gateway: { listen: '127.0.0.1:17840', ready: null, reason_code: 'daemon_identity_unavailable' },
-    credentials: { path: '/home/user/.dsh/.credentials.yaml', state: 'absent', permissions: null },
-    references: [
-      { route: 'tmax', protocol: 'responses', credential_ref: 'TMAX_REF', action: 'would_write' },
-      { route: 'renamed', protocol: 'responses', credential_ref: 'OTHER_REF', action: 'unchanged' },
-    ],
-    changed: null,
-    effects: { native_writes: false, secret_reads: false, processes_started: false, locks_created: false },
-    message: 'preview only',
-  }, t)
-  assert.deepEqual(lines.map(line => line.label),
-    ['target', 'gatewayTitle', 'credentialsTitle', 'connectRefs', 'connectEffects', 'connectDetail'])
-  assert.deepEqual(lines[0].items, ['target: dsh-main', 'targetPath: /home/user/.dsh'])
-  assert.deepEqual(lines[1].items, [
-    'gatewayListen: 127.0.0.1:17840',
-    'gatewayReady: unknown',
-    'gatewayReason: reasonDaemonIdentity',
-  ])
-  assert.deepEqual(lines[2].items, [
-    'credentialPath: /home/user/.dsh/.credentials.yaml',
-    'credentialState: absent',
-  ])
-  assert.deepEqual(lines[3].items, [
-    'tmax · responses · TMAX_REF · actionWouldWrite',
-    'renamed · responses · OTHER_REF · actionUnchanged',
-  ])
-  assert.deepEqual(lines[4].items, [
-    'effectNativeWrites: no',
-    'effectSecretReads: no',
-    'effectProcessesStarted: no',
-    'effectLocksCreated: no',
-  ])
-  assert.deepEqual(lines[5].items, ['preview only'])
-
-  const blocked = pure.connectLines({ changed: true, blockers: [{ message: 'not usable' }], next_actions: ['reload DSH'] }, t)
-  assert.deepEqual(blocked.map(line => line.label), ['connectChanged', 'connectBlockers', 'connectNextActions'])
-  assert.deepEqual(blocked[0].items, ['yes'])
-  assert.deepEqual(blocked[1].items, ['not usable'])
-
-  // `tmax agent apply` data: applied state, planned/changed/unchanged files,
-  // recovery, and fact gaps. Paths and states are disclosed; file contents and
-  // secrets never are.
-  const apply = pure.connectLines({
-    target: 'dsh-main',
-    state: 'applied_reload_pending',
-    files: [{ path: '/home/user/.dsh/cordis.patch.yml', format: 'yaml', after: 'SECRET-CONTENT' }],
-    changed_files: ['/home/user/.dsh/cordis.patch.yml'],
-    unchanged_files: ['/home/user/.dsh/tmax-dsh.mjs'],
-    recovery: { planned: 'exact native bytes in current-user-only files', retained: 'rec_1' },
-    fact_gaps: [{ entry: 'tmax', model: 'deepseek-v4.1-flash', missing: ['reasoning_efforts'] }],
-    effects: { native_writes: true, secret_reads: false },
-  }, t)
-  assert.deepEqual(apply.map(line => line.label),
-    ['target', 'connectState', 'connectFiles', 'connectChangedFiles', 'connectUnchangedFiles',
-      'connectRecovery', 'connectFactGaps', 'connectEffects'])
-  assert.deepEqual(apply[0].items, ['dsh-main'])
-  assert.deepEqual(apply[1].items, ['applied_reload_pending'])
-  assert.deepEqual(apply[2].items, ['/home/user/.dsh/cordis.patch.yml: yaml'])
-  assert.deepEqual(apply[3].items, ['/home/user/.dsh/cordis.patch.yml'])
-  assert.deepEqual(apply[4].items, ['/home/user/.dsh/tmax-dsh.mjs'])
-  assert.deepEqual(apply[5].items, [
-    'recoveryPlanned: exact native bytes in current-user-only files',
-    'recoveryRetained: rec_1',
-  ])
-  assert.deepEqual(apply[6].items, ['tmax/deepseek-v4.1-flash: reasoning_efforts'])
-  assert.deepEqual(apply[7].items, ['effectNativeWrites: yes', 'effectSecretReads: no'])
-  assert.equal(JSON.stringify(apply).includes('SECRET-CONTENT'), false, 'file contents never cross')
-
-  assert.equal(pure.connectLines(undefined, t).length, 0)
-  const longMessage = pure.connectLines({ message: 'x'.repeat(400) }, t)
-  assert.equal(longMessage[0].items[0].length, 201)
-  assert.equal(longMessage[0].items[0].endsWith('…'), true)
-
   const items = pure.observeItems({
     items: [
       { source: 'tmax', id: 'kimi', status: 'refreshed' },
@@ -1033,13 +1025,15 @@ test('English and Chinese locales are complete, unique and colon-correct', async
   }
   assert.equal(en.colon, ':')
   assert.equal(zh.colon, '：')
-  // The control names the operation main actually provides: native apply.
-  assert.equal(en.connect, 'Apply')
-  assert.equal(zh.connect, '应用')
-  assert.equal(en.connectApply, 'Confirm apply')
-  assert.equal(zh.connectApply, '确认应用')
-  assert.equal(en.colon, ':')
-  assert.equal(zh.colon, '：')
+  // The page names the operation the host provides: one Harness apply.
+  assert.equal(en.harnessApply, 'Apply')
+  assert.equal(en.harnessReapply, 'Reapply')
+  assert.equal(zh.harnessApply, '应用')
+  assert.equal(zh.harnessReapply, '重新应用')
+  assert.equal(en.applyConfirm, 'Confirm apply')
+  assert.equal(zh.applyConfirm, '确认应用')
+  assert.equal(en.pendingHarnesses, 'Harnesses to apply')
+  assert.equal(zh.harnessPending, '待应用')
 
   const literalKeys = new Set([...source.matchAll(/\bt\('([A-Za-z0-9_]+)'\)/g)].map(match => match[1]))
   const missing = [...literalKeys].filter(key => en[key] === undefined)
@@ -1050,7 +1044,7 @@ test('client reads one state route and carries no auto-observation path', async 
   const module = await moduleWith(inertReact())
   const pure = module.__pure
 
-  for (const helper of ['windowReading', 'verdict', 'nextAction', 'safeDashboard', 'clockOf', 'formatReset', 'providerActions', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'windowTone']) {
+  for (const helper of ['windowReading', 'nextAction', 'safeDashboard', 'clockOf', 'formatReset', 'providerActions', 'actionPayload', 'actionSucceeded', 'actionResultLines', 'markerStatus', 'modelsAvailability', 'stateGate', 'toolStatusSummary', 'accountsOf', 'windowTone', 'harnessesOf', 'harnessMembershipOf', 'harnessLabelMap', 'unappliedHarnesses', 'countSelections']) {
     assert.equal(typeof pure[helper], 'function', `__pure.${helper} is exported`)
   }
 
@@ -1065,7 +1059,7 @@ test('client reads one state route and carries no auto-observation path', async 
 
   const endpoints = [...source.matchAll(/\/_tmax\/[a-z-]+/g)].map(match => match[0])
   // The page carries no history reader: retained history is a CLI read.
-  assert.deepEqual([...new Set(endpoints)].sort(), ['/_tmax/action', '/_tmax/connect', '/_tmax/observe', '/_tmax/state'])
+  assert.deepEqual([...new Set(endpoints)].sort(), ['/_tmax/action', '/_tmax/observe', '/_tmax/state'])
 
   const tokens = [...source.matchAll(/var\((--[a-z0-9-]+)/g)].map(match => match[1])
   const foreign = [...new Set(tokens)].filter(token => !token.startsWith('--dsw-alias-') && !token.startsWith('--ds'))
@@ -1133,9 +1127,8 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     assert.equal(page.documentStub.listeners.includes('visibilitychange'), false)
 
     const text = textOf(tree)
-    // The verdict comes from the read model; internal identifiers do not reach
-    // the page: no revision, no schema number, no read-model source.
-    assert.match(text, /stateUnknown/)
+    // Internal identifiers do not reach the page: no revision, no schema
+    // number, no read-model source.
     assert.doesNotMatch(text, /352a0e3f/)
     assert.doesNotMatch(text, /schema 1/)
     assert.doesNotMatch(text, /inventory/)
@@ -1146,7 +1139,7 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     assert.doesNotMatch(text, /unknownQuotaUnsupported/)
     assert.doesNotMatch(text, /GLM Coding CN/)
     // Quota lives in its own tab; bars are drawn there.
-    const quotaTree = await page.click('tabQuota')
+    const quotaTree = await page.clickTab('quota')
     const quotaText = textOf(quotaTree)
     // Each bar states to a screen reader what it draws: the window, what it has
     // used, and the same value the eye reads.
@@ -1169,7 +1162,7 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     const drained = await mountPage(withState(exhausted))
     try {
       await drained.mount()
-      const drainedTree = await drained.click('tabQuota')
+      const drainedTree = await drained.clickTab('quota')
       const spent = collectNodes(drainedTree, node => String(node.props?.className ?? '') === 'tmx-barFill')
       assert.equal(spent.length, 1)
       assert.equal(spent[0].props.style.width, '100%')
@@ -1178,8 +1171,7 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
     } finally {
       drained.restore()
     }
-    // The provider list carries every provider and its joined/total ratio;
-    // model identity is one drill-in away, so this first render stays short.
+    // The provider list carries every provider and its models.
     assert.match(text, /opencode-go-2/)
     assert.doesNotMatch(text, /routingCandidates|routeActive|ownership/)
   } finally {
@@ -1188,71 +1180,28 @@ test('mount fetches only GET /_tmax/state and never observes a provider', async 
 })
 
 
-test('a registered route without a credential is not "connected"', async () => {
-  const unusable = {
-    ...connected,
-    routes: connected.routes.map(route => ({ ...route, credentialConfigured: false })),
-    gateway: { ...connected.gateway, ready: true },
-    target: { ...connected.target, blockers: [] },
-  }
-  const page = await mountPage(withState(unusable))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    assert.match(text, /stateNotUsable/)
-    assert.doesNotMatch(text, /stateReady/)
-    // Applying is the one thing that repairs a credential tmax knows is
-    // missing, so it is the verdict line's own control.
-    const apply = buttonByText(tree, 'connect')
-    assert.ok(apply, 'Apply sits on the verdict line')
-    assert.equal(page.calls.some(call => call.method === 'POST'), false, 'mount runs nothing')
-  } finally {
-    page.restore()
-  }
-})
-
-test('declared routes DSH has not loaded say so, name their blockers, and offer no write', async () => {
-  const state = {
-    ...connected,
-    ownership: { owner: 'page', scope: 'profile_scoped', reason: null, conflict: null },
-    routes: [{
-      ...connected.routes[0],
-      active: false,
-      blockers: [{ code: 'model_hidden', message: 'glm-5.4 excluded: no eligible candidate' }],
-    }],
-  }
-  const page = await mountPage(withState(state))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    assert.match(text, /stateReload/)
-    assert.match(text, /nextReload/)
-    // The host's own route blocker is named beside the route it belongs to.
-    assert.match(text, /model_hidden: glm-5.4 excluded: no eligible candidate/)
-    assert.equal(buttonByText(tree, 'connect'), undefined)
-    assert.equal(page.calls.some(call => call.method === 'POST'), false)
-  } finally {
-    page.restore()
-  }
-})
-
-
 test('an unsupported state schema is a visible failure, not a payload', async () => {
-  const page = await mountPage(withState({ ...connected, schemaVersion: 5 }))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    assert.match(text, /stateSchemaUnsupported/)
-    assert.doesNotMatch(text, /Kimi Coding Plan/)
-    assert.doesNotMatch(text, /accessTitle/)
-    assert.ok(buttonByText(tree, 'retry'))
-    assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
-  } finally {
-    page.restore()
+  // The page consumes one host contract revision. A host serving another is a
+  // typed failure; its payload is never drawn as evidence.
+  for (const schemaVersion of [4, 6]) {
+    const page = await mountPage(async record => {
+      if (pathOf(record) === '/_tmax/state') return { status: 200, body: { ...connected, schemaVersion } }
+      return { status: 404, body: { ok: false } }
+    })
+    try {
+      const tree = await page.mount()
+      const text = textOf(tree)
+      assert.match(text, /stateSchemaUnsupported/)
+      assert.doesNotMatch(text, /Kimi Coding Plan/)
+      assert.ok(buttonByText(tree, 'retry'))
+      assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
+    } finally {
+      page.restore()
+    }
   }
 })
 
-test('section read failures replace empty and disconnected claims', async () => {
+test('section read failures are named instead of being drawn as empty sections', async () => {
   const failed = {
     ...connected,
     // Host shape: a failed projection read is reported under 'target' with a
@@ -1272,10 +1221,8 @@ test('section read failures replace empty and disconnected claims', async () => 
   }
   const page = await mountPage(withState(failed))
   try {
-    await page.mount()
-    const tree = await page.click('tabQuota')
+    const tree = await page.mount()
     const text = textOf(tree)
-    assert.match(text, /stateProjection/)
     for (const pattern of [
       /projection_unavailable/,
       /agent_inspect_unavailable/,
@@ -1287,24 +1234,23 @@ test('section read failures replace empty and disconnected claims', async () => 
     ]) {
       assert.match(text, pattern)
     }
-    // A failed projection/providers read is not "not connected", "no routes",
-    // or an empty unknown-quota list.
-    assert.doesNotMatch(text, /stateDisconnected/)
-    assert.doesNotMatch(text, /noRoutes/)
-    assert.doesNotMatch(text, /unknownQuota/)
-    assert.doesNotMatch(text, /notReported/)
-    // The failed projection offers a retry, and no observation happens.
-    assert.ok(buttonByText(tree, 'retry'))
+    // The failure is named once, before the section it emptied; an empty quota
+    // list caused by a failed read never reads as "no account".
+    await page.clickTab('quota')
+    const quotaText = textOf(await page.settle())
+    assert.match(quotaText, /provider_list_unavailable/)
+    assert.doesNotMatch(quotaText, /noAccounts/)
+    // The failed read offers a retry, and no observation happens.
+    assert.ok(buttonByText(await page.settle(), 'retry'))
     assert.equal(page.calls.some(call => call.method === 'POST'), false)
   } finally {
     page.restore()
   }
 })
 
-test('a section read failure with usable routes offers a non-observing retry', async () => {
+test('a section read failure offers a non-observing retry', async () => {
   const state = {
     ...connected,
-    // The fixture blocker would be a stronger action; this case is only a read.
     target: { ...connected.target, blockers: [] },
     errors: [{ section: 'gateway', code: 'gateway_unavailable', message: 'gateway status failed' }],
   }
@@ -1312,8 +1258,8 @@ test('a section read failure with usable routes offers a non-observing retry', a
   try {
     const tree = await page.mount()
     const text = textOf(tree)
-    assert.match(text, /nextSectionRetry/)
     assert.match(text, /gateway_unavailable/)
+    assert.match(text, /readFailed/)
     assert.ok(buttonByText(tree, 'retry'))
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
 
@@ -1327,7 +1273,7 @@ test('a section read failure with usable routes offers a non-observing retry', a
   }
 })
 
-test('an explicit projection section error is a projection retry', async () => {
+test('an explicit projection section failure is named and offers a read retry', async () => {
   const state = {
     ...connected,
     errors: [{ section: 'projection', code: 'projection_unavailable', message: 'projection failed' }],
@@ -1339,8 +1285,8 @@ test('an explicit projection section error is a projection retry', async () => {
   try {
     const tree = await page.mount()
     const text = textOf(tree)
-    assert.match(text, /stateProjection/)
-    assert.match(text, /nextProjectionRetry/)
+    assert.match(text, /projection_unavailable/)
+    assert.match(text, /readFailed/)
     assert.ok(buttonByText(tree, 'retry'))
     assert.equal(page.calls.some(call => call.method === 'POST'), false)
   } finally {
@@ -1359,10 +1305,8 @@ test('a clean state offers no retry action', async () => {
     const tree = await page.mount()
     const text = textOf(tree)
     assert.equal(buttonByText(tree, 'retry'), undefined)
-    assert.doesNotMatch(text, /nextSectionRetry/)
-    assert.doesNotMatch(text, /nextProjectionRetry/)
-    assert.doesNotMatch(text, /nextActionTitle/)
     assert.doesNotMatch(text, /readFailed/)
+    assert.doesNotMatch(text, /configProblem/)
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
   } finally {
     page.restore()
@@ -1378,7 +1322,7 @@ test('a failed provider read does not hide live routes or claim an empty list', 
   const page = await mountPage(withState(state))
   try {
     await page.mount()
-    const text = textOf(await page.click('tabQuota'))
+    const text = textOf(await page.clickTab('quota'))
     assert.match(text, /provider_list_unavailable/)
     assert.match(text, /readFailed/)
     assert.doesNotMatch(text, /unknownQuota/)
@@ -1398,7 +1342,7 @@ test('a readable empty account list says so instead of reading as a failure', as
   const page = await mountPage(withState(empty))
   try {
     await page.mount()
-    const text = textOf(await page.click('tabQuota'))
+    const text = textOf(await page.clickTab('quota'))
     assert.match(text, /noAccounts/)
     assert.doesNotMatch(text, /readFailed/)
     assert.doesNotMatch(text, /unknownQuota/)
@@ -1410,19 +1354,28 @@ test('a readable empty account list says so instead of reading as a failure', as
 
 
 
-test('an invalid or unreadable config is the next action before Apply', async () => {
-  const ownership = { owner: 'page', scope: 'profile_scoped', reason: null, homeIntegration: { present: false, entry: false, artifact: false }, conflict: null }
-  for (const [config, expected] of [
-    [{ state: 'invalid', revision: 'abc12345', errors: [{ code: 'bad_schema', message: 'configuration does not match the schema' }] }, [/nextConfig/, /bad_schema/]],
-    [{ state: 'unavailable', revision: null, errors: [{ code: 'config_validate_failed', message: 'config validate failed' }] }, [/nextConfigUnavailable/, /config_validate_failed/]],
+test('an invalid or unreadable config is named and blocks every Harness write', async () => {
+  for (const config of [
+    { state: 'invalid', revision: 'abc12345', errors: [{ code: 'bad_schema', message: 'configuration does not match the schema' }] },
+    { state: 'unavailable', revision: null, errors: [{ code: 'config_validate_failed', message: 'config validate failed' }] },
   ]) {
-    const state = { ...connected, routes: [], ownership, config }
-    const page = await mountPage(withState(state))
+    const page = await mountPage(withState(harnessState({ config })))
     try {
-      const tree = await page.mount()
-      const text = textOf(tree)
-      for (const pattern of expected) assert.match(text, pattern)
-      assert.equal(buttonByText(tree, 'connect'), undefined)
+      const models = await page.mount()
+      const text = textOf(models)
+      assert.match(text, /configProblem/)
+      assert.match(text, new RegExp(config.errors[0].code))
+      // The Harness tab withholds Apply while the configuration cannot be written.
+      const harnessTree = await page.clickTab('harness')
+      const apply = buttonByText(harnessTree, 'harnessApply')
+      assert.ok(apply, 'the pending Harness still shows its status')
+      assert.equal(apply.props.disabled, true, 'a broken configuration blocks Apply')
+      // The picker likewise offers no selection write.
+      await page.clickTab('models')
+      const tree = await page.settle()
+      harnessControlNode(tree, 'deepseek-v4.1-flash').props.onClick()
+      const opened = await page.settle()
+      assert.equal(popoverCheckbox(opened, 'dsh-main').props.disabled, true)
       assert.equal(page.calls.some(call => call.method === 'POST'), false)
     } finally {
       page.restore()
@@ -1449,9 +1402,8 @@ test('a host state with absent sections renders unknowns instead of crashing', a
     await page.mount()
     const modelsText = textOf(await page.settle())
     // Absent sections are absent: the page says what it can and invents nothing.
-    assert.match(modelsText, /stateDisconnected/)
     assert.match(modelsText, /catalogUnavailable/)
-    const quotaText = textOf(await page.click('tabQuota'))
+    const quotaText = textOf(await page.clickTab('quota'))
     assert.match(quotaText, /noAccounts/)
     assert.doesNotMatch(modelsText, /unknown undefined|NaN/)
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
@@ -1509,55 +1461,24 @@ test('a failed refresh keeps the old table and names the failure', async () => {
   })
   try {
     await page.mount()
-    await page.click('tabQuota')
+    await page.clickTab('quota')
     const tree = await page.click('refresh')
     const text = textOf(tree)
     assert.match(text, /observeFailed/)
     assert.match(text, /observe_unavailable: transport failed/)
-    // A failed observation must not erase a good reading, and the verdict now
-    // says the table is last-known rather than current.
+    // A failed observation must not erase a good reading; the banner says the
+    // table is the last known one rather than current.
     assert.match(text, /kimi/)
-    assert.match(text, /stateLastKnown/)
+    assert.match(text, /staleNotice/)
   } finally {
     page.restore()
   }
 })
 
-test('an unreadable ownership withholds Apply and offers a read retry', async () => {
-  // The settings could not be parsed, so nothing can say whether the routes
-  // are applied. Writing on that guess could overwrite a working home.
-  const state = {
-    ...connected,
-    routes: [],
-    routing: [],
-    target: { ...connected.target, blockers: [] },
-    ownership: { owner: 'unknown', scope: null, reason: 'settings_unreadable', conflict: null },
-  }
-  const page = await mountPage(withState(state))
-  try {
-    const tree = await page.mount()
-    const text = textOf(tree)
-    assert.equal(buttonByText(tree, 'connect'), undefined, 'no write is offered')
-    assert.match(text, /nextSettingsUnreadable/)
-    assert.ok(buttonByText(tree, 'retry'), 'a read retry is offered')
-    assert.equal(page.calls.some(call => call.method === 'POST'), false)
-  } finally {
-    page.restore()
-  }
-})
-
-test('a failed read withdraws Apply and leaves only a read retry', async () => {
-  const pageOwned = {
-    ...connected,
-    routes: [],
-    target: { ...connected.target, blockers: [] },
-    ownership: {
-      owner: 'page', scope: 'profile_scoped', reason: null,
-      homeIntegration: { present: false, entry: false, artifact: false }, conflict: null, mode: 'auto',
-    },
-  }
+test('a failed read keeps the last table and withdraws every Harness write', async () => {
+  const state = harnessState()
   const page = await mountPage(async record => {
-    if (pathOf(record) === '/_tmax/state') return { status: 200, body: pageOwned }
+    if (pathOf(record) === '/_tmax/state') return { status: 200, body: state }
     if (pathOf(record) === '/_tmax/observe') {
       return { status: 502, body: { ok: false, code: 'observe_unavailable', message: 'transport failed' } }
     }
@@ -1565,14 +1486,20 @@ test('a failed read withdraws Apply and leaves only a read retry', async () => {
   })
   try {
     const ready = await page.mount()
-    // The ready state's next action is Apply.
-    assert.ok(buttonByText(ready, 'connect'), 'a ready page-owned state offers Apply')
+    assert.ok(harnessControlNode(ready, 'deepseek-v4.1-flash'), 'a ready state offers the inline control')
     const failed = await page.click('refresh')
     const text = textOf(failed)
-    assert.match(text, /stateLastKnown/)
+    assert.match(text, /staleNotice/)
     // The last-known state is stale evidence: no write may be offered from it.
-    assert.equal(buttonByText(failed, 'connect'), undefined, 'a failed read withdraws Apply')
-    assert.ok(buttonByText(failed, 'retry'), 'the only next action is the read retry')
+    const harnessTree = await page.clickTab('harness')
+    const apply = buttonByText(harnessTree, 'harnessApply')
+    assert.equal(apply.props.disabled, true, 'a failed read withdraws Apply')
+    await page.clickTab('models')
+    const tree = await page.settle()
+    harnessControlNode(tree, 'deepseek-v4.1-flash').props.onClick()
+    const opened = await page.settle()
+    assert.equal(popoverCheckbox(opened, 'dsh-main').props.disabled, true)
+    assert.ok(buttonByText(opened, 'retry'), 'the only next action is the read retry')
     // That retry is one GET; it never observes or writes.
     const before = page.calls.length
     await page.click('retry')
@@ -1589,7 +1516,7 @@ test('a later refused read keeps the last good table and names its section error
   let phase = 'good'
   const refused = {
     ok: false,
-    schemaVersion: 4,
+    schemaVersion: 5,
     errors: [{ section: 'projection', code: 'inventory_unavailable', message: 'inventory read failed' }],
     target: null,
     routes: [],
@@ -1607,87 +1534,17 @@ test('a later refused read keeps the last good table and names its section error
   })
   try {
     await page.mount()
-    await page.click('tabQuota')
-    assert.match(textOf(await page.click('refresh')), /stateLastKnown/)
+    await page.clickTab('quota')
+    assert.match(textOf(await page.click('refresh')), /staleNotice/)
     phase = 'refused'
     const tree = await page.click('retry')
     const text = textOf(tree)
     // A refused read model does not clear the last good table...
     assert.match(text, /kimi/)
-    assert.match(text, /stateLastKnown/)
+    assert.match(text, /staleNotice/)
     // ...and the refused read's own section failure is named once, beside it.
     assert.match(text, /readFailed: inventory_unavailable/)
     assert.equal(buttonByText(tree, 'retry') ? collectButtons(tree).filter(button => textOf(button).trim() === 'retry').length : 0, 1, 'one retry, not one per panel')
-    assert.equal(buttonByText(tree, 'connect'), undefined, 'a refused read offers no write')
-  } finally {
-    page.restore()
-  }
-})
-
-test('Apply previews with dryRun before it writes, then uses the returned state', async () => {
-  const noRoutes = {
-    ...connected,
-    routes: [],
-    target: { ...connected.target, blockers: [] },
-    ownership: { owner: 'page', scope: 'profile_scoped', reason: null, homeIntegration: { present: false, entry: false, artifact: false }, conflict: null },
-  }
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: noRoutes }
-    if (path === '/_tmax/connect') {
-      const body = JSON.parse(record.body)
-      const connect = {
-        schema_version: 1,
-        target: { id: 'dsh-main', path: '/home/user/.dsh' },
-        gateway: { listen: '127.0.0.1:17840', ready: null, reason_code: 'daemon_identity_unavailable' },
-        credentials: { path: '/home/user/.dsh/.credentials.yaml', state: 'absent', permissions: null },
-        references: [{ route: 'tmax', protocol: 'responses', credential_ref: 'TMAX_REF', action: body.dryRun === true ? 'would_write' : 'written' }],
-        changed: body.dryRun === true ? null : true,
-        effects: { native_writes: body.dryRun !== true, secret_reads: false, processes_started: false, locks_created: false },
-      }
-      if (body.dryRun === true) return { status: 200, body: { ok: true, dryRun: true, connect, state: noRoutes } }
-      return { status: 200, body: { ok: true, dryRun: false, connect, state: connected } }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    await page.mount()
-    const ready = await page.click('tabQuota')
-    const before = textOf(ready)
-    // Nothing declared: the verdict says so and Apply is its own control, with
-    // no explanatory sentence beside it.
-    assert.match(before, /stateDisconnected/)
-    assert.ok(buttonByText(ready, 'connect'))
-    assert.doesNotMatch(before, /nextConnect/)
-
-    const preview = await page.click('connect')
-    assert.equal(page.calls.length, 2)
-    assert.equal(pathOf(page.calls[1]), '/_tmax/connect')
-    assert.equal(page.calls[1].body, JSON.stringify({ dryRun: true }))
-    const previewText = textOf(preview)
-    assert.match(previewText, /connectPreview/)
-    assert.match(previewText, /TMAX_REF/)
-    assert.match(previewText, /actionWouldWrite/)
-    assert.match(previewText, /effectNativeWrites: no/)
-    // The preview discloses the target, gateway and credential file state.
-    assert.match(previewText, /target: dsh-main/)
-    assert.match(previewText, /targetPath: \/home\/user\/\.dsh/)
-    assert.match(previewText, /gatewayListen: 127\.0\.0\.1:17840/)
-    assert.match(previewText, /gatewayReady: unknown/)
-    assert.match(previewText, /credentialPath: \/home\/user\/\.dsh\/\.credentials\.yaml/)
-    assert.match(previewText, /credentialState: absent/)
-
-    const applied = await page.click('connectApply')
-    assert.equal(page.calls.length, 3)
-    assert.equal(pathOf(page.calls[2]), '/_tmax/connect')
-    assert.equal(page.calls[2].body, JSON.stringify({ dryRun: false }))
-    const appliedText = textOf(applied)
-    assert.match(appliedText, /connectApplied/)
-    assert.match(appliedText, /actionWritten/)
-    assert.match(appliedText, /effectNativeWrites: yes/)
-    // The mutation returned state; the page renders it without another GET.
-    assert.match(appliedText, /kimi/)
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
   } finally {
     page.restore()
   }
@@ -1923,7 +1780,7 @@ test('a suspended provider previews then executes one resume, and mount runs no 
   })
   try {
     await page.mount()
-    const mounted = await page.click('tabQuota')
+    const mounted = await page.clickTab('quota')
     assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/action').length, 0)
     assert.ok(buttonByText(mounted, 'actionResumeQuota'), 'a suspended quota offers exactly one resume')
@@ -1987,7 +1844,7 @@ test('Reset failure sends one exact provider operation; observing is the page Re
   })
   try {
     await page.mount()
-    const mounted = await page.click('tabQuota')
+    const mounted = await page.clickTab('quota')
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/action').length, 0)
     assert.ok(buttonByText(mounted, 'actionResetFailure'), 'an active failure offers one reset')
     // No card repeats the observation: one Refresh reads every account.
@@ -2034,7 +1891,7 @@ test('a refused or unavailable action is a failure, never success, and keeps the
   })
   try {
     await page.mount()
-    await page.click('tabQuota')
+    await page.clickTab('quota')
     const refused = await page.click('actionResumeQuota')
     const refusedText = textOf(refused)
     assert.match(refusedText, /actionFailed/)
@@ -2083,7 +1940,7 @@ test('a pending action disables every action control until it settles', async ()
   })
   try {
     await page.mount()
-    const mounted = await page.click('tabQuota')
+    const mounted = await page.clickTab('quota')
     const resume = buttonByText(mounted, 'actionResumeQuota')
     assert.ok(resume)
     resume.props.onClick()
@@ -2170,20 +2027,20 @@ test('Settings > Models availability names why tmax models are absent', async ()
   }), 'unknown')
 })
 
-test('the state gate accepts only schemaVersion 4 with ok true', async () => {
+test('the state gate accepts only the current schemaVersion with ok true', async () => {
   const pure = (await moduleWith(inertReact())).__pure
-  const good = { schemaVersion: 4, ok: true, routes: [] }
+  const good = { schemaVersion: 5, ok: true, routes: [] }
   assert.deepEqual(pure.stateGate(good, { status: 200 }), { object: true, state: good })
   // A non-object payload is not a state and is never adopted.
   assert.equal(pure.stateGate(null, { status: 200 }).object, false)
   assert.equal(pure.stateGate(undefined, { status: 200 }).object, false)
   // An unsupported schema is a typed failure carrying the value it saw.
-  assert.deepEqual(pure.stateGate({ schemaVersion: 5 }, { status: 200 }),
-    { object: true, schemaUnsupported: true, message: '5' })
+  assert.deepEqual(pure.stateGate({ schemaVersion: 4 }, { status: 200 }),
+    { object: true, schemaUnsupported: true, message: '4' })
   // A refused model is an error, never evidence.
-  assert.equal(pure.stateGate({ schemaVersion: 4, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
+  assert.equal(pure.stateGate({ schemaVersion: 5, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
     'state_unavailable: no answer')
-  assert.equal(pure.stateGate({ schemaVersion: 4, ok: 'yes' }, { status: 200 }).state, undefined)
+  assert.equal(pure.stateGate({ schemaVersion: 5, ok: 'yes' }, { status: 200 }).state, undefined)
 })
 
 test('unknown credential readiness is never drawn as a missing credential', async () => {
@@ -2215,12 +2072,6 @@ test('unknown credential readiness is never drawn as a missing credential', asyn
   assert.equal(pure.modelsAvailability(state(active(false))), 'credential')
   assert.equal(pure.modelsAvailability(state([...active(false), ...active(null)])), 'credential')
   assert.equal(pure.modelsAvailability(state(active(true))), 'available')
-
-  // The page's own verdict already drew the same line: unknown readiness is
-  // not "registered, not usable"; only a reported absence is.
-  const load = routes => ({ phase: 'ready', value: { ...base, routes } })
-  assert.deepEqual(pure.verdict(load(active(null)), t), { tone: 'idle', text: 'stateUnknown' })
-  assert.deepEqual(pure.verdict(load(active(false)), t), { tone: 'warn', text: 'stateNotUsable' })
 })
 
 test('the tmax_status tool text is parsed as data, never as a success claim', async () => {
@@ -2285,94 +2136,6 @@ test('the sidebar marker degrades to a dot in the rail', async () => {
     assert.equal(mark.props['data-wide'], 'false')
     assert.equal(mark.props['data-tone'], 'ok')
     assert.equal(collectButtons(tree).length, 0)
-  } finally {
-    page.restore()
-  }
-})
-
-test('the Settings footer explains missing models and previews Apply before executing', async () => {
-  const selected = []
-  const empty = seatState({
-    routes: [],
-    ownership: {
-      owner: 'page',
-      scope: 'profile_scoped',
-      reason: null,
-      homeIntegration: { present: false, entry: false, artifact: false },
-      conflict: null,
-      mode: 'auto',
-    },
-  })
-  const connectedState = {
-    ...seatState(),
-    configurationRevision: 'feedfacecafebeef1234567890feedface',
-  }
-  const page = await mountSeat(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: empty }
-    if (path === '/_tmax/connect') {
-      const body = JSON.parse(record.body)
-      // The host passes raw `tmax agent apply` data through.
-      const connect = body.dryRun === true
-        ? {
-          target: 'dsh-main',
-          dry_run: true,
-          files: [{ path: '/home/user/.dsh/cordis.patch.yml' }],
-          effects: { native_writes: false, secret_reads: false, processes_started: false, locks_created: false },
-        }
-        : {
-          target: 'dsh-main',
-          state: 'applied_reload_pending',
-          written: true,
-          changed_files: ['/home/user/.dsh/cordis.patch.yml'],
-          unchanged_files: ['/home/user/.dsh/tmax-dsh.mjs'],
-          recovery: 'rec_1',
-        }
-      return { status: 200, body: { ok: true, dryRun: body.dryRun === true, connect, state: body.dryRun === true ? empty : connectedState } }
-    }
-    return { status: 404, body: { ok: false } }
-  }, slot('settings.models.footer'), {}, { services: { layout: { selectPanel: id => selected.push(id) } } })
-  try {
-    const mounted = await page.mount()
-    assert.deepEqual(page.calls.map(call => `${call.method} ${pathOf(call)}`), ['GET /_tmax/state'])
-    const mountedText = textOf(mounted)
-    assert.match(mountedText, /modelsNone/)
-    assert.match(mountedText, /footerGateway/)
-    assert.match(mountedText, /gatewayReady/)
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/observe').length, 0)
-
-    const preview = await page.click('connect')
-    assert.equal(page.calls.length, 2)
-    assert.equal(page.calls[1].method, 'POST')
-    assert.equal(pathOf(page.calls[1]), '/_tmax/connect')
-    assert.equal(page.calls[1].body, JSON.stringify({ dryRun: true }))
-    const previewText = textOf(preview)
-    assert.match(previewText, /connectPreview/)
-    // The preview discloses the planned native file and the effect flags.
-    assert.match(previewText, /connectFiles/)
-    assert.match(previewText, /cordis\.patch\.yml/)
-    assert.match(previewText, /effectNativeWrites: no/)
-    assert.match(previewText, /effectSecretReads: no/)
-
-    const applied = await page.click('connectApply')
-    assert.equal(page.calls.length, 3)
-    assert.equal(page.calls[2].body, JSON.stringify({ dryRun: false }))
-    const appliedText = textOf(applied)
-    assert.match(appliedText, /connectApplied/)
-    // The result reports applied state, changed/unchanged files, and recovery.
-    assert.match(appliedText, /connectState applied_reload_pending/)
-    assert.match(appliedText, /connectChangedFiles/)
-    assert.match(appliedText, /cordis\.patch\.yml/)
-    assert.match(appliedText, /connectUnchangedFiles/)
-    assert.match(appliedText, /tmax-dsh\.mjs/)
-    assert.match(appliedText, /connectRecovery rec_1/)
-    // The returned read model is adopted: the card now reports a listed route.
-    assert.match(appliedText, /modelsAvailable/)
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/observe').length, 0)
-
-    await page.click('footerOpenPage')
-    assert.deepEqual(selected, ['tmax'])
   } finally {
     page.restore()
   }
@@ -2488,7 +2251,8 @@ test('Start is offered for a configured gateway whose readiness is unknown, neve
     const state = { ...connected, gateway, target: { ...connected.target, blockers: [] } }
     const page = await mountPage(withState(state))
     try {
-      const tree = await page.mount()
+      await page.mount()
+      const tree = await page.clickTab('gateway')
       assert.equal(buttonByText(tree, 'actionStartGateway') !== undefined, offered, JSON.stringify(gateway))
     } finally {
       page.restore()
@@ -2496,7 +2260,7 @@ test('Start is offered for a configured gateway whose readiness is unknown, neve
   }
 })
 
-test('a gateway that is not ready is started from the verdict line, and a ready one offers no lifecycle control', async () => {
+test('a gateway that is not ready is started from the Gateway tab, and a ready one offers no lifecycle control', async () => {
   const running = {
     ...connected,
     gateway: { ...connected.gateway, ready: true, daemonDiscoveryState: 'identified' },
@@ -2528,12 +2292,12 @@ test('a gateway that is not ready is started from the verdict line, and a ready 
     return { status: 404, body: { ok: false } }
   })
   try {
-    const mounted = await page.mount()
+    await page.mount()
+    const mounted = await page.clickTab('gateway')
     // Fixture gateway: configured, readiness unknown. Starting is the only verb
-    // that can change that, and it is the verdict line's own control.
+    // that can change that, and it is the Gateway tab's own control.
     const start = buttonByText(mounted, 'actionStartGateway')
-    assert.ok(start, 'Start sits on the verdict line')
-    assert.equal(start.props['data-kind'], 'primary')
+    assert.ok(start, 'Start sits on the Gateway tab')
     assert.equal(buttonByText(mounted, 'actionStopGateway'), undefined)
     assert.equal(buttonByText(mounted, 'actionRestartGateway'), undefined)
 
@@ -2556,7 +2320,7 @@ test('a gateway that is not ready is started from the verdict line, and a ready 
     assert.match(liveText(executed), /actionDone: gateway_started/)
     // The returned read model is adopted: nothing is left to start, and the
     // page offers no stop or restart, which belong to the CLI.
-    assert.match(executedText, /stateReady/)
+    assert.match(executedText, /gatewayReady/)
     assert.equal(buttonByText(executed, 'actionStartGateway'), undefined)
     assert.equal(buttonByText(executed, 'actionStopGateway'), undefined)
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/observe').length, 0)
@@ -2615,45 +2379,6 @@ test('a degraded marker is drawn on the row without opening the page', async () 
   }
 })
 
-test('the Settings footer offers Apply only when the page next action is Apply', async () => {
-  const route = seatState().routes[0]
-  const pageOwnership = {
-    owner: 'page',
-    scope: 'profile_scoped',
-    reason: null,
-    homeIntegration: { present: false, entry: false, artifact: false },
-    conflict: null,
-    mode: 'auto',
-  }
-  const cases = [
-    { name: 'invalid config', connect: false, state: seatState({ config: { state: 'invalid', revision: 'x', errors: [] } }) },
-    { name: 'unavailable config', connect: false, state: seatState({ config: { state: 'unavailable', revision: 'x', errors: [] } }) },
-    {
-      name: 'projection failure',
-      connect: false,
-      state: seatState({ routes: [], target: null, errors: [{ section: 'projection', code: 'projection_unavailable', message: 'no projection' }] }),
-    },
-    // Nothing declared yet: Apply is exactly the step that declares something.
-    { name: 'no routes yet', connect: true, state: seatState({ routes: [] }) },
-
-    { name: 'unknown credential', connect: false, state: seatState({ routes: [{ ...route, credentialConfigured: null }] }) },
-    { name: 'page-owned no routes', connect: true, state: seatState({ routes: [], ownership: pageOwnership }) },
-    { name: 'known missing credential', connect: true, state: seatState({ routes: [{ ...route, credentialConfigured: false }] }) },
-  ]
-  for (const item of cases) {
-    const page = await mountSeat(withState(item.state), slot('settings.models.footer'))
-    try {
-      const tree = await page.mount()
-      assert.equal(buttonByText(tree, 'connect') !== undefined, item.connect,
-        `${item.name}: Apply ${item.connect ? 'is offered' : 'is withheld'}`)
-      assert.equal(page.calls.filter(call => call.method === 'POST').length, 0, `${item.name}: no write on mount`)
-      assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/observe').length, 0, `${item.name}: no observation`)
-    } finally {
-      page.restore()
-    }
-  }
-})
-
 test('the Settings footer does not count an unknown credential as unusable', async () => {
   const route = seatState().routes[0]
   const page = await mountSeat(withState(seatState({ routes: [{ ...route, credentialConfigured: null }] })),
@@ -2671,55 +2396,6 @@ test('the Settings footer does not count an unknown credential as unusable', asy
     assert.match(text, /updated /)
   } finally {
     page.restore()
-  }
-})
-
-test('an apply-returned read model is adopted only through the state gate', async () => {
-  const pageOwnership = {
-    owner: 'page',
-    scope: 'profile_scoped',
-    reason: null,
-    homeIntegration: { present: false, entry: false, artifact: false },
-    conflict: null,
-    mode: 'auto',
-  }
-  const empty = seatState({ routes: [], ownership: pageOwnership })
-  const cases = [
-    {
-      name: 'unsupported schema',
-      state: { ...seatState(), schemaVersion: 5 },
-      pattern: /hostError: schema 5/,
-    },
-    {
-      name: 'refused read model',
-      state: { ...seatState(), ok: false, code: 'state_unavailable', message: 'tmax did not answer' },
-      pattern: /state_unavailable: tmax did not answer/,
-    },
-  ]
-  for (const item of cases) {
-    const page = await mountSeat(async record => {
-      const path = pathOf(record)
-      if (path === '/_tmax/state') return { status: 200, body: empty }
-      if (path === '/_tmax/connect') {
-        return { status: 200, body: { ok: true, dryRun: false, connect: { changed: true }, state: item.state } }
-      }
-      return { status: 404, body: { ok: false } }
-    }, slot('settings.models.footer'))
-    try {
-      await page.mount()
-      await page.click('connect')
-      const applied = await page.click('connectApply')
-      const text = textOf(applied)
-      // The write is reported, but the payload it returned is never evidence.
-      assert.match(text, /connectApplied/, `${item.name}: the write is reported`)
-      assert.match(text, item.pattern, `${item.name}: the rejected read is visible`)
-      assert.doesNotMatch(text, /modelsAvailable/, `${item.name}: no model claim`)
-      assert.match(text, /footerRoutes: unknown/, `${item.name}: no route claim`)
-      assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1,
-        `${item.name}: no silent second read`)
-    } finally {
-      page.restore()
-    }
   }
 })
 
@@ -2830,331 +2506,31 @@ test('a projection failure is unknown footer evidence, not zero counts', async (
 })
 
 // ---------------------------------------------------------------------------
-// The approved catalog page: tabs, provider drill-in, search, and one add.
+// Page tabs, then the approved Harness page.
 
-test('the page tabs separate models, gateway, and quota without extra reads', async () => {
+test('the page tabs separate models, harness, gateway, and quota without extra reads', async () => {
   const page = await mountPage(withState(connected))
   try {
     const models = await page.mount()
     assert.match(textOf(models), /tabModels/)
+    assert.match(textOf(models), /tabHarness/)
     assert.match(textOf(models), /Kimi Coding Plan/)
     assert.equal(page.calls.length, 1)
 
-    const gateway = await page.click('tabGateway')
+    const harness = await page.clickTab('harness')
+    assert.match(textOf(harness), /harnessSection|harnessNone|tabHarness/)
+
+    const gateway = await page.clickTab('gateway')
     assert.match(textOf(gateway), /gatewayTitle/)
     assert.match(textOf(gateway), /gatewayListen/)
     assert.match(textOf(gateway), /127\.0\.0\.1:17840/)
 
-    const quota = await page.click('tabQuota')
+    const quota = await page.clickTab('quota')
     assert.match(textOf(quota), /accountsTitle/)
 
-    const back = await page.click('tabModels')
+    const back = await page.clickTab('models')
     assert.match(textOf(back), /Kimi Coding Plan/)
     assert.equal(page.calls.length, 1, 'tab switches never read or act')
-  } finally {
-    page.restore()
-  }
-})
-
-test('the catalog drills into a provider and adds one model through a previewed action', async () => {
-  const bodies = []
-  const joinedState = {
-    ...connected,
-    catalog: {
-      ...connected.catalog,
-      providers: connected.catalog.providers.map(provider => provider.id !== 'kimi'
-        ? provider
-        : {
-            ...provider,
-            entries: [{ name: 'kimi', relayed: false, protocols: ['responses'] }],
-            entry: 'kimi',
-            joinedCount: 1,
-            models: provider.models.map(model => ({ ...model, joined: true, joinedProtocols: ['responses'] })),
-          }),
-    },
-  }
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    if (path === '/_tmax/action') {
-      const body = JSON.parse(record.body)
-      bodies.push(body)
-      const plan = {
-        provider: 'kimi',
-        model: 'k3.1-pro',
-        protocol: 'responses',
-        target: 'dsh-main',
-        entry: { name: 'kimi', mode: 'create' },
-        steps: ['provider_add', 'model_add', 'apply'],
-      }
-      if (body.dryRun === true) {
-        return {
-          status: 200,
-          body: { ok: true, action: 'add_model', dryRun: true, result: { code: 'ok', status: 'dry_run', data: plan }, state: connected },
-        }
-      }
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          action: 'add_model',
-          dryRun: false,
-          result: { code: 'awaiting_native_reload', status: 'success', data: { ...plan, steps: [] } },
-          state: joinedState,
-        },
-      }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    let tree = await page.mount()
-    const provider = collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0]
-    assert.ok(provider, 'a provider row is a drill-in control')
-    provider.props.onClick()
-    tree = await page.settle()
-    assert.match(textOf(tree), /k3\.1-pro/)
-    assert.match(textOf(tree), /joinModel/)
-
-    const add = collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0]
-    assert.ok(add, 'an unjoined model offers the add control')
-    add.props.onClick()
-    tree = await page.settle()
-    assert.equal(bodies.length, 1)
-    assert.deepEqual(bodies[0], { action: 'add_model', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses', dryRun: true })
-    assert.match(textOf(tree), /addNewEntry/)
-    assert.match(textOf(tree), /addProtocol/)
-    assert.ok(buttonByText(tree, 'addConfirm'))
-
-    tree = await page.click('addConfirm')
-    assert.equal(bodies.length, 2)
-    assert.equal(bodies[1].dryRun, false)
-    assert.match(textOf(tree), /addApplied/)
-    assert.match(textOf(tree), /addReloadHint/)
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1, 'the action state is adopted without a GET')
-  } finally {
-    page.restore()
-  }
-})
-
-test('typing in the catalog search switches to grouped model results', async () => {
-  const page = await mountPage(withState(connected))
-  try {
-    let tree = await page.mount()
-    const input = collectNodes(tree, node => node.props?.type === 'search')[0]
-    assert.ok(input, 'the catalog has a search field')
-    input.props.onChange({ target: { value: 'k3' } })
-    tree = await page.settle()
-    const text = textOf(tree)
-    assert.match(text, /Kimi Coding Plan/)
-    assert.match(text, /k3\.1-pro/)
-    assert.match(text, /joinModel/)
-    assert.equal(page.calls.length, 1, 'search is local to the read model')
-  } finally {
-    page.restore()
-  }
-})
-
-test('a disabled provider offers only a disabled add control for its models', async () => {
-  const disabled = {
-    ...connected,
-    catalog: {
-      ...connected.catalog,
-      providers: connected.catalog.providers.map(provider => provider.id !== 'kimi'
-        ? provider
-        : { ...provider, enabled: false }),
-    },
-  }
-  const page = await mountPage(withState(disabled))
-  try {
-    let tree = await page.mount()
-    const provider = collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0]
-    provider.props.onClick()
-    tree = await page.settle()
-    const add = collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0]
-    assert.ok(add, 'the model row is still visible')
-    assert.equal(add.props.disabled, true, 'a disabled provider cannot be selected into the target')
-  } finally {
-    page.restore()
-  }
-})
-
-test('a malformed add preview never offers confirmation', async () => {
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    if (path === '/_tmax/action') {
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          action: 'add_model',
-          dryRun: true,
-          result: { code: 'ok', status: 'dry_run', data: { provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' } },
-          state: connected,
-        },
-      }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    let tree = await page.mount()
-    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
-    tree = await page.settle()
-    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
-    tree = await page.settle()
-    assert.match(textOf(tree), /addInvalidPreview/)
-    assert.equal(buttonByText(tree, 'addConfirm'), undefined, 'no write is offered without the approved entry preview')
-  } finally {
-    page.restore()
-  }
-})
-
-test('a partial add failure adopts the fresh state and reports the failed step', async () => {
-  const joinedState = {
-    ...connected,
-    catalog: {
-      ...connected.catalog,
-      providers: connected.catalog.providers.map(provider => provider.id !== 'kimi'
-        ? provider
-        : {
-            ...provider,
-            entries: [{ name: 'kimi', relayed: false, protocols: ['responses'] }],
-            entry: 'kimi',
-            joinedCount: 1,
-            models: provider.models.map(model => ({ ...model, joined: true, joinedProtocols: ['responses'] })),
-          }),
-    },
-  }
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    if (path === '/_tmax/action') {
-      const body = JSON.parse(record.body)
-      if (body.dryRun === true) {
-        return {
-          status: 200,
-          body: {
-            ok: true,
-            action: 'add_model',
-            dryRun: true,
-            result: {
-              code: 'ok',
-              status: 'dry_run',
-              data: {
-                provider: 'kimi',
-                model: 'k3.1-pro',
-                protocol: 'responses',
-                target: 'dsh-main',
-                entry: { name: 'kimi', mode: 'create' },
-                steps: ['provider_add', 'model_add', 'apply'],
-              },
-            },
-            state: connected,
-          },
-        }
-      }
-      return {
-        status: 409,
-        body: {
-          ok: false,
-          action: 'add_model',
-          dryRun: false,
-          code: 'model_add_failed',
-          message: 'the model selection was not written',
-          result: {
-            code: 'model_add_failed',
-            status: 'error',
-            message: 'the model selection was not written',
-            data: { provider: 'kimi', model: 'k3.1-pro', protocol: 'responses', entry: { name: 'kimi', mode: 'create' }, steps: [], failedStep: 'model_add' },
-          },
-          state: joinedState,
-        },
-      }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    let tree = await page.mount()
-    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
-    tree = await page.settle()
-    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
-    tree = await page.settle()
-    tree = await page.click('addConfirm')
-    assert.match(textOf(tree), /addFailed/)
-    assert.match(textOf(tree), /addStepModelAdd/)
-    assert.match(textOf(tree), /joined/)
-    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1, 'the partial state is adopted without another GET')
-  } finally {
-    page.restore()
-  }
-})
-
-test('changing the add protocol re-previews and confirms the same protocol', async () => {
-  const bodies = []
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: connected }
-    if (path === '/_tmax/action') {
-      const body = JSON.parse(record.body)
-      bodies.push(body)
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          action: 'add_model',
-          dryRun: body.dryRun,
-          result: body.dryRun
-            ? {
-                code: 'ok',
-                status: 'dry_run',
-                data: {
-                  provider: 'kimi',
-                  model: 'k3.1-pro',
-                  protocol: body.protocol,
-                  target: 'dsh-main',
-                  entry: { name: 'kimi', mode: 'create' },
-                  steps: ['provider_add', 'model_add', 'apply'],
-                },
-              }
-            : { code: 'awaiting_native_reload', status: 'success', data: {} },
-          state: connected,
-        },
-      }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    let tree = await page.mount()
-    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
-    tree = await page.settle()
-    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
-    tree = await page.settle()
-    const select = collectNodes(tree, node => node.props?.className === 'tmx-addSelect')[0]
-    select.props.onChange({ target: { value: 'chat-completions' } })
-    tree = await page.settle()
-    assert.equal(bodies.at(-1).protocol, 'chat-completions')
-    assert.equal(bodies.at(-1).dryRun, true)
-    tree = await page.click('addConfirm')
-    assert.equal(bodies.at(-1).protocol, 'chat-completions')
-    assert.equal(bodies.at(-1).dryRun, false)
-  } finally {
-    page.restore()
-  }
-})
-
-test('an unconfigured gateway offers only a disabled add control', async () => {
-  const gatewayOff = {
-    ...connected,
-    gateway: { ...connected.gateway, configured: false, ready: null },
-  }
-  const page = await mountPage(withState(gatewayOff))
-  try {
-    let tree = await page.mount()
-    collectNodes(tree, node => node.props?.['data-provider'] === 'tmax')[0].props.onClick()
-    tree = await page.settle()
-    const add = collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0]
-    assert.ok(add)
-    assert.equal(add.props.disabled, true)
   } finally {
     page.restore()
   }
@@ -3171,6 +2547,882 @@ test('an unavailable catalog reports unavailability instead of an empty provider
     const text = textOf(await page.mount())
     assert.match(text, /catalogUnavailable/)
     assert.doesNotMatch(text, /noProviders/)
+  } finally {
+    page.restore()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The approved Harness page: one inline control per catalog model, only the
+// declared Harnesses, a direct desired-configuration write with no preview, and
+// one explicit Harness apply with a dry-run preview.
+
+/** The connected state with one selection added to a declared Harness. */
+function withSelection(state, harnessId, providerName, sourceProvider, modelId, protocol) {
+  return {
+    ...state,
+    harnesses: state.harnesses.map(harness => {
+      if (harness.id !== harnessId) return harness
+      const known = harness.providers.some(entry => entry.name === providerName)
+      const providers = known
+        ? harness.providers.map(entry => entry.name !== providerName
+          ? entry
+          : { ...entry, models: [...entry.models, { id: modelId, protocol }] })
+        : [...harness.providers, {
+            name: providerName,
+            sourceProvider,
+            relayed: sourceProvider === 'tmax',
+            models: [{ id: modelId, protocol }],
+          }]
+      return {
+        ...harness,
+        modelCount: harness.modelCount + 1,
+        providerCount: known ? harness.providerCount : harness.providerCount + 1,
+        providers,
+      }
+    }),
+  }
+}
+
+/** The same state with one exact selection removed. */
+function withoutSelection(state, harnessId, providerName, modelId) {
+  return {
+    ...state,
+    harnesses: state.harnesses.map(harness => harness.id !== harnessId ? harness : {
+      ...harness,
+      modelCount: harness.modelCount - 1,
+      providers: harness.providers.map(entry => entry.name !== providerName ? entry : {
+        ...entry,
+        models: entry.models.filter(model => model.id !== modelId),
+      }),
+    }),
+  }
+}
+
+function modelControlIds(tree) {
+  return collectNodes(tree, node => node?.type === 'button'
+    && String(node.props?.className ?? '').split(' ').includes('tmx-harnessControl'))
+    .map(node => node.props['data-model'])
+}
+
+test('the models tab groups providers and puts one Harness control on every model', async () => {
+  const page = await mountPage(withState(harnessState()))
+  try {
+    const tree = await page.mount()
+    const text = textOf(tree)
+    const search = collectNodes(tree, node => node?.type === 'input' && node.props?.className === 'tmx-searchInput')[0]
+    assert.ok(search, 'the models tab has its own search field')
+    assert.equal(search.props.placeholder, 'searchModelsPlaceholder')
+    // One control per catalog model, grouped by provider, no drill-in page.
+    assert.deepEqual(modelControlIds(tree),
+      ['deepseek-v4.1-flash', 'glm-5.4', 'gpt-6-astra', 'gpt-6-astra', 'k3.1-pro', 'deepseek-v4.1-flash'])
+    assert.match(text, /deepseek-v4\.1-flash/)
+    assert.match(text, /Kimi Coding Plan/)
+
+    // A selection is read from the declared Harness, never from catalog.joined.
+    const selected = harnessControlNode(tree, 'deepseek-v4.1-flash')
+    assert.equal(selected.props['data-harnesses'], 'dsh-main')
+    assert.match(textOf(selected), /DSH/)
+    assert.equal(collectNodes(selected, node => String(node.props?.className ?? '') === 'tmx-dot')[0].props['data-tone'], 'warn',
+      'the pending Harness colours its model control amber')
+    const applied = harnessControlNode(tree, 'k3.1-pro')
+    assert.equal(applied.props['data-harnesses'], 'pi-main')
+    assert.equal(collectNodes(applied, node => String(node.props?.className ?? '') === 'tmx-dot')[0].props['data-tone'], 'ok')
+
+    // A model that catalog.joined says is joined but no declared Harness
+    // selects still offers the empty control.
+    const unselected = collectNodes(tree, node => node?.type === 'button'
+      && node.props?.['data-provider'] === 'tmax' && node.props?.['data-model'] === 'gpt-6-astra')[0]
+    assert.equal(unselected.props['data-harnesses'], '')
+    assert.match(textOf(unselected), /selectHarness/)
+
+    // The compact pending line counts Harnesses, never model items.
+    assert.match(text, /1 pendingHarnessOne/)
+    assert.equal(buttonByText(tree, 'goApply') !== undefined, true)
+    assert.equal(page.calls.length, 1)
+  } finally {
+    page.restore()
+  }
+})
+
+test('the models search narrows providers and models without another read', async () => {
+  const page = await mountPage(withState(harnessState()))
+  try {
+    const tree = await page.mount()
+    const input = collectNodes(tree, node => node?.type === 'input' && node.props?.className === 'tmx-searchInput')[0]
+    assert.ok(input, 'the models tab has its own search field')
+    input.props.onChange({ target: { value: 'kimi' } })
+    const filtered = await page.settle()
+    assert.match(textOf(filtered), /k3\.1-pro/)
+    assert.doesNotMatch(textOf(filtered), /glm-5\.4/)
+    assert.equal(page.calls.length, 1, 'search is local to the read model')
+
+    const clear = collectNodes(filtered, node => node?.type === 'button'
+      && node.props?.['aria-label'] === 'clearSearch')[0]
+    assert.ok(clear)
+    clear.props.onClick()
+    assert.match(textOf(await page.settle()), /glm-5\.4/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('the inline control opens only the declared Harnesses, searchable and closable', async () => {
+  const page = await mountPage(withState(harnessState()))
+  try {
+    const tree = await page.mount()
+    harnessControlNode(tree, 'deepseek-v4.1-flash').props.onClick()
+    const opened = await page.settle()
+    const popover = popoverOf(opened)
+    assert.ok(popover, 'the control opens the anchored picker')
+    assert.equal(popover.props['aria-label'], 'selectHarness')
+    const items = collectNodes(opened, node => String(node.props?.className ?? '') === 'tmx-popoverItem')
+    assert.deepEqual(items.map(item => item.props['data-harness']), ['dsh-main', 'pi-main'])
+    assert.doesNotMatch(textOf(opened), /Codex|OpenCode|Hermes|OMP|harnessNone/)
+    assert.equal(popoverCheckbox(opened, 'dsh-main').props.checked, true)
+    assert.equal(popoverCheckbox(opened, 'pi-main').props.checked, false)
+    assert.match(textOf(opened), /harnessPickerConfigured/)
+    assert.match(textOf(opened), /1 harnessCountOne/)
+
+    // The picker has its own search field.
+    const search = collectNodes(opened, node => node?.type === 'input' && node.props?.className === 'tmx-popoverSearchInput')[0]
+    search.props.onChange({ target: { value: 'pi' } })
+    const filtered = await page.settle()
+    assert.deepEqual(collectNodes(filtered, node => String(node.props?.className ?? '') === 'tmx-popoverItem').map(item => item.props['data-harness']),
+      ['pi-main'])
+
+    // 完成 closes it; no request was made by browsing.
+    const done = buttonByText(filtered, 'harnessPickerDone')
+    assert.ok(done)
+    done.props.onClick()
+    assert.equal(popoverOf(await page.settle()), undefined)
+    assert.equal(page.calls.some(call => call.method === 'POST'), false)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a picker checkbox saves one exact add_model and redraws from the returned state', async () => {
+  const before = harnessState()
+  const after = withSelection(before, 'dsh-main', 'tmax', 'tmax', 'gpt-6-astra', 'responses')
+  const bodies = []
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      bodies.push(JSON.parse(record.body))
+      return {
+        status: 200,
+        body: { ok: true, action: 'add_model', dryRun: false, result: { code: 'ok', status: 'success' }, state: after },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.mount()
+    harnessControlNode(tree, 'gpt-6-astra').props.onClick()
+    const opened = await page.settle()
+    popoverCheckbox(opened, 'dsh-main').props.onChange({ target: { checked: true } })
+    const updated = await page.settle()
+    // One exact desired-configuration write, never an apply.
+    assert.deepEqual(bodies, [{
+      action: 'add_model',
+      target: 'dsh-main',
+      provider: 'tmax',
+      model: 'gpt-6-astra',
+      protocol: 'responses',
+      dryRun: false,
+    }])
+    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1,
+      'the returned state is adopted without another GET')
+    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/action').length, 1)
+    // The control redraws from the host state, and the picker stays open.
+    assert.equal(harnessControlNode(updated, 'gpt-6-astra').props['data-harnesses'], 'dsh-main')
+    assert.equal(popoverCheckbox(updated, 'dsh-main').props.checked, true)
+    assert.match(textOf(updated), /selectionSaved/)
+    assert.match(textOf(updated), /actionAddModel/)
+    assert.match(textOf(updated), /resultDetails/)
+    assert.match(liveText(updated), /selectionSaved/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a picker checkbox unchecks into one remove_model; the host removes all protocols', async () => {
+  const before = harnessState()
+  const after = withoutSelection(before, 'dsh-main', 'tmax', 'deepseek-v4.1-flash')
+  const bodies = []
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      bodies.push(JSON.parse(record.body))
+      return {
+        status: 200,
+        body: { ok: true, action: 'remove_model', dryRun: false, result: { code: 'ok', status: 'success' }, state: after },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.mount()
+    harnessControlNode(tree, 'deepseek-v4.1-flash').props.onClick()
+    const opened = await page.settle()
+    popoverCheckbox(opened, 'dsh-main').props.onChange({ target: { checked: false } })
+    const updated = await page.settle()
+    assert.deepEqual(bodies, [{
+      action: 'remove_model',
+      target: 'dsh-main',
+      provider: 'tmax',
+      model: 'deepseek-v4.1-flash',
+      protocol: 'responses',
+      dryRun: false,
+    }])
+    assert.equal(harnessControlNode(updated, 'deepseek-v4.1-flash').props['data-harnesses'], '')
+    assert.match(textOf(harnessControlNode(updated, 'deepseek-v4.1-flash')), /selectHarness/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('an out-of-order save response refreshes instead of overwriting the newer state', async () => {
+  const before = harnessState()
+  const withDshModel = id => ({
+    ...before,
+    harnesses: before.harnesses.map(harness => harness.id !== 'dsh-main' ? harness : {
+      ...harness,
+      providers: [
+        ...harness.providers,
+        { name: `new-${id}`, sourceProvider: id.startsWith('k3') ? 'kimi' : 'tmax', relayed: true, models: [{ id, protocol: 'responses' }] },
+      ],
+    }),
+  })
+  const stateA = withDshModel('gpt-6-astra')
+  const stateB = withDshModel('k3.1-pro')
+  let currentState = before
+  let releaseA
+  let releaseB
+  const gateA = new Promise(resolve => { releaseA = resolve })
+  const gateB = new Promise(resolve => { releaseB = resolve })
+  let actionCount = 0
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: currentState }
+    if (path === '/_tmax/action') {
+      actionCount += 1
+      if (actionCount === 1) {
+        await gateA
+        return { status: 200, body: { ok: true, action: 'add_model', dryRun: false, result: { code: 'ok', status: 'success' }, state: stateA } }
+      }
+      await gateB
+      return { status: 200, body: { ok: true, action: 'add_model', dryRun: false, result: { code: 'ok', status: 'success' }, state: stateB } }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.mount()
+    const controlA = harnessControlNode(tree, 'gpt-6-astra')
+    controlA.props.onClick()
+    const openedA = await page.settle()
+    popoverCheckbox(openedA, 'dsh-main').props.onChange({ target: { checked: true } })
+    await page.settle()
+
+    // A newer interaction starts while A's response is delayed.
+    const controlB = harnessControlNode(page.current(), 'k3.1-pro')
+    assert.ok(controlB, 'the second model control is rendered')
+    controlB.props.onClick()
+    const openedB = await page.settle()
+    popoverCheckbox(openedB, 'dsh-main').props.onChange({ target: { checked: true } })
+    await page.settle()
+
+    // B is authoritative when it completes; delayed A must not overwrite it.
+    currentState = stateB
+    releaseB()
+    await page.settle()
+    releaseA()
+    const final = await page.settle()
+    assert.equal(harnessControlNode(final, 'gpt-6-astra').props['data-harnesses'], '')
+    assert.match(harnessControlNode(final, 'k3.1-pro').props['data-harnesses'], /(^|,)dsh-main(,|$)/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a refused selection is reported inline and keeps the last state', async () => {
+  const state = harnessState()
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: state }
+    if (path === '/_tmax/action') {
+      return {
+        status: 409,
+        body: {
+          ok: false,
+          action: 'add_model',
+          code: 'model_add_failed',
+          message: 'the model selection was not written',
+          result: {
+            code: 'model_add_failed',
+            status: 'error',
+            message: 'the model selection was not written',
+            data: {
+              target: 'dsh-main',
+              provider: 'tmax',
+              model: 'gpt-6-astra',
+              protocol: 'responses',
+              entry: { name: 'tmax', mode: 'existing' },
+              steps: [{ name: 'provider_add', code: 'ok', status: 'success' }, { name: 'model_add', code: 'model_add_failed', status: 'error' }],
+              failedStep: 'model_add',
+            },
+          },
+          state,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.mount()
+    harnessControlNode(tree, 'gpt-6-astra').props.onClick()
+    const opened = await page.settle()
+    popoverCheckbox(opened, 'dsh-main').props.onChange({ target: { checked: true } })
+    const updated = await page.settle()
+    const text = textOf(updated)
+    assert.match(text, /selectionFailed: model_add_failed: the model selection was not written/)
+    assert.match(text, /actionAddModel/)
+    assert.match(text, /resultDetails/)
+    assert.match(text, /failedStep/)
+    assert.match(liveText(updated), /selectionFailed/)
+    // The refused write is never drawn as a selection.
+    assert.equal(popoverCheckbox(updated, 'dsh-main').props.checked, false)
+    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1,
+      'the refused host state is adopted without another GET')
+    assert.equal(page.calls.some(call => call.method === 'POST' && pathOf(call) === '/_tmax/observe'), false)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a refused selection without a returned state re-reads the host state', async () => {
+  let stateReads = 0
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') {
+      stateReads += 1
+      return { status: 200, body: harnessState() }
+    }
+    if (path === '/_tmax/action') {
+      return { status: 502, body: { ok: false, code: 'host_unavailable', message: 'the action transport failed' } }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.mount()
+    harnessControlNode(tree, 'gpt-6-astra').props.onClick()
+    const opened = await page.settle()
+    popoverCheckbox(opened, 'dsh-main').props.onChange({ target: { checked: true } })
+    await page.settle()
+    // A resultless refusal refreshes the read model rather than guessing.
+    assert.equal(stateReads, 2)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a pending Harness count links to the Harness tab', async () => {
+  const page = await mountPage(withState(harnessState()))
+  try {
+    const models = await page.mount()
+    const go = buttonByText(models, 'goApply')
+    assert.ok(go, 'the pending count is a link to the Harness tab')
+    go.props.onClick()
+    const harness = await page.settle()
+    assert.ok(harnessGroupNode(harness, 'dsh-main'), 'the Harness tab draws its rows')
+    assert.equal(page.calls.length, 1, 'navigation reads nothing')
+  } finally {
+    page.restore()
+  }
+})
+
+test('the Harness tab draws one target-level row per declared Harness, never an invented Agent', async () => {
+  const page = await mountPage(withState(harnessState()))
+  try {
+    const tree = await page.clickTab('harness')
+    const dsh = harnessGroupNode(tree, 'dsh-main')
+    assert.ok(dsh, 'the declared DSH Harness has a row')
+    assert.match(textOf(dsh), /DeepSeek Harness/)
+    assert.match(textOf(dsh), /dsh-main · dsh · 2 modelUnit/)
+    assert.match(textOf(dsh), /harnessPending/)
+    assert.ok(buttonByText(dsh, 'harnessApply'), 'a pending Harness offers Apply')
+
+    const chips = collectNodes(dsh, node => String(node.props?.className ?? '') === 'tmx-modelChip')
+    assert.deepEqual(chips.map(chip => textOf(chip).trim()), ['deepseek-v4.1-flash', 'glm-5.4'])
+    for (const chip of chips) {
+      assert.equal(collectNodes(chip, node => String(node.props?.className ?? '') === 'tmx-dot')[0].props['data-tone'], 'warn',
+        'a pending Harness colours every chip amber')
+    }
+
+    const pi = harnessGroupNode(tree, 'pi-main')
+    assert.match(textOf(pi), /harnessApplied/)
+    assert.ok(buttonByText(pi, 'harnessReapply'), 'an applied Harness can be reapplied')
+    assert.match(textOf(pi), /harnessWritten/)
+    assert.match(textOf(pi), /harnessReopenPrefix/)
+    for (const chip of collectNodes(pi, node => String(node.props?.className ?? '') === 'tmx-modelChip')) {
+      assert.equal(collectNodes(chip, node => String(node.props?.className ?? '') === 'tmx-dot')[0].props['data-tone'], 'ok')
+    }
+
+    // Only declared Harnesses: no add/create Agent rows exist in this scope.
+    assert.doesNotMatch(textOf(tree), /Codex|OpenCode|Hermes|OMP|新建|可添加|harnessNone/)
+    assert.equal(page.calls.length, 1)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a Harness row shows its default and its reported blockers', async () => {
+  const state = harnessState({
+    harnesses: [
+      harnessEntry({
+        defaultConfigured: true,
+        default: { provider: 'tmax', id: 'glm-5.4', protocol: 'responses' },
+        blockers: [{ code: 'gateway_not_ready', message: 'start the gateway first' }],
+      }),
+      harnessEntry({ id: 'pi-main', agent: 'pi' }),
+    ],
+  })
+  const page = await mountPage(withState(state))
+  try {
+    const tree = await page.clickTab('harness')
+    const dsh = harnessGroupNode(tree, 'dsh-main')
+    assert.match(textOf(dsh), /harnessDefault/)
+    assert.match(textOf(dsh), /gateway_not_ready: start the gateway first/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('the Harness tab 添加模型 link returns to the models tab', async () => {
+  const page = await mountPage(withState(harnessState()))
+  try {
+    const tree = await page.clickTab('harness')
+    const add = collectNodes(tree, node => node?.type === 'button'
+      && String(node.props?.className ?? '') === 'tmx-addModel')[0]
+    assert.ok(add, 'every Harness row offers the model shortcut')
+    add.props.onClick()
+    const models = await page.settle()
+    assert.ok(harnessControlNode(models, 'deepseek-v4.1-flash'))
+    assert.equal(page.calls.length, 1)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a Harness apply previews with dryRun, confirms the same target, and redraws applied', async () => {
+  const before = harnessState()
+  const after = {
+    ...before,
+    harnesses: before.harnesses.map(harness => harness.id !== 'dsh-main' ? harness : {
+      ...harness,
+      appliedState: 'applied_reload_pending',
+      unapplied: false,
+    }),
+  }
+  const bodies = []
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      const body = JSON.parse(record.body)
+      bodies.push(body)
+      if (body.dryRun === true) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            action: 'apply_target',
+            dryRun: true,
+            result: {
+              code: 'ok',
+              status: 'dry_run',
+              data: {
+                target: 'dsh-main',
+                state: 'applied_reload_pending',
+                files: [
+                  { path: '/home/user/.dsh/cordis.patch.yml', format: 'yaml' },
+                  { path: '/home/user/.dsh/.credentials.yaml', format: 'yaml' },
+                ],
+                effects: { native_writes: false, secret_reads: false, processes_started: false, locks_created: false },
+              },
+            },
+            state: before,
+          },
+        }
+      }
+      return {
+        status: 200,
+        body: { ok: true, action: 'apply_target', dryRun: false, result: { code: 'ok', status: 'success', data: {} }, state: after },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.clickTab('harness')
+    assert.ok(buttonByText(tree, 'harnessApply'))
+    const preview = await page.click('harnessApply')
+    assert.deepEqual(bodies, [{ action: 'apply_target', target: 'dsh-main', dryRun: true }])
+    const dialog = applyDialogNode(preview)
+    assert.ok(dialog, 'the dry run opens the apply dialog')
+    const dialogText = textOf(dialog)
+    assert.match(dialogText, /harnessApplyTo DeepSeek Harness/)
+    assert.match(dialogText, /2 modelUnit/)
+    assert.match(dialogText, /2 fileUnit/)
+    assert.match(dialogText, /cordis\.patch\.yml/)
+    assert.match(dialogText, /credentials\.yaml/)
+    assert.match(dialogText, /harnessApplyNote/)
+    assert.match(dialogText, /connectEffects/)
+    assert.ok(buttonByText(dialog, 'applyCancel'))
+    assert.ok(buttonByText(dialog, 'applyConfirm'))
+    assert.match(liveText(preview), /applyPreviewTitle/)
+
+    const applied = await page.click('applyConfirm')
+    assert.deepEqual(bodies.at(-1), { action: 'apply_target', target: 'dsh-main', dryRun: false })
+    assert.equal(applyDialogNode(applied), undefined, 'success closes the dialog')
+    const dsh = harnessGroupNode(applied, 'dsh-main')
+    assert.match(textOf(dsh), /harnessApplied/)
+    assert.match(textOf(dsh), /harnessReloadPending/)
+    assert.match(textOf(dsh), /harnessWritten/)
+    assert.ok(buttonByText(dsh, 'harnessReapply'), 'an applied Harness offers Reapply')
+    for (const chip of collectNodes(dsh, node => String(node.props?.className ?? '') === 'tmx-modelChip')) {
+      assert.equal(collectNodes(chip, node => String(node.props?.className ?? '') === 'tmx-dot')[0].props['data-tone'], 'ok')
+    }
+    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1,
+      'the returned state is adopted without another GET')
+    assert.match(liveText(applied), /applyApplied/)
+    assert.match(textOf(applied), /applyApplied/)
+    assert.match(textOf(applied), /actionApplyHarness/)
+    assert.match(textOf(applied), /actionDone/)
+    assert.match(textOf(applied), /resultDetails/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('cancelling an Apply preview fences its late response', async () => {
+  const before = harnessState()
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      await gate
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          action: 'apply_target',
+          dryRun: true,
+          result: { code: 'ok', status: 'dry_run', data: { target: 'dsh-main', files: [] } },
+          state: before,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.clickTab('harness')
+    const applying = await page.click('harnessApply')
+    const close = collectNodes(applying, node => String(node.props?.className ?? '') === 'tmx-dialogClose')[0]
+    assert.ok(close, 'the dialog has its close control')
+    close.props.onClick()
+    const closed = await page.settle()
+    assert.equal(applyDialogNode(closed), undefined, 'the cancelled dialog stays closed')
+    release()
+    const after = await page.settle()
+    assert.equal(applyDialogNode(after), undefined, 'a late preview response does not reopen the dialog')
+    assert.doesNotMatch(textOf(after), /actionApplyHarness/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('an executing Apply cannot be closed before its result is reconciled', async () => {
+  const before = harnessState()
+  const after = {
+    ...before,
+    harnesses: before.harnesses.map(harness => harness.id !== 'dsh-main' ? harness : {
+      ...harness,
+      appliedState: 'applied_reload_pending',
+      unapplied: false,
+    }),
+  }
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      const body = JSON.parse(record.body)
+      if (body.dryRun === true) {
+        return { status: 200, body: { ok: true, action: 'apply_target', dryRun: true, result: { code: 'ok', status: 'dry_run', data: { target: 'dsh-main', files: [] } }, state: before } }
+      }
+      await gate
+      return { status: 200, body: { ok: true, action: 'apply_target', dryRun: false, result: { code: 'ok', status: 'success', data: {} }, state: after } }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    await page.clickTab('harness')
+    const preview = await page.click('harnessApply')
+    assert.ok(applyDialogNode(preview))
+    const executing = await page.click('applyConfirm')
+    const close = collectNodes(executing, node => String(node.props?.className ?? '') === 'tmx-dialogClose')[0]
+    assert.equal(close.props.disabled, true, 'the close control is disabled during execution')
+    release()
+    const applied = await page.settle()
+    assert.equal(applyDialogNode(applied), undefined)
+    assert.match(textOf(harnessGroupNode(applied, 'dsh-main')), /harnessApplied/)
+    assert.match(textOf(applied), /actionApplyHarness/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a refused Harness apply is reported and never drawn as applied', async () => {
+  const before = harnessState()
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      const body = JSON.parse(record.body)
+      if (body.dryRun === true) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            action: 'apply_target',
+            dryRun: true,
+            result: { code: 'ok', status: 'dry_run', data: { target: 'dsh-main', files: [{ path: '/home/user/.dsh/cordis.patch.yml' }] } },
+            state: before,
+          },
+        }
+      }
+      return {
+        status: 409,
+        body: {
+          ok: false,
+          action: 'apply_target',
+          code: 'gateway_not_ready',
+          message: 'start the gateway first',
+          result: { code: 'gateway_not_ready', status: 'error', message: 'start the gateway first' },
+          state: before,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.clickTab('harness')
+    const preview = await page.click('harnessApply')
+    assert.ok(applyDialogNode(preview))
+    const failed = await page.click('applyConfirm')
+    const dialog = applyDialogNode(failed)
+    assert.ok(dialog, 'a refusal keeps the dialog open with the typed detail')
+    assert.match(textOf(dialog), /applyFailed: gateway_not_ready: start the gateway first/)
+    assert.match(liveText(failed), /applyFailed/)
+    const dsh = harnessGroupNode(failed, 'dsh-main')
+    assert.match(textOf(dsh), /harnessPending/)
+    assert.doesNotMatch(textOf(dsh), /harnessApplied/)
+    assert.ok(buttonByText(dsh, 'harnessApply'), 'the pending Harness still offers Apply')
+    assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a model selected under two protocols names its Harness once and removes it once', async () => {
+  const before = harnessState({
+    harnesses: [
+      harnessEntry({
+        modelCount: 2,
+        providers: [{
+          name: 'tmax',
+          sourceProvider: 'tmax',
+          relayed: true,
+          models: [
+            { id: 'deepseek-v4.1-flash', protocol: 'responses' },
+            { id: 'deepseek-v4.1-flash', protocol: 'chat-completions' },
+          ],
+        }],
+      }),
+      harnessEntry({
+        id: 'pi-main',
+        agent: 'pi',
+        appliedState: 'applied_reload_pending',
+        unapplied: false,
+        providers: [{ name: 'kimi', sourceProvider: 'kimi', relayed: false, models: [{ id: 'k3.1-pro', protocol: 'chat-completions' }] }],
+      }),
+    ],
+  })
+  const bodies = []
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      bodies.push(JSON.parse(record.body))
+      return { status: 200, body: { ok: true, action: 'remove_model', dryRun: false, result: { code: 'ok', status: 'success' }, state: before } }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    const tree = await page.mount()
+    const control = harnessControlNode(tree, 'deepseek-v4.1-flash')
+    assert.equal(control.props['data-harnesses'], 'dsh-main')
+    assert.doesNotMatch(textOf(control), /DSH · DSH/)
+    assert.match(textOf(control), /DSH/)
+
+    control.props.onClick()
+    const opened = await page.settle()
+    assert.equal(popoverCheckbox(opened, 'dsh-main').props.checked, true)
+    popoverCheckbox(opened, 'dsh-main').props.onChange({ target: { checked: false } })
+    await page.settle()
+    // One host-fixed operation removes both protocol selections.
+    assert.deepEqual(bodies.map(body => body.protocol), ['responses'])
+    for (const body of bodies) {
+      assert.equal(body.action, 'remove_model')
+      assert.equal(body.target, 'dsh-main')
+      assert.equal(body.provider, 'tmax')
+      assert.equal(body.model, 'deepseek-v4.1-flash')
+    }
+  } finally {
+    page.restore()
+  }
+})
+
+test('a refused apply preview offers no confirmation', async () => {
+  const before = harnessState()
+  const page = await mountPage(async record => {
+    const path = pathOf(record)
+    if (path === '/_tmax/state') return { status: 200, body: before }
+    if (path === '/_tmax/action') {
+      return {
+        status: 409,
+        body: {
+          ok: false,
+          action: 'apply_target',
+          dryRun: true,
+          code: 'gateway_not_ready',
+          message: 'start the gateway first',
+          result: { code: 'gateway_not_ready', status: 'error', message: 'start the gateway first' },
+          state: before,
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    await page.clickTab('harness')
+    const failed = await page.click('harnessApply')
+    const dialog = applyDialogNode(failed)
+    assert.ok(dialog, 'the refusal is reported in the dialog')
+    assert.match(textOf(dialog), /applyFailed: gateway_not_ready: start the gateway first/)
+    assert.equal(buttonByText(dialog, 'applyConfirm'), undefined, 'a failed preview offers no confirmation')
+    assert.ok(buttonByText(dialog, 'close'))
+  } finally {
+    page.restore()
+  }
+})
+
+test('a failed Harness read is named instead of claiming none is declared', async () => {
+  const state = harnessState({
+    harnesses: [],
+    errors: [{ section: 'harnesses', code: 'harnesses_unavailable', message: 'the Harness list failed' }],
+  })
+  const page = await mountPage(withState(state))
+  try {
+    const tree = await page.clickTab('harness')
+    const text = textOf(tree)
+    assert.match(text, /readFailed: harnesses_unavailable — the Harness list failed/)
+    assert.doesNotMatch(text, /harnessNone/, 'a failed read is not an empty declaration list')
+  } finally {
+    page.restore()
+  }
+})
+
+test('the Settings footer reports the DSH Harness and pending count without a legacy Apply', async () => {
+  const page = await mountSeat(withState(harnessState()), slot('settings.models.footer'), {}, {
+    services: { layout: { selectPanel() {} } },
+  })
+  try {
+    const tree = await page.mount()
+    const text = textOf(tree)
+    assert.match(text, /footerHarness: dsh-main/)
+    assert.match(text, /footerUnapplied: 1/)
+    // Applying is the Harness tab's operation; the settings footer only links.
+    assert.equal(buttonByText(tree, 'connect'), undefined)
+    assert.equal(buttonByText(tree, 'harnessApply'), undefined)
+    const open = buttonByText(tree, 'footerOpenPage')
+    assert.ok(open, 'the way back to tmax is the page link')
+    assert.equal(open.props.disabled, false)
+    open.props.onClick()
+    assert.equal(page.calls.filter(call => call.method === 'POST').length, 0)
+  } finally {
+    page.restore()
+  }
+})
+
+test('the Settings footer treats a failed Harness read as unknown, not none', async () => {
+  const state = harnessState({ errors: [{ section: 'harnesses', code: 'harnesses_unavailable', message: 'target list failed' }] })
+  const page = await mountSeat(withState(state), slot('settings.models.footer'), {}, {
+    services: { layout: { selectPanel() {} } },
+  })
+  try {
+    const tree = await page.mount()
+    const text = textOf(tree)
+    assert.match(text, /footerHarness: unknown/)
+    assert.match(text, /footerUnapplied: unknown/)
+    assert.doesNotMatch(text, /footerHarness: none/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('the Settings footer reports unknown pending when one DSH Harness is uninspectable', async () => {
+  const state = harnessState({
+    harnesses: [
+      harnessEntry(),
+      harnessEntry({ id: 'dsh-broken', agent: 'dsh', appliedState: null, unapplied: null, providers: [] }),
+    ],
+  })
+  const page = await mountSeat(withState(state), slot('settings.models.footer'), {}, {
+    services: { layout: { selectPanel() {} } },
+  })
+  try {
+    const tree = await page.mount()
+    const text = textOf(tree)
+    assert.match(text, /footerHarness: dsh-main, dsh-broken/)
+    assert.match(text, /footerUnapplied: unknown/)
+    assert.doesNotMatch(text, /footerUnapplied: 0/)
+  } finally {
+    page.restore()
+  }
+})
+
+test('the Settings footer says when no DSH Harness is declared and counts zero pending', async () => {
+  const state = harnessState({
+    harnesses: [harnessEntry({
+      id: 'pi-main',
+      agent: 'pi',
+      appliedState: 'applied',
+      unapplied: false,
+    })],
+  })
+  const page = await mountSeat(withState(state), slot('settings.models.footer'))
+  try {
+    const text = textOf(await page.mount())
+    assert.match(text, /footerHarness: none/)
+    assert.match(text, /footerUnapplied: 0/)
+    assert.equal(buttonByText(page.current(), 'connect'), undefined)
   } finally {
     page.restore()
   }

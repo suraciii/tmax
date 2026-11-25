@@ -239,6 +239,8 @@ A DSH profile may also load the `tmax` profile plugin. That plugin serves a
 first-level page, three seats on DSH-owned pages, a read-only `/tmax` human
 command when DSH exposes its optional `commands` service, a bounded
 retained-history read, one read tool, and one skill inside the profile. The page
+presents every declared tmax target as a **Harness**; declaring, editing,
+applying, and removing Harnesses stay in the `agent` command family. The page
 composes its read model from tmax's effect-free reads — agent, provider,
 gateway, configuration, and model inspection — plus an explicit retained-history
 read, and adds only the DSH-side facts tmax cannot know. The plugin is not a
@@ -253,9 +255,9 @@ and tmax's CLI and Web remain where configuration is authored.
 | Transition | A written profile setting is not live until DSH reloads that profile. The page reports the applied delivery and the owed reload; it never registers, replaces, or disposes a route. |
 | Ownership | `tmax agent apply` writes the providers into a profile's settings, and the client's own adapter serves them. The page registers nothing: it reports `settings` when those providers are present, `unapplied` when apply has not written them, `none` when nothing is declared, and `other` with a conflict when another provider already serves the same route names. |
 | Installation | Installing, updating, or removing the page bundle stays with DSH. `agent apply` and `agent restore` write profile settings and credentials only; they do not install, configure, or remove the page bundle, and nothing has to be installed for routes to work. |
-| Apply | The page's Apply action is tmax's previewed Agent application (`agent apply`) on the configured target, not a plugin-authored format, and it is the page's only DSH or actual-file write. The [DSH plugin contract](dsh-plugin/spec.md#apply) owns the operation, the files it writes, and its result. |
-| Read model | The plugin maps tmax's effect-free reads into one plugin-owned state contract; it does not add a tmax command, require a snapshot command, or become a tmax CLI contract. `diagnostics.readModel` reports `inventory`. The [DSH plugin contract](dsh-plugin/spec.md#state-consumer-contract) owns the shape and the failure rules. |
-| Surfaces | The plugin may add the page, three additive seats, a read-only `/tmax` command, a bounded retained-history read, and allowlisted previewed actions; each is admitted only under the [DSH plugin contract](dsh-plugin/spec.md), which owns its content and rules. No surface observes on open, changes a DSH selection or setting, or acts without explicit preview and confirmation. |
+| Apply | The page's per-Harness Apply action is tmax's previewed Agent application (`agent apply --dry-run`, then `agent apply`) on one declared Harness, not a plugin-authored format, and it is the page's only actual-file write. Adding or removing a Harness's model selection writes desired tmax configuration only and never applies. A DSH Harness writes under the [DSH home boundary](#dsh-home-boundary); another Agent's Harness writes under that Agent's own integration contract. The [DSH plugin contract](dsh-plugin/spec.md#apply) owns the operation, the files it writes, and its result. |
+| Read model | The plugin maps tmax's effect-free reads into one plugin-owned state contract; it does not add a tmax command, require a snapshot command, or become a tmax CLI contract. The state carries one `harnesses` row per declared target beside the configured DSH target's dossier. `diagnostics.readModel` reports `inventory`. The [DSH plugin contract](dsh-plugin/spec.md#state-consumer-contract) owns the shape and the failure rules. |
+| Surfaces | The plugin may add the page, three additive seats, a read-only `/tmax` command, a bounded retained-history read, and allowlisted actions with explicit previews for actual-file writes; each is admitted only under the [DSH plugin contract](dsh-plugin/spec.md), which owns its content and rules. Target-selection actions change desired configuration only; apply is per declared Harness. No surface observes on open, changes a DSH selection or setting, or writes without an explicit user action. |
 
 Sources:
 

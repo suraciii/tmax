@@ -123,6 +123,11 @@ async fn dsh_apply_writes_profile_providers_and_leaves_the_home_patch_alone() {
             inspected["blockers"].as_array().unwrap().is_empty(),
             "{inspected}"
         );
+        assert_eq!(inspected["unapplied"], true, "{inspected}");
+        assert!(
+            inspected["target_revision"].is_string(),
+            "target revision is reported: {inspected}"
+        );
 
         // A dry run writes nothing and never shows the key.
         let before_credentials = fs::read(&credentials).unwrap();
@@ -175,6 +180,12 @@ async fn dsh_apply_writes_profile_providers_and_leaves_the_home_patch_alone() {
             untouched_home,
             "the home patch is the user's and stays as it was"
         );
+        let applied_inspect = inspect(&store, &config, "managed", None).await.unwrap();
+        assert_eq!(applied_inspect["unapplied"], false, "{applied_inspect}");
+        assert_eq!(
+            applied_inspect["applied_target_revision"], applied_inspect["target_revision"],
+            "{applied_inspect}"
+        );
         let native_credentials =
             document::parse(&fs::read_to_string(&credentials).unwrap(), Format::Yaml).unwrap();
         assert_eq!(native_credentials["refs"]["EXISTING"], "synthetic-existing");
@@ -184,8 +195,12 @@ async fn dsh_apply_writes_profile_providers_and_leaves_the_home_patch_alone() {
         );
 
         // With nothing else touched, restore puts every byte back exactly.
+        let before_restore = inspect(&store, &config, "managed", None).await.unwrap();
+        assert_eq!(before_restore["unapplied"], false, "{before_restore}");
         let index: Index = store.read_json(INDEX).unwrap();
         restore(&store, &index.records[0].id, false).await.unwrap();
+        let restored_inspect = inspect(&store, &config, "managed", None).await.unwrap();
+        assert_eq!(restored_inspect["unapplied"], true, "{restored_inspect}");
         assert_eq!(
             fs::read_to_string(home.join("cordis.patch.yml")).unwrap(),
             untouched_home

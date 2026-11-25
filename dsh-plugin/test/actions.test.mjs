@@ -10,14 +10,18 @@ import {
   ACTIONS,
   ACTION_TIMEOUTS,
   GATEWAY_ACTIONS,
+  MODEL_ACTIONS,
   OBSERVE_SCOPES,
   actionArgv,
   actionLockKey,
   actionTimeoutMs,
   createActionService,
+  harnessFromState,
+  harnessIdsFromState,
   isActionSuccess,
   planAction,
   planAddModel,
+  planRemoveModel,
   providerIdsFromState,
   resultFromEnvelope,
   validateActionRequest,
@@ -62,7 +66,68 @@ function agentInspectData() {
     native_default: { state: 'available', fields: { provider: 'tmax', model: 'public-model', present: true } },
     installation: { executable: '/tmp/bin/dsh', version: '0.2.3-alpha.2', state: 'detected', source: 'https://github.com/deepseek-ai/deepseek-harness' },
     applied_state: 'applied',
+    target_revision: 'rev-1',
+    applied_target_revision: 'rev-1',
+    unapplied: false,
     blockers: [],
+  }
+}
+
+/** A second declared target (Harness), so per-target behavior is observable. */
+function piInspectData() {
+  return {
+    target: 'pi-main',
+    agent: 'pi',
+    path: '/tmp/pi',
+    scope_state: 'available',
+    configuration_revision: 'rev-1',
+    providers: [{
+      name: 'deepseek',
+      source: { provider: 'kimi' },
+      relayed: false,
+      base_url: null,
+      credential_ref: null,
+      applied_delivery: null,
+      models: [{ id: 'k3.1-pro', protocol: 'responses' }],
+    }],
+    default: null,
+    native_projection: [],
+    installation: { executable: '/tmp/bin/pi', version: '1.0.0', state: 'detected', source: null },
+    applied_state: 'not_applied',
+    target_revision: 'rev-2',
+    applied_target_revision: null,
+    unapplied: true,
+    blockers: [],
+  }
+}
+
+/** One `agent apply` answer for a non-DSH target. */
+function piApplyEnvelope(dryRun) {
+  if (dryRun) {
+    return dryReady({
+      target: 'pi-main',
+      agent: 'pi',
+      path: '/tmp/pi',
+      dry_run: true,
+      files: [],
+      credentials: { resolved: false },
+      effects: { native_writes: false, secret_reads: false, processes_started: false, locks_created: false },
+    })
+  }
+  return {
+    code: 'awaiting_native_reload',
+    status: 'success',
+    data: {
+      target: 'pi-main',
+      agent: 'pi',
+      path: '/tmp/pi',
+      state: 'applied_reload_pending',
+      written: true,
+      changed_files: [],
+      unchanged_files: [],
+      recovery: 'recovery-pi',
+      fact_gaps: [],
+    },
   }
 }
 
@@ -264,7 +329,9 @@ function baseScenario() {
     dispatch[`gateway ${verb} --dry-run`] = gatewayLifecycleEnvelope(verb, true)
   }
   // The state service composes the inventory plus provider/config/explain reads.
-  dispatch['agent list'] = success({ agents: [{ target: 'dsh-main', agent: 'dsh', path: '__HOME__' }] })
+  dispatch['agent list'] = success({
+    agents: [{ target: 'dsh-main', agent: 'dsh', path: '__HOME__', provider_count: 1, model_count: 1, default_configured: false }],
+  })
   dispatch['agent inspect dsh-main'] = success(agentInspectData())
   dispatch['gateway status'] = success(gatewayStatusData())
   dispatch['status'] = success(tmaxStatusData())
@@ -276,12 +343,28 @@ function baseScenario() {
   dispatch['model explain public-model --protocol responses'] = success(stateExplainData())
   dispatch['agent provider add dsh-main kimi --provider kimi'] = success({ target: 'dsh-main', name: 'kimi', provider: 'kimi' })
   dispatch['agent model add dsh-main kimi k3.1-pro --protocol responses'] = success({ target: 'dsh-main', name: 'kimi', model: 'k3.1-pro', protocol: 'responses' })
+  dispatch['agent model remove dsh-main tmax public-model --protocol responses'] = success({ target: 'dsh-main', name: 'tmax', model: 'public-model', protocol: 'responses' })
   dispatch['agent apply dsh-main --dry-run'] = connectEnvelope(true)
   dispatch['agent apply dsh-main'] = connectEnvelope(false)
   return {
     connect: { dryRun: connectEnvelope(true), exec: connectEnvelope(false) },
     dispatch,
   }
+}
+
+/** The base scenario plus a second declared target, for per-target behavior. */
+function twoTargetScenario() {
+  const scenario = baseScenario()
+  scenario.dispatch['agent list'] = success({
+    agents: [
+      { target: 'dsh-main', agent: 'dsh', path: '__HOME__', provider_count: 1, model_count: 1, default_configured: false },
+      { target: 'pi-main', agent: 'pi', path: '/tmp/pi', provider_count: 1, model_count: 1, default_configured: false },
+    ],
+  })
+  scenario.dispatch['agent inspect pi-main'] = success(piInspectData())
+  scenario.dispatch['agent apply pi-main --dry-run'] = piApplyEnvelope(true)
+  scenario.dispatch['agent apply pi-main'] = piApplyEnvelope(false)
+  return scenario
 }
 
 // ---------------------------------------------------------------------------
@@ -533,7 +616,10 @@ test('the action contract is a closed allowlist with closed operands and deadlin
     'gateway_stop',
     'gateway_restart',
     'add_model',
+    'remove_model',
+    'apply_target',
   ])
+  assert.deepEqual([...MODEL_ACTIONS], ['add_model', 'remove_model'])
   assert.deepEqual([...GATEWAY_ACTIONS], ['gateway_start', 'gateway_stop', 'gateway_restart'])
   assert.deepEqual([...OBSERVE_SCOPES], ['quota', 'auth', 'models', 'all'])
   // One scope uses tmax's 45 s observation deadline; a full observation runs
@@ -548,6 +634,9 @@ test('the action contract is a closed allowlist with closed operands and deadlin
   assert.equal(actionTimeoutMs('reset_failure'), 45_000)
   assert.equal(actionTimeoutMs('connect'), 45_000)
   assert.equal(actionTimeoutMs('add_model'), 120_000)
+  assert.equal(actionTimeoutMs('remove_model'), 120_000)
+  // Applying one Harness writes native files through tmax's apply sequence.
+  assert.equal(actionTimeoutMs('apply_target'), 45_000)
   assert.equal(actionTimeoutMs('open_management', { dryRun: true }), 20_000)
   assert.equal(actionTimeoutMs('open_management', { dryRun: false }), 60_000)
   // Gateway lifecycle waits on supervision, so every verb gets the 90 s budget.
@@ -560,6 +649,7 @@ test('the action contract is a closed allowlist with closed operands and deadlin
   // Canonical lock keys are shared with the legacy routes.
   assert.equal(actionLockKey('connect'), 'connect')
   assert.equal(actionLockKey('add_model'), 'connect')
+  assert.equal(actionLockKey('remove_model'), 'connect')
   assert.equal(actionLockKey('observe_provider', 'kimi'), 'observe')
   assert.equal(actionLockKey('resume_quota', 'kimi'), 'resume_quota:kimi')
   assert.equal(actionLockKey('reset_failure', 'kimi'), 'reset_failure:kimi')
@@ -567,6 +657,10 @@ test('the action contract is a closed allowlist with closed operands and deadlin
   assert.equal(actionLockKey('gateway_start'), 'gateway:start')
   assert.equal(actionLockKey('gateway_stop'), 'gateway:stop')
   assert.equal(actionLockKey('gateway_restart'), 'gateway:restart')
+  // Applying locks one Harness: different targets are different locks.
+  assert.equal(actionLockKey('apply_target', null, 'dsh-main'), 'apply:dsh-main')
+  assert.equal(actionLockKey('apply_target', null, 'pi-main'), 'apply:pi-main')
+  assert.notEqual(actionLockKey('apply_target', null, 'dsh-main'), actionLockKey('apply_target', null, 'pi-main'))
   assert.equal(actionLockKey('delete_everything'), null)
 })
 
@@ -599,6 +693,12 @@ test('every action builds its exact argv from validated operands only', () => {
   // `agent apply` has no --home selector: an unresolved target has no argv.
   assert.equal(actionArgv('connect', { config }), null)
   assert.equal(actionArgv('connect', { config, dryRun: true }), null)
+  // Applying one Harness names the client-selected target operand, never a
+  // fallback to the configured target.
+  assert.deepEqual(actionArgv('apply_target', { target: 'pi-main' }), ['agent', 'apply', 'pi-main'])
+  assert.deepEqual(actionArgv('apply_target', { target: 'pi-main', dryRun: true }), ['agent', 'apply', 'pi-main', '--dry-run'])
+  assert.equal(actionArgv('apply_target', { config }), null)
+  assert.equal(actionArgv('apply_target', { config, target: '' }), null)
   // No fallback form: an unknown action, a missing provider operand, or a
   // non-enum scope has none.
   assert.equal(actionArgv('delete_everything', { provider: 'kimi' }), null)
@@ -616,6 +716,13 @@ test('request validation rejects malformed actions, operands, and scopes', () =>
   assertInvalid(validateActionRequest({ action: 'reset_failure', provider: '' }), 400, 'invalid_provider')
   assertInvalid(validateActionRequest({ action: 'observe_provider', provider: 'kimi', scope: 'galaxy' }), 400, 'invalid_scope')
   assertInvalid(validateActionRequest({ action: 'observe_provider', provider: 'kimi', dryRun: 'yes' }), 400, 'invalid_dry_run')
+  // Every selection and apply action names a required target operand.
+  assertInvalid(validateActionRequest({ action: 'add_model', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' }), 400, 'invalid_target')
+  assertInvalid(validateActionRequest({ action: 'add_model', target: '', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' }), 400, 'invalid_target')
+  assertInvalid(validateActionRequest({ action: 'remove_model', target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro' }), 400, 'invalid_protocol')
+  assertInvalid(validateActionRequest({ action: 'apply_target' }), 400, 'invalid_target')
+  assertInvalid(validateActionRequest({ action: 'add_model', target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'galaxy' }), 400, 'invalid_protocol')
+  assertInvalid(validateActionRequest({ action: 'remove_model', target: 'dsh-main', provider: '', model: 'k3.1-pro', protocol: 'responses' }), 400, 'invalid_provider')
 
   assert.deepEqual(
     validateActionRequest({ action: 'observe_provider', provider: 'kimi' }),
@@ -624,6 +731,18 @@ test('request validation rejects malformed actions, operands, and scopes', () =>
   assert.deepEqual(
     validateActionRequest({ action: 'open_management' }),
     { ok: true, request: { action: 'open_management', provider: null, scope: null, dryRun: false } },
+  )
+  assert.deepEqual(
+    validateActionRequest({ action: 'apply_target', target: 'pi-main' }),
+    { ok: true, request: { action: 'apply_target', target: 'pi-main', provider: null, scope: null, dryRun: false } },
+  )
+  assert.deepEqual(
+    validateActionRequest({ action: 'add_model', target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' }),
+    { ok: true, request: { action: 'add_model', target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses', scope: null, dryRun: false } },
+  )
+  assert.deepEqual(
+    validateActionRequest({ action: 'remove_model', target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses', dryRun: true }),
+    { ok: true, request: { action: 'remove_model', target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses', scope: null, dryRun: true } },
   )
   // A provider sent for an action that names none is ignored, never argv.
   assert.equal(validateActionRequest({ action: 'open_management', provider: 'kimi' }).request.provider, null)
@@ -652,6 +771,22 @@ test('request validation rejects malformed actions, operands, and scopes', () =>
     ['kimi', 'cpa-us2'],
   )
   assert.deepEqual(providerIdsFromState(undefined), [])
+  assert.deepEqual(
+    harnessIdsFromState({ harnesses: [{ id: 'dsh-main' }, { id: null }, {}, { id: 'pi-main' }] }),
+    ['dsh-main', 'pi-main'],
+  )
+  assert.deepEqual(harnessIdsFromState(undefined), [])
+  // An unread Harness list is a typed refusal, never an unknown target.
+  assert.equal(harnessIdsFromState({ errors: [{ section: 'harnesses', code: 'x', message: 'y' }] }).length, 0)
+  const unknownHarness = harnessFromState({ harnesses: [] }, 'dsh-main')
+  assert.equal(unknownHarness.ok, false)
+  assert.equal(unknownHarness.code, 'unknown_target')
+  const unreadHarnesses = harnessFromState({ harnesses: [], errors: [{ section: 'harnesses', code: 'unknown_resource', message: 'unavailable' }] }, 'dsh-main')
+  assert.equal(unreadHarnesses.ok, false)
+  assert.equal(unreadHarnesses.code, 'harnesses_unavailable')
+  const uninspectable = harnessFromState({ harnesses: [{ id: 'dsh-main', appliedState: null, providers: [] }] }, 'dsh-main')
+  assert.equal(uninspectable.ok, false)
+  assert.equal(uninspectable.code, 'target_uninspectable')
 
   // A connect plans the native application for the resolved target.
   const plannedConnect = planAction({ action: 'connect', dryRun: true }, { target: 'dsh-main' })
@@ -659,6 +794,20 @@ test('request validation rejects malformed actions, operands, and scopes', () =>
   assert.deepEqual(plannedConnect.plan.argv, ['agent', 'apply', 'dsh-main', '--dry-run'])
   assert.equal(plannedConnect.plan.timeoutMs, 45_000)
   assertInvalid(planAction({ action: 'connect' }, { config: { home: '/tmp/dsh-home' } }), 409, 'target_unresolved')
+  // An apply_target plans exactly `agent apply TARGET` against a declared id.
+  const plannedApply = planAction({ action: 'apply_target', target: 'pi-main' }, { targets: ['dsh-main', 'pi-main'] })
+  assert.equal(plannedApply.ok, true)
+  assert.deepEqual(plannedApply.plan.argv, ['agent', 'apply', 'pi-main'])
+  assert.equal(plannedApply.plan.timeoutMs, 45_000)
+  assert.deepEqual(
+    planAction({ action: 'apply_target', target: 'pi-main', dryRun: true }, { targets: ['pi-main'] }).plan.argv,
+    ['agent', 'apply', 'pi-main', '--dry-run'],
+  )
+  assertInvalid(planAction({ action: 'apply_target', target: 'nope' }, { targets: ['dsh-main'] }), 409, 'unknown_target')
+  assertInvalid(planAction({ action: 'apply_target', target: 'nope' }, {}), 409, 'harnesses_unavailable')
+  // Model selection actions are composites with their own runner, never argv.
+  assert.equal(actionArgv('add_model', { target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' }), null)
+  assert.equal(actionArgv('remove_model', { target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' }), null)
 })
 
 test('result projection preserves tmax evidence and strips key material', () => {
@@ -1292,79 +1441,113 @@ test('the action route keeps the shared POST guards and works beside the legacy 
 })
 
 // ---------------------------------------------------------------------------
-// Target-selection add: one previewed composite, exact argv, stop and report.
+// Target selection: both writes save desired configuration only. The target is
+// an explicit declared-Harness operand, the entry comes from that Harness's own
+// inspected providers, and no action ever runs `agent apply`.
 
-test('add_model previews a catalog-derived plan without writing anything', async () => {
+test('add_model previews a target-derived plan without writing anything', async () => {
   const { fake, state } = await applied()
   await fake.clearCalls()
   const preview = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
     dryRun: true,
   })
-  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.body))
   assert.equal(preview.body.ok, true)
   assert.equal(preview.body.dryRun, true)
+  assert.deepEqual(Object.keys(preview.body).sort(), ['action', 'dryRun', 'ok', 'result', 'state'])
   assert.equal(preview.body.result.status, 'dry_run')
   assert.deepEqual(preview.body.result.data, {
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
-    target: 'dsh-main',
     entry: { name: 'kimi', mode: 'create' },
-    steps: ['provider_add', 'model_add', 'apply'],
+    steps: ['provider_add', 'model_add'],
+    protocols: [null, 'responses'],
   })
-  // A preview reads state only; it never writes desired or native configuration.
+  // A preview reads state only; it never writes desired or native configuration
+  // and it never applies.
   const calls = await fake.calls()
   assert.equal(calls.some(argv => argv[0] === 'agent' && ['provider', 'model', 'apply'].includes(argv[1])), false)
-  assert.equal(preview.body.state.schemaVersion, 4)
+  assert.equal(preview.body.state.schemaVersion, 5)
   assert.equal(preview.body.state.catalog.state, 'available')
+  assert.deepEqual(preview.body.state.harnesses.map(row => row.id), ['dsh-main'])
 })
 
-test('add_model executes the fixed provider, model, apply sequence and reports every step', async () => {
+test('add_model saves desired configuration only and never applies', async () => {
   const { fake, state } = await applied()
   await fake.clearCalls()
   const executed = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
     dryRun: false,
   })
-  assert.equal(executed.statusCode, 200)
+  assert.equal(executed.statusCode, 200, JSON.stringify(executed.body))
   assert.equal(executed.body.ok, true)
   assert.equal(executed.body.result.status, 'success')
-  assert.equal(executed.body.result.code, 'awaiting_native_reload')
+  assert.equal(executed.body.result.code, 'ok')
   assert.deepEqual(executed.body.result.data, {
     target: 'dsh-main',
-    agent: 'dsh',
-    path: '/tmp/dsh',
-    state: 'applied_reload_pending',
-    written: true,
-    changed_files: ['/tmp/dsh/cordis.patch.yml'],
-    unchanged_files: [],
-    recovery: 'recovery-1',
-    fact_gaps: [],
-    provider: 'kimi',
+    name: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
+    provider: 'kimi',
     entry: { name: 'kimi', mode: 'create' },
     steps: [
-      { name: 'provider_add', code: 'ok', status: 'success' },
-      { name: 'model_add', code: 'ok', status: 'success' },
-      { name: 'apply', code: 'awaiting_native_reload', status: 'success' },
+      { name: 'provider_add', code: 'ok', status: 'success', protocol: null },
+      { name: 'model_add', code: 'ok', status: 'success', protocol: 'responses' },
     ],
   })
-  assert.equal(JSON.stringify(executed.body.result).includes('sk-live-CONNECT-SECRET'), false, 'apply evidence is secret-free')
   const writes = (await fake.calls()).filter(argv => argv[0] === 'agent' && ['provider', 'model', 'apply'].includes(argv[1]))
   assert.deepEqual(writes, [
     ['agent', 'provider', 'add', 'dsh-main', 'kimi', '--provider', 'kimi'],
     ['agent', 'model', 'add', 'dsh-main', 'kimi', 'k3.1-pro', '--protocol', 'responses'],
-    ['agent', 'apply', 'dsh-main'],
   ])
-  assert.equal(executed.body.state.schemaVersion, 4)
+  assert.equal(writes.some(argv => argv[1] === 'apply'), false, 'a selection write never applies')
+  assert.equal(executed.body.state.schemaVersion, 5)
+  assert.ok(executed.body.state, 'the response carries fresh state')
+})
+
+test('add_model selects the target entry from the Harness providers, not the catalog', async () => {
+  const scenario = twoTargetScenario()
+  const listed = modelListEnvelope()
+  listed.data.models.push({ id: 'kimi/kimi-other', kind: 'concrete', enabled: true, availability: 'unverified', published_protocols: ['responses'] })
+  scenario.dispatch['model list'] = listed
+  const { state } = await applied({ scenario })
+
+  // pi-main already declares a kimi entry that serves responses: fill it.
+  const pi = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    target: 'pi-main',
+    provider: 'kimi',
+    model: 'kimi-other',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(pi.statusCode, 200, JSON.stringify(pi.body))
+  assert.deepEqual(pi.body.result.data.entry, { name: 'deepseek', mode: 'existing' })
+  assert.deepEqual(pi.body.result.data.steps, ['model_add'])
+
+  // The DSH target has no kimi entry: create one there instead.
+  const dsh = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    target: 'dsh-main',
+    provider: 'kimi',
+    model: 'kimi-other',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(dsh.statusCode, 200, JSON.stringify(dsh.body))
+  assert.deepEqual(dsh.body.result.data.entry, { name: 'kimi', mode: 'create' })
+  assert.deepEqual(dsh.body.result.data.steps, ['provider_add', 'model_add'])
 })
 
 test('add_model reuses an existing entry whose protocol matches', async () => {
@@ -1390,6 +1573,7 @@ test('add_model reuses an existing entry whose protocol matches', async () => {
   const { state } = await applied({ scenario })
   const already = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
@@ -1399,29 +1583,76 @@ test('add_model reuses an existing entry whose protocol matches', async () => {
   assert.equal(already.body.code, 'already_joined')
   const preview = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'kimi-other',
     protocol: 'responses',
     dryRun: true,
   })
-  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.body))
   assert.deepEqual(preview.body.result.data.entry, { name: 'kimi-entry', mode: 'existing' })
-  assert.deepEqual(preview.body.result.data.steps, ['model_add', 'apply'])
+  assert.deepEqual(preview.body.result.data.steps, ['model_add'])
 })
 
-test('add_model refuses unknown, unsupported, and already-selected requests before argv', async () => {
-  const { state } = await applied()
+test('add_model refuses unknown targets, providers, models, and protocols before argv', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
   for (const [body, code] of [
-    [{ provider: 'missing', model: 'k3.1-pro', protocol: 'responses' }, 'unknown_provider'],
-    [{ provider: 'kimi', model: 'missing', protocol: 'responses' }, 'unknown_model'],
-    [{ provider: 'cpa-us2', model: 'gpt-6-astra', protocol: 'messages' }, 'unsupported_protocol'],
-    [{ provider: 'kimi', model: 'k3.1-pro', protocol: 'bogus' }, 'invalid_protocol'],
+    [{ target: 'missing-target', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' }, 'unknown_target'],
+    [{ target: 'dsh-main', provider: 'missing', model: 'k3.1-pro', protocol: 'responses' }, 'unknown_provider'],
+    [{ target: 'dsh-main', provider: 'kimi', model: 'missing', protocol: 'responses' }, 'unknown_model'],
+    [{ target: 'dsh-main', provider: 'cpa-us2', model: 'gpt-6-astra', protocol: 'messages' }, 'unsupported_protocol'],
+    [{ target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'bogus' }, 'invalid_protocol'],
   ]) {
     const result = await postJson(state, '/_tmax/action', { action: 'add_model', ...body, dryRun: false })
     assert.equal(result.body.ok, false)
     assert.equal(result.body.code, code)
-    assert.equal(result.body.state, undefined)
+    assert.equal(result.body.state, undefined, 'a request refused before argv carries no state')
   }
+  const calls = await fake.calls()
+  assert.equal(calls.some(argv => argv[0] === 'agent' && ['provider', 'model', 'apply'].includes(argv[1])), false)
+})
+
+test('add_model refuses an uninspectable target and an unread Harness list', async () => {
+  const uninspectable = baseScenario()
+  uninspectable.dispatch['agent inspect dsh-main'] = {
+    code: 'unknown_resource',
+    status: 'error',
+    data: null,
+    blockers: [{ code: 'unknown_resource', message: 'Unknown DSH target "dsh-main".' }],
+    __exit: 2,
+  }
+  const blind = await applied({ scenario: uninspectable })
+  const blindResult = await postJson(blind.state, '/_tmax/action', {
+    action: 'add_model',
+    target: 'dsh-main',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(blindResult.statusCode, 409)
+  assert.equal(blindResult.body.code, 'target_uninspectable')
+
+  const unread = baseScenario()
+  unread.dispatch['agent list'] = {
+    code: 'unknown_resource',
+    status: 'error',
+    data: null,
+    blockers: [{ code: 'unknown_resource', message: 'Target inventory unavailable.' }],
+    __exit: 2,
+  }
+  const missing = await applied({ scenario: unread })
+  const missingResult = await postJson(missing.state, '/_tmax/action', {
+    action: 'add_model',
+    target: 'dsh-main',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(missingResult.statusCode, 409)
+  assert.equal(missingResult.body.code, 'harnesses_unavailable')
 })
 
 test('add_model stops at a refused step and reports the completed prefix', async () => {
@@ -1430,6 +1661,7 @@ test('add_model stops at a refused step and reports the completed prefix', async
   const { state } = await applied({ scenario })
   const executed = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
@@ -1439,14 +1671,15 @@ test('add_model stops at a refused step and reports the completed prefix', async
   assert.equal(executed.body.ok, false)
   assert.equal(executed.body.result.data.failedStep, 'model_add')
   assert.deepEqual(executed.body.result.data.steps, [
-    { name: 'provider_add', code: 'ok', status: 'success' },
-    { name: 'model_add', code: 'unknown_resource', status: 'error' },
+    { name: 'provider_add', code: 'ok', status: 'success', protocol: null },
+    { name: 'model_add', code: 'unknown_resource', status: 'error', protocol: 'responses' },
   ])
   assert.ok(executed.body.state, 'the fresh state accompanies a partial write')
 })
 
 test('add_model refuses a disabled provider before any argv', () => {
   const state = {
+    harnesses: [{ id: 'dsh-main', appliedState: 'unknown', providers: [] }],
     catalog: {
       state: 'available',
       entriesState: 'available',
@@ -1464,74 +1697,367 @@ test('add_model refuses a disabled provider before any argv', () => {
     },
     gateway: { configured: true },
   }
-  const planned = planAddModel({ action: 'add_model', provider: 'disabled', model: 'm1', protocol: 'responses' }, { state, target: 'dsh-main' })
+  const planned = planAddModel(
+    { action: 'add_model', target: 'dsh-main', provider: 'disabled', model: 'm1', protocol: 'responses' },
+    { state },
+  )
   assert.equal(planned.ok, false)
   assert.equal(planned.code, 'provider_disabled')
+
+  // A target whose entries could not be read is refused, not guessed.
+  const blind = planAddModel(
+    { action: 'add_model', target: 'dsh-main', provider: 'kimi', model: 'k3.1-pro', protocol: 'responses' },
+    { state: { harnesses: [{ id: 'dsh-main', appliedState: null, providers: [] }], catalog: state.catalog } },
+  )
+  assert.equal(blind.ok, false)
+  assert.equal(blind.code, 'target_uninspectable')
 })
 
-test('add_model preserves the apply refusal evidence and reports the failed apply step', async () => {
+test('add_model preserves the model-add refusal evidence and reports the failed step', async () => {
   const { fake, state } = await applied()
   await fake.patch(current => {
-    current.dispatch['agent apply dsh-main'] = {
-      code: 'partial_native_apply',
+    current.dispatch['agent model add dsh-main kimi k3.1-pro --protocol responses'] = {
+      code: 'unsupported_selection',
       status: 'error',
-      data: {
-        state: 'partially_applied',
-        changed_files: ['/tmp/dsh/cordis.patch.yml'],
-        recovery: 'recovery-2',
-      },
-      effects: { native_writes: true, locks_created: false },
-      blockers: [{ code: 'partial_native_apply', message: 'one file failed' }],
+      data: { name: 'kimi', model: 'k3.1-pro', protocol: 'responses', saved: false },
+      effects: { desired_writes: false, native_writes: false },
+      blockers: [{ code: 'unsupported_selection', message: 'The client cannot take this selection.' }],
     }
   })
   await fake.clearCalls()
   const executed = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
     dryRun: false,
   })
   assert.equal(executed.statusCode, 409)
-  assert.equal(executed.body.code, 'partial_native_apply')
-  assert.equal(executed.body.result.data.state, 'partially_applied')
-  assert.deepEqual(executed.body.result.data.changed_files, ['/tmp/dsh/cordis.patch.yml'])
-  assert.equal(executed.body.result.data.recovery, 'recovery-2')
-  assert.equal(executed.body.result.data.failedStep, 'apply')
-  assert.equal(executed.body.result.data.entry.name, 'kimi')
-  assert.deepEqual(executed.body.result.effects, { native_writes: true, locks_created: false })
+  assert.equal(executed.body.code, 'unsupported_selection')
+  assert.equal(executed.body.message, 'The client cannot take this selection.')
+  assert.equal(executed.body.result.data.name, 'kimi')
+  assert.equal(executed.body.result.data.saved, false)
+  assert.equal(executed.body.result.data.failedStep, 'model_add')
+  assert.deepEqual(executed.body.result.data.entry, { name: 'kimi', mode: 'create' })
+  assert.deepEqual(executed.body.result.effects, { desired_writes: false, native_writes: false })
+  assert.equal(executed.body.result.blockers[0].code, 'unsupported_selection')
 })
 
-test('add_model needs no pending precondition and still reports apply success and reload', async () => {
-  // The authoritative target contract carries no pending-delta field. A target
-  // that has not been applied yet is still addable: the fixed sequence ends in
-  // `agent apply`, whose result owns the reload report.
+test('add_model works on a target that has never been applied and never applies it', async () => {
   const scenario = baseScenario()
-  scenario.dispatch['agent inspect dsh-main'] = success({ ...agentInspectData(), applied_state: 'not_applied' })
+  scenario.dispatch['agent inspect dsh-main'] = success({
+    ...agentInspectData(),
+    applied_state: 'not_applied',
+    applied_target_revision: null,
+    unapplied: true,
+  })
   const { fake, state } = await applied({ scenario })
   await fake.clearCalls()
   const preview = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
     dryRun: true,
   })
   assert.equal(preview.statusCode, 200)
-  assert.deepEqual(preview.body.result.data.steps, ['provider_add', 'model_add', 'apply'])
+  assert.deepEqual(preview.body.result.data.steps, ['provider_add', 'model_add'])
+  assert.equal(preview.body.state.harnesses[0].unapplied, true, 'the page learns the target is unapplied')
   const executed = await postJson(state, '/_tmax/action', {
     action: 'add_model',
+    target: 'dsh-main',
     provider: 'kimi',
     model: 'k3.1-pro',
     protocol: 'responses',
     dryRun: false,
   })
   assert.equal(executed.statusCode, 200)
+  assert.equal(executed.body.result.status, 'success')
+  assert.equal(
+    (await fake.calls()).some(argv => argv[0] === 'agent' && argv[1] === 'apply'),
+    false,
+    'the selection is saved, not applied',
+  )
+})
+
+test('remove_model previews the target entry that holds the selection without writing', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const preview = await postJson(state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'dsh-main',
+    provider: 'tmax',
+    model: 'public-model',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.body))
+  assert.equal(preview.body.result.status, 'dry_run')
+  assert.deepEqual(preview.body.result.data, {
+    target: 'dsh-main',
+    provider: 'tmax',
+    model: 'public-model',
+    protocol: 'responses',
+    entry: { name: 'tmax', mode: 'existing' },
+    steps: ['model_remove'],
+    protocols: ['responses'],
+  })
+  const calls = await fake.calls()
+  assert.equal(
+    calls.some(argv => argv[0] === 'agent' && argv[1] === 'model' && argv[2] === 'remove'),
+    false,
+    'a preview never sends a selection command',
+  )
+})
+
+test('remove_model removes the desired selection and never applies', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const executed = await postJson(state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'dsh-main',
+    provider: 'tmax',
+    model: 'public-model',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(executed.statusCode, 200, JSON.stringify(executed.body))
+  assert.equal(executed.body.result.status, 'success')
+  assert.equal(executed.body.result.code, 'ok')
+  assert.deepEqual(executed.body.result.data, {
+    target: 'dsh-main',
+    name: 'tmax',
+    model: 'public-model',
+    protocol: 'responses',
+    provider: 'tmax',
+    entry: { name: 'tmax', mode: 'existing' },
+    steps: [{ name: 'model_remove', code: 'ok', status: 'success', protocol: 'responses' }],
+  })
+  const writes = (await fake.calls()).filter(argv => argv[0] === 'agent' && ['provider', 'model', 'apply'].includes(argv[1]))
+  assert.deepEqual(writes, [
+    ['agent', 'model', 'remove', 'dsh-main', 'tmax', 'public-model', '--protocol', 'responses'],
+  ])
+  assert.equal(writes.some(argv => argv[1] === 'apply'), false, 'a selection removal never applies')
+  assert.ok(executed.body.state)
+})
+
+test('remove_model refuses an unselected model, an unknown target, and an ambiguous entry', async () => {
+  const { state } = await applied()
+  const unselected = await postJson(state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'dsh-main',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(unselected.statusCode, 409)
+  assert.equal(unselected.body.code, 'not_joined')
+  assert.equal(unselected.body.state, undefined)
+  const unknown = await postJson(state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'nope',
+    provider: 'tmax',
+    model: 'public-model',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(unknown.statusCode, 409)
+  assert.equal(unknown.body.code, 'unknown_target')
+
+  // The same selection in two entries cannot be addressed by the browser, so
+  // the host refuses instead of choosing one.
+  const scenario = baseScenario()
+  scenario.dispatch['agent inspect dsh-main'] = success({
+    ...agentInspectData(),
+    providers: [
+      ...agentInspectData().providers,
+      { name: 'kimi-a', source: { provider: 'kimi' }, relayed: false, base_url: null, credential_ref: null, applied_delivery: null, models: [{ id: 'k3.1-pro', protocol: 'responses' }] },
+      { name: 'kimi-b', source: { provider: 'kimi' }, relayed: false, base_url: null, credential_ref: null, applied_delivery: null, models: [{ id: 'k3.1-pro', protocol: 'responses' }] },
+    ],
+  })
+  const ambiguousFixture = await applied({ scenario })
+  const ambiguous = await postJson(ambiguousFixture.state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'dsh-main',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(ambiguous.statusCode, 409)
+  assert.equal(ambiguous.body.code, 'ambiguous_selection')
+})
+
+test('remove_model removes every protocol selection for one model in one host sequence', async () => {
+  const scenario = baseScenario()
+  const inspect = agentInspectData()
+  inspect.providers = inspect.providers.map(provider => provider.name === 'tmax'
+    ? { ...provider, models: [...provider.models, { id: 'public-model', protocol: 'chat-completions' }] }
+    : provider)
+  scenario.dispatch['agent inspect dsh-main'] = success(inspect)
+  scenario.dispatch['agent model remove dsh-main tmax public-model --protocol responses'] = success({ target: 'dsh-main', name: 'tmax', model: 'public-model', protocol: 'responses' })
+  scenario.dispatch['agent model remove dsh-main tmax public-model --protocol chat-completions'] = success({ target: 'dsh-main', name: 'tmax', model: 'public-model', protocol: 'chat-completions' })
+  const { fake, state } = await applied({ scenario })
+  await fake.clearCalls()
+  const executed = await postJson(state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'dsh-main',
+    provider: 'tmax',
+    model: 'public-model',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(executed.statusCode, 200, JSON.stringify(executed.body))
+  assert.deepEqual(executed.body.result.data.steps.map(step => step.name), ['model_remove', 'model_remove'])
+  const writes = (await fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'model' && argv[2] === 'remove')
+  assert.deepEqual(writes.map(argv => argv.at(-1)), ['responses', 'chat-completions'], 'one host-fixed sequence removes both protocols')
+})
+
+test('remove_model finds the selection in the addressed Harness only', async () => {
+  const scenario = twoTargetScenario()
+  scenario.dispatch['agent model remove pi-main deepseek k3.1-pro --protocol responses'] = success({
+    target: 'pi-main',
+    name: 'deepseek',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+  })
+  const { fake, state } = await applied({ scenario })
+  await fake.clearCalls()
+  // dsh-main does not hold it; pi-main's own entry does.
+  const declared = await postJson(state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'dsh-main',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: true,
+  })
+  assert.equal(declared.statusCode, 409)
+  assert.equal(declared.body.code, 'not_joined')
+  const removed = await postJson(state, '/_tmax/action', {
+    action: 'remove_model',
+    target: 'pi-main',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(removed.statusCode, 200, JSON.stringify(removed.body))
+  assert.deepEqual(removed.body.result.data.entry, { name: 'deepseek', mode: 'existing' })
+  assert.deepEqual(
+    (await fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'model' && argv[2] === 'remove'),
+    [['agent', 'model', 'remove', 'pi-main', 'deepseek', 'k3.1-pro', '--protocol', 'responses']],
+  )
+})
+
+// ---------------------------------------------------------------------------
+// Applying one declared Harness.
+
+test('apply_target previews with --dry-run, executes without it, and returns fresh state', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const preview = await postJson(state, '/_tmax/action', { action: 'apply_target', target: 'dsh-main', dryRun: true })
+  assert.equal(preview.statusCode, 200, JSON.stringify(preview.body))
+  assert.equal(preview.body.ok, true)
+  assert.equal(preview.body.action, 'apply_target')
+  assert.equal(preview.body.dryRun, true)
+  assert.equal(preview.body.result.code, 'dry_run_ready')
+  assert.equal(preview.body.result.status, 'dry_run')
+  assert.deepEqual(Object.keys(preview.body).sort(), ['action', 'dryRun', 'ok', 'result', 'state'])
+  let applies = (await fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'apply')
+  assert.deepEqual(applies, [['agent', 'apply', 'dsh-main', '--dry-run']])
+  assert.equal(preview.body.state.schemaVersion, 5)
+
+  await fake.clearCalls()
+  const executed = await postJson(state, '/_tmax/action', { action: 'apply_target', target: 'dsh-main' })
+  assert.equal(executed.statusCode, 200, JSON.stringify(executed.body))
+  assert.equal(executed.body.ok, true)
   assert.equal(executed.body.result.code, 'awaiting_native_reload')
   assert.equal(executed.body.result.data.state, 'applied_reload_pending')
-  assert.deepEqual(executed.body.result.data.steps.map(step => [step.name, step.status]), [
-    ['provider_add', 'success'],
-    ['model_add', 'success'],
-    ['apply', 'success'],
-  ])
+  assert.ok(executed.body.state, 'the response carries fresh state')
+  applies = (await fake.calls()).filter(argv => argv[0] === 'agent' && argv[1] === 'apply')
+  assert.deepEqual(applies, [['agent', 'apply', 'dsh-main']])
+})
+
+test('apply_target refuses an undeclared target before any apply argv', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const undeclared = await postJson(state, '/_tmax/action', { action: 'apply_target', target: 'pi-main', dryRun: true })
+  assert.equal(undeclared.statusCode, 409)
+  assert.equal(undeclared.body.code, 'unknown_target')
+  assert.equal(undeclared.body.state, undefined)
+  const unnamed = await postJson(state, '/_tmax/action', { action: 'apply_target', dryRun: true })
+  assert.equal(unnamed.statusCode, 400)
+  assert.equal(unnamed.body.code, 'invalid_target')
+  assert.equal(
+    (await fake.calls()).some(argv => argv[0] === 'agent' && argv[1] === 'apply'),
+    false,
+    'no undeclared target reaches argv',
+  )
+
+  // An unread Harness list is a typed refusal, never an empty list meaning
+  // "no such target".
+  const unread = baseScenario()
+  unread.dispatch['agent list'] = {
+    code: 'unknown_resource',
+    status: 'error',
+    data: null,
+    blockers: [{ code: 'unknown_resource', message: 'Target inventory unavailable.' }],
+    __exit: 2,
+  }
+  const missing = await applied({ scenario: unread })
+  const refused = await postJson(missing.state, '/_tmax/action', { action: 'apply_target', target: 'dsh-main', dryRun: true })
+  assert.equal(refused.statusCode, 409)
+  assert.equal(refused.body.code, 'harnesses_unavailable')
+})
+
+test('apply_target preserves a typed refusal and a transport failure', async () => {
+  const { fake, state } = await applied()
+  await fake.patch(current => {
+    current.dispatch['agent apply dsh-main'] = {
+      code: 'runtime_blocked',
+      status: 'blocked',
+      data: null,
+      blockers: [{ code: 'gateway_not_ready', message: 'Start the gateway before application.' }],
+      __exit: 3,
+    }
+  })
+  const refused = await postJson(state, '/_tmax/action', { action: 'apply_target', target: 'dsh-main' })
+  assert.equal(refused.statusCode, 409)
+  assert.equal(refused.body.code, 'runtime_blocked')
+  assert.equal(refused.body.message, 'Start the gateway before application.')
+  assert.equal(refused.body.result.blockers[0].code, 'gateway_not_ready')
+  assert.ok(refused.body.state)
+
+  await fake.patch(current => {
+    current.dispatch['agent apply dsh-main'] = { __raw: 'not a tmax envelope', __exit: 4 }
+  })
+  const transport = await postJson(state, '/_tmax/action', { action: 'apply_target', target: 'dsh-main' })
+  assert.equal(transport.statusCode, 502)
+  assert.equal(transport.body.code, 'tmax_unavailable')
+  assert.equal(transport.body.result.code, 'tmax_unavailable')
+  assert.ok(transport.body.state)
+})
+
+test('apply_target locks one target while a different target can apply concurrently', async () => {
+  const scenario = twoTargetScenario()
+  const { fake, state } = await applied({ scenario })
+  await getJson(state, '/_tmax/state') // warm: the lock, not the state read, is under test
+  await fake.update({ ...twoTargetScenario(), delayFor: 'agent apply', delayMs: 200 })
+
+  const first = postJson(state, '/_tmax/action', { action: 'apply_target', target: 'dsh-main' })
+  await sleep(60)
+  const duplicate = await postJson(state, '/_tmax/action', { action: 'apply_target', target: 'dsh-main' })
+  assert.equal(duplicate.statusCode, 409)
+  assert.equal(duplicate.body.code, 'busy')
+  assert.equal(duplicate.body.action, 'apply_target')
+  const other = await postJson(state, '/_tmax/action', { action: 'apply_target', target: 'pi-main' })
+  assert.equal(other.statusCode, 200, JSON.stringify(other.body))
+  assert.equal(other.body.result.data.target, 'pi-main')
+  const firstResult = await first
+  assert.equal(firstResult.statusCode, 200)
+  await fake.update(twoTargetScenario())
 })
