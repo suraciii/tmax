@@ -136,9 +136,9 @@ allowlists. This is one person's tool, not a multi-user gateway. Native agent
 model roles are configuration settings, not access-control roles.
 
 tmax must not provide an uninstall feature or a dedicated uninstall workflow.
-Existing stop, autostart, native-restoration, and secret-cleanup operations retain
-their independent meanings; none implicitly performs the others or removes the
-program. Users may use their own calling agent to uninstall it.
+Existing stop, autostart, Agent-configuration restoration, and secret-cleanup
+operations retain their independent meanings; none implicitly performs the others
+or removes the program. Users may use their own calling agent to uninstall it.
 
 ## Configuration authority
 
@@ -148,7 +148,7 @@ logs, protected secrets, session bindings, and recovery records belong under
 `~/.tmax`; ordinary request history remains in memory. The separate
 [error log](../diagnostics/spec.md#persistent-gateway-error-log) retains bounded
 failure details locally.
-Native-agent configuration and native-owned credentials remain in their native
+Agent actual configuration and Agent-owned credentials remain in their
 locations. Platform startup registration is an external integration, not a
 second tmax data directory.
 
@@ -158,21 +158,22 @@ Web operations edit the same desired state. TOML is the persisted representation
 not an input task the caller must complete. Optional manual edits remain possible;
 writes must detect concurrent changes and preserve unrelated settings and comments.
 The [configuration contract](../configuration/spec.md) owns location, field syntax,
-validation, and the separate persistence, reload, and native-application boundaries.
+validation, and the separate persistence, reload, and Agent-application boundaries.
 
 Ordinary configuration contains secret references, not secret values or login
 tokens. Usage observations, health results, retained conversation destinations,
 and applied-state records are runtime state, not another source of desired
 configuration. Neither runtime state nor a models.dev refresh may rewrite user intent.
 
-Native agent configuration is a managed target, not a second authority. tmax must
-not provide agent-to-tmax import of providers, models, settings, or credentials.
-Native configuration inspection is read-only and limited to configuration scope,
-compatibility, safe change previews, and conflict detection; native edits must
-not flow back into tmax. Session discovery is a separate capability that reads
+An Agent's actual configuration is a managed target, not a second authority. tmax
+must not provide Agent-to-tmax import of providers, models, settings, or
+credentials. Inspection is read-only and limited to configuration scope,
+compatibility, safe change previews, and ownership or namespace guards; later
+edits in those files must not flow back into tmax. Session discovery is a
+separate capability that reads
 Agent session stores and returns bounded metadata; it does not import
 configuration, credentials, or routing state. Copying a selected Agent session to
-another native target under the [session contract](../sessions/spec.md) is
+another Agent target under the [session contract](../sessions/spec.md) is
 likewise a native session copy, not configuration import.
 
 Executed CLI/Web configuration changes save desired settings and activate the
@@ -191,7 +192,7 @@ not require authoring a replacement document. Reset is a last-resort operation
 only for an existing invalid file: preserve its exact bytes in a current-user-
 restricted plaintext recovery artifact before replacing desired settings with
 empty configuration. Report lost desired selections and resulting access
-revocation. Do not change native files, sign out, delete stored secrets, discard
+revocation. Do not change actual files, sign out, delete stored secrets, discard
 prior recovery information, or move old sessions to another destination. Recovery
 artifacts remain inspectable without exposing secrets and are retained until
 explicitly discarded; resetting does not authorize replay of rejected content.
@@ -199,8 +200,9 @@ explicitly discarded; resetting does not authorize replay of rejected content.
 ### Backup and restoration boundary
 
 tmax must not provide built-in backup bundles, configuration history snapshots,
-or cross-machine synchronization. Invalid-file recovery and native-change
-restoration are not backups of a complete working installation.
+or cross-machine synchronization. Invalid-file recovery and restoration of
+tmax-managed Agent configuration are not backups of a complete working
+installation.
 
 Guidance for external system backups must identify `~/.tmax` as the tmax-owned
 state boundary. A consistent file copy requires stopping the daemon service
@@ -208,15 +210,16 @@ and all other tmax writers; copying only `tmax.toml` is not a complete backup.
 Secret-bearing backup copies require the same protection as their source.
 Secret and credential-bearing recovery files contain plaintext; copying them
 does not encrypt their contents. Backups must retain the source's current-OS-user
-access restriction. Native-agent files, native-owned credentials, and OS startup
-registration are outside that directory.
+access restriction. An Agent's actual files, Agent-owned credentials, and OS
+startup registration are outside that directory.
 
 Restoring external files does not verify credentials, restore upstream account
-state, or establish that native settings still match. Startup must validate the
+state, or establish that actual Agent settings still match. Startup must validate the
 restored authority normally and retain unknown or unavailable evidence where
-dependencies cannot be established. OS-account file restrictions and native paths
+dependencies cannot be established. OS-account file restrictions and Agent file
+paths
 may prevent reuse on another machine. tmax must not promise portable recovery,
-replay requests, or overwrite current native settings as a side effect of startup.
+replay requests, or overwrite current Agent settings as a side effect of startup.
 
 ## Providers and authentication
 
@@ -341,8 +344,9 @@ Removal must be rejected while the resulting configuration contains references
 to the removed provider, model, model alias, or login-source target. Show
 those references and let the user explicitly remove or replace them before
 retrying; do not cascade-delete dependents or select replacements automatically.
-Removing a provider leaves native agent files and stored credentials untouched.
-The result must identify retained secret references and affected native targets,
+Removing a provider leaves the Agent's actual files and stored credentials
+untouched. The result must identify retained secret references and affected Agent
+targets,
 including direct access that can continue outside tmax. Local-secret deletion is
 a separate explicit action and must reject references still used by desired or
 loaded configuration. Deleting a stored key does not revoke copies held by agents
@@ -361,7 +365,7 @@ on requested provider sign-in:
         source = saved login source
     else:
         block before effects; report missing source and supported choices
-    if source or its native scope is unsupported:
+    if source or its configuration scope is unsupported:
         block this source; do not choose an alternative
     use source's supported sign-in under the authentication failure boundary
 ```
@@ -492,7 +496,7 @@ automatic acquisition is visibly paused. Status and selection previews remain
 effect-free. Disabling acquisition must not extend an existing fact's validity.
 
 Changing a rule or publishing an input changes future priority evaluations,
-not native files, candidate membership, or a retained conversation destination.
+not actual files, candidate membership, or a retained conversation destination.
 Direct configuration may inspect the current ranking, but changing its selected
 concrete model remains an explicit operation. The same captured inputs used for
 selection must explain the outcome, including rules skipped for unavailable
@@ -501,52 +505,52 @@ facts; later observations must not rewrite that historical explanation.
 
 ## Agent configuration
 
-The user must be able to discover or explicitly locate an agent target and
+The user must be able to discover or explicitly locate an Agent target and
 inspect its Agent, version, profile, effective configuration locations,
 and configuration scope. Detection must be read-only. It must not create tmax
-providers from native settings or collect existing agent credentials.
+providers from an Agent's actual settings or collect existing Agent credentials.
 
-For each target, the user can configure named native provider entries, their
-model choices, a default model with an optional reasoning effort, and any native
-model roles. An entry references exactly one provider. A direct entry references
+For each target, the user can configure named provider entries, their
+model choices, a default model with an optional reasoning effort, and any model
+roles. An entry references exactly one provider. A direct entry references
 any provider other than `tmax` and selects that provider's concrete models. A
 relayed entry references the derived [gateway provider](#gateway-provider) `tmax`
 and selects its public route names.
 Both kinds may coexist in the same target. There is no target-wide operating mode.
-Unsupported native multi-provider configurations must be explained, not silently
-collapsed to one provider. Defaults and native roles identify both the entry and
+Unsupported multi-provider actual configurations must be explained, not silently
+collapsed to one provider. Defaults and model roles identify both the entry and
 its model. A default effort is model-scoped: for DSH, pi, OMP, and OpenCode it is a
 caller-facing name the selected model declares and the tool can represent; for
 Codex and Hermes it is a verbatim native value tmax does not validate. tmax must
 not invent universal role or reasoning-level names, synthesize a default effort,
 or treat a capability declaration as a default.
-These choices control native configuration and model pickers, not gateway permissions.
+These choices control actual configuration and model pickers, not gateway permissions.
 Alias continuity belongs to the shared alias definition under
 [Model selection](../model-routing/spec.md#selection-and-continuity).
 A target may be registered before its model set or default is complete, including
-when it is needed as a native login source. Missing setup is an explicit unavailable
-state, not a new draft resource. Any declared references must resolve. Native
+when it is needed as a login source. Missing setup is an explicit unavailable
+state, not a new draft resource. Any declared references must resolve. Agent
 application remains blocked until its required selections, credentials, and
 compatibility are established; incomplete targets do not block standalone gateway use.
 For OpenCode, selecting a default is optional: adding provider models preserves
-the native default unless the user explicitly changes it. An unverified tool
+the Agent's current default unless the user explicitly changes it. An unverified tool
 version is advisory under the [integration contract](../integrations/spec.md#support-contract).
 Model addition, removal, and default selection are distinct requested changes;
 tmax must not infer them from a generic request to switch or optimize access.
 
-The default model and the default effort are independent managed fields. Applying
-a target writes only the fields the user explicitly configured: a missing default
-model produces no default write, and a missing default effort preserves the
-tool's current effort exactly. Settings tmax does not configure remain
-tool-owned even when they live in the same native entry, object, or model
+The default model and the default effort are independent managed fields. An apply
+writes only the fields the current expected configuration declares: a missing
+default model produces no default write, and a field tmax never managed keeps the
+Agent's current value exactly. Settings tmax does not configure remain
+unmanaged even when they live in the same actual entry, object, or model
 reference. A configured effort that the selected model cannot represent, or that
-the target tool cannot express, blocks application before any native write and
+the target tool cannot express, blocks application before any file write and
 reports the available names. Removing an effort from the target stops managing it;
-later apply restores that field's captured baseline and still refuses to overwrite
-an external edit. When a native format encodes the model and its effort in one
+the next apply removes that managed field, and the retained single-level snapshot
+can restore its previous value. When the Agent's format encodes the model and its effort in one
 composite value, removing only the effort leaves the current composite value in
 place until the model reference itself becomes unmanaged or changes; clearing the
-default still restores that field's captured baseline.
+default removes that managed composite field.
 
 Direct model selections must resolve to a specific qualified model and therefore
 its provider's authorization. Adding another instance must not switch direct
@@ -559,13 +563,17 @@ When an agent shares an active account across a profile, process, or server,
 tmax must expose that scope and detect conflicting account selections. It must
 not promise per-project or per-session isolation that the native agent cannot
 provide. It must block incompatible selections and explain whether supported
-separate native scopes or gateway routes can provide the requested separation.
+separate Agent configuration scopes or gateway routes can provide the requested
+separation.
 
-The agent configuration view must report whether the requested changes are not
-applied, applied, awaiting agent reload, conflicted, or blocked. It must distinguish
-saved settings from the running agent's effective configuration. External edits
-and higher-precedence settings must be surfaced, not silently overwritten or
-claimed as active.
+The Agent configuration view must report the target's applied state from its
+retained managed record: unknown when the scope is unavailable, not applied when
+no record is retained, and otherwise that record's state (for example awaiting
+Agent reload or recovery required), together with any blocker for the requested
+operation. It must distinguish expected configuration from the running Agent's
+effective configuration. Higher-precedence settings and unmanaged fields must be surfaced
+and never claimed as active. A later edit to a managed field is not a separate
+state; the next authoritative apply overwrites it.
 
 Application state and runtime verification must be presented separately under
 the [diagnostics contract](../diagnostics/spec.md). Applied files are not proof
@@ -584,51 +592,62 @@ server is required on that inference path. Supported on-demand secret
 resolution may require the installed tmax CLI; disclose that dependency. A
 relayed entry uses the gateway listen address and shared gateway key. Applying it
 requires an explicitly started, ready listener; application must not start it.
-Adapters supply the native model list through supported discovery or static
+Adapters supply the model list through supported discovery or static
 configuration. Saving settings and choosing a model never start the gateway.
 
-Every native application must support a redacted dry run showing target files,
+Every Agent application must support a redacted dry run showing target files,
 credential handoff, affected model selections, and reload or restart requirements.
-The actual operation must preserve unrelated settings. Where native secure storage
-or references are supported, tmax must use them instead of embedding a secret
-into ordinary configuration. Dry-run output and execution results must disclose
-any plaintext credential handoff to native storage.
+The actual operation must preserve unmanaged settings. Where the Agent's own
+protected storage or references are supported, tmax must use them instead of
+embedding a secret into ordinary configuration. Dry-run output and execution
+results must disclose any plaintext credential handoff to the Agent's protected
+storage.
 
-An apply operation must inspect current native inputs and detect changes between
-that inspection and its writes. On a conflict it must stop without overwriting
-the new content and report what must be inspected. A previous dry run is neither
-required nor a stored authorization; execution recomputes from current state.
-A failed multi-file operation must report which changes were applied and either
-restore its own changes safely or identify a recovery-required state. It must
-never report partial application as success.
+An apply operation is authoritative for tmax-managed actual configuration. It
+reads the target's current actual inputs when it runs, then overwrites managed
+fields and entries from the expected configuration, removes managed fields that
+are no longer expected, and leaves unmanaged fields and containers alone. It does
+not delete a container it cannot prove it introduced. It does not compare managed fields with an earlier apply and does
+not treat later user edits to managed fields as a conflict; user confirmation is
+consent to that overwrite. Cross-target file ownership and a foreign provider
+name that tmax does not own still block before any write, as does an
+unrepresentable setting. A previous
+dry run is neither required nor a stored authorization. A failed multi-file
+operation must report which changes were applied and either restore its own
+changes safely or identify a recovery-required state. It must never report
+partial application as success.
 
-The user must be able to stop managing an agent's configuration or undo tmax's changes. Restoration must
-remove or restore only tmax-owned changes and preserve later user edits. Where
-ownership is ambiguous, restoration must stop with a conflict. Backups containing
-credentials must receive the same protection as those credentials.
+The user must be able to stop managing an agent's configuration or undo tmax's
+managed changes. Restore is single-level: one retained managed snapshot per
+target, captured immediately before the last successful apply and replaced by
+the next one. Restoring returns tmax-managed fields
+and entries to that snapshot, leaves unmanaged fields in place, and overwrites
+later edits to managed fields. It is not a merge and does not preserve later
+edits to managed configuration. Backups containing credentials must receive the
+same protection as those credentials.
 
 Stopping management removes the target from desired configuration without
-rewriting its native files or signing it out. A target referenced as a login
+rewriting its actual files or signing it out. A target referenced as a login
 owner cannot be removed until that dependency is explicitly resolved. Removing
 a target or one of its provider entries does not revoke the shared gateway key,
-change the gateway's models, or stop the service. Existing native settings may
+change the gateway's models, or stop the service. Existing actual settings may
 continue to work. Offer restoration before removal, not as an implicit side
-effect. Retain current-user-restricted plaintext restore information until
-restoration completes or the user explicitly discards it; this is recovery data,
-not desired configuration.
+effect. Retain current-user-restricted plaintext restore information as the
+target's single managed snapshot until a later successful apply replaces it; this
+is recovery data, not expected configuration.
 
 ## Model gateway
 
-The gateway serves compatible local clients independently of native agent
+The gateway serves compatible local clients independently of Agent
 configuration management. No registered agent target or client record is required.
 It exposes one shared model list derived from enabled provider models and
 alias definitions under their declared protocols, not another publication or
-permission list. An agent's native model picker can show a subset without
+permission list. An Agent's model picker can show a subset without
 restricting requests to the gateway. Runtime requests do not create configuration.
 
 The first gateway start must be explicit. Once started, it runs in the background
 independently of the launching terminal or Web session. Opening management,
-saving settings, or applying native configuration does not start inference.
+saving settings, or applying actual Agent configuration does not start inference.
 Closing the browser does not stop it. User-login autostart is enabled by
 default once the gateway is configured; an explicit disable is the opt-out.
 Startup uses the current user's secret files. Missing or unavailable
@@ -737,13 +756,13 @@ upstream-credential export facility.
 
 Explicit replacement updates the shared key reference. Activation rejects the old
 key on subsequent requests; in-flight requests retain their captured credentials.
-Report known native configurations needing reapplication and explain that manually
+Report known Agent configurations needing reapplication and explain that manually
 configured clients must update too. There is no overlapping-key grace period.
 Replacing this local key does not change conversation identities or retained
 upstream destinations; later requests must supply the current key.
-Removing an agent never revokes this key. Removing gateway configuration stops its
+Removing an Agent target never revokes this key. Removing gateway configuration stops its
 use after dependencies are resolved; stored-secret cleanup remains explicit.
-Failures distinguish provisioning, save, activation, and native application.
+Failures distinguish provisioning, save, activation, and Agent application.
 A generated but unreferenced key remains discoverable for explicit cleanup.
 
 ### Daemon service identity
@@ -757,7 +776,7 @@ conversation stores.
 
 A repeated start of an already-running compatible inference listener must return
 the existing process and actual state without restarting, reloading pending
-configuration, or reapplying native files. Starting inference on a compatible
+configuration, or reapplying actual files. Starting inference on a compatible
 management-only owner is an explicit listener start, not a second daemon.
 The management interface must remain usable when inference is stopped.
 When explicit stop operations leave both inference and Web stopped, the daemon
@@ -908,7 +927,7 @@ because the recorded revision hashes `route/protocol` pairs.
 
 Staleness reasons are named, not merged: `listen_changed`, `key_rotated`,
 `route_removed`, `entry_selection_changed`, `entry_references_missing_route`,
-`gateway_not_ready`, `native_edit_conflict`.
+`gateway_not_ready`, `apply_incomplete`.
 
 ### Availability, delivery, and use
 
@@ -918,7 +937,7 @@ them separately and must never collapse them.
 | Fact | Values | Evidence |
 | --- | --- | --- |
 | Availability | ready, not ready, unknown | Gateway listener and shared key |
-| Delivery, per target | current, stale, blocked, unknown, not_applied, not_configured | Recorded target-scoped revision versus the current delivery facts, and native file checks |
+| Delivery, per target | current, stale, blocked, unknown, not_applied, not_configured | Recorded target-scoped revision versus the current delivery facts, and actual-file checks |
 | Use, per target | unverified, observed | Agent-side evidence only |
 
 A ready gateway must not establish that a target applied provider `tmax`. The
@@ -992,7 +1011,7 @@ The supplementary Web interface must have these task-oriented areas:
 | Overview | Provider-instance problems grouped by service, agent configuration state, gateway health, stale quota information, upcoming known renewal dates |
 | Providers | Metadata selection, local ID, inherited defaults, local overrides and effective values, authentication, model access, subscription or API balance, quota windows with their basis, units and reset evidence, and freshness |
 | Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases (presented as gateway entries) with public names, declared protocols, explicit candidate lists, and selection previews |
-| Agents | Five supported Agents, native targets and provider entries, model choices, effective configuration, preview/apply/restore |
+| Agents | Five supported Agents, Agent targets and provider entries, model choices, effective configuration, preview/apply/restore |
 | Gateway | Listener lifecycle, shared key, gateway-entry list with readiness and next actions, authenticated published raw concrete-model IDs, continuity, health and request metadata |
 
 The Web interface presents a Model alias as a **gateway entry**: the
@@ -1004,7 +1023,7 @@ Model's exact model ID (the model portion of its qualified reference); the user
 confirms or edits that name before saving. If the default name is taken, the form
 prefills a non-colliding suggestion and lets the user edit it; it never changes
 the name of an existing entry. Saving an entry must not start the gateway, change
-native Agent configuration, or claim that requests can already run. The UI must
+Agent actual configuration, or claim that requests can already run. The UI must
 show the entry's next step — configure the gateway, start or reload it, use the
 entry in an Agent target, or resolve a disabled entry or unavailable source — and
 must distinguish the entry name from the raw `provider-id/model-id` ID, which
@@ -1022,9 +1041,9 @@ key, the selected task, preview, or revision guard. Provider/model/target IDs,
 configuration field names, and raw JSON remain unchanged. Localized result status
 and explanation accompany the unmodified raw result. CLI output remains English.
 
-Provider creation and native provider/model selections are explicit operations.
+Provider creation and Agent provider/model selections are explicit operations.
 CLI operations persist their own changes; they do not require a caller-authored
-complete document. Sign-in, native application, and gateway startup remain separate
+complete document. Sign-in, Agent application, and gateway startup remain separate
 operations; saving declarations must not perform them.
 Adding another provider instance must not silently replace an existing agent's
 selected provider or default model.
@@ -1043,14 +1062,14 @@ CLI and Web must expose the same next action for incomplete operations:
 | Outcome | Next action |
 | --- | --- |
 | Provider saved without authentication | Sign in through the supported owner or supply a key; model and subscription editing remain available |
-| Saved without a running service | Start explicitly when gateway use is wanted; direct native application remains independent |
+| Saved without a running service | Start explicitly when gateway use is wanted; direct Agent application remains independent |
 | Saved but not active | Fix the reported cause and explicitly reload; a listener-address change requires restart |
 | Invalid saved configuration | Inspect the validation error; correct supported fields through explicit operations where possible, or explicitly reset invalid configuration with protected preservation of the rejected bytes |
-| Concurrent or conflicting native edits | Inspect current inputs and issue the intended operation again; do not overwrite external changes or treat an earlier dry run as binding |
-| Partial native application | Show changed and unchanged targets/files; restore owned changes or issue a new operation based on current state |
+| Later edits to tmax-managed Agent fields | Run apply again; it overwrites managed fields from expected configuration and leaves unmanaged fields alone |
+| Partial Agent application | Show changed and unchanged targets/files; restore the retained managed snapshot or issue a new operation based on current state |
 | Native login changed authorization before failure or rejected identity | Show affected native/shared consumers and block affected managed use; reestablish the intended identity through the qualified owner, then inspect current state |
 | Startup registration failed or drifted | Show saved intent separately from registration; explicitly set or clear gateway autostart through configure to reconcile this authority's registration |
-| Applied but awaiting native reload | Perform the named agent reload/restart; do not reapply blindly |
+| Applied but awaiting Agent reload | Perform the named Agent reload/restart; do not reapply blindly |
 
 Results identify the requested operation, affected objects, completed effects,
 blocking reason, and supported next action without exposing secrets.
@@ -1059,8 +1078,8 @@ known blockers, and uncertainty without changing files, reserving resources,
 reading secrets, signing in, or sending upstream requests. A normal invocation
 executes directly after checking current inputs and constraints; no prior dry run,
 confirmation token, approval receipt, or persisted plan is required.
-An operation that only changes desired settings may succeed without applying
-native files. An incomplete requested activation or application must not return
+An operation that only changes expected configuration may succeed without applying
+actual files. An incomplete requested activation or application must not return
 success. Recovery uses explicit authentication, autostart, reload, apply, and
 restore operations, not a workflow engine or automatically scheduled retries.
 
@@ -1078,35 +1097,35 @@ agent chooses operations from help and current state.
    replaced by an empty configuration.
 2. Add a provider from catalog metadata or explicit custom integration settings.
    Local integration discovery must work without catalog access. Discover or
-   explicitly locate the native target and register its Agent and scope.
+   explicitly locate the Agent target and register its Agent and scope.
    A target needed as a login source may exist before models or a default are set.
-   These declarations must not sign in or write native files.
+   These declarations must not sign in or write actual files.
 3. Supply a key through protected input or invoke sign-in through the selected source.
    Show local credential readiness separately from upstream verification.
    Cancelled or failed actions retain saved definitions for subsequent operations;
-   native effects follow the authentication failure boundary. Unknown quota or
+   actual-file effects follow the authentication failure boundary. Unknown quota or
    renewal must not block otherwise qualified access.
-4. Register concrete models and add the target's native provider entries and
-   selected models, default, and native roles through CLI operations. Inspect a
+4. Register concrete models and add the target's provider entries and
+   selected models, default, and model roles through CLI operations. Inspect a
    requested concrete model or alias for the target before choosing its default;
    do not infer a selection from the Agent or model name. Direct entries need
    no gateway or model alias. Relayed entries select public route names, so each
    selected route must be defined; schedules remain optional.
 5. For gateway use, explicitly configure, start, and validate the listener. Apply the target's
-   desired configuration as a separate operation, optionally preceded by its
-   dry run. Report written changes, outstanding native reload, and runtime
-   evidence separately. The user or calling agent may perform the named native
+   expected configuration as a separate operation, optionally preceded by its
+   dry run. Report written changes, outstanding Agent reload, and runtime
+   evidence separately. The user or calling agent may perform the named Agent
    reload; tmax does not do it silently.
 6. Inspect the result. An inference probe is a separate explicit operation with
    its cost risk disclosed, never an automatic setup step. Configuration success
    and model discovery do not prove a working tool-call conversation.
 
-Unsupported combinations must identify their missing prerequisite before native
+Unsupported combinations must identify their missing prerequisite before Agent
 application. Incomplete providers or targets remain inspectable and editable
 through CLI operations. Neither surface requires authoring a configuration
-document, importing native credentials, or inventing a workflow record to resume.
+document, importing Agent credentials, or inventing a workflow record to resume.
 
-Gateway-only use omits native target registration and application. Configure upstream
+Gateway-only use omits Agent target registration and application. Configure upstream
 access and models, configure and start the gateway, and explicitly retrieve its
 shared key for the user's client. No client record or permission assignment is needed.
 
@@ -1163,9 +1182,9 @@ versions and provider-authorized credentials where a provider request is needed:
    access without a subscription. Multiple targets, routes, or authorizations for
    one upstream identity must not duplicate its quota or inherit another identity's observations.
 3. Configure and restore each of Codex, pi, omp, OpenCode, Hermes, and DSH without
-   overwriting unrelated or concurrently changed configuration.
-4. Use a direct native entry while tmax is stopped, and a relayed entry while
-   the browser is closed. Configure both entries in one supported native target.
+   overwriting unrelated configuration or another target's files.
+4. Use a direct provider entry while tmax is stopped, and a relayed entry while
+   the browser is closed. Configure both entries in one supported Agent target.
    Serve an independently configured client without registering any agent target.
 5. Complete streaming output and a tool-call round trip for each advertised
    agent/protocol route. Reject a protocol mismatch before upstream inference.
@@ -1173,7 +1192,7 @@ versions and provider-authorized credentials where a provider request is needed:
    and exhausted quota as distinct conditions when the upstream evidence permits.
 7. Reject invalid shared gateway keys, unavailable models, and untrusted cross-site
    management requests without leaking credentials or conversation content.
-   Valid shared-key holders see the same model list; native picker subsets do not
+   Valid shared-key holders see the same model list; Agent picker subsets do not
    impose request permissions. Open the Web interface without login or pairing.
 8. Explain unknown quota and renewal information, and keep gateway observations
    separate from authoritative provider balances.
@@ -1182,15 +1201,15 @@ versions and provider-authorized credentials where a provider request is needed:
 10. Resolve deepseek and deepseek-2 independently against the same catalog entry.
     Exercise custom IDs, automatic suffix collisions, rename collisions, and
     reference updates without renumbering instances or retargeting sessions.
-    Reject conflicting direct selections within a native shared scope; dry runs
+    Reject conflicting direct selections within a shared Agent configuration scope; dry runs
     and actual results identify all targets affected by a requested shared-scope switch.
 11. Exercise the [model-selection acceptance boundary](../model-routing/spec.md#acceptance-boundary):
     catalog refresh, instance-qualified IDs, explicit alias candidate lists,
     schedules, and conversation continuity.
-12. Edit desired configuration through CLI, Web, and the text file without creating
+12. Edit expected configuration through CLI, Web, and the text file without creating
     competing authorities. Detect concurrent edits; keep credentials and runtime
-    observations out of ordinary configuration. Inspect native agent configuration
-    without importing providers, models, settings, or credentials, or overwriting later edits.
+    observations out of ordinary configuration. Inspect Agent actual configuration
+    without importing providers, models, settings, or credentials or changing it.
 13. Keep an explicitly started gateway running after its launching terminal and Web
 session close. Exercise opt-in login startup with missing or unavailable
 credentials; do not claim readiness or add a fallback.
@@ -1213,7 +1232,7 @@ credentials; do not claim readiness or add a fallback.
     registered qualified models; arbitrary alias names confer no membership.
     Keep the agent-visible choice stable while new selections use eligible
     candidates and their exact upstream IDs. Model availability must precede
-    native selection; no selection callback may be assumed.
+    Agent selection; no selection callback may be assumed.
 17. Exercise the [configuration contract](../configuration/spec.md): persisted
     field validation, reference checks, explicit reload, saved/loaded/applied state
     separation, invalid-file startup, and concurrent-write rejection. Configure
@@ -1223,12 +1242,12 @@ credentials; do not claim readiness or add a fallback.
     values. Select independently of effort, then validate only that backend;
     effort failure must not publish a new binding or choose a replacement.
 18. Remove providers and targets only after references are explicitly resolved.
-    Distinguish retained native files and secrets from removed desired settings;
+    Distinguish retained actual files and secrets from removed expected settings;
     stopping management must not silently sign out or revoke upstream access.
 19. Provision and explicitly replace the one shared gateway key. Ordinary reads
     must not expose it; explicit protected delivery supports unmanaged clients.
     Reject the old key after activation, report known configurations needing
-    reapplication, and distinguish save, activation, and native-application failures.
+    reapplication, and distinguish save, activation, and Agent-application failures.
     Removing a target must not revoke the key or block independently configured clients.
 20. Follow the [provider-specific contracts](../integrations/spec.md#provider-specific-contracts)
     for native login sources, key/product separation, unverified account identity,
@@ -1240,12 +1259,12 @@ credentials; do not claim readiness or add a fallback.
 21. Complete the first usable-agent path without a model alias, an inferred
     model selection, or an automatic paid probe. Resume after cancelled authentication,
     a saved-but-not-active revision, or an agent awaiting reload without
-    duplicating providers, overwriting native changes, or repeating completed writes.
+    duplicating providers, overwriting unmanaged fields, or repeating completed writes.
     Discover custom integration choices without catalog access, and inspect a
-    requested concrete model or alias for an unsaved native target without a
+    requested concrete model or alias for an unsaved Agent target without a
     placeholder model selection.
-    Register a native login source before model/default completion without native
-    writes, implicit login, or gateway startup.
+    Register a native login source before model/default completion without
+    actual-file writes, implicit login, or gateway startup.
 22. Follow the [diagnostics acceptance boundary](../diagnostics/spec.md#observable-acceptance):
     distinguish configuration from runtime evidence, explain historical decisions
     from their original revisions, and clear request history without losing
@@ -1256,7 +1275,7 @@ credentials; do not claim readiness or add a fallback.
     for CLI tasks and must report the same effects and recovery actions.
 24. Use the same `~/.tmax` configuration and data from different calling agents and
     working directories. Caller identity does not create a new target or change
-    which personal resources are managed. Keep native targets in their own scopes.
+    which personal resources are managed. Keep Agent targets in their own scopes.
 25. Configure and inspect quota and reset-announcement rules through explicit
     CLI operations. Exercise the [rule-input contract](../model-routing/inputs/spec.md#acceptance)
     and model-selection acceptance with supplied facts, not invented upstream
@@ -1322,7 +1341,7 @@ owns its provider-specific acceptance boundary and external evidence.
 The workspace includes shared management, configuration, routing/input,
 protected-storage, native-adapter, Web, and gateway implementations. Agent session
 listing and one-way native import are implemented in the workspace; runtime
-qualification remains scoped to actual versions, native scopes, credentials,
+qualification remains scoped to actual versions, Agent configuration scopes, credentials,
 operations, and transports.
 Local tests or parser checks do not establish provider entitlement or a verified
 hosted-provider tool-call conversation. This specification remains a design and

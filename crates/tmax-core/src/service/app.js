@@ -32,7 +32,7 @@ const areas = {
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber'],['dsh','DeepSeek Harness','D','blue']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-code-plan-cn':'Kimi Code Plan · 中国','kimi-code-plan-global':'Kimi Code Plan · 全球','glm-coding-plan':'GLM Coding Plan','stepfun-token-plan':'StepFun Step Plan','minimax-cn-coding-plan':'MiniMax Coding Plan · 中国','minimax-coding-plan':'MiniMax Coding Plan · 全球','custom':'自定义集成'};
 const protocolNames = {'responses':'Responses','chat-completions':'Chat Completions','messages':'Messages'};
-const stateLabel = value => ({saved:'已保存',observed:'已获取观测',unqualified:'有效期未获保证',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',restored_reload_pending:'已恢复，重新打开工具后生效',pending_native_changes:'有修改待应用',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
+const stateLabel = value => ({saved:'已保存',observed:'已获取观测',unqualified:'有效期未获保证',missing:'暂无信息',unknown:'未知',unavailable:'不可用',absent:'未配置',available:'可用',fresh:'有效',stale:'已过期',expired:'已过期',unverified:'未验证',not_verified:'未验证',configured:'已配置',ready:'已就绪',loaded:'已加载',not_applied:'尚未应用',applied:'已应用',applied_reload_pending:'已应用，重新打开工具后生效',write_pending:'写入进行中',recovery_required:'写入未完成，需要恢复',restored_reload_pending:'已恢复，重新打开工具后生效',incomplete:'待完善',complete:'已完整配置',unchanged:'无变化',mismatch:'与当前配置不一致',matches:'与配置一致',drifted:'存在外部修改',awaiting_native_reload:'等待工具重新加载'}[value] || '未知');
 const quotaSourceNames={go_usage_api:'OpenCode Go 用量接口',kimi_usage_api:'Kimi 用量接口',glm_monitor_api:'GLM 监控接口',stepfun_usage_api:'StepFun 用量接口',minimax_plan_remains_api:'MiniMax 用量接口',official_balance_api:'账户余额接口',official_models_api:'模型目录接口'};
 const quotaNotes={percent_consumed_floored:'百分比为已用值并向下取整，不能据此反推精确剩余额度。',counters_unit_unqualified:'计数单位未公布，不能当作请求数或 token 数。',usage_and_limits_may_overlap:'接口同时返回 usage 与 limits，二者可能描述同一额度，这里不作相加。',fields_unqualified:'字段含义、单位枚举与时间编码尚未确认，按供应商原值展示。',status_enums_unqualified:'状态码含义尚未确认，不能据此推断额度可用或已耗尽。',credit_not_tokens:'Credit 不是原始 token 数或请求次数；重置与到期含义待确认。'};
 const quotaWindows={interval:'当前窗口',weekly:'周窗口'};
@@ -1010,24 +1010,13 @@ function projectionBlock(projection) {
 }
 function nativeProjectionSection(data) {
   const intro=notice('以下是应用后将写入的期望能力声明，不代表已应用或工具当前状态。别名输入取全部配置候选的共同能力；目标默认档位只在显式配置时写入，否则沿用工具当前档位。');
-  if(!Array.isArray(data.native_projection))return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${notice('未能生成期望能力映射。请以阻塞原因与检查结果为准。','warning')}`;
+  if(!Array.isArray(data.native_projection))return `<h3 class="subheading">工具能力映射（期望能力）</h3>${intro}${notice('未能生成期望能力映射。请以阻塞原因与检查结果为准。','warning')}`;
   const entries=data.native_projection.map(entry=>{
     const source=entry.source?.provider==='tmax'?'tmax 本地网关':entry.source?.provider?providerName(entry.source.provider):'来源未知';
     const models=(entry.models||[]).map(m=>`<div class="list-row"><div class="grow"><strong>${escapeHtml(m.id)}</strong> <small class="label-note mono">${escapeHtml(entry.name)} · ${escapeHtml(protocolNames[m.protocol]||m.protocol)}</small>${projectionBlock(m.projection)}</div></div>`).join('');
     return `<div class="list-row split"><div><h3>${escapeHtml(entry.name)}</h3><small class="label-note">${escapeHtml(source)}</small></div></div>${models||'<p class="muted">尚未配置模型。</p>'}`;
   }).join('');
-  return `<h3 class="subheading">原生能力映射（期望能力）</h3>${intro}${entries||'<p class="muted">尚未生成映射。</p>'}`;
-}
-function conflictSection(data, target) {
-  const blockers = Array.isArray(data.blockers) ? data.blockers : [];
-  const conflicts = data.recovery?.conflicts;
-  const conflicted = blockers.some(blocker => blocker.code === 'native_conflict') || (Array.isArray(conflicts) && conflicts.length > 0);
-  if (!conflicted) return '';
-  const fields = Array.isArray(conflicts) ? conflicts.map(item => Array.isArray(item.field) ? item.field.join('.') : (item.field || item.code)).filter(Boolean) : [];
-  return `<h3 class="subheading">解决冲突</h3>`+
-    notice('工具里由 tmax 管理的默认设置已被修改。tmax 不会静默覆盖：可以接受工具当前状态（把当前原生值记为新的恢复基线），或恢复 tmax 接管前的配置。若要让 tmax 配置覆盖工具值，请在 CLI 执行 agent recovery discard 后重新应用（会丢弃原恢复基线）。未受管的字段始终保持工具当前值。','warning')+
-    (fields.length?`<div class="list-row"><small class="label-note mono">${escapeHtml(fields.join('、'))}</small></div>`:'')+
-    `<div class="actions">${button('接受工具当前状态','agent-accept',target,'soft')}${button('恢复原生配置','agent-restore',target)}</div>`;
+  return `<h3 class="subheading">工具能力映射（期望能力）</h3>${intro}${entries||'<p class="muted">尚未生成映射。</p>'}`;
 }
 function blockersSection(blockers) {
   const list=Array.isArray(blockers)?blockers:[];
@@ -1075,7 +1064,7 @@ async function agentDetail(target) {
   const generation=openDialog(target,'<div class="loading">正在检查工具配置…</div>','CODING TOOL');
   try {const data=await read('agent inspect',[target]);if(generation!==state.dialogGeneration)return;
     const config=state.config.agents[target];
-    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入原生配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',defaultLabel(config.default,config.agent))}${fact('工具当前默认',nativeDefaultLabel(data.native_default))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.provider==='tmax'?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}${conflictSection(data,target)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复原生配置','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
+    $('dialog-content').innerHTML=notice('模型选择只保存设置。点击“应用到工具”才会写入实际配置。')+`<div class="detail-facts">${fact('应用状态',stateLabel(data.applied_state))}${fact('默认模型',defaultLabel(config.default,config.agent))}${fact('工具当前默认',nativeDefaultLabel(data.native_default))}</div><div class="actions">${button('添加模型来源','agent-source',target,'','plus')}${button(config.agent==='codex'?'选择默认模型':'更改默认模型（可选）','agent-default',target,'soft')}</div><h3 class="subheading">模型来源</h3>${Object.entries(config.providers).map(([name,p])=>`<div class="list-row"><strong>${escapeHtml(name)}</strong><small class="label-note">${escapeHtml(p.provider==='tmax'?'tmax 本地网关':providerName(p.provider))} · ${p.models.length} 个模型</small><div class="actions">${button('添加可选模型','agent-model',JSON.stringify([target,name]),'small')}</div></div>`).join('') || '<p class="muted">尚未配置来源。</p>'}${nativeProjectionSection(data)}${blockersSection(data.blockers)}<h3 class="subheading">应用与恢复</h3><div class="actions">${button('应用到工具','agent-apply',target,'primary')}${button('恢复到应用前','agent-restore',target)}${button('更多配置','agent-advanced',target,'small')}</div>${detail(data,'查看检查结果、阻塞原因与受影响文件')}`;
   }catch(error){if(generation===state.dialogGeneration)$('dialog-content').innerHTML=notice(escapeHtml(error.message),'error');}
 }
 function agentSource(target) {
@@ -1186,14 +1175,14 @@ async function gatewayEntrySetup(encoded) {
 }
 
 const operandLabels={'Provider ID':'接入 ID','Qualified model':'具体模型引用','Alias ID':'网关入口名','Target ID':'工具配置名称','Native provider entry':'工具内来源名称','Model ID':'模型 ID','Catalog provider ID':'目录提供商 ID','Request handle':'请求记录标识','Recovery handle':'恢复记录标识','Native role':'原生模型角色'};
-const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','agent apply':'应用到工具','agent restore':'恢复原生配置','provider remove':'移除接入','model remove':'移除模型','model alias remove':'移除网关入口','provider refresh':'查询上游信息','provider login':'登录接入','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
+const operationLabels={'gateway start':'启动网关','gateway stop':'停止网关','gateway restart':'重启网关','agent apply':'应用到工具','agent restore':'恢复到应用前','provider remove':'移除接入','model remove':'移除模型','model alias remove':'移除网关入口','provider refresh':'查询上游信息','provider login':'登录接入','model explain':'查看模型选择依据','agent discover':'发现本地安装','skill install':'安装 tmax 使用技能'};
 const operationEffects={
   'skill install':'将 tmax 使用说明安装到本机技能目录，供编程工具读取。可先预览目标路径；不会修改模型配置。',
   'gateway start':'启动本地网关；新进程由系统托管，确认就绪后才报告成功。不会启用登录自启动。',
   'gateway stop':'停止推理并取消进行中的请求，不会重放；管理页面继续运行，自动恢复不会重新打开已停止的推理。',
   'gateway restart':'更换网关进程并取消进行中的请求。页面会重新连接，确认新进程就绪后才报告完成。',
-  'agent apply':'将已保存的模型选择应用到此工具的原生配置。可先预览涉及的文件与影响。',
-  'agent restore':'恢复由 tmax 管理的原生更改，保留其他修改；存在冲突时会阻止覆盖。',
+  'agent apply':'将已保存的模型选择写入此工具的实际配置。可先预览涉及的文件与影响；写入会覆盖 tmax 管理的字段，未管理字段保留。',
+  'agent restore':'恢复最近一次成功应用前的 tmax 管理快照；未管理字段保留，之后对已管理字段的修改会被覆盖。',
   'provider remove':'移除此接入的已保存设置。若仍被引用，操作会被拒绝；不会注销上游账户。',
   'model remove':'移除模型登记；被工具或别名引用时，需先解除相关引用。',
   'model alias remove':'移除此模型别名，不改变其他模型或工具的直接连接。',
@@ -1321,8 +1310,7 @@ async function dispatch(action,id) {
     case 'agent-default': agentDefault(id);break;
     case 'agent-apply': formDialog('应用到工具',`将模型配置写入 ${escapeHtml(id)}。完成后重新打开工具即可使用。`,'',()=>({operation:'agent apply',operands:[id]}),{submit:'应用配置',stayOpen:true});break;
     case 'agent-restore': openOperation('agent restore',[id]);break;
-    case 'agent-accept': openOperation('agent recovery accept',[id]);break;
-    case 'agent-advanced': openOperation('agent inspect',[id]);break;
+        case 'agent-advanced': openOperation('agent inspect',[id]);break;
     case 'gateway-configure': configureGateway();break;
     case 'gateway-start': startGateway();break;
     case 'gateway-entry-add': gatewayEntryForm(id);break;

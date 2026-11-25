@@ -62,7 +62,6 @@ function agentInspectData() {
     native_default: { state: 'available', fields: { provider: 'tmax', model: 'public-model', present: true } },
     installation: { executable: '/tmp/bin/dsh', version: '0.2.3-alpha.2', state: 'detected', source: 'https://github.com/deepseek-ai/deepseek-harness' },
     applied_state: 'applied',
-    pending_native_changes: [],
     blockers: [],
   }
 }
@@ -1320,7 +1319,7 @@ test('add_model previews a catalog-derived plan without writing anything', async
   // A preview reads state only; it never writes desired or native configuration.
   const calls = await fake.calls()
   assert.equal(calls.some(argv => argv[0] === 'agent' && ['provider', 'model', 'apply'].includes(argv[1])), false)
-  assert.equal(preview.body.state.schemaVersion, 3)
+  assert.equal(preview.body.state.schemaVersion, 4)
   assert.equal(preview.body.state.catalog.state, 'available')
 })
 
@@ -1365,7 +1364,7 @@ test('add_model executes the fixed provider, model, apply sequence and reports e
     ['agent', 'model', 'add', 'dsh-main', 'kimi', 'k3.1-pro', '--protocol', 'responses'],
     ['agent', 'apply', 'dsh-main'],
   ])
-  assert.equal(executed.body.state.schemaVersion, 3)
+  assert.equal(executed.body.state.schemaVersion, 4)
 })
 
 test('add_model reuses an existing entry whose protocol matches', async () => {
@@ -1464,33 +1463,10 @@ test('add_model refuses a disabled provider before any argv', () => {
       }],
     },
     gateway: { configured: true },
-    target: { pendingNativeChanges: [] },
   }
   const planned = planAddModel({ action: 'add_model', provider: 'disabled', model: 'm1', protocol: 'responses' }, { state, target: 'dsh-main' })
   assert.equal(planned.ok, false)
   assert.equal(planned.code, 'provider_disabled')
-})
-
-test('add_model refuses a target that already has pending native changes', async () => {
-  const scenario = baseScenario()
-  scenario.dispatch['agent inspect dsh-main'] = success({
-    ...agentInspectData(),
-    applied_state: 'pending_native_changes',
-    pending_native_changes: [{ kind: 'default', id: 'unrelated' }],
-  })
-  const { fake, state } = await applied({ scenario })
-  await fake.clearCalls()
-  const preview = await postJson(state, '/_tmax/action', {
-    action: 'add_model',
-    provider: 'kimi',
-    model: 'k3.1-pro',
-    protocol: 'responses',
-    dryRun: true,
-  })
-  assert.equal(preview.statusCode, 409)
-  assert.equal(preview.body.code, 'pending_native_changes')
-  assert.equal('result' in preview.body, false, 'a planned refusal has no tmax result envelope')
-  assert.equal((await fake.calls()).some(argv => argv[0] === 'agent' && argv[1] === 'provider'), false)
 })
 
 test('add_model preserves the apply refusal evidence and reports the failed apply step', async () => {
@@ -1526,13 +1502,12 @@ test('add_model preserves the apply refusal evidence and reports the failed appl
   assert.deepEqual(executed.body.result.effects, { native_writes: true, locks_created: false })
 })
 
-test('add_model refuses an unreadable pending target state separately from known pending changes', async () => {
+test('add_model needs no pending precondition and still reports apply success and reload', async () => {
+  // The authoritative target contract carries no pending-delta field. A target
+  // that has not been applied yet is still addable: the fixed sequence ends in
+  // `agent apply`, whose result owns the reload report.
   const scenario = baseScenario()
-  scenario.dispatch['agent inspect dsh-main'] = success({
-    ...agentInspectData(),
-    applied_state: 'unknown',
-    pending_native_changes: null,
-  })
+  scenario.dispatch['agent inspect dsh-main'] = success({ ...agentInspectData(), applied_state: 'not_applied' })
   const { fake, state } = await applied({ scenario })
   await fake.clearCalls()
   const preview = await postJson(state, '/_tmax/action', {
@@ -1542,7 +1517,21 @@ test('add_model refuses an unreadable pending target state separately from known
     protocol: 'responses',
     dryRun: true,
   })
-  assert.equal(preview.statusCode, 409)
-  assert.equal(preview.body.code, 'target_uninspectable')
-  assert.equal((await fake.calls()).some(argv => argv[0] === 'agent' && argv[1] === 'provider'), false)
+  assert.equal(preview.statusCode, 200)
+  assert.deepEqual(preview.body.result.data.steps, ['provider_add', 'model_add', 'apply'])
+  const executed = await postJson(state, '/_tmax/action', {
+    action: 'add_model',
+    provider: 'kimi',
+    model: 'k3.1-pro',
+    protocol: 'responses',
+    dryRun: false,
+  })
+  assert.equal(executed.statusCode, 200)
+  assert.equal(executed.body.result.code, 'awaiting_native_reload')
+  assert.equal(executed.body.result.data.state, 'applied_reload_pending')
+  assert.deepEqual(executed.body.result.data.steps.map(step => [step.name, step.status]), [
+    ['provider_add', 'success'],
+    ['model_add', 'success'],
+    ['apply', 'success'],
+  ])
 })

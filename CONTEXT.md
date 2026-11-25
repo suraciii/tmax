@@ -113,9 +113,9 @@ capabilities and effort choices in an Agent's supported configuration vocabulary
 not a native request preference.
 _Avoid_: Model copy, default selection, request transformation
 
-**Native default selection**:
-A target's explicit choice of native default model and, optionally, one reasoning
-effort written into that tool's own default configuration; distinct from a
+**Agent default selection**:
+A target's explicit choice of default model and, optionally, one reasoning
+effort written into that Agent's own actual configuration; distinct from a
 capability declaration, a gateway request default, or a session choice.
 _Avoid_: Universal default level, forced thinking, request override
 
@@ -187,9 +187,48 @@ _Avoid_: Native as a standalone name, agent runtime, provider integration
 
 **Agent target**:
 One local agent installation, profile, or supported configuration scope that
-can be managed independently. It identifies which Agent and which native scope
-are being configured. DSH uses one home-wide scope, not separate profile targets.
+can be managed independently. It identifies which Agent and which actual
+configuration scope are being configured. DSH uses one home-wide scope, not
+separate profile targets.
 _Avoid_: Agent type, provider account, calling agent
+
+**Expected configuration**:
+The current desired tmax-managed settings for one Agent target: its provider
+entries, model selections, default, and roles. It is saved intent, not a
+statement about the Agent's files. "Desired configuration" means the same thing.
+_Avoid_: Pending changes, applied state, native state
+
+**Actual configuration**:
+An Agent target's own configuration files and credential artifacts that tmax
+inspects or writes for that target. It contains both tmax-managed fields and
+fields tmax leaves unmanaged. The Agent owns those files; tmax changes them only
+through an explicit apply or restore. Not an upstream protocol, wire surface, or
+model-catalog fact.
+_Avoid_: Native configuration for an Agent's own files, applied configuration, target state
+
+**Tmax-managed configuration**:
+The fields, entries, and credential references of one Agent target's actual
+configuration that tmax writes, recorded in its retained managed snapshot.
+Everything else in those files is unmanaged and belongs to the user and the
+Agent; apply and restore leave it in place.
+_Avoid_: Owned settings without a retained record, conflict markers, managed state
+
+**Authoritative apply**:
+An apply whose only authority for tmax-managed configuration is the current
+expected configuration. It reads the target's current actual inputs, overwrites
+or removes managed fields and entries to match expected configuration, preserves
+unmanaged fields, and does not block on later user edits to managed fields. A
+user confirmation is consent to that overwrite; ownership and namespace guards
+for another target's files or a foreign provider name still apply.
+_Avoid_: Merge, three-way comparison, conflict resolution, pending queue
+
+**Single-level restore**:
+Restoration from the one retained managed snapshot for an Agent target, captured
+immediately before its last successful apply and replaced by the next one. It returns tmax-managed fields and entries to that
+snapshot, leaves unmanaged fields in place, and overwrites later edits to
+managed fields. It is not a change history, a merge, or a conflict-resolution
+step.
+_Avoid_: Three-way merge, re-baselining, conflict-free restore, per-field recovery layers
 
 **Agent session**:
 A persisted native conversation owned by one Agent target, including its visible
@@ -236,11 +275,11 @@ _Avoid_: Transcript copy, managed session, backup
 
 **Calling agent**:
 The user's assistant acting through tmax on the user's behalf. It need not be
-an agent target or use an Agent whose native configuration tmax manages.
+an Agent target or use an Agent whose actual configuration tmax manages.
 _Avoid_: Agent target, built-in tmax assistant
 
 **Agent provider**:
-A named provider entry in an agent target's native configuration. Each entry
+A named provider entry in an Agent target's actual configuration. Each entry
 references exactly one configured provider: a direct entry references a
 user-managed provider, and a relayed entry references the derived gateway
 provider `tmax`. Several entries can coexist
@@ -248,14 +287,15 @@ where the agent supports them; they are not separate upstream accounts.
 _Avoid_: Provider account, target operating mode
 
 **Login source**:
-The application and native scope responsible for a provider's sign-in session
-and its refresh: tmax where supported, or an explicitly selected Agent target.
+The application and configuration scope responsible for a provider's sign-in
+session and its refresh: tmax where supported, or an explicitly selected Agent
+target.
 _Avoid_: Account owner, permission role, credential import
 
 **Gateway**:
 The local service that forwards requests for concrete models or model aliases using
 the selected upstream provider. It can serve clients without managing their
-native configuration.
+actual configuration.
 _Avoid_: Proxy, model proxy, agent operating mode, permission-management service
 
 **Model alias**:

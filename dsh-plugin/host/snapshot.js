@@ -13,7 +13,7 @@ import { readEnvelope, READ_TIMEOUT_MS } from './cli.js'
 import { composeInventory, readInventoryFacts } from './inventory.js'
 import { liveProviderIds } from './ownership.js'
 
-export const STATE_SCHEMA_VERSION = 3
+export const STATE_SCHEMA_VERSION = 4
 const CACHE_TTL_MS = 5_000
 const PROTOCOLS = new Set(['chat-completions', 'responses', 'messages'])
 
@@ -276,7 +276,6 @@ function targetSection(inventory, inspect, effective) {
     nativeDefault: inspect.native_default ?? null,
     effectiveDefault: effective,
     appliedState: text(inspect.applied_state),
-    pendingNativeChanges: inspect.pending_native_changes ?? null,
     blockers: targetBlockers(inventory, inspect),
     // The contract carries the detected installation only; tmax's full
     // agent-inspect dossier (files, recovery, paths) does not cross.

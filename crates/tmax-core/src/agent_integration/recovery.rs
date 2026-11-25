@@ -130,12 +130,11 @@ pub(super) fn record_for<'a>(
     scope: &Path,
 ) -> Option<&'a Record> {
     identity.and_then(|identity| {
-        index.records.iter().rev().find(|r| {
-            r.owner == identity
-                && r.scope == scope
-                && r.state != "restored"
-                && r.state != "discarded"
-        })
+        index
+            .records
+            .iter()
+            .rev()
+            .find(|r| r.owner == identity && r.scope == scope && r.state != "discarded")
     })
 }
 fn validate_record(record: &Record) -> Result<()> {
@@ -179,7 +178,7 @@ pub(super) fn record_view(store: &Store, record: &Record) -> Value {
     let drift = field_drift(record, false);
     let protection = secrets::check_recovery(store, &record.payload_ref, &record.owner)
         .map(|_| "current_user_files");
-    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":protection.as_ref().ok(),"restore_available":protection.is_ok(),"storage_reason_code":protection.as_ref().err().map(|error|error.code.as_str()),"files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":if protection.is_ok(){json!(["agent restore --recovery","agent recovery accept","agent recovery discard"])}else{json!([])}})
+    json!({"recovery":record.id,"target":record.target,"agent":record.agent,"path":record.scope,"state":record.state,"protection":protection.as_ref().ok(),"restore_available":protection.is_ok(),"storage_reason_code":protection.as_ref().err().map(|error|error.code.as_str()),"files":record.files.iter().map(|f|json!({"path":f.path,"written":f.written,"owned_fields":f.fields.iter().map(|f|&f.path).collect::<Vec<_>>()})).collect::<Vec<_>>(),"conflicts":drift.as_ref().ok(),"inspection_state":if drift.is_ok(){"available"}else{"unknown"},"reason_code":drift.err().map(|e|e.code),"available_actions":if protection.is_ok(){json!(["agent restore --recovery"])}else{json!([])}})
 }
 pub(super) fn protect_payload(
     store: &Store,
@@ -296,34 +295,9 @@ fn restore_text(
     capture: &Capture,
 ) -> Result<Option<String>> {
     if file.format == Format::Text {
-        let actual = document::parse(current.unwrap_or(""), Format::Text)?;
-        let observed = field_hash(document::get(&actual, &["$text".into()]));
-        if revision(current) != revision(Some(&capture.after))
-            && revision(current) != revision(capture.before.as_deref())
-            && !file
-                .fields
-                .iter()
-                .any(|field| field.observed_hash == observed)
-        {
-            return Err(Error::new(
-                "native_conflict",
-                "The native plugin artifact changed after application; restoration stopped without overwriting it",
-            ));
-        }
         return Ok(capture.before.clone());
     }
     if file.format == Format::Credential {
-        let actual = document::parse(current.unwrap_or(""), Format::Credential)?;
-        let observed = field_hash(document::get(&actual, &["$credential".into()]));
-        if revision(current) != revision(Some(&capture.after))
-            && revision(current) != revision(capture.before.as_deref())
-            && !file.fields.iter().any(|f| f.observed_hash == observed)
-        {
-            return Err(Error::new(
-                "native_conflict",
-                "The native credential artifact changed after handoff; its opaque bytes were not imported or overwritten",
-            ));
-        }
         return Ok(capture.before.clone());
     }
     if current == Some(capture.after.as_str()) && capture.exact_original_safe {
@@ -331,21 +305,30 @@ fn restore_text(
     }
     let mut text = current.unwrap_or("").to_owned();
     let original = document::parse(capture.before.as_deref().unwrap_or(""), file.format)?;
-    let actual = document::parse(&text, file.format)?;
-    for field in &file.fields {
-        let hash = field_hash(document::get(&actual, &field.path));
-        if hash != field.after_hash && hash != field.before_hash && hash != field.observed_hash {
-            return Err(Error::new("native_conflict","A later edit changed a tmax-owned native field; restoration stopped without overwriting it").field(field.path.join(".")));
-        }
+    // The capture's baseline map includes fields removed by the latest apply;
+    // they are no longer in `file.fields` after finalization, but restoring the
+    // single snapshot still has to put them back. Older records may not carry
+    // one, so fall back to their field paths.
+    let mut baselines: Vec<(Vec<String>, Option<Value>)> = capture.baseline_values.clone();
+    if baselines.is_empty() {
+        baselines = file
+            .fields
+            .iter()
+            .map(|field| {
+                (
+                    field.path.clone(),
+                    baseline(Some(capture), &original, &field.path).cloned(),
+                )
+            })
+            .collect();
     }
-    for field in file.fields.iter().rev() {
-        let before = baseline(Some(capture), &original, &field.path);
+    for (path, before) in baselines.iter().rev() {
         let value = document::parse(&text, file.format)?;
-        if document::get(&value, &field.path) != before {
-            text = document::set(&text, file.format, &field.path, before)?;
+        if document::get(&value, path) != before.as_ref() {
+            text = document::set(&text, file.format, path, before.as_ref())?;
         }
     }
-    // User-added fields survive; comments force a conflict rather than deletion.
+    // User-added fields survive; managed fields return to their snapshot.
     prune_empty_parents(&mut text, file.format, &original, &file.fields)?;
     if capture.before.is_none()
         && document::parse(&text, file.format)?
@@ -425,16 +408,9 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
     } else {
         Some(decode_payload(store, &record)?)
     };
-    let conflicts = field_drift(&record, !dry_run)?;
-    if !conflicts.is_empty() {
-        return Err(Error::new(
-            "native_conflict",
-            "Owned native fields differ from both their captured originals and tmax writes; restore them, or accept the current native state with agent recovery accept",
-        ));
-    }
     if dry_run {
         return Ok(
-            json!({"target":record.target,"recovery":selected,"dry_run":true,"files":record.files.iter().map(|f|&f.path).collect::<Vec<_>>(),"restoration":"three_way_owned_fields_only","secret_reads":false,"native_writes":false}),
+            json!({"target":record.target,"recovery":selected,"dry_run":true,"files":record.files.iter().map(|f|&f.path).collect::<Vec<_>>(),"restoration":"authoritative managed snapshot","secret_reads":false,"native_writes":false}),
         );
     }
     let payload = payload.expect("executing restoration resolves its payload");
@@ -508,7 +484,7 @@ pub async fn restore(store: &Store, id: &str, dry_run: bool) -> Result<Value> {
         );
     }
     Ok(
-        json!({"_code":"awaiting_native_reload","target":record.target,"agent":record.agent,"recovery":selected,"state":"restored_reload_pending","changed_files":changed,"unchanged_files":unchanged,"preserved":"unrelated settings and later unowned edits","credential_logout":false,"gateway_key_revoked":false,"recovery_retained":true}),
+        json!({"_code":"awaiting_native_reload","target":record.target,"agent":record.agent,"recovery":selected,"state":"restored_reload_pending","changed_files":changed,"unchanged_files":unchanged,"preserved":"unrelated settings; later edits to tmax-managed fields are overwritten","credential_logout":false,"gateway_key_revoked":false,"recovery_retained":true}),
     )
 }
 
@@ -844,7 +820,7 @@ mod tests {
         )
     }
     #[test]
-    fn plugin_restore_accepts_observed_prewrite_bytes_but_refuses_user_edits() {
+    fn plugin_restore_overwrites_later_native_bytes_with_the_original() {
         let (mut file, capture) = record("new-plugin", None, Format::Text);
         file.fields = vec![Field {
             path: vec!["$text".into()],
@@ -853,15 +829,14 @@ mod tests {
             observed_hash: field_hash(Some(&json!("observed-plugin"))),
             released: false,
         }];
-        for current in [Some("observed-plugin"), Some("new-plugin"), None] {
+        for current in [
+            Some("observed-plugin"),
+            Some("new-plugin"),
+            Some("user-edited-plugin"),
+            None,
+        ] {
             assert_eq!(restore_text(current, &file, &capture).unwrap(), None);
         }
-        assert_eq!(
-            restore_text(Some("user-edited-plugin"), &file, &capture)
-                .unwrap_err()
-                .code,
-            "native_conflict"
-        );
     }
     #[test]
     fn three_way_restore_preserves_later_unrelated_settings_and_comments() {
@@ -884,17 +859,15 @@ mod tests {
         );
     }
     #[test]
-    fn three_way_restore_refuses_owned_user_edits() {
+    fn three_way_restore_overwrites_owned_user_edits() {
         let (f, c) = record(
             "{\"model\":\"new\"}",
             Some("{\"model\":\"old\"}"),
             Format::Json,
         );
         assert_eq!(
-            restore_text(Some("{\"model\":\"user\"}"), &f, &c)
-                .unwrap_err()
-                .code,
-            "native_conflict"
+            restore_text(Some("{\"model\":\"user\"}"), &f, &c).unwrap(),
+            Some("{\"model\":\"old\"}".into())
         );
     }
     #[test]
@@ -907,7 +880,7 @@ mod tests {
         assert_eq!(restore_text(Some(&c.after), &f, &c).unwrap(), c.before);
     }
     #[test]
-    fn restore_never_overwrites_a_changed_native_credential_artifact() {
+    fn restore_overwrites_a_changed_native_credential_artifact() {
         let path = PathBuf::from("/isolated/native-owned.key");
         let file = FileRecord {
             path: path.clone(),
@@ -924,13 +897,13 @@ mod tests {
             exact_original_safe: true,
             baseline_values: vec![],
         };
-        let error = restore_text(Some("native-owner-replaced-key"), &file, &capture).unwrap_err();
-        assert_eq!(error.code, "native_conflict");
-        assert!(!error.message.contains("native-owner-replaced-key"));
-        assert_eq!(
-            restore_text(Some("selected-key"), &file, &capture).unwrap(),
-            None
-        );
+        for current in [
+            Some("native-owner-replaced-key"),
+            Some("selected-key"),
+            None,
+        ] {
+            assert_eq!(restore_text(current, &file, &capture).unwrap(), None);
+        }
     }
     #[test]
     fn three_way_restore_keeps_later_owned_container_comments() {

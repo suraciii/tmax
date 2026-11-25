@@ -31,7 +31,7 @@ select the default profile, not a named `profiles/default` directory.
 profiles ignore it. A programmatic model-registry path can override file lookup.
 tmax default discovery follows these environment selectors, including
 `PI_PROFILE` only when `OMP_PROFILE` is absent. An explicitly declared target
-path remains its independent native scope; it is not reinterpreted by the
+path remains its independent configuration scope; it is not reinterpreted by the
 calling process's active profile.
 On Linux/macOS, existing corresponding `omp` directories under configured XDG
 data/state/cache roots can relocate categorized data including the credential
@@ -114,7 +114,7 @@ outside the vocabulary stay visible as omitted, not renamed by the native
 adapter. Gateway model maps resolve after backend selection; tmax does not copy
 them into omp's `effortMap` or `compat.reasoningEffortMap` for direct or gateway
 entries. With no name inside the vocabulary, the ladder is unrepresentable and
-blocks application before native writes. The projection sets no `defaultLevel`,
+blocks application before any write. The projection sets no `defaultLevel`,
 budget, or request value. Native compatibility keys are a curated per-API schema
 plus recognized runtime wire axes. Unknown compatibility keys warn nonfatally;
 preservation does not prove the API reads them. No guessed compatibility flags
@@ -292,9 +292,9 @@ Independent post-repair qualification used release SHA-256
 Actual apply and the installed JSON model listing agreed on context 1000000,
 output 65536, reasoning true, and text/image input from concrete metadata;
 unsupported audio was filtered. Separate native parser checks retained false
-reasoning and empty input. Restore preserved a later unowned field and exact
+reasoning and empty input. Restore preserved a later unmanaged field and exact
 original settings bytes and removed the key artifact. Known zero output was
-blocked before unlock or native writes. Safe `agent inspect` reported the
+blocked before unlock or any write. Safe `agent inspect` reported the
 correct runtime-key → pinned-config → stored-OAuth precedence. All checks ran
 with private passwd-home isolation and no outbound network.
 
@@ -302,7 +302,7 @@ On 2026-10-24, installed OMP 18.12.6 read `modelRoleStorage: project`
 before and after actual tmax application to an existing `config.yaml`, and
 again after restore. No shadowing `config.yml` was created. The actual installed
 model listing consumed context 123456, output 8192, false reasoning, and
-text/image input. Three-way restore preserved a later unowned thinking setting
+text/image input. Restore preserved a later unmanaged thinking setting
 and the original comment, and removed the private key artifact; apply/restore
 still reported reload pending. Separate private-home discovery exercised the
 explicit default profile, `PI_PROFILE` fallback, and named-profile isolation

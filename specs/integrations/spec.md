@@ -50,14 +50,14 @@ application; operations that execute the tool report it.
 | omp | Active-profile `models.yml`/`models.yaml`, provider/model overrides, model-role settings, native authentication | Respect profile/environment path overrides and credential precedence; `auth: oauth` does not itself create credentials or register a sign-in flow | Match the declared native API and transport; an existing omp auth gateway is evidence of an extension point, not a mandatory tmax dependency |
 | OpenCode | Provider packages, custom base URLs/models, multiple saved accounts per provider, local configuration and account storage | Detect the versioned schema and server-scoped active account. V1 and V2 provider shapes differ; credential stores and effective policy cannot be inferred from one config file | The provider package selects the protocol. Model picker filtering is not gateway authorization |
 | Hermes Agent | Profile-aware configuration, provider/model selection, native login and key sources, per-provider transport | Respect `HERMES_HOME`, native secret storage and managed configuration precedence | Match its selected Chat Completions, Messages, or Codex/Responses transport; a URL override alone does not validate that transport |
-| DSH | HOME `cordis.patch.yml` entry configuration for the installed `tmax` plugin, and adjacent home credential references | Require an existing DSH home scope carrying the `tmax` bundle in a profile; preserve user `llm-pi-ai`, unrelated HOME-level rows, provider fields, and expressions; never edit profile files, presets, or bundles | The installed plugin registers the target's routes in DSH's common LLM runtime with native `openai-completions`, `openai-responses`, or `anthropic-messages`; configuration support alone does not establish native session identity or a provider-qualified route |
+| DSH | Profile `cordis.patch.yml` provider settings under row `llm-pi-ai`, and adjacent home credential references | Require an existing DSH home scope with a selectable profile; write the selected profile's `llm-pi-ai` row field by field, preserving user routes, unrelated HOME-level rows, provider fields, and expressions; never create or delete profiles, edit presets, or edit the launcher-owned `cordis.yml` | DSH's own base-bundle adapter registers the target's routes from those profile settings with native `openai-completions`, `openai-responses`, or `anthropic-messages`; the optional `tmax` bundle adds only the page. Configuration support alone does not establish native session identity or a provider-qualified route |
 
 Agent-owned credential stores must be managed through supported agent operations
 or a version-qualified contract. tmax must not assume that changing a database
 row or deleting one auth file removes every credential source. Disabling a model
 in an agent's picker must not be described as preventing all direct calls.
 
-For a concrete model, native application must preserve known effective
+For a concrete model, Agent application must preserve known effective
 context/output limits, reasoning support, and input modalities where the
 version-qualified native schema can express them. Unknown metadata must remain
 unknown rather than receive fabricated defaults. This is model-capability
@@ -92,7 +92,7 @@ Native projection maps its derived input names exactly to representable native
 names; it never copies upstream map targets into a gateway native selector or
 performs model-specific translation there. A partial projection keeps every
 unrepresentable input visible as omitted. A projection with no usable native
-level is unrepresentable: it blocks that agent's application before native writes
+level is unrepresentable: it blocks that agent's application before writes
 and stays visible in inspection. These fields declare selector capability only.
 They set no default effort, level, budget, thinking switch, or request value.
 A default effort is written only through an explicit target default selection,
@@ -102,13 +102,14 @@ it is a verbatim native value (`model_reasoning_effort` and
 `agent.reasoning_effort` respectively) that tmax does not validate. The default
 model and effort are independent managed fields: an absent model or effort writes
 nothing and preserves the tool's current value, including siblings inside the
-same native entry or object. Where a native format encodes model and effort as one
+same actual entry or object. Where a native format encodes model and effort as one
 composite value, removing only the effort leaves the current composite value in
 place until the model reference itself becomes unmanaged or changes. An
-unrepresentable effort blocks application before native writes, and external edits to an owned default field remain conflicts
-under the common recovery contract. Native capability declarations can affect the tool's model representation;
+unrepresentable effort blocks application before writes, and a later apply
+overwrites the managed default field from current expected configuration. Native
+capability declarations can affect the tool's model representation;
 the [DSH alias limitation](#alias-reasoning-capability) makes that effect explicit.
-The native tool keeps ownership of thinking enablement, request preferences, and
+The Agent keeps ownership of thinking enablement, request preferences, and
 any default selection the user did not explicitly configure in tmax, under the
 [request-parameter contract](../model-routing/spec.md#request-parameters).
 
@@ -117,7 +118,7 @@ record external model/authentication schemas and evidence for each Agent.
 They do not replace these contracts or establish provider entitlement.
 
 Integration setup and recovery must be reachable through explicit CLI arguments,
-including the native target and authentication owner; callers must not author
+including the Agent target and authentication owner; callers must not author
 configuration documents or use the Web first. tmax's sole private authority is
 `~/.tmax/tmax.toml`, independent of the working directory or calling agent. All
 tmax-owned persistent data, caches, logs, recovery data, and secret files remain
@@ -126,8 +127,9 @@ credential-bearing recovery payloads are plaintext files restricted to the curre
 OS account; ordinary configuration stores secret references, not key bytes.
 File permissions are not encryption. Never place credentials in argv, environment
 variables, TOML, stdout, logs, or ordinary inspection. Agent-owned configuration
-and supported native credential stores retain their native locations and ownership;
-those native scopes are not alternative tmax homes or configuration authorities.
+and supported Agent credential stores retain their own locations and ownership;
+those configuration scopes are not alternative tmax homes or configuration
+authorities.
 Upstream login and refresh remain with their declared owner.
 
 tmax-owned credential work follows
@@ -141,9 +143,11 @@ buffering, and backpressure follow
 Operations follow the
 [CLI dry-run and execution contract](../cli/spec.md#dry-run-and-execution):
 optional dry runs inspect permitted local inputs without effects, secret reads,
-login, upstream calls, or reservations. Execution checks current inputs and
-rejects conflicting changes during the operation before overwrite. No preview,
-confirmation token, or claim of human approval is a prerequisite. Explicit
+login, upstream calls, or reservations. Execution checks current inputs before it
+writes. A concurrent edit to tmax's own configuration is rejected rather than
+overwritten; an Agent's actual configuration is authoritative over tmax-managed
+fields under the [Agent contract](../cli/agents/spec.md#agent-application-and-recovery).
+No preview, confirmation token, or claim of human approval is a prerequisite. Explicit
 business inputs specify requested scope and identity claims; they do not verify
 identity, qualification, or safe conversation continuation.
 
@@ -163,7 +167,7 @@ routing rules, and the current winner must not narrow that set.
 | Any candidate lacks the declaration | Common support is unknown; omit derived input metadata. Do not substitute text-only, an empty list, or another candidate's declaration. Effort derivation remains independent. |
 | Inspection | Expose common support as `declared` with an array (including empty), or `unknown` with null, and every qualified candidate's effective input list or null. Retain accepted metadata provenance. |
 | Native representation | Use the same version-qualified input mapping as concrete models. Report projected fields, omitted modalities, unsupported native fields, unknown fallback, or an unrepresentable declaration separately from effort projection. |
-| Reapplication | Replace or withdraw obsolete managed input declarations, never retain stale managed image support. Preserve unrelated settings and reject conflicting edits. For an already managed DSH models array, omission removes selected rows' obsolete `input`; on first application, unrelated existing native declarations remain native-owned. Native inheritance is not a claim of text-only support. |
+| Reapplication | Replace or withdraw obsolete managed input declarations, never retain stale managed image support. Preserve unmanaged settings and overwrite managed fields. For an already managed DSH models array, omission removes selected rows' obsolete `input`; on first application, unrelated existing native declarations remain unmanaged. Native inheritance is not a claim of text-only support. |
 | Empty native representation | If the native schema would reinterpret a known empty set as inheritance, block that target's application before writes rather than invent support. |
 
 This is a declaration for native consumers, not an extra gateway request
@@ -201,10 +205,10 @@ candidates lack reasoning support. It does not change saved effort preferences,
 inject a request value, or repair a resulting native preference conflict.
 
 After candidate membership, model maps, fixed candidate effort, or effective
-capability metadata changes, inspect and explicitly reapply affected native
+capability metadata changes, inspect and explicitly reapply affected actual
 entries, then reload the native tool. Accepted catalog changes and local
 overrides can change common choices; no metadata or map change automatically
-rewrites native files.
+rewrites actual files.
 
 The [capability design](design.md) separates declarations, common choices,
 native representation, and request intent, including this lossy DSH boundary.
@@ -216,15 +220,15 @@ native representation, and request intent, including this lossy DSH boundary.
 | Scope | Existing DSH home directory itself. Discovery uses nonblank `DSH_HOME`, otherwise the OS home directory's `.dsh`. An explicit target path selects the home directly; never infer it from a profile path. Select a profile to write into by `--profile`, otherwise `desktop`, then `web`; never create, rename, or delete a profile, and never inspect its bundles. |
 | Profile settings | A provider is a profile-level setting in DSH: its Models page writes into `profiles/<profile>/cordis.patch.yml`, row `llm-pi-ai`, path `config.providers.<provider>`. tmax writes there and nowhere else, one provider per target entry, named after that entry so existing references keep resolving, carrying `api`, `baseURL`, `models`, and the credential reference. A provider name the user already configured that tmax does not own blocks application instead of being overwritten. Use DSH's field-level edit: preserve other providers in that row, their fields, comments, and opaque expressions; an uneditable owned branch blocks rather than being rewritten. Never create or edit profiles' bundle composition, the launcher-owned `cordis.yml`, or a legacy `settings.yaml`. |
 | Plugin | Routes need no plugin: the base bundle already composes `llm-pi-ai` (dormant until settings supply providers) and the credential store, so the profile settings tmax writes are loaded by DSH's own adapter on the next start. The optional `tmax` bundle adds only the page. tmax never installs, copies, or replaces a plugin, never mounts `llm-pi-ai` a second time, and never registers its own configurable-provider directory or catalog. Provider names must be globally unique in that profile; a provider keeps its entry's name, so a name the user already configured that tmax does not own blocks application rather than being merged or renamed. Preserve both direct and relayed entries. |
-| Installation | Apply installs nothing: no npm invocation, no profile creation, no bundle composition change. A DSH home with no selectable profile blocks before any native write, naming the profiles it has. |
+| Installation | Apply installs nothing: no npm invocation, no profile creation, no bundle composition change. A DSH home with no selectable profile blocks before any write, naming the profiles it has. |
 | Layering | Bundle patches → profile patch → home patch → command-line overlays. Writing into the profile patch edits the same layer DSH's Models page edits, field by field, so a user's own providers in that row stay exactly as they are; tmax never rewrites that row as a whole. An explicitly managed home default may still shadow lower-layer defaults; runtime overlays remain outside tmax's ownership. |
-| Credential handoff | The generated routes use `apiKeyEnv: TMAX_<stable hash>`. Executed apply resolves the referenced tmax key into that home's adjacent current-user-restricted `.credentials.yaml`, `version: 1`, under `refs`; preserve unrelated references and credential records. Accept empty stores and stamp version 1; nonempty stores without version 1 block. Apply and restore executions hold the native sibling `.credentials.yaml.lock` writer lock from initial credential read through commit. An existing lock blocks immediately with `native_credentials_busy`, without changing native files or the external lock; never overwrite or reclaim it. Release owned locks on success and failure. Dry-run/inspect never create locks, resolve secrets, or return values. The native store is shared across profiles, not another tmax authority. |
+| Credential handoff | The generated routes use `apiKeyEnv: TMAX_<stable hash>`. Executed apply resolves the referenced tmax key into that home's adjacent current-user-restricted `.credentials.yaml`, `version: 1`, under `refs`; preserve unrelated references and credential records. Accept empty stores and stamp version 1; nonempty stores without version 1 block. Apply and restore executions hold the adjacent `.credentials.yaml.lock` writer lock from initial credential read through commit. An existing lock blocks immediately with `native_credentials_busy`, without changing actual files or the external lock; never overwrite or reclaim it. Release owned locks on success and failure. Dry-run/inspect never create locks, resolve secrets, or return values. The credential store is shared across profiles, not another tmax authority. |
 | Headless credentials | Hand off into the store the base bundle's `credentials` service already reads, so it resolves without another configuration row; do not require a secret-bearing environment or launch wrapper. Two profiles may select the same entry differently, so the reference includes the profile. |
-| Selection | Model-only application writes no `agent-default-model` entry, default reasoning effort, route `reasoning`, or thinking budget. An explicitly selected default writes its provider/model reference and, only when explicitly configured, `agent-default-model.reasoningEffort`; an absent effort preserves the existing field. Route `reasoning` and thinking budgets are never written. Lower-layer defaults are not automatically imported into a new provider profile. No native model roles or native interactive login are qualified. |
+| Selection | Model-only application writes no `agent-default-model` entry, default reasoning effort, route `reasoning`, or thinking budget. An explicitly selected default writes its provider/model reference and, only when explicitly configured, `agent-default-model.reasoningEffort`; an absent effort preserves the existing field. Route `reasoning` and thinking budgets are never written. Lower-layer defaults are not automatically imported into a new provider profile. No model roles or native interactive login are qualified. |
 | Output metadata | Leave DSH output capability unprojected: explicit native `maxTokens` also sets a per-request default. Preserve existing HOME-level fields on retained selected models by exact model ID; explicitly projected fields override them, while membership and order remain the explicit selection. Do not import shadowed profile settings. |
 | Protocol | Support all three native protocol mappings without translation. A provider route has one protocol and base; incompatible selections in one route block rather than silently changing transport or dropping models. Existing `modelOverrides` on a selected HOME provider route block before writes rather than emitting incompatible `models` plus `modelOverrides`. |
 | Runtime qualification | Configuration/source qualification is not inference evidence. Unknown DSH gateway context does not establish a reusable conversation identity. Do not fabricate session headers, static IDs, or another client's User-Agent. Direct OpenCode Go access remains unqualified without its required genuine session mechanism. |
-| Recovery | Capture the providers tmax wrote into the profile settings, the credential references it added, and any legacy artifact it retires. Restore only owned changes to their captured baselines; preserve later unrelated edits and refuse conflicting owned edits under the common apply/restore contract. Recognize captured pre-write artifact content during interrupted transaction recovery. The home patch is the user's: application never writes it, so no row there is captured, retired, or restored. Every field in the profile row that tmax did not write remains the user's. |
+| Recovery | Capture the providers tmax wrote into the profile settings, the credential references it added, and any legacy artifact it retires. Restore is single-level: each successful apply replaces the retained managed snapshot captured immediately before that apply, and restore returns tmax-managed fields to that snapshot while unmanaged fields stay. A later edit to a managed field is overwritten by apply and restore, not treated as a conflict. Recognize captured pre-write artifact content during interrupted transaction recovery. The home patch is the user's: application never writes it, so no row there is captured, retired, or restored. Every field in the profile row that tmax did not write remains the user's. |
 
 The [versioned DSH reference](../../docs/agents/dsh.md) records source evidence
 and its limits without establishing an untested version range or provider access.
@@ -244,12 +248,12 @@ and tmax's CLI and Web remain where configuration is authored.
 
 | Surface | Required behavior |
 | --- | --- |
-| Ownership | The [home boundary](#dsh-home-boundary) `tmax` entry is the sole managed adapter entry, and the installed plugin owns the routes. The [DSH plugin contract](dsh-plugin/spec.md#route-ownership) owns the case where a home still carries the retired embedded adapter: how the page defers to it, how it keeps working routes while that home waits for a DSH reload, and what it reports. |
+| Ownership | The [home boundary](#dsh-home-boundary) profile settings are the sole source of the declared routes, and DSH's own adapter serves them. The installed `tmax` bundle adds only the page; the page owns no route. The [DSH plugin contract](dsh-plugin/spec.md#route-ownership) owns what the page reports about that ownership and the blocker it raises when another provider already serves the same names. |
 | Conflict | Two owners must never serve one route name. A detected live-route conflict or a duplicate-adapter registration failure is reported as a blocker. The plugin must not crash, replace the other registration, or register a partial set. |
-| Transition | A home entry an earlier release installed is not live until a DSH start loads it. The [DSH plugin contract](dsh-plugin/spec.md#route-ownership) owns the transition behavior, including the routes that must remain and the reported reload. |
+| Transition | A written profile setting is not live until DSH reloads that profile. The page reports the applied delivery and the owed reload; it never registers, replaces, or disposes a route. |
 | Ownership | `tmax agent apply` writes the providers into a profile's settings, and the client's own adapter serves them. The page registers nothing: it reports `settings` when those providers are present, `unapplied` when apply has not written them, `none` when nothing is declared, and `other` with a conflict when another provider already serves the same route names. |
 | Installation | Installing, updating, or removing the page bundle stays with DSH. `agent apply` and `agent restore` write profile settings and credentials only; they do not install, configure, or remove the page bundle, and nothing has to be installed for routes to work. |
-| Apply | The page's Apply action is tmax's previewed native application (`agent apply`) on the configured target, not a plugin-authored format, and it is the page's only DSH or native write. The [DSH plugin contract](dsh-plugin/spec.md#apply) owns the operation, the files it writes, and its result. |
+| Apply | The page's Apply action is tmax's previewed Agent application (`agent apply`) on the configured target, not a plugin-authored format, and it is the page's only DSH or actual-file write. The [DSH plugin contract](dsh-plugin/spec.md#apply) owns the operation, the files it writes, and its result. |
 | Read model | The plugin maps tmax's effect-free reads into one plugin-owned state contract; it does not add a tmax command, require a snapshot command, or become a tmax CLI contract. `diagnostics.readModel` reports `inventory`. The [DSH plugin contract](dsh-plugin/spec.md#state-consumer-contract) owns the shape and the failure rules. |
 | Surfaces | The plugin may add the page, three additive seats, a read-only `/tmax` command, a bounded retained-history read, and allowlisted previewed actions; each is admitted only under the [DSH plugin contract](dsh-plugin/spec.md), which owns its content and rules. No surface observes on open, changes a DSH selection or setting, or acts without explicit preview and confirmation. |
 
@@ -339,7 +343,7 @@ windows, and reset policies remain sourced provider data, not product constants.
 | Condition | Shared requirement |
 | --- | --- |
 | A service requires a recognized native client or session header. | Its child contract owns the exact requirement and source-qualified versions. Protocol compatibility alone must not admit the route. |
-| Direct native configuration | The actual agent must satisfy the service's identity requirements without tmax on the inference path. |
+| Direct Agent configuration | The actual agent must satisfy the service's identity requirements without tmax on the inference path. |
 | Same-protocol forwarding | Retain the truthful qualified native client identity and genuine session semantics across main requests, tool results, continuations, and auxiliary requests. Preserve native parent/subsession distinctions where present. |
 | Identity is missing, conflicting, or unqualified for a required path. | Block that path with the missing prerequisite and supported recovery. Do not forge a User-Agent, manufacture a supported-client name, or replace a native conversation with a static provider-wide ID. |
 | No special User-Agent value or session header is established by the consulted provider evidence. | State that limit in the child contract. Do not copy another product's requirements or claim that undisclosed runtime restrictions cannot exist. |
@@ -386,7 +390,7 @@ owns the `endpoints` field for custom integrations only.
 
 Model protocol availability follows the provider's resolved endpoints, not a
 per-model approval list. An unverified model/protocol combination must not block
-publication, native configuration, selection, or dispatch solely because tmax
+publication, actual configuration, selection, or dispatch solely because tmax
 lacks upstream qualification evidence. Such evidence remains informational, not
 proof of support. The upstream decides whether the exact model accepts a request;
 tmax preserves its response without protocol conversion, implicit model changes,
@@ -610,7 +614,8 @@ limitation; it must not be replaced by a generic API-key success claim.
 Each adapter must be exercised against supported agent versions for discovery,
 effective-config precedence, apply/restore, pre-existing login handling, key
 replacement, account-switch scope, adding an account without an unrequested
-shared-scope switch, and conflicting user edits. Native sign-in qualification
+shared-scope switch, authoritative overwrite of later edits to managed fields,
+and single-level restore. Native sign-in qualification
 must establish when active authorization changes, whether isolation or staging
 preserves the old authorization, and how cancellation, rejected identity, and
 local-save failure are recovered before and after that point. Exercise shared

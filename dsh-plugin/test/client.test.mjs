@@ -318,7 +318,7 @@ function seatState(overrides) {
   const base = {
     ok: true,
     errors: [],
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: '2026-11-23T10:15:00Z',
     configurationRevision: 'abc123def4567890abc123def4567890abc123def4567890',
     tmaxVersion: '0.1.0',
@@ -1238,7 +1238,7 @@ test('declared routes DSH has not loaded say so, name their blockers, and offer 
 
 
 test('an unsupported state schema is a visible failure, not a payload', async () => {
-  const page = await mountPage(withState({ ...connected, schemaVersion: 4 }))
+  const page = await mountPage(withState({ ...connected, schemaVersion: 5 }))
   try {
     const tree = await page.mount()
     const text = textOf(tree)
@@ -1433,7 +1433,7 @@ test('an invalid or unreadable config is the next action before Apply', async ()
 test('a host state with absent sections renders unknowns instead of crashing', async () => {
   const minimal = {
     ok: true,
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: '2026-11-23T10:15:00Z',
     configurationRevision: 'abc12345',
     routes: [],
@@ -1589,7 +1589,7 @@ test('a later refused read keeps the last good table and names its section error
   let phase = 'good'
   const refused = {
     ok: false,
-    schemaVersion: 3,
+    schemaVersion: 4,
     errors: [{ section: 'projection', code: 'inventory_unavailable', message: 'inventory read failed' }],
     target: null,
     routes: [],
@@ -1696,7 +1696,7 @@ test('Apply previews with dryRun before it writes, then uses the returned state'
 test('an unreadable tmax state names the host failure and offers a retry', async () => {
   const unreadable = {
     ok: false,
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: '2026-11-23T10:15:00Z',
     target: null,
     routes: [],
@@ -2170,20 +2170,20 @@ test('Settings > Models availability names why tmax models are absent', async ()
   }), 'unknown')
 })
 
-test('the state gate accepts only schemaVersion 3 with ok true', async () => {
+test('the state gate accepts only schemaVersion 4 with ok true', async () => {
   const pure = (await moduleWith(inertReact())).__pure
-  const good = { schemaVersion: 3, ok: true, routes: [] }
+  const good = { schemaVersion: 4, ok: true, routes: [] }
   assert.deepEqual(pure.stateGate(good, { status: 200 }), { object: true, state: good })
   // A non-object payload is not a state and is never adopted.
   assert.equal(pure.stateGate(null, { status: 200 }).object, false)
   assert.equal(pure.stateGate(undefined, { status: 200 }).object, false)
   // An unsupported schema is a typed failure carrying the value it saw.
-  assert.deepEqual(pure.stateGate({ schemaVersion: 4 }, { status: 200 }),
-    { object: true, schemaUnsupported: true, message: '4' })
+  assert.deepEqual(pure.stateGate({ schemaVersion: 5 }, { status: 200 }),
+    { object: true, schemaUnsupported: true, message: '5' })
   // A refused model is an error, never evidence.
-  assert.equal(pure.stateGate({ schemaVersion: 3, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
+  assert.equal(pure.stateGate({ schemaVersion: 4, ok: false, code: 'state_unavailable', message: 'no answer' }, { status: 502 }).message,
     'state_unavailable: no answer')
-  assert.equal(pure.stateGate({ schemaVersion: 3, ok: 'yes' }, { status: 200 }).state, undefined)
+  assert.equal(pure.stateGate({ schemaVersion: 4, ok: 'yes' }, { status: 200 }).state, undefined)
 })
 
 test('unknown credential readiness is never drawn as a missing credential', async () => {
@@ -2687,8 +2687,8 @@ test('an apply-returned read model is adopted only through the state gate', asyn
   const cases = [
     {
       name: 'unsupported schema',
-      state: { ...seatState(), schemaVersion: 4 },
-      pattern: /hostError: schema 4/,
+      state: { ...seatState(), schemaVersion: 5 },
+      pattern: /hostError: schema 5/,
     },
     {
       name: 'refused read model',
@@ -3171,92 +3171,6 @@ test('an unavailable catalog reports unavailability instead of an empty provider
     const text = textOf(await page.mount())
     assert.match(text, /catalogUnavailable/)
     assert.doesNotMatch(text, /noProviders/)
-  } finally {
-    page.restore()
-  }
-})
-
-test('a pending add offers a contextual Apply and resumes the add after it', async () => {
-  const pending = {
-    ...connected,
-    target: { ...connected.target, appliedState: 'pending_native_changes', pendingNativeChanges: [{ change: 'release', field: ['llm-tmax', 'config'] }] },
-  }
-  const clean = {
-    ...pending,
-    target: { ...pending.target, appliedState: 'applied', pendingNativeChanges: [] },
-  }
-  const bodies = []
-  let actionCount = 0
-  const plan = {
-    provider: 'kimi',
-    model: 'k3.1-pro',
-    protocol: 'responses',
-    target: 'dsh-main',
-    entry: { name: 'kimi', mode: 'create' },
-    steps: ['provider_add', 'model_add', 'apply'],
-  }
-  const page = await mountPage(async record => {
-    const path = pathOf(record)
-    if (path === '/_tmax/state') return { status: 200, body: pending }
-    if (path === '/_tmax/connect') {
-      const body = JSON.parse(record.body)
-      bodies.push({ path, body })
-      if (body.dryRun === true) {
-        return {
-          status: 200,
-          body: {
-            ok: true,
-            dryRun: true,
-            connect: { target: 'dsh-main', files: [{ path: '/home/szf/.dsh/cordis.patch.yml' }], effects: { native_writes: false } },
-            state: pending,
-          },
-        }
-      }
-      return { status: 200, body: { ok: true, dryRun: false, connect: { changed: true, target: 'dsh-main' }, state: clean } }
-    }
-    if (path === '/_tmax/action') {
-      const body = JSON.parse(record.body)
-      bodies.push({ path, body })
-      actionCount += 1
-      if (actionCount === 1) {
-        return {
-          status: 409,
-          body: {
-            ok: false,
-            action: 'add_model',
-            dryRun: true,
-            code: 'pending_native_changes',
-            message: 'the target has pending native changes',
-          },
-        }
-      }
-      return { status: 200, body: { ok: true, action: 'add_model', dryRun: true, result: { code: 'ok', status: 'dry_run', data: plan }, state: clean } }
-    }
-    return { status: 404, body: { ok: false } }
-  })
-  try {
-    let tree = await page.mount()
-    assert.equal(buttonByText(tree, 'connect'), undefined, 'pending alone does not add a top-level Apply')
-    collectNodes(tree, node => node.props?.['data-provider'] === 'kimi')[0].props.onClick()
-    tree = await page.settle()
-    collectNodes(tree, node => node.props?.['data-action'] === 'add-model')[0].props.onClick()
-    tree = await page.settle()
-    assert.match(textOf(tree), /pending_native_changes/)
-    const apply = buttonByText(tree, 'addApplyPending')
-    assert.ok(apply, 'the refusal offers the contextual Apply')
-    apply.props.onClick()
-    tree = await page.settle()
-    assert.match(textOf(tree), /connectPreview/)
-    assert.deepEqual(bodies.find(item => item.path === '/_tmax/connect').body, { dryRun: true })
-    // Navigate away while Apply is on screen; the resumed preview must come
-    // back to the Models/provider context rather than complete off-screen.
-    tree = await page.click('tabQuota')
-    tree = await page.click('connectApply')
-    tree = await page.settle()
-    assert.match(textOf(tree), /connectApplied/)
-    assert.match(textOf(tree), /Kimi Coding Plan/)
-    assert.match(textOf(tree), /addNewEntry/)
-    assert.equal(bodies.filter(item => item.path === '/_tmax/action').at(-1).body.dryRun, true)
   } finally {
     page.restore()
   }

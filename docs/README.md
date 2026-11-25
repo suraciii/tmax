@@ -8,7 +8,7 @@ Contracts live in [../specs/](../specs/AGENTS.md). Engineering practices live in
 
 ## Guides
 
-- [CLI usage](usage.md) — provider/model setup, manual input and rule previews, gateway-only use, and explicit Pi/DSH apply/restore paths.
+- [CLI usage](usage.md) — provider/model setup, manual input and rule previews, gateway-only use, and explicit Pi/DSH apply and single-level restore paths.
 - [Local Web workspace](web.md) — task pages, explicit effects, protected inputs,
   and browser verification.
 - [Building and verification](building.md) — dependencies, build commands, the

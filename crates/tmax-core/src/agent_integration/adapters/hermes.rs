@@ -105,10 +105,6 @@ pub(super) fn build(target: &AgentTarget, scope: &Path, entries: &[Entry]) -> Re
     Ok(vec![file(scope, "config.yaml", Format::Yaml, config)])
 }
 
-pub(super) fn inline_credential(path: &[String]) -> bool {
-    path.len() == 3 && path[0] == "providers" && path[2] == "api_key"
-}
-
 pub(super) fn preserve_model(path: &[String], value: &Value, current: &Value) -> bool {
     path.len() == 4
         && path[0] == "providers"

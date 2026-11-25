@@ -15,7 +15,7 @@ not proof that nothing is running or that no sessions are affected.
 A provider is an independent upstream access instance; multiple providers can use
 the same service or account without proving separate allowances. Each concrete
 model belongs to one provider and is referenced as `provider-id/model-id`. An
-agent target is an independently managed native scope. A model alias is one named
+Agent target is an independently managed configuration scope. A model alias is one named
 route that declares native protocols and references existing models, with optional
 alias-local reasoning effort per candidate; candidates have no independent
 identity or lifecycle.
@@ -94,7 +94,7 @@ writing. Run `tmax config migrate` to convert the file; apply is the default whe
 1. Merges version-1 records that share an alias `id` into one record only when
    their `candidates`, `enabled`, `continuity`, `fallback`, and
    `candidate_reasoning_effort` are identical.
-2. Rewrites every version-1 native provider entry that uses `gateway = true` or
+2. Rewrites every version-1 target provider entry that uses `gateway = true` or
    its historical `proxy = true` spelling to `provider = "tmax"` with the same
    models. A relayed entry selects public route names only; an entry that selects
    a concrete qualified model ID is refused, so define a route for that model or
@@ -113,7 +113,7 @@ copy means copying the retained file back by hand. A version-2 file is refused a
 `invalid_arguments` (exit 2) because the configuration already uses the current
 format; migration is not needed and nothing is written.
 
-Migration does not start the gateway and does not rewrite native files. Start the
+Migration does not start the gateway and does not rewrite actual files. Start the
 gateway and re-apply each affected target:
 
 ```sh
@@ -200,10 +200,10 @@ shows the common list and each candidate's effective declaration. A missing
 declaration is unknown, not false or text-only; correct the concrete model's
 metadata through existing model operations rather than invent an alias override.
 
-When both candidates declare text and image, native application includes both.
+When both candidates declare text and image, Agent application includes both.
 Adding a text-only candidate removes common image support. Explicitly reapply
 affected Agent targets and reload the tool after changing membership or effective
-metadata; saving tmax settings does not rewrite native files. Reapplication
+metadata; saving tmax settings does not rewrite actual files. Reapplication
 withdraws obsolete managed input declarations. DSH cannot represent a known empty
 common input set and blocks before writing; an unknown declaration leaves native
 fallback visible rather than preserving a stale tmax image claim. Capability
@@ -215,7 +215,7 @@ candidates declaring text and image produced the common list; clearing one
 declaration made the intersection unknown and DSH's managed `input` row was
 withdrawn while native fallback stayed visible; restoring text and image
 reprojected both. A known empty intersection blocked preview and execution before
-any native write, leaving the patch and credential files byte-identical. No
+any write, leaving the patch and credential files byte-identical. No
 hosted inference or provider entitlement was exercised.
 
 ### Existing configuration with removed tier fields
@@ -335,8 +335,8 @@ impossible query.
 
 The Web Overview groups the provider and agent evidence already available through
 local read operations. It does not refresh providers, resolve secrets, sign in,
-start the gateway, or apply native files. An explicitly requested refresh or native
-change remains a separate task.
+start the gateway, or apply actual files. An explicitly requested refresh or
+actual-configuration change remains a separate task.
 
 Treat saved configuration, loaded state, applied files, and effective native
 runtime as separate facts. A configured authentication method is not verified
@@ -358,8 +358,8 @@ their documented spelling. The CLI remains English.
 
 Use `tmax model explain ID --protocol PROTOCOL` for an effect-free explanation of
 a public qualified concrete or alias ID. Add `--target TARGET` to assess it for a
-declared native target, optionally with `--agent-provider ENTRY` for an existing
-entry. For an undeclared native scope, use `--agent AGENT --path PATH` instead;
+declared Agent target, optionally with `--agent-provider ENTRY` for an existing
+entry. For an undeclared configuration scope, use `--agent AGENT --path PATH` instead;
 this does not register or import the scope. Do not mix the two context forms.
 With a direct entry, use its exact unqualified upstream model ID;
 without an entry, concrete IDs must be qualified. No saved native model, default,
@@ -379,7 +379,7 @@ Explanation data identifies `gateway`, `agent_target`, `agent_provider`, or
 
 `--state loaded` explains the daemon loaded view, not pending saved edits. Model
 explanation does not retrieve secrets, sign in, run inference, reserve a session,
-or apply native files. It assesses only qualified local evidence; a readable tool
+or apply actual files. It assesses only qualified local evidence; a readable tool
 or configured login does not verify native authentication, entitlement, or access.
 
 For an existing gateway request, use the opaque `scope_handle` returned in retained
@@ -397,10 +397,10 @@ Catalog adoption is also explicit. `catalog apply --revision REVISION` applies a
 validated downloaded snapshot; its preview/result compares accepted and candidate
 effective metadata after overrides and reports affected concrete selections,
 aliases, and native projections. Review `reapply_required`, blocked
-unrepresentable facts, and any gateway-route revalidation even when native files are
+unrepresentable facts, and any gateway-route revalidation even when actual files are
 unchanged. The result distinguishes accepted-before, candidate, and accepted-after
 revisions; a preview does not advance accepted metadata. Activation reports the
-actual service outcome. Catalog apply does not implicitly apply native files or
+actual service outcome. Catalog apply does not implicitly apply actual files or
 change endpoint, enablement, or destination settings.
 
 ## Request fallback and temporary provider priority
@@ -581,7 +581,7 @@ and prunes their observations, while retaining subscription and other manual
 declarations. An `authorization_invalidation` failure is pre-native: the owner
 command has not run. A `native_effect_uncertain` or partial native result means do
 not assume the old authorization or observations were restored and do not retry
-blindly. Inspect the same provider and native scope, then recover through that
+blindly. Inspect the same provider and configuration scope, then recover through that
 scope's qualified owner; never copy native tokens into tmax or another agent.
 
 ## Gateway naming upgrade
@@ -811,7 +811,7 @@ variable. On Unix, a home that yields an unrepresentable control-socket pathname
 blocks startup with `daemon_control_path_invalid`, the actual path, and the
 platform's representation error before launching a daemon. Use an OS account
 whose home permits that pathname; tmax does not relocate its store or fall back
-to a shorter endpoint. No listener, credentials, or native configuration are
+to a shorter endpoint. No listener, credentials, or actual configuration are
 changed by this startup blocker.
 
 New processes run in a native supervised user job: systemd on Linux, launchd on
@@ -1147,35 +1147,32 @@ tmax agent default set dsh-main tmax deepseek-v4.1-flash \
 tmax agent apply dsh-main
 ```
 
-Only explicitly configured fields are written. A default that omits the effort
-preserves whatever effort the tool currently has, including inside the same
-native entry or settings object. A configured effort the model or tool cannot
-represent blocks application before any native write and lists the available
-names. Use `--native-effort` only for Codex or Hermes; it is written without
-selector validation.
+An apply writes only the fields tmax manages. A default that omits an effort
+tmax never managed leaves the tool's current effort untouched, including inside
+the same actual entry or settings object. A configured effort the model or tool
+cannot represent blocks application before any file write and lists the
+available names. Use `--native-effort` only for Codex or Hermes; it is written
+without selector validation.
 
 Removing the effort from the default (run `agent default set` without
-`--effort`) stops managing it; the next apply restores that field's captured
-baseline and still refuses to overwrite an external edit. OpenCode is the
-exception because its model and variant are one native reference: removing only
+`--effort`) stops managing it; the next apply removes that field, and the
+retained snapshot can restore its previous value. OpenCode is the
+exception because its model and variant are one actual reference: removing only
 the effort keeps the current variant, while `agent default clear` or a model
 change rewrites the reference and the whole field is managed as one unit.
 
-If the tool's own settings changed a tmax-owned default after apply, the next
-apply stops with a conflict instead of overwriting it. Resolve it explicitly:
-`tmax agent inspect TARGET` lists the conflicting fields and the tool's current
-native default;
-`tmax agent recovery accept TARGET` records the tool's current native values as
-the new recovery baseline (then set the tmax default to the same model and
-effort and apply, which writes nothing); `tmax agent restore TARGET` returns the
-captured pre-tmax baseline; and `tmax agent recovery discard TARGET` followed by
-`tmax agent apply TARGET` makes tmax's configured default win at the cost of the
-original restore baseline. The tool must reload or restart before new sessions
-use the updated default; running sessions keep their selection.
+Apply is authoritative over tmax-managed fields. If the tool's own settings
+changed a tmax-managed default after apply, the next apply overwrites it with
+the current tmax default; it is not a conflict and does not need a separate
+accept or discard step. `tmax agent inspect TARGET` reports the applied state
+and the tool's current default, and `tmax agent restore TARGET` returns the
+managed fields to the target's single retained managed snapshot. The tool must
+reload or restart before new sessions use the updated default; running sessions
+keep their selection.
 
 ## Pi target: apply, reload, restore
 
-Native configuration is explicit and separate from gateway startup. Use an existing
+Actual configuration is explicit and separate from gateway startup. Use an existing
 Pi scope outside `~/.tmax`; a path inside tmax-owned storage is rejected. This is
 the direct-provider command sequence; scope and IDs are examples:
 
@@ -1192,39 +1189,39 @@ tmax agent default set "$TARGET" upstream "$MODEL_ID" \
 tmax agent apply "$TARGET"
 ```
 
-Application writes only the requested native scope; it does not start tmax
+Application writes only the requested configuration scope; it does not start tmax
 inference or make a paid probe. `tmax agent apply` reads referenced provider keys
-from tmax's current-user-restricted files and uses the native adapter's declared
+from tmax's current-user-restricted files and uses the Agent adapter's declared
 credential handoff. Unsupported storage-format key records return `storage_version_unsupported` or
 `storage_record_invalid` and remain unchanged; re-enter the key with
 `provider key set` before applying. Unsupported recovery contents are unavailable
-to current recovery operations. The `awaiting_native_reload` state means the native
-tool must reload/restart before the change is effective. When the tool rewrites
-its own configuration and apply reports `native_conflict`, resolve it
-explicitly: `agent restore` reverts owned fields, or `agent recovery accept
-TARGET` re-baselines the retained record to the current native state without
-native writes, credential deletion, or losing credential ownership; apply then
-proceeds from the accepted state.
+to current recovery operations. The `awaiting_native_reload` state means the tool
+must reload/restart before the change is effective. Apply overwrites tmax-managed
+fields with the current expected configuration and removes managed entries you no
+longer select; unmanaged fields stay. A later edit to a managed field is
+overwritten by the next apply, not reported as a conflict. `agent restore TARGET`
+returns managed fields to the target's single retained managed snapshot;
+each successful apply replaces that snapshot.
 
 For qualified Pi and OMP concrete selections, known effective model context/output
 limits, reasoning capability, and supported text/image input metadata are written
-using the versioned native schema. False values remain false; unknown metadata is
-not manufactured, and an unrepresentable explicit token limit blocks before native
-writes. Alias metadata is not copied from whichever candidate currently wins: an
+using the versioned schema for that Agent. False values remain false; unknown
+metadata is not manufactured, and an unrepresentable explicit token limit
+blocks before any write. Alias metadata is not copied from whichever candidate currently wins: an
 alias row carries a context/output limit only when every candidate's effective
 facts declare the same value, so disagreement or a gap leaves that limit unset.
 `model add`, `agent inspect`, and `agent apply` report `fact_gap`/`fact_gaps`
 when a model has no catalog or declared reasoning-effort or context-limit fact:
-the native entry stays bare for those fields, and a static surface such as DSH
+the actual entry stays bare for those fields, and a static surface such as DSH
 completes none of them itself. Declare the facts with `model update` or
 `model reasoning`, or accept the degraded entry.
 See [versioned agent schemas](agents/README.md) for the distinct native fields,
 authentication precedence, scopes, and qualification limits.
 
 Model capability limits are not generation budgets, and the gateway does not
-police request parameters against them. Native sampling, thinking effort, output
-budgets, tool use, structured output, and modalities stay owned by the native
-agent and travel to the upstream unchanged; the upstream clamps or rejects them
+police request parameters against them. The Agent's sampling, thinking effort,
+output budgets, tool use, structured output, and modalities stay owned by that
+Agent and travel to the upstream unchanged; the upstream clamps or rejects them
 with its own error. Use the agent's supported request controls when deliberately
 bounding an authorized probe.
 
@@ -1232,10 +1229,12 @@ bounding an authorized probe.
 tmax agent restore "$TARGET"
 ```
 
-Restore preserves later user edits and reports when the native tool must reload.
+Restore returns tmax-managed fields to the target's single retained managed
+snapshot, leaves unmanaged fields in place, overwrites later edits to managed
+fields, and reports when the tool must reload.
 With Pi 1.2.0, a private synthetic-provider fixture's apply and restore each
 returned exit 3 / `awaiting_native_reload`; the installed Pi parser recognized
-the selected model. This proves local native configuration parsing, not hosted
+the selected model. This proves local configuration parsing, not hosted
 credentials, entitlement, or permission.
 
 For a Pi client that should use the gateway, add a relayed entry, select a public
@@ -1248,10 +1247,11 @@ tmax agent default set "$TARGET" local "$PUBLIC_ID" --protocol chat-completions
 tmax agent apply "$TARGET"
 ```
 
-The gateway itself must already be configured and explicitly started; this native
+The gateway itself must already be configured and explicitly started; this Agent
 target path is optional. Pi 1.2.0 completed a same-protocol Chat Completions
 round-trip through tmax to a private synthetic loopback provider using a
-synthetic key. This is local gateway/native wiring evidence, not hosted access.
+synthetic key. This is local gateway and actual-configuration wiring evidence,
+not hosted access.
 
 `model probe` is a separate potentially paid operation. Choose a transport
 listed by `integration inspect` and invoke it explicitly; apply/restore never
@@ -1265,7 +1265,7 @@ For the complete contract, see [CLI specs](../specs/cli/spec.md),
 ## Native session listing and import
 
 `session list` reads the session stores of the declared Agent targets without
-changing native files, credentials, or configuration. It lists Codex, pi, omp,
+changing actual files, credentials, or configuration. It lists Codex, pi, omp,
 OpenCode, Hermes, and DSH sessions, including archived, hidden, and unnamed
 native-readable rows. A row contains bounded metadata and a bounded title, not
 message bodies or tool output. With no selector it scans every declared target;
@@ -1313,7 +1313,7 @@ bounded, control-free destination title. `--allow-over-budget` conflicts with
 `--tail` and applies only when a known destination budget would otherwise block
 the import. `--again` creates a new copy after an earlier completed import;
 without it, an existing matching import is a conflict. `--dry-run` reports the
-plan and qualification without writing native files or creating a provenance
+plan and qualification without writing actual files or creating a provenance
 record. Completed imports are recorded under tmax runtime storage as bounded
 provenance (counts, paths, schemas, title, and source revision), never as a
 transcript copy. A missing or corrupt record store is reported as
@@ -1321,10 +1321,10 @@ transcript copy. A missing or corrupt record store is reported as
 
 Exit `0` means the requested list or verified import completed. Invalid
 selectors or source schemas exit `2`; a precondition that prevents native effects
-exits `3`; a native write, registration, readback, or post-commit record failure
+exits `3`; an actual-file write, registration, readback, or post-commit record failure
 exits `4`. A partial target scan still exits `0` and reports `coverage: partial`.
 
-## DSH target: profile-scoped native application
+## DSH target: profile-scoped actual configuration
 
 DeepSeek Harness uses the same target/provider/model operations as the Pi example,
 with `--agent dsh` and the existing DSH home as its scope. Discovery uses nonblank
@@ -1338,15 +1338,15 @@ already reads. Nothing has to be installed first, and the next DSH start serves
 the routes. Apply selects the profile by `--profile`, otherwise `desktop`, then
 `web`, and reports which one it used.
 
-Apply preserves the user's own providers in that row and every unrelated field
-and expression. It does not create or delete profiles, change bundle composition,
+Apply overwrites the tmax-managed provider entries and fields from the current
+expected configuration; the user's own providers in that row, unrelated fields,
+and expressions stay. It does not create or delete profiles, change bundle composition,
 run npm, or touch the launcher-owned `cordis.yml`. Provider configurations from
-all adapters share DSH's LLM runtime; native provider names must be globally
-unique, not automatically merged. Direct and relayed entries may coexist. Provider configurations from all adapters share DSH's LLM runtime;
-native provider names must be globally unique, not automatically merged. Direct
-and relayed entries may coexist. Runtime overlays remain outside
-tmax's ownership. The [DSH home boundary](../specs/integrations/spec.md#dsh-home-boundary)
-owns the application and recovery rules.
+all adapters share DSH's LLM runtime; provider names must be globally unique, not
+automatically merged. Direct and relayed entries may coexist. Runtime overlays
+remain outside tmax's ownership. The
+[DSH home boundary](../specs/integrations/spec.md#dsh-home-boundary) owns the
+application and recovery rules.
 
 ```sh
 DSH_SCOPE="${DSH_HOME:-$HOME/.dsh}"
@@ -1366,17 +1366,18 @@ only when the default declares `--effort`, one validated effort; an absent
 effort preserves the existing HOME-level setting rather than importing profile
 defaults. Native route APIs support all three protocols; incompatible
 protocol/base selections cannot share one provider entry. Executed apply hands
-the key to the target home's private native `.credentials.yaml` `refs` map and
-uses a stable `TMAX_...` reference in the adjacent home patch. It enables the
-native credential service in the HOME patch for headless consumption without
-bundle inspection, exported secrets, or a tmax launcher. Preview and inspect
+the key to the target home's private `.credentials.yaml` `refs` map and
+uses a stable `TMAX_...` reference in the managed profile settings row. It
+enables the credential service in that profile patch for headless consumption
+without bundle inspection, exported secrets, or a tmax launcher. Preview and inspect
 never resolve or return key values.
 Output capability is intentionally not projected because DSH's explicit
 `maxTokens` would also change a per-request default.
 
-Reload DSH instances using that home after apply/restore. Restoration covers the
-profile rows tmax wrote and its credential references while preserving unrelated
-edits. The profile's `llm-pi-ai` entry is the only application format tmax
+Reload DSH instances using that home after apply/restore. Restore returns the
+tmax-managed profile fields and credential references to the single retained
+managed snapshot; unmanaged fields stay and later edits to managed fields are
+overwritten. The profile's `llm-pi-ai` entry is the only application format tmax
 writes: it never edits the home `cordis.patch.yml`, so a row an earlier release
 put there is yours to remove.
 File writes alone are not runtime or provider-access evidence. DSH 0.2.1-rc.2
@@ -1384,10 +1385,10 @@ loaded the independent plugin and completed local synthetic image/tool requests
 through all three protocols, with direct and concrete gateway routes coexisting
 alongside a native user adapter. An isolated public apply–native request–restore
 run also passed with profiles unchanged. Synthetic gateway forwarding used a
-real isolated tmax router with harness-prepared native configuration. Separately,
+real isolated tmax router with harness-prepared configuration. Separately,
 an installed release and matching daemon passed public gateway apply and actual
 DSH headless Chat Completions and Responses requests through stateless aliases
-to the selected OpenCode Go provider. The current managed native entry is `tmax`,
+to the selected OpenCode Go provider. The current managed entry is `tmax`,
 using `openai-responses`. Freeing that name required explicit removal of obsolete
 user routes in two local profile patches; tmax does not automate that edit.
 These runs do not qualify both accounts, hosted tools/images, native Web settings,

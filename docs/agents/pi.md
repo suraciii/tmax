@@ -67,8 +67,8 @@ project caller-facing input names under the [shared mapping and alias rules](../
 every native key is written explicitly, holding the exact input name or null.
 Names outside the keys remain omitted, not renamed by the native adapter. Maps
 resolve only inside the gateway, not in pi's native field. A declaration with no
-level besides `off` is unrepresentable and blocks application before native
-writes. The map declares selector capability and sets no default thinking level
+level besides `off` is unrepresentable and blocks application before any
+write. The map declares selector capability and sets no default thinking level
 or request value.
 
 `inputLimits.maxRequestBytes`, `images.maxPerMessage`, and `images.maxPerRequest`
@@ -173,8 +173,8 @@ changes identity. Its native Chat Completions compatibility options were
 This bounded evidence is not a recommendation to add compatibility flags to
 unrelated direct routes.
 
-Three-way restore retained a later unowned comment and `quietStartup` preference,
-and removed owned model/key changes. A manually reformatted probe restored the
+Restore retained a later unmanaged comment and `quietStartup` preference,
+and removed tmax-managed model/key changes. A manually reformatted probe restored the
 semantic baseline, not original formatting. The later repaired reapply consumed
 the credential through the installed parser path. No actual native OAuth login,
 refresh, hosted entitlement, or paid provider request was qualified by these
@@ -186,8 +186,8 @@ Independent post-repair qualification used release SHA-256
 Actual apply wrote context 1000000, output 65536, reasoning true, and text/image
 input from a concrete model; unsupported audio metadata was filtered. The
 installed parser consumed those values. Separate parser checks accepted explicit
-reasoning false and empty input. Restore preserved a later unowned field and
-original settings bytes and removed the private key artifact. A known zero
-output limit failed with `native_metadata_unrepresentable` before unlock or
-native writes. This check used private passwd-home and disconnected network
+reasoning false and empty input. Restore preserved a later unmanaged field and
+the original settings bytes and removed the private key artifact. A known zero
+output limit failed with `native_metadata_unrepresentable` before unlock or any
+write. This check used private passwd-home and disconnected network
 namespaces; it did not infer capabilities from a hosted model or run inference.

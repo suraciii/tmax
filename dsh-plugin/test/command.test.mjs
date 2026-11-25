@@ -50,7 +50,6 @@ function agentInspectData() {
     native_default: { state: 'available', fields: { provider: 'tmax', model: 'deepseek-v4.1-flash', present: true } },
     installation: { executable: '/tmp/bin/dsh', version: '0.2.3-alpha.2', state: 'detected', source: 'https://github.com/deepseek-ai/deepseek-harness' },
     applied_state: 'unknown',
-    pending_native_changes: null,
     blockers: [],
   }
 }

@@ -75,28 +75,31 @@ page makes no external font, image, or script requests.
   Add a direct or relayed provider entry, select its models and native
   protocols, then optionally choose its default (required for Codex). A direct
   source lists that provider's concrete models; a relayed gateway source lists
-  only gateway entries, because a raw `provider-id/model-id` is not a valid native
-  route selection. Choices list only published protocols, grouped Responses
+  only gateway entries, because a raw `provider-id/model-id` is not a valid route
+  selection for the Agent. Choices list only published protocols, grouped Responses
   first. An entry appears under each declared protocol, with Responses listed
   first; existing selections retain their protocol. The client uses the selected protocol;
   the gateway does not translate or choose another one. Saving these declarations
-  does not write native files.
-  Apply and restore remain separate explicit actions with optional previews.
-  Details also show desired per-model reasoning selectors, omitted names, and
-  blockers. These are not evidence of native reload or inference; an effort is
+  does not write actual files.
+  Apply writes tmax-managed fields authoritatively and restore returns the single
+  retained managed snapshot; both are separate explicit actions with optional
+  previews. Details also show expected per-model reasoning selectors, omitted
+  names, and blockers. These are not evidence of Agent reload or inference; an effort is
   written only when the target default explicitly declares one, and the tool's
   current effort is preserved otherwise.
   DSH requires an existing home directory (`DSH_HOME`, otherwise the OS home's
-  `.dsh`) whose profiles carry the `tmax` plugin DSH installs; application
-  configures that entry in `cordis.patch.yml` and hands keys to the adjacent native
-  `.credentials.yaml`. It enables the credential service for headless consumption
-  and preserves user `llm-pi-ai` routes. It does not install the plugin, enumerate,
-  select, create, or manage profiles, or reorder bundles. The managed home entry shadows
-  lower entries with the same identity. Model-only application writes no
+  `.dsh`) with a selectable profile (`--profile`, otherwise `desktop`, then
+  `web`). Application writes the managed provider fields into that profile's
+  `profiles/<profile>/cordis.patch.yml` row `llm-pi-ai` and hands keys to the
+  adjacent home `.credentials.yaml`. It enables the credential service for
+  headless consumption and leaves user `llm-pi-ai` routes, other providers, and
+  unrelated HOME-level rows unmanaged. It does not install a plugin, create,
+  rename, or delete profiles or presets, or reorder bundles. The profile settings
+  row is the same layer DSH's Models page edits; tmax writes managed fields there
+  and never rewrites the row as a whole. Model-only application writes no
   `agent-default-model` entry; an explicit default changes provider/model and,
-  only when configured, one validated effort, while an absent effort preserves
-  the existing HOME-level setting. Runtime overlays remain outside tmax's
-  ownership. See the
+  only when configured, one validated effort, while a field tmax never managed
+  keeps its value. Runtime overlays remain outside tmax's ownership. See the
   [DSH reference](agents/dsh.md) for evidence limits; historical profile-path
   checks do not establish current home-wide, multi-profile behavior.
 - **Gateway** lists the gateway entries with source models, protocols, readiness,
@@ -178,17 +181,17 @@ The scenario creates unique provider, model, and alias fixtures, removes them in
 `finally`, and checks preview isolation, scalar values, concurrent editing,
 search, navigation, narrow layouts, credential-preview isolation, skill preview,
 and advanced reads. It performs no authentication, upstream
-inference, or native application. A failed cleanup must be investigated before
+inference, or Agent application. A failed cleanup must be investigated before
 rerunning. Browser snapshots belong outside the repository.
 
 The optional [`scripts/web_discovery_smoke.js`](../scripts/web_discovery_smoke.js)
 scenario controls discovery responses to verify directory selection, duplicate
 targets, missing installations, failures, delayed results, and the handoff to
 model configuration. It creates and removes one uniquely named target declaration;
-it never applies native files. Run it in the same dedicated browser session.
+it never applies actual files. Run it in the same dedicated browser session.
 
 The optional [`scripts/web_agent_apply_smoke.js`](../scripts/web_agent_apply_smoke.js)
 checks OpenCode's optional default, the application form without command/target
 fields, preview isolation, and successful application with a non-error reload
 reminder. It creates a temporary target declaration and mocks the
-application result; it does not write native files or prove runtime inference.
+application result; it does not write actual files or prove runtime inference.

@@ -17,11 +17,13 @@ that revision. The tabbed catalog page was also rendered from this worktree in
 the live `web` profile against the real tmax 0.1.0 store: all 11 providers, the
 19 concrete models and 9 aliases, joined ratios, search, provider drill-in, the
 gateway tab, and the quota tab rendered. An Add and an Apply preview were
-exercised; neither wrote. A live `add_model` execution was not run: the real
-target reports pending native changes, and the action refused with
-`pending_native_changes` by design. The earlier temporary-profile render did not
-use a real format-2 tmax store. The package declares `engines.dsh`
-`>=0.2.3-alpha.2 <0.3.0`; no other DSH version has been tested. The contract is owned by the
+exercised; neither wrote. A live `add_model` execution was not run at that
+revision. The earlier temporary-profile render did not use a real format-2 tmax
+store. The pending-native-change precondition and its contextual Apply/resume
+flow were later retired: the target apply is authoritative, so the add is one
+direct previewed sequence ending in `agent apply TARGET`. The package declares
+`engines.dsh` `>=0.2.3-alpha.2 <0.3.0`; no other DSH version has been tested.
+The contract is owned by the
 [DSH plugin specification](../specs/integrations/dsh-plugin/spec.md); the
 [DSH reference](../docs/agents/dsh.md#evidence-and-runtime-limits) records what
 was and was not exercised, including the browser surfaces that remain
@@ -95,7 +97,7 @@ bounded deadline:
 | Command | Facts it owns |
 |---|---|
 | `tmax agent list` | Which declared target matches the DSH home, when the plugin has no explicit `target`. |
-| `tmax agent inspect <TARGET>` | The target's relayed provider entries, their selected models and native projection, applied and pending state, configuration revision, and tmax's own blockers. |
+| `tmax agent inspect <TARGET>` | The target's relayed provider entries, their selected models and native projection, applied state, configuration revision, and tmax's own blockers. |
 | `tmax status` | The tmax data directory (reported as the state's authority) and the caller's tmax version. |
 | `tmax gateway status` | Daemon discovery state, gateway readiness, listen address, supervision, autostart, and shared-key load state. |
 | `tmax provider list` | The tmax provider rows: authentication, affected targets, integration, quota state, and suspension/failure summaries. |
@@ -162,16 +164,16 @@ longer carries a manifest.
 On the **tmax** page, select **Apply**. This first requests a preview
 (`POST /_tmax/connect` with `{"dryRun": true}`, `{"preview": true}`, or
 `?dry-run=1`/`?preview=1`), which runs `tmax agent apply TARGET --dry-run` and
-writes nothing; the preview discloses the planned native writes, secret reads,
+writes nothing; the preview discloses the planned file writes, secret reads,
 started processes, created locks, and the files it would change. **Apply** then
 sends `{"dryRun": false}` (or `{"preview": false}`) and runs
-`tmax agent apply TARGET`, writing the target's native DSH files: the providers
-in the profile's `cordis.patch.yml` and the credential reference in the
-adjacent `.credentials.yaml`. A request that states neither a
+`tmax agent apply TARGET`, writing the target's DSH configuration files: the
+providers in the profile's `cordis.patch.yml` and the credential reference in
+the adjacent `.credentials.yaml`. A request that states neither a
 preview nor an execution boolean is refused before any tmax call, and a preview
 query never executes. The result reports changed and unchanged files, applied
 state, recovery, blockers, next actions, and effects. The key never enters the
-browser, a log, or a response, and native file contents never cross.
+browser, a log, or a response, and file contents never cross.
 
 The terminal equivalents are:
 
@@ -180,18 +182,17 @@ tmax agent apply "$TARGET" --dry-run
 tmax agent apply "$TARGET"
 ```
 
-Apply is the only bare native write this page offers. The **Add to DSH** action
+Apply is the only bare file write this page offers. The **Add to DSH** action
 is the one fixed target-selection write: it creates the target entry when needed,
 adds one model selection, and applies the target. Observation publishes provider
 evidence, which can feed tmax's automatic quota suspension, but writes no DSH or
-native state. Quota resume and failure reset are separate previewed tmax
+target state. Quota resume and failure reset are separate previewed tmax
 mutations. Gateway start, stop, and restart are separate previewed tmax
 operations; native restore, provider authentication, provider/model definition
 edits, and profile or preset changes stay explicit CLI or tmax Web operations.
 The page never chains one action into another; `add_model` is one allowlisted
-action with a fixed host sequence. A successful contextual Apply may reopen the
-same Add preview once, but never executes the Add; that is a UI resume, not a
-second action.
+action with a fixed host sequence, and its Apply step is authoritative: it is
+the whole write, with no earlier Apply to run and no add to resume.
 
 ## Actions
 
@@ -211,8 +212,8 @@ the same apply and observation operations.
 | **Start gateway** (`gateway_start`) | Configured gateway that is not ready | `gateway start --dry-run` | Starts the tmax inference gateway, or reuses a compatible running owner. |
 | **Stop gateway** (`gateway_stop`) | Not offered by the page; the CLI stops a gateway | `gateway stop --dry-run` | Stops the tmax inference gateway (not the Web listener) and reports interrupted work. |
 | **Restart gateway** (`gateway_restart`) | Not offered by the page; the CLI restarts a gateway | `gateway restart --dry-run` | Recycles the tmax inference gateway through its native manager and reports readiness. |
-| **Apply** (`connect`) | The Apply next action | `tmax agent apply TARGET --dry-run` | Writes the target's native DSH files. The page uses its own Apply panel. |
-| **Add to DSH** (`add_model`) | A model row in the Models tab that is enabled, has a published protocol, and is not selected. The preview refuses a target with pending or unreadable native changes. | Catalog-derived plan: entry, protocol, and step names; writes nothing | Fixed sequence: `agent provider add` when no matching entry exists, `agent model add`, then `agent apply TARGET`. It refuses `pending_native_changes` or `target_uninspectable`; apply the target first. The first refusal stops it and reports the completed prefix and failed step; no rollback. |
+| **Apply** (`connect`) | The Apply next action | `tmax agent apply TARGET --dry-run` | Writes the target's DSH configuration files. The page uses its own Apply panel. |
+| **Add to DSH** (`add_model`) | A model row in the Models tab that is enabled, has a published protocol, and is not selected. | Catalog-derived plan: entry, protocol, and step names; writes nothing | Fixed sequence: `agent provider add` when no matching entry exists, `agent model add`, then `agent apply TARGET`. The final Apply is the whole authoritative write, so the sequence needs no earlier Apply. The first refused step stops it and reports the completed prefix and failed step; no rollback. |
 
 Every action is previewed first and then explicitly confirmed or cancelled. A
 preview writes nothing and is reported separately from execution. The verdict
@@ -276,10 +277,9 @@ quota is spent.
   protocols, default mark, joined mark, and **Add to DSH** for an unselected,
   enabled model with a published protocol. The add preview is one line — the
   entry and protocol — and confirmation runs the fixed selection-and-apply
-  sequence. If the target has pending native changes, the add bar refuses and
-  offers **Apply current changes first**; that opens the ordinary Apply preview.
-  After it succeeds, the page restores the Models view and reopens the same add
-  preview. Pending alone adds no page-level Apply button.
+  sequence. Its final `agent apply TARGET` step is the authoritative write: the
+  add is one direct sequence, with no separate Apply to run first and nothing
+  to resume.
 - **Gateway** — configured and ready state, listener address, shared-key loaded
   state, and tmax's reason when not ready; **Start gateway** when configured and
   not ready. Full supervision and autostart detail stay in the CLI.
@@ -316,7 +316,7 @@ the DSH client packages it needs: `@deepseek-ai/dsh-client-locale`,
 | Seat | Where it appears | What it does |
 | --- | --- | --- |
 | Sidebar marker | Trailing slot of the **tmax** row in the sidebar panel list | A non-interactive dot with screen-reader text: an invalid configuration, `a blocker is reported`, `gateway not ready`, `quota suspended`, or `route conflict` as errors; an unavailable configuration, a failed section read, or no usable route as warnings; `unknown` when no state is readable. It never opens the page or runs an action. |
-| Models footer card | **Settings > Models**, below the model list | Gateway readiness, active and usable route counts, model count, and the reason tmax models are or are not usable. **Apply** appears only when the page's own next action is Apply, then previews and confirms the same native DSH write as the page; **Reload** appears when the read failed or the next action is retry; **Open tmax** opens the plugin page when that page exists. |
+| Models footer card | **Settings > Models**, below the model list | Gateway readiness, active and usable route counts, model count, and the reason tmax models are or are not usable. **Apply** appears only when the page's own next action is Apply, then previews and confirms the same DSH configuration write as the page; **Reload** appears when the read failed or the next action is retry; **Open tmax** opens the plugin page when that page exists. |
 | Tool card | The `tmax_status` tool call | A compact card of the result the tool already returned: target, routes, gateway, provider and model counts, and blockers, with pending, unreadable, and failed states. It never performs a new read. |
 
 Seat reads are GET-only and never observe a provider, apply, or mutate tmax.
@@ -347,7 +347,7 @@ observes, refreshes, applies, or starts a service.
 Empty input shows `status`. The subcommands print the same facts as the page's
 read model in bounded text:
 
-- `status` — target and effective default, applied and pending state, routes and
+- `status` — target and effective default, applied state, routes and
   credential readiness, gateway readiness, provider counts, and blockers.
 - `providers` — every tmax provider's authentication, integration, quota state,
   freshness, observation time, suspension, and failure. Unknown quota stays
@@ -410,10 +410,10 @@ The page keeps no tmax data in browser storage.
   rather than given a guessed value; unknown input modalities are advertised as
   text-only.
 - The page has no configuration editor: provider, model, alias, priority, and
-  schedule edits stay in the tmax CLI or Web. Apply is its only bare DSH or
-  native write; the fixed target-selection action adds one existing model and
-  ends in Apply. Its other operations are observation, the previewed provider
-  repairs, and the previewed gateway lifecycle actions.
+  schedule edits stay in the tmax CLI or Web. Apply is its only bare DSH
+  configuration write; the fixed target-selection action adds one existing
+  model and ends in Apply. Its other operations are observation, the previewed
+  provider repairs, and the previewed gateway lifecycle actions.
 - Request bodies, headers, URLs, model output, error-log viewing, and history
   clear or export controls are not shipped. The page shows no history;
   `/tmax history` lists retained metadata only, and a typed unavailable answer
