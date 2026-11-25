@@ -1298,14 +1298,13 @@ pub fn dashboard(id: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    /// The DSH plugin reimplements these quota reads in JavaScript, because it
-    /// reads the agent's credential store rather than tmax's. One fixture file
-    /// holds the response bodies and the rows both sides must publish from them,
-    /// so a change on either side breaks the other's test in the same commit.
+    /// One fixture holds each vendor's response body and the rows the
+    /// projection must publish from it, so a change to a vendor's reading
+    /// breaks this test rather than silently drifting.
     #[test]
-    fn dsh_plugin_quota_contract_rows_match() {
+    fn quota_contract_rows_match() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../dsh-plugin/test/fixtures/quota-contract.json");
+            .join("tests/fixtures/quota-contract.json");
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         let document: Value = serde_json::from_str(&text).expect("contract fixture is JSON");

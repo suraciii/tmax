@@ -1105,7 +1105,7 @@ test('legacy routes and actions share the connect and observation locks', async 
 
   // Legacy observe and action observe_provider are one observation lock.
   await fake.update({ ...baseScenario(), delayFor: 'provider list', delayMs: 150 })
-  const legacyObserve = postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  const legacyObserve = postJson(state, '/_tmax/observe', {})
   await sleep(60)
   const actionObserve = await postJson(state, '/_tmax/action', { action: 'observe_provider', provider: 'kimi' })
   assert.equal(actionObserve.statusCode, 409)
@@ -1117,7 +1117,7 @@ test('legacy routes and actions share the connect and observation locks', async 
   await fake.update({ ...baseScenario(), delayFor: 'provider refresh', delayMs: 150 })
   const actionObserveFirst = postJson(state, '/_tmax/action', { action: 'observe_provider', provider: 'kimi' })
   await sleep(60)
-  const legacyObserveSecond = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  const legacyObserveSecond = await postJson(state, '/_tmax/observe', {})
   assert.equal(legacyObserveSecond.statusCode, 409)
   assert.equal(legacyObserveSecond.body.code, 'busy')
   assert.equal((await actionObserveFirst).statusCode, 200)

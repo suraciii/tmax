@@ -316,8 +316,8 @@ read model in bounded text:
 - `status` — target and effective default, applied and pending state, routes and
   credential readiness, gateway readiness, provider counts, and blockers.
 - `providers` — every tmax provider's authentication, integration, quota state,
-  freshness, observation time, suspension, and failure; agent-configured
-  providers separately. Unknown quota stays unknown, never zero.
+  freshness, observation time, suspension, and failure. Unknown quota stays
+  unknown, never zero.
 - `routing` — every projected model's selection, candidates, exclusions, and any
   per-model error.
 - `gateway` — readiness, listener, daemon discovery, supervision, autostart, and
@@ -329,8 +329,8 @@ read model in bounded text:
   omitted counts, and a bounded record list. An unavailable daemon or history is
   reported with its reason, never as an empty history.
 
-Output is bounded: at most 20 routes, 40 tmax providers and 40 agent-configured
-providers, 40 routing rows, 20 section errors, and 10 history records; at most
+Output is bounded: at most 20 routes, 40 providers, 40 routing rows, 20 section
+errors, and 10 history records; at most
 10 blockers; each cell is capped at 120 characters. A truncated list states how
 many rows were omitted. An unknown or multi-word subcommand returns an error
 with the usage and performs no read. A failed or absent section prints
@@ -347,15 +347,14 @@ JSON media-type, 16 KiB body-size, and single-flight checks to its POST actions.
 
 | Route | Effect |
 | --- | --- |
-| `GET /_tmax/state` | The host read model used by the page: `ok`, `schemaVersion`, `generatedAt`, `configurationRevision`, `tmaxVersion`, `authority`, `target`, `ownership` including its mode, `gateway`, `config`, `routes`, `providers` (tmax and agent), `routing`, `diagnostics` including `readModel` (`inventory`), and a top-level `errors` list naming every failed section read. Reads cached state only; `502` only when the host cannot produce any state. |
+| `GET /_tmax/state` | The host read model used by the page: `ok`, `schemaVersion`, `generatedAt`, `configurationRevision`, `tmaxVersion`, `authority`, `target`, `ownership` including its mode, `gateway`, `config`, `routes`, `providers` (tmax), `routing`, `diagnostics` including `readModel` (`inventory`), and a top-level `errors` list naming every failed section read. Reads cached state only; `502` only when the host cannot produce any state. |
 | `GET /_tmax/status` | First-generation page compatibility summary of the same read model. Reads cached state only. |
 | `GET /_tmax/usage` | First-generation provider and usage rows from the same read model. Reads cached state only. |
-| `GET /_tmax/dsh-usage` | First-generation cached readings for providers this DSH profile configures. Reads cached state only and never observes. |
 | `GET /_tmax/history` | Explicit retained-history read. One read-only `tmax history list` (45 s) mapped to `{ ok, generatedAt, coverage, records, truncated?, omitted? }` with at most 50 compact rows; a typed unavailable daemon/history answer is `200` with `ok:false` and its reason (never an empty history), while a missing transport envelope is `502` `history_unavailable`. Bodies, headers, URLs, and secrets never cross. |
-| `POST /_tmax/observe` | Explicit observation. Body `{ "scope": "all", "dryRun": false }`, where `scope` is `all`, `tmax`, or `agent`. Returns per-provider outcomes and fresh state: `200` when no item failed, `207` when one did, `409` when an observation is already running, and `502` when the host cannot run the observation at all. |
+| `POST /_tmax/observe` | Explicit observation. Body `{ "dryRun": false }`. One quota-scope `tmax provider refresh` per provider tmax lists. Returns per-provider outcomes and fresh state: `200` when no item failed, `207` when one did, `409` when an observation is already running, and `502` when the host cannot run the observation at all. |
 | `POST /_tmax/connect` | Explicit Apply. Body `{ "dryRun": true }` or `{ "preview": true }` previews through `tmax agent apply TARGET --dry-run`; `{ "dryRun": false }` or `{ "preview": false }` executes; a `?dry-run=1`/`?preview=1` query previews only. A request that states neither preview nor execution is `400` `invalid_dry_run` before any tmax call. Returns the typed result and fresh state (`200`). A typed refusal from tmax is `409` with the refusal and fresh state; an unresolved target is `409` with its typed code and writes nothing; a busy Apply is `409` `busy` with no state; a transport failure, timeout, or output that is not a JSON envelope is `502` `connect_unavailable`. |
 | `POST /_tmax/action` | The allowlisted action surface used by the page for provider and management actions. Body `{ "action": "...", "provider"?: "...", "scope"?: "...", "dryRun": true }` for `connect`, `observe_provider`, `resume_quota`, `reset_failure`, `open_management`, `gateway_start`, `gateway_stop`, and `gateway_restart`. `200`: typed `result` plus fresh state. `409`: typed refusal plus fresh state, or an unknown-provider, gateway guard, or busy refusal with neither. `400`: invalid request with neither. `502`: `state_unavailable` with neither, or a transport/no-envelope failure with a typed `result` and state when a read is available. |
-| `POST /_tmax/usage/refresh` | First-generation explicit tmax observation. Same rules as the `tmax` scope of `/_tmax/observe`; a `dryRun`/`preview` body or `?dry-run=1`/`?preview=1` performs no real observation. |
+| `POST /_tmax/usage/refresh` | First-generation explicit tmax observation. Same rules as `/_tmax/observe`; a `dryRun`/`preview` body or `?dry-run=1`/`?preview=1` performs no real observation. |
 
 `POST /_tmax/connect` and `POST /_tmax/observe` remain supported compatibility
 forms: the page's Apply and Refresh still use them, and provider, gateway, or
@@ -366,38 +365,6 @@ cached model and never observes.
 No route returns key material. Responses, logs, argv, and error text are
 secret-free, and action and apply payloads are filtered to non-secret fields.
 The page keeps no tmax data in browser storage.
-
-## Providers the agent configures itself
-
-The page is not limited to providers tmax manages. It also reads the model
-configuration of the running DSH profile through `settings` and the
-configurable-provider directory, never by parsing profile files, and for the
-vendors tmax already implements it observes that vendor's quota endpoint only
-after an explicit Refresh.
-
-Each vendor is implemented separately, because a subscription quota is not a
-protocol: every vendor has its own endpoint, its own auth style (GLM wants the key
-raw, the rest want a bearer token), and its own idea of a window. The destination
-must match a vendor's host and path exactly; a custom proxy URL does not borrow a
-vendor's endpoint or send it the provider's key. A provider whose vendor has no
-implementation is reported as having no supported quota source, never as zero or
-unlimited.
-
-Providers that share one vendor and one credential reference are read once, but
-each configured provider keeps its own row, so a suspended instance is never
-folded into a healthy sibling.
-
-No credential value leaves the host: `apiKeyEnv` is a reference, resolved only
-inside the explicit observation, and only the vendor's JSON crosses back to the
-page.
-
-The vendor quota reads are implemented twice — once in tmax (Rust) and once in
-this plugin — because the two read different credential stores: tmax can only
-reach keys in its own secret file, and the agent's keys live in DSH's. They share
-a contract, not code: `test/fixtures/quota-contract.json` holds each vendor's
-response body and the rows both sides must project from it, and
-`crates/tmax-core` asserts the same file from its own test. Changing a quota
-projection means changing that fixture, which breaks the other side's test.
 
 ## Limitations
 
@@ -412,8 +379,6 @@ projection means changing that fixture, which breaks the other side's test.
   schedule edits stay in the tmax CLI or Web. Apply is its only DSH or native
   write; its other operations are observation, the previewed provider repairs,
   and the previewed gateway lifecycle actions.
-- Agent-configured providers are read-only and cover only vendors tmax
-  implements. Their observations are explicit and have no history.
 - Request bodies, headers, URLs, model output, error-log viewing, and history
   clear or export controls are not shipped. The page shows no history;
   `/tmax history` lists retained metadata only, and a typed unavailable answer

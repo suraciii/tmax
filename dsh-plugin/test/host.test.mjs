@@ -720,34 +720,6 @@ function fakeContext({
   return { ctx, state }
 }
 
-const GLM_QUOTA_BODY = {
-  success: true,
-  code: 200,
-  data: { limits: [{ type: 'TOKENS_LIMIT', unit: 5, number: 1, percentage: 37 }], level: 'pro' },
-}
-
-/** One agent-configured provider with a vendor base URL, for observation tests. */
-function glmAgentContext({ resolveCredential } = {}) {
-  const provider = {
-    provider: 'glm-coding-cn',
-    displayName: 'GLM Coding CN',
-    defaultBaseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
-    settingsNs: 'llm-pi-ai',
-    settingsPath: ['providers', 'glm-coding-cn'],
-    declared: true,
-  }
-  return {
-    provider,
-    context: {
-      ...(resolveCredential === undefined ? {} : { resolveCredential }),
-      settingsDescribe: () => [{
-        ns: 'llm-pi-ai',
-        value: { providers: { 'glm-coding-cn': { apiKeyEnv: 'GLM_KEY', baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4', models: [{ id: 'glm-5.4' }] } } },
-      }],
-      configurableProviders: () => [provider],
-    },
-  }
-}
 
 function makeRes() {
   const out = { statusCode: undefined, headers: {}, body: undefined }
@@ -796,13 +768,6 @@ async function postJson(state, path, payload, headers = {}) {
 
 async function getJson(state, path) {
   return callRoute(routeOf(state, path), 'GET', {})
-}
-
-/** Force a fresh state through one explicit agent-scope observation. */
-async function freshState(state) {
-  const result = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-  assert.ok(result.body?.state, `observe returns state (HTTP ${result.statusCode})`)
-  return result.body.state
 }
 
 function emptyHome() {
@@ -1412,7 +1377,7 @@ test('the state cache serves repeated reads and single-flights cold ones', async
 // ---------------------------------------------------------------------------
 // Tests: HTTP route surface, POST hardening, and explicit operations.
 
-test('POST actions are hardened: method, media type, origin, size, JSON, scope, and busy', async () => {
+test('POST actions are hardened: method, media type, origin, size, JSON, and busy', async () => {
   const { state } = await applied()
   const route = routeOf(state, '/_tmax/observe')
 
@@ -1444,10 +1409,6 @@ test('POST actions are hardened: method, media type, origin, size, JSON, scope, 
   const notJson = await callRoute(route, 'POST', { body: '{not json', headers: { 'content-type': 'application/json' } })
   assert.equal(notJson.statusCode, 400)
 
-  const invalidScope = await postJson(state, '/_tmax/observe', { scope: 'galaxy' })
-  assert.equal(invalidScope.statusCode, 400)
-  assert.equal(invalidScope.body.code, 'invalid_scope')
-
   const invalidDryRun = await postJson(state, '/_tmax/observe', { dryRun: 'yes' })
   assert.equal(invalidDryRun.statusCode, 400)
   assert.equal(invalidDryRun.body.code, 'invalid_dry_run')
@@ -1456,14 +1417,34 @@ test('POST actions are hardened: method, media type, origin, size, JSON, scope, 
 test('concurrent observe requests are rejected with busy', async () => {
   const { fake, state } = await applied()
   await fake.update({ ...baseScenario(), delayFor: 'provider refresh', delayMs: 150 })
-  const first = postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  const first = postJson(state, '/_tmax/observe', {})
   await new Promise(resolve => setTimeout(resolve, 40))
-  const second = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  const second = await postJson(state, '/_tmax/observe', {})
   assert.equal(second.statusCode, 409)
   assert.equal(second.body.code, 'busy')
   const firstResult = await first
   assert.ok(firstResult.statusCode === 200 || firstResult.statusCode === 207)
   await fake.update(baseScenario())
+})
+
+test('a dry-run observation previews with --dry-run and publishes nothing', async () => {
+  const { fake, state } = await applied()
+  await fake.clearCalls()
+  const preview = await postJson(state, '/_tmax/observe', { dryRun: true })
+  assert.equal(preview.statusCode, 200)
+  assert.equal(preview.body.ok, true)
+  assert.equal(preview.body.dryRun, true)
+  // One quota-scope refresh per provider tmax lists, every one a preview.
+  const refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
+  assert.equal(refreshes.length, 2)
+  for (const argv of refreshes) {
+    assert.ok(argv.includes('--dry-run'), `dry run passes --dry-run: ${argv.join(' ')}`)
+    assert.ok(argv.includes('--scope') && argv.includes('quota'), `one quota observation: ${argv.join(' ')}`)
+  }
+  assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged', 'unchanged'])
+  assert.ok(preview.body.items.every(item => item.code === 'dry_run'))
+  // The preview still returns a fresh read model, under the current schema.
+  assert.equal(preview.body.state.schemaVersion, 2)
 })
 
 test('explicit observe reports all-failed and partial outcomes without claiming success', async () => {
@@ -1474,7 +1455,7 @@ test('explicit observe reports all-failed and partial outcomes without claiming 
   }
   const { fake, state } = await applied({ scenario })
   await fake.clearCalls()
-  const failed = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  const failed = await postJson(state, '/_tmax/observe', {})
   assert.equal(failed.statusCode, 207)
   assert.equal(failed.body.ok, false)
   assert.deepEqual(failed.body.items.map(item => item.status), ['failed', 'failed'])
@@ -1487,7 +1468,7 @@ test('explicit observe reports all-failed and partial outcomes without claiming 
     current.refresh.kimi.exec = refreshOk('kimi')
     current.refresh['cpa-us2'].exec = refreshUnsupported('cpa-us2')
   })
-  const partial = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  const partial = await postJson(state, '/_tmax/observe', {})
   assert.equal(partial.statusCode, 200)
   assert.equal(partial.body.ok, true)
   assert.deepEqual(partial.body.items.map(item => item.status), ['refreshed', 'blocked'])
@@ -1497,251 +1478,10 @@ test('explicit observe reports all-failed and partial outcomes without claiming 
   await fake.patch(current => {
     current.refresh['cpa-us2'].exec = refreshFailed('cpa-us2')
   })
-  const mixed = await postJson(state, '/_tmax/observe', { scope: 'tmax' })
+  const mixed = await postJson(state, '/_tmax/observe', {})
   assert.equal(mixed.statusCode, 207)
   assert.equal(mixed.body.ok, false)
   assert.deepEqual(mixed.body.items.map(item => item.status), ['refreshed', 'failed'])
-})
-
-test('dry-run observe previews with --dry-run and performs no agent request', async () => {
-  const { fake, state } = await applied({
-    context: glmAgentContext().context,
-  })
-  await fake.clearCalls()
-  const realFetch = globalThis.fetch
-  let fetchCalls = 0
-  globalThis.fetch = async () => { fetchCalls += 1; return new Response('{}', { status: 200 }) }
-  try {
-    const preview = await postJson(state, '/_tmax/observe', { scope: 'all', dryRun: true })
-    assert.equal(preview.statusCode, 200)
-    assert.equal(preview.body.ok, true)
-    const refreshes = (await fake.calls()).filter(argv => argv[0] === 'provider' && argv[1] === 'refresh')
-    assert.equal(refreshes.length, 2)
-    assert.ok(refreshes.every(argv => argv.includes('--dry-run')))
-    assert.deepEqual(preview.body.items.map(item => item.status), ['unchanged', 'unchanged', 'unchanged'])
-    assert.ok(preview.body.items.every(item => item.code === 'dry_run'))
-    assert.equal(fetchCalls, 0, 'dry run makes no vendor request')
-    assert.equal(state.resolveCalls, 0, 'dry run resolves no credential')
-    assert.equal(preview.body.state.providers.agent[0].state, 'not_observed')
-  } finally {
-    globalThis.fetch = realFetch
-  }
-})
-
-test('agent-configured providers are cache-only on GET and observed only on explicit POST', async () => {
-  const { state } = await applied({ context: glmAgentContext().context })
-  const realFetch = globalThis.fetch
-  let fetchCalls = 0
-  globalThis.fetch = async () => {
-    fetchCalls += 1
-    return new Response(JSON.stringify(GLM_QUOTA_BODY), { status: 200 })
-  }
-  try {
-    const before = await getJson(state, '/_tmax/state')
-    assert.equal(before.body.providers.agent.length, 1)
-    assert.equal(before.body.providers.agent[0].state, 'not_observed')
-    assert.equal(before.body.providers.agent[0].vendor, 'glm-coding-plan')
-    assert.equal(before.body.providers.agent[0].observedAt, null)
-    assert.equal(fetchCalls, 0)
-    assert.equal(state.resolveCalls, 0)
-    // The legacy route is cache-only too.
-    const legacy = await callRoute(routeOf(state, '/_tmax/dsh-usage'), 'GET', { headers: {} })
-    assert.equal(legacy.statusCode, 200)
-    assert.equal(fetchCalls, 0)
-
-    const observed = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-    assert.equal(observed.statusCode, 200)
-    assert.deepEqual(observed.body.items, [{ source: 'agent', id: 'dsh:glm-coding-cn', status: 'refreshed' }])
-    assert.equal(fetchCalls, 1)
-    assert.equal(state.resolveCalls, 1)
-    assert.equal(observed.body.state.providers.agent[0].state, 'observed')
-    assert.equal(observed.body.state.providers.agent[0].rows[0].percent, 37)
-  } finally {
-    globalThis.fetch = realFetch
-  }
-})
-
-test('a failed agent observation keeps the last reading and its time', async () => {
-  const { state } = await applied({ context: glmAgentContext().context })
-  const realFetch = globalThis.fetch
-  let mode = 'ok'
-  let fetchCalls = 0
-  globalThis.fetch = async () => {
-    fetchCalls += 1
-    return mode === 'ok'
-      ? new Response(JSON.stringify(GLM_QUOTA_BODY), { status: 200 })
-      : new Response('', { status: 500 })
-  }
-  try {
-    const first = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-    assert.equal(first.body.items[0].status, 'refreshed')
-    const good = first.body.state.providers.agent[0]
-    assert.equal(good.state, 'observed')
-    assert.equal(good.rows.length, 1)
-    assert.equal(typeof good.observedAt, 'string')
-    assert.deepEqual(good.plan, { level: 'pro' })
-
-    mode = 'fail'
-    const second = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-    assert.equal(second.body.items[0].status, 'failed')
-    assert.equal(second.body.items[0].code, 'upstream_rejection')
-    const after = second.body.state.providers.agent[0]
-    assert.equal(after.state, 'failed')
-    assert.equal(after.observedAt, good.observedAt, 'the reading time survives the failed attempt')
-    assert.equal(after.rows.length, 1, 'the last reading survives')
-    assert.equal(after.rows[0].percent, 37)
-    assert.deepEqual(after.plan, { level: 'pro' })
-    assert.equal(after.reasonCode, 'upstream_rejection')
-    assert.match(after.message, /upstream 500/)
-    assert.equal(fetchCalls, 2)
-  } finally {
-    globalThis.fetch = realFetch
-  }
-})
-
-test('a blocked agent observation never overwrites the cached reading', async () => {
-  const credential = { value: 'test-key' }
-  const { state } = await applied({
-    context: glmAgentContext({
-      resolveCredential: async () => (credential.value === undefined ? undefined : { value: credential.value }),
-    }).context,
-  })
-  const realFetch = globalThis.fetch
-  let fetchCalls = 0
-  globalThis.fetch = async () => {
-    fetchCalls += 1
-    return new Response(JSON.stringify(GLM_QUOTA_BODY), { status: 200 })
-  }
-  try {
-    const first = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-    const good = first.body.state.providers.agent[0]
-    assert.equal(good.state, 'observed')
-    assert.equal(good.rows.length, 1)
-
-    credential.value = undefined
-    const second = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-    assert.equal(second.body.items[0].status, 'blocked')
-    assert.equal(second.body.items[0].code, 'credential_unavailable')
-    assert.equal(fetchCalls, 1, 'a blocked observation makes no vendor request')
-    const after = second.body.state.providers.agent[0]
-    assert.equal(after.state, 'observed', 'the prior reading stays readable')
-    assert.equal(after.observedAt, good.observedAt)
-    assert.equal(after.rows.length, 1)
-    assert.equal(after.reasonCode, null)
-    assert.deepEqual(after.plan, { level: 'pro' })
-  } finally {
-    globalThis.fetch = realFetch
-  }
-})
-
-test('a blocked or failed observation with no prior reading fabricates nothing', async () => {
-  const realFetch = globalThis.fetch
-  let fetchCalls = 0
-  globalThis.fetch = async () => {
-    fetchCalls += 1
-    return new Response('', { status: 500 })
-  }
-  try {
-    const blocked = await applied({
-      context: glmAgentContext({ resolveCredential: async () => undefined }).context,
-    })
-    const blockedBody = await postJson(blocked.state, '/_tmax/observe', { scope: 'agent' })
-    assert.equal(blockedBody.body.items[0].status, 'blocked')
-    assert.equal(blockedBody.body.items[0].code, 'credential_unavailable')
-    const blockedRecord = blockedBody.body.state.providers.agent[0]
-    assert.equal(blockedRecord.state, 'not_observed')
-    assert.equal(blockedRecord.observedAt, null)
-    assert.deepEqual(blockedRecord.rows, [])
-    assert.equal(blockedRecord.plan, null)
-    assert.equal(blockedRecord.reasonCode, 'credential_unavailable')
-    assert.equal(fetchCalls, 0)
-
-    const failed = await applied({ context: glmAgentContext().context })
-    const failedBody = await postJson(failed.state, '/_tmax/observe', { scope: 'agent' })
-    assert.equal(failedBody.body.items[0].status, 'failed')
-    const failedRecord = failedBody.body.state.providers.agent[0]
-    assert.equal(failedRecord.state, 'failed')
-    assert.deepEqual(failedRecord.rows, [])
-    assert.equal(typeof failedRecord.observedAt, 'string')
-    assert.equal(failedRecord.reasonCode, 'upstream_rejection')
-    assert.equal(fetchCalls, 1)
-  } finally {
-    globalThis.fetch = realFetch
-  }
-})
-
-test('a provider named after a vendor is observed only when its base URL matches the vendor', async () => {
-  const provider = {
-    provider: 'opencode-go',
-    displayName: 'Custom OpenCode',
-    defaultBaseURL: 'https://llm.example.test/v1',
-    settingsNs: 'llm-pi-ai',
-    settingsPath: ['providers', 'opencode-go'],
-    declared: true,
-  }
-  const { state } = await applied({
-    context: {
-      settingsDescribe: () => [{
-        ns: 'llm-pi-ai',
-        value: { providers: { 'opencode-go': { apiKeyEnv: 'CUSTOM_KEY', baseURL: 'https://llm.example.test/v1', models: [{ id: 'custom-model' }] } } },
-      }],
-      configurableProviders: () => [provider],
-    },
-  })
-  const realFetch = globalThis.fetch
-  let fetchCalls = 0
-  globalThis.fetch = async () => { fetchCalls += 1; return new Response('{}', { status: 200 }) }
-  try {
-    const before = (await getJson(state, '/_tmax/state')).body
-    assert.equal(before.providers.agent[0].vendor, null)
-    assert.equal(before.providers.agent[0].reasonCode, 'unsupported_source')
-    const observed = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-    assert.equal(observed.statusCode, 200)
-    assert.deepEqual(observed.body.items.map(item => [item.id, item.status, item.code]), [
-      ['dsh:opencode-go', 'blocked', 'unsupported_source'],
-    ])
-    assert.equal(fetchCalls, 0, 'a vendor-named route without a vendor host makes no request')
-    assert.equal(state.resolveCalls, 0)
-  } finally {
-    globalThis.fetch = realFetch
-  }
-})
-
-test('dsh-usage reports unavailable agent discovery', async () => {
-  const { state } = await applied({ context: { settingsUnavailable: true } })
-  const usage = await getJson(state, '/_tmax/dsh-usage')
-  assert.equal(usage.statusCode, 200)
-  assert.equal(usage.body.ok, false)
-  assert.deepEqual(usage.body.providers, [])
-  const body = (await getJson(state, '/_tmax/state')).body
-  assert.ok(body.errors.some(error => error.section === 'providers' && error.code === 'agent_settings_unavailable'))
-  assert.deepEqual(body.providers.agent, [])
-})
-
-test('an unreadable provider directory is a providers section error, not a failed state read', async () => {
-  const { state } = await applied({
-    context: { configurableProviders: () => { throw new Error('provider directory unavailable') } },
-  })
-  const response = await getJson(state, '/_tmax/state')
-  assert.equal(response.statusCode, 200, 'one failed directory read does not fail the state')
-  assert.equal(response.body.ok, true)
-  assert.deepEqual(response.body.providers.agent, [])
-  assert.ok(response.body.errors.some(error => error.section === 'providers' && error.code === 'agent_settings_unavailable'))
-})
-
-test('agent observation without a readable settings service reports a failed item', async () => {
-  const { state } = await applied({ context: { settingsUnavailable: true } })
-  const result = await postJson(state, '/_tmax/observe', { scope: 'agent' })
-  assert.equal(result.statusCode, 207, 'an observation that attributed nothing is not success')
-  assert.equal(result.body.ok, false)
-  assert.deepEqual(result.body.items, [{
-    source: 'agent',
-    id: 'dsh:settings',
-    status: 'failed',
-    code: 'agent_settings_unavailable',
-    message: 'the DSH settings service is unavailable, so agent-configured providers cannot be observed',
-  }])
-  assert.ok(result.body.state, 'the response still carries state')
 })
 
 test('the legacy usage refresh route observes explicitly and reports per-item results', async () => {
@@ -1983,7 +1723,6 @@ test('tmax_status returns compact sections and triggers no observation', async (
   }
   assert.deepEqual(value.routes.map(route => route.provider), ['tmax'])
   assert.equal(value.providers.tmax.length, 2)
-  assert.equal(value.providers.agent.length, 0)
   assert.equal(value.routing[0].selection.qualifiedModel, 'opencode-go-2/public-model')
   const calls = await fake.calls()
   assert.equal(calls.some(argv => argv[0] === 'provider' && argv[1] === 'refresh'), false)
