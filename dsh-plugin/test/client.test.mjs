@@ -677,12 +677,24 @@ test('accounts are ordered by what they used, and a window prints usage of its q
   assert.equal(reading('consumed').quota, '100%', 'a percentage prints the 100% limit it is a share of')
 })
 
-test('unqualified reset times are marked, never dated', async () => {
+test('an unqualified reset shows its time as an approximation', async () => {
   const pure = (await moduleWith(inertReact())).__pure
   const unqualified = { kind: 'unqualified_epoch_millis', raw: 1795073471000, encoding: 'epoch_milliseconds_unqualified' }
   assert.equal(pure.resetQualified(unqualified), false)
   assert.equal(pure.resetUnqualified(unqualified), true)
+  // The plain date reader still refuses an unqualified epoch...
   assert.equal(pure.resetAt(unqualified), undefined)
+  // ...and the explicit approximation reader interprets it as Unix milliseconds.
+  const approx = pure.unqualifiedResetAt(unqualified)
+  assert.ok(approx instanceof Date)
+  assert.equal(approx.getTime(), 1795073471000)
+  assert.equal(pure.unqualifiedResetAt({ kind: 'unqualified_epoch_millis', raw: 'soon' }), undefined)
+  assert.equal(pure.unqualifiedResetAt({ kind: 'unqualified_epoch_seconds', raw: 1795073471, encoding: 'epoch_milliseconds_unqualified' }), undefined,
+    'another unqualified unit is not read as milliseconds')
+  assert.equal(pure.unqualifiedResetAt({ kind: 'unqualified_epoch_millis', raw: 1795073471000 }), undefined,
+    'a row that names no encoding is not read as milliseconds')
+  assert.equal(pure.unqualifiedResetAt({ at: '2026-11-26T15:42:16Z', kind: 'announced' }), undefined,
+    'a qualified reset is never approximated')
 
   const qualified = { at: '2026-11-26T15:42:16Z', kind: 'provider_timestamp' }
   assert.equal(pure.resetQualified(qualified), true)
@@ -695,7 +707,7 @@ test('unqualified reset times are marked, never dated', async () => {
     reset: unqualified,
   }, 0, t)
   assert.equal(unqualifiedReading.resetUnqualified, true)
-  assert.equal(unqualifiedReading.reset, undefined)
+  assert.ok(unqualifiedReading.reset instanceof Date, 'an unqualified reset still prints its time')
 
   const qualifiedReading = pure.windowReading({
     label: { key: 'weekly_allowance' },
@@ -706,6 +718,40 @@ test('unqualified reset times are marked, never dated', async () => {
   assert.ok(qualifiedReading.reset instanceof Date)
   // The fixture's tmax row is the qualified case.
   assert.equal(pure.windowReading(connected.providers.tmax[0].billing.rows[0], 0, t).resetUnqualified, false)
+})
+
+test('only an unqualified reset is printed as approximate', async () => {
+  const unqualified = { kind: 'unqualified_epoch_millis', raw: 1795599213774, encoding: 'epoch_milliseconds_unqualified' }
+  const qualified = { at: '2026-12-02T08:31:00Z', kind: 'provider_timestamp' }
+  const provider = (id, reset) => ({
+    id,
+    billing: {
+      kind: 'plan_allowance',
+      state: 'observed',
+      freshness: 'fresh',
+      notes: [],
+      rows: [{ label: { key: 'weekly' }, basis: 'consumed_percent', percent: 3, reset }],
+    },
+  })
+  const state = { ...connected, providers: { tmax: [provider('approx', unqualified), provider('exact', qualified)] } }
+  const page = await mountPage(withState(state))
+  try {
+    const tree = await page.mount()
+    const text = textOf(tree)
+    assert.equal(text.match(/resetApprox/g)?.length ?? 0, 1, 'only the unqualified reset carries the marker')
+    const cells = collectNodes(tree, node => node.props?.className === 'tmx-windowReset')
+    assert.equal(cells.length, 2)
+    const marked = cells.filter(cell => typeof cell.props?.title === 'string')
+    assert.equal(marked.length, 1, 'the approximate cell explains itself on hover')
+    assert.equal(marked[0].props.title, 'resetApproxNote')
+    assert.match(textOf(marked[0]), /^reset\s+resetApprox\s+\S/u, 'the marker sits beside the time it qualifies')
+    // The qualified cell prints its date with no marker and no note.
+    const exact = cells.find(cell => cell !== marked[0])
+    assert.doesNotMatch(textOf(exact), /resetApprox/)
+    assert.equal(exact.props?.title, undefined)
+  } finally {
+    page.restore()
+  }
 })
 
 test('verdict answers reachability, never a catalog group name', async () => {
@@ -1439,6 +1485,47 @@ test('Refresh is the only observation path: one explicit POST /_tmax/observe', a
     assert.match(text, /observeFailed:\s+kimi \(upstream_rejection: refused\)/)
     // The fresh snapshot from the observation response is adopted without a GET.
     assert.equal(page.calls.filter(call => pathOf(call) === '/_tmax/state').length, 1)
+  } finally {
+    page.restore()
+  }
+})
+
+test('a provider with no quota source is not a failed observation', async () => {
+  const updated = { ...connected, configurationRevision: 'bbbbbbbbccccccccddddddddeeeeeeeeffffffff000000001111111122222222' }
+  const page = await mountPage(async record => {
+    if (pathOf(record) === '/_tmax/state') return { status: 200, body: connected }
+    if (pathOf(record) === '/_tmax/observe') {
+      // The host counts only failed items as a failed observation, so blocked
+      // providers arrive as a 200 with a fresh state.
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          generatedAt: '2026-11-23T10:16:00Z',
+          dryRun: false,
+          state: updated,
+          items: [
+            { source: 'tmax', id: 'zai-coding-cn', status: 'refreshed' },
+            { source: 'tmax', id: 'cpa-us2', status: 'blocked', code: 'unsupported_source', message: 'this provider has no supported observation source' },
+            { source: 'tmax', id: 'llm-us', status: 'blocked', code: 'unsupported_source', message: 'this provider has no supported observation source' },
+            { source: 'tmax', id: 'kimi', status: 'blocked', code: 'credential_unavailable', message: 'the credential for this provider is unavailable' },
+          ],
+        },
+      }
+    }
+    return { status: 404, body: { ok: false } }
+  })
+  try {
+    await page.mount()
+    const text = textOf(await page.click('refresh'))
+    // No supported source is a capability of the provider, not a failed refresh:
+    // the page does not name those accounts at all.
+    assert.doesNotMatch(text, /cpa-us2/)
+    assert.doesNotMatch(text, /llm-us/)
+    assert.doesNotMatch(text, /unsupported_source/)
+    // An account a person can fix is still named, and counted once.
+    assert.match(text, /kimi \(credential_unavailable/)
+    assert.match(text, /observeFailed: 1/)
   } finally {
     page.restore()
   }

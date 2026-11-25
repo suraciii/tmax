@@ -247,8 +247,10 @@ account's quota is spent and when it comes back.
   its own errors, a route-ownership conflict, a tmax blocker — followed by every
   failed section read and route blocker, code first, with a **Retry** that reads
   again and never observes. **Refresh** observes every listed provider; an
-  observation names only the accounts it could not read. A failed read keeps the
-  last good table, labels it last known, and shows the failure once.
+  observation names only the accounts it could not read or that a person can
+  fix — a provider with no supported quota source is not a failed refresh. A
+  failed read keeps the last good table, labels it last known, and shows the
+  failure once.
 - **Accounts** — one card per tmax account that reports a quota window, closest
   to its limit first. Every window the account reports is one bar filled with
   what it has used, its name, what it used of what, and when it resets, whatever
@@ -260,7 +262,8 @@ account's quota is spent and when it comes back.
   **Resume quota** for a reported suspension, **Reset failure** for an active
   failure. Colour marks what needs attention — amber from 75% used, red from 90%
   — and a reset states its clock within a day, its date after that, and its year
-  only when that is not the current one.
+  only when that is not the current one; an unqualified epoch reads as Unix
+  milliseconds and prints as approximate with its caveat.
 - **Models** — every projected model and the account its routing selects; the
   target's default is marked.
 
