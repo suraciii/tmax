@@ -327,3 +327,47 @@ _Avoid_: Shared account session, model selection configuration, Agent session
 Usage measured from requests that passed through tmax. It is not a provider's
 account-wide usage report or an authoritative bill.
 _Avoid_: Subscription usage, remaining quota
+
+**Usage ledger**:
+A bounded local record of gateway-observed usage facts, one record per terminal
+gateway request, without request identity, request content, or decision evidence.
+It is not request history, an archive, a bill, or a balance.
+_Avoid_: Request history, usage database, audit log, telemetry
+
+**Usage record**:
+One terminal gateway request's typed usage facts inside the usage ledger. It is
+not a diagnostic request record and cannot be inspected as a request.
+_Avoid_: Request record, trace, transcript
+
+**Usage report**:
+A read-time aggregation over the usage ledger and allowance readings for a stated
+period and coverage. It is not a stored total, an all-time history, or a bill.
+_Avoid_: Dashboard total, usage statistics, account usage
+
+**Usage coverage**:
+The ledger range and known store gaps a usage report covers: evictions, dropped
+writes, clears, and unreadable periods. Traffic outside the gateway is unobserved
+with an extent that cannot be known. Coverage is not a completeness guarantee.
+_Avoid_: Coverage guarantee, full history, complete usage
+
+**Allowance reading history**:
+Dated provider quota or balance readings retained for display and insight. It is
+not the current quota observation, an eligibility fact, or a remaining balance.
+_Avoid_: Quota history as evidence, confirmed balance, current allowance
+
+**Effective price**:
+The price and source used to compute one cost estimate from observed usage. It is
+not a tariff schedule, a provider charge, or a settled price.
+_Avoid_: Provider price, real price, billed rate
+
+**Cost estimate**:
+A locally computed money estimate from observed typed usage and a frozen effective
+price. It is not a bill, actual spend, a subscription charge, or a remaining
+balance.
+_Avoid_: Bill, spend, charge, invoice
+
+**Insight**:
+A dated, scoped, deterministic statement that derives a claim from a usage report
+and proposes at most one explicit user action. It is not a fact, an alert, a
+routing rule, or an automatic policy.
+_Avoid_: Recommendation engine, anomaly, alert, forecast

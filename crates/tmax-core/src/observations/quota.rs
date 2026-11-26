@@ -628,6 +628,7 @@ pub(crate) async fn automatic_quota_tick(store: &Store, config: &Config) -> Resu
             state.next_check_at = Some(now + chrono::Duration::seconds(60));
             let captured = Capture {
                 binding: b,
+                provider: provider.clone(),
                 head_revision: revision(heads.heads.get(&key)).into(),
                 quota_epoch: state.epoch.clone(),
                 denial_revision: state.latest_denial_revision.clone(),

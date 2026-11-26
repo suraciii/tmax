@@ -32,6 +32,19 @@ dialog{padding:0;border:1px solid #dde7e0;border-radius:15px;width:min(640px,cal
 .quota-notes{margin:0 0 12px;padding-left:18px;font-size:11px;color:var(--muted);display:grid;gap:4px}
 .quota-hint{font-size:11px;color:var(--muted);margin:0 0 8px}
 .quota-dashboard{font-size:12px;margin:0 0 12px}
+.usage-select{font-size:12px;border:1px solid #dfe7e2;border-radius:7px;background:white;color:var(--ink);padding:8px 10px;min-width:0;max-width:100%}
+.usage-claim{font-size:13px;margin:0 0 12px;overflow-wrap:anywhere}
+.usage-insights{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.usage-insight{border:1px solid var(--line);border-radius:11px;background:white;padding:19px 21px;min-width:0}
+.usage-insight-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.usage-insight-head h3{font-size:14px}
+.usage-chart{width:100%;margin:4px 0 14px}
+.usage-chart svg{width:100%;height:auto;display:block}
+.usage-bar{fill:#cfe6da;stroke:#147d64;stroke-width:.8}
+.usage-bar.is-peak{fill:#147d64}
+.usage-chart-axis{stroke:var(--line);stroke-width:1}
+.usage-chart-label{stroke:none;fill:#83928a;font-size:9px;text-anchor:middle}
+.usage-chart-value{stroke:none;fill:#147d64;font-size:10px;font-weight:600;text-anchor:middle}
 @media(max-width:600px){
   .btn,.btn.small{min-height:44px;font-size:13px}
   .icon-button{width:44px;height:44px}
@@ -39,4 +52,8 @@ dialog{padding:0;border:1px solid #dde7e0;border-radius:15px;width:min(640px,cal
   .quota-row-value{font-size:16px}
   .quota-row-label{font-size:13px}
   .quota-row-meta{font-size:12px}
+  .usage-select{max-width:160px}
+  .usage-insights{grid-template-columns:1fr}
+  .usage-insight{padding:15px 16px}
+  .usage-claim{font-size:12px}
 }

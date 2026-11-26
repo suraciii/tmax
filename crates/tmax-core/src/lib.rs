@@ -19,6 +19,7 @@ pub mod service;
 pub mod sessions;
 mod skill;
 pub mod storage;
+pub(crate) mod usage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -127,6 +127,12 @@ async fn dispatch(store: &Store, r: &Request) -> Result<Value> {
             Err(error) => Err(error),
         };
     }
+    // Usage reads and the explicit clear work without a valid or present
+    // configuration and never contact the daemon. The bare `usage` path stays
+    // on the daemon control route below.
+    if path.starts_with("usage ") {
+        return crate::usage::handle(store, r).await;
+    }
     let file = match inspection::selected(store, r).await {
         Ok(Some(file)) => file,
         Ok(None) => {

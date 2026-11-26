@@ -461,6 +461,9 @@ pub(crate) struct QuotaAccess {
 }
 
 pub(crate) fn quota_access(source: &str, data: &Value) -> Option<QuotaAccess> {
+    if source == "official_balance_api" {
+        return balance_quota_access(data);
+    }
     if source != GO_USAGE_DESTINATION.source {
         return None;
     }
@@ -486,6 +489,40 @@ pub(crate) fn quota_access(source: &str, data: &Value) -> Option<QuotaAccess> {
         coverage: None,
         windows,
     })
+}
+
+/// Normalized availability of one official balance fact: one access state for
+/// every reported currency. A balance fact carries no reset clock, so the reset
+/// field stays empty and unqualified and no guard decision can read it.
+fn balance_quota_access(data: &Value) -> Option<QuotaAccess> {
+    let available = data.get("is_available").and_then(Value::as_bool)?;
+    let windows = data
+        .get("balance_infos")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|item| {
+            let currency = item.get("currency").and_then(Value::as_str)?;
+            Some(QuotaAccessWindow {
+                window: balance_window_identity(currency),
+                access_state: if available {
+                    "available"
+                } else {
+                    "unavailable"
+                },
+                reset_at: String::new(),
+            })
+        })
+        .collect();
+    Some(QuotaAccess {
+        coverage: None,
+        windows,
+    })
+}
+
+/// One balance window identity per reported currency. The display label and the
+/// access window share it, so an access state never matches another currency.
+fn balance_window_identity(currency: &str) -> String {
+    format!("balance-{currency}")
 }
 
 /// Surface-neutral display projection of one normalized quota fact. It owns
@@ -522,6 +559,43 @@ pub(crate) fn quota_display(source: &str, data: &Value) -> Option<Value> {
     };
     Some(json!({"plan": plan, "rows": rows, "notes": notes}))
 }
+
+/// Surface-neutral display projection of one normalized official balance fact:
+/// one remaining-credit row per reported currency. Exact decimal strings stay
+/// verbatim, and no percentage, conversion, or sum is computed; a balance has no
+/// window or reset clock.
+pub(crate) fn balance_display(source: &str, data: &Value) -> Option<Value> {
+    if source != "official_balance_api" {
+        return None;
+    }
+    let rows = data
+        .get("balance_infos")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|item| {
+            let currency = item.get("currency").and_then(Value::as_str)?;
+            let mut counters = serde_json::Map::new();
+            counters.insert("currency".into(), json!(currency));
+            for field in ["total_balance", "granted_balance", "topped_up_balance"] {
+                counters.insert(field.into(), item.get(field)?.clone());
+            }
+            Some(json!({
+                "label": {"key": balance_window_identity(currency)},
+                "basis": "credit",
+                "percent": Value::Null,
+                "counters": counters,
+                "unit": currency,
+                "reset": {"kind": "none"},
+            }))
+        })
+        .collect::<Vec<_>>();
+    Some(json!({
+        "plan": Value::Null,
+        "rows": rows,
+        "notes": ["balance_not_token_allowance"],
+    }))
+}
+
 fn go_display_rows(data: &Value) -> Vec<Value> {
     ["rolling", "weekly", "monthly"]
         .into_iter()
@@ -1738,7 +1812,6 @@ mod tests {
         let data = go_usage_body();
         for source in [
             "",
-            "official_balance_api",
             "official_models_api",
             "kimi_usage_api",
             "glm_monitor_api",
@@ -1748,6 +1821,74 @@ mod tests {
         ] {
             assert_eq!(quota_access(source, &data), None, "{source}");
         }
+    }
+
+    fn balance_body(available: bool) -> Value {
+        json!({"is_available":available,"balance_infos":[
+            {"currency":"USD","total_balance":"0001.2000","granted_balance":"0.2000","topped_up_balance":"1.0000"},
+            {"currency":"CNY","total_balance":"2.000","granted_balance":"0.000","topped_up_balance":"2.000"}]})
+    }
+
+    #[test]
+    fn balance_quota_access_projects_normalized_availability_per_currency() {
+        for (available, state) in [(true, "available"), (false, "unavailable")] {
+            let normalized =
+                normalize_observation("official_balance_api", &balance_body(available)).unwrap();
+            assert_eq!(
+                quota_access("official_balance_api", &normalized),
+                Some(QuotaAccess {
+                    coverage: None,
+                    windows: vec![
+                        QuotaAccessWindow {
+                            window: "balance-USD".into(),
+                            access_state: state,
+                            reset_at: String::new(),
+                        },
+                        QuotaAccessWindow {
+                            window: "balance-CNY".into(),
+                            access_state: state,
+                            reset_at: String::new(),
+                        },
+                    ],
+                })
+            );
+        }
+        // A fact without a normalized availability value qualifies no access.
+        assert_eq!(quota_access("official_balance_api", &json!({})), None);
+        assert_eq!(
+            quota_access(
+                "official_balance_api",
+                &json!({"is_available":"yes","balance_infos":[]})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn balance_display_projects_remaining_credit_rows_per_currency() {
+        let normalized =
+            normalize_observation("official_balance_api", &balance_body(true)).unwrap();
+        let display = balance_display("official_balance_api", &normalized).unwrap();
+        let rows = display["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["label"]["key"], "balance-USD");
+        assert_eq!(rows[0]["basis"], "credit");
+        assert!(rows[0]["percent"].is_null());
+        // Exact decimal strings are retained verbatim; no sum or conversion.
+        assert_eq!(
+            rows[0]["counters"],
+            json!({"currency":"USD","total_balance":"0001.2000","granted_balance":"0.2000","topped_up_balance":"1.0000"})
+        );
+        assert_eq!(rows[0]["unit"], "USD");
+        assert_eq!(rows[0]["reset"], json!({"kind":"none"}));
+        assert_eq!(rows[1]["label"]["key"], "balance-CNY");
+        assert_eq!(rows[1]["counters"]["currency"], "CNY");
+        assert_eq!(rows[1]["unit"], "CNY");
+        assert_eq!(display["plan"], Value::Null);
+        // Balance and discovery are not subscription quota displays.
+        assert!(quota_display("official_balance_api", &normalized).is_none());
+        assert!(balance_display("official_models_api", &normalized).is_none());
+        assert!(balance_display("go_usage_api", &normalized).is_none());
     }
 
     #[test]

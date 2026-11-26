@@ -1172,3 +1172,104 @@ async fn dropping_a_partial_error_response_preserves_text_and_marks_it_incomplet
     assert_eq!(entry["evidence_gap"], true);
     server.abort();
 }
+
+#[tokio::test]
+async fn terminal_request_records_one_content_free_usage_row_surviving_restart() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = Router::new().fallback(|| async {
+        axum::Json(
+            json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"private-request-prompt"}}],"usage":{"prompt_tokens":11,"completion_tokens":4}}),
+        )
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let (_temporary, runtime, initial) = fixture();
+    let mut config = initial.clone();
+    config
+        .providers
+        .get_mut("p")
+        .unwrap()
+        .endpoints
+        .insert("chat-completions".into(), format!("http://{address}/v1"));
+    publish(&runtime, &initial, &config, "usage-capture");
+    runtime.open();
+    let request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", "Bearer test-local-key")
+        .header("user-agent", "pi (linux test; x64)")
+        .body(Body::from(
+            r#"{"model":"p/m","messages":[{"role":"user","content":"private-request-prompt"}]}"#,
+        ))
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    to_bytes(response.into_body(), 4096).await.unwrap();
+    let store = runtime.store.clone();
+    drop(runtime);
+    let rows = crate::gateway::test_support::usage_rows(&store);
+    assert_eq!(rows.len(), 1, "exactly one row per terminal request");
+    let row = &rows[0];
+    assert_eq!(row["origin"], "client");
+    assert_eq!(row["outcome"], "completed");
+    assert_eq!(row["stage"], "downstream_delivery");
+    assert_eq!(row["requested_model"], "p/m");
+    assert_eq!(row["model_kind"], "concrete");
+    assert_eq!(row["provider"], "p");
+    assert_eq!(row["qualified_model"], "p/m");
+    assert_eq!(row["protocol"], "chat-completions");
+    assert_eq!(row["input_tokens"], 11);
+    assert_eq!(row["output_tokens"], 4);
+    assert_eq!(row["usage_state"], "reported");
+    assert_eq!(row["cost_state"], "unpriced");
+    assert!(row["admitted_at_ms"].as_i64().is_some());
+    let encoded = row.to_string();
+    for excluded in [
+        "private-request-prompt",
+        "test-provider-key",
+        "test-local-key",
+    ] {
+        assert!(
+            !encoded.contains(excluded),
+            "usage row retained content or credentials: {excluded}"
+        );
+    }
+    // The ledger survives a runtime restart; in-memory history does not.
+    let restarted = Runtime::new(store.clone(), "restarted".into()).unwrap();
+    let retained = crate::gateway::test_support::usage_rows(&restarted.store);
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0], rows[0]);
+    drop(restarted);
+    server.abort();
+}
+
+#[tokio::test]
+async fn pre_admission_rejection_records_one_row_without_destination_evidence() {
+    let (temporary, runtime, _config) = fixture();
+    let store = runtime.store.clone();
+    // Admission stays closed until `Runtime::open`, matching a stopped listener.
+    let request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", "Bearer test-local-key")
+        .body(Body::from(
+            r#"{"model":"p/m","messages":[{"role":"user","content":"x"}]}"#,
+        ))
+        .unwrap();
+    let response = forward(State(runtime.clone()), request).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    to_bytes(response.into_body(), 4096).await.unwrap();
+    drop(runtime);
+    let rows = crate::gateway::test_support::usage_rows(&store);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row["outcome"], "rejected");
+    assert_eq!(row["stage"], "local_admission");
+    assert_eq!(row["reason_code"], "listener_stopped");
+    assert_eq!(row["origin"], "client");
+    assert!(row["provider"].is_null());
+    assert!(row["qualified_model"].is_null());
+    assert!(row["admitted_at_ms"].is_null());
+    assert_eq!(row["cost_state"], "none");
+    drop(temporary);
+}

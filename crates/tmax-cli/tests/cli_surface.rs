@@ -410,6 +410,70 @@ fn effort_map_binary_surface_requires_supported_protocol_and_finite_operands() {
 }
 
 #[test]
+fn usage_group_help_lists_every_leaf_with_its_scope_and_exits() {
+    let root = tmax(&["--help"]);
+    assert!(root.status.success());
+    let help = String::from_utf8(root.stdout).unwrap();
+    assert!(
+        help.lines()
+            .any(|line| line.trim_start().starts_with("usage "))
+    );
+    let group = tmax(&["usage", "--help"]);
+    assert!(group.status.success());
+    let group_help = String::from_utf8(group.stdout).unwrap();
+    for leaf in ["summary", "breakdown", "insights", "clear"] {
+        assert!(group_help.contains(leaf), "{leaf}");
+    }
+    for args in [
+        vec!["usage", "summary", "--help"],
+        vec!["usage", "breakdown", "--help"],
+        vec!["usage", "insights", "--help"],
+        vec!["usage", "clear", "--help"],
+    ] {
+        let output = tmax(&args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(help.contains("Example: tmax usage"), "{args:?}");
+        assert!(help.contains("Exit:"), "{args:?}");
+    }
+}
+
+#[test]
+fn usage_scope_arguments_are_rejected_before_any_ledger_access() {
+    for (args, operation) in [
+        (
+            vec![
+                "usage",
+                "summary",
+                "--period",
+                "7d",
+                "--since",
+                "2026-11-01T00:00:00Z",
+            ],
+            "usage summary",
+        ),
+        (
+            vec!["usage", "summary", "--since", "2026-11-01T00:00:00Z"],
+            "usage summary",
+        ),
+        (
+            vec!["usage", "summary", "--until", "2026-11-08T00:00:00Z"],
+            "usage summary",
+        ),
+        (vec!["usage", "summary", "--dry-run"], "usage summary"),
+        (vec!["usage", "breakdown"], "usage breakdown"),
+        (
+            vec!["usage", "breakdown", "--by", "unknown"],
+            "usage breakdown",
+        ),
+        (vec!["usage", "clear", "--period", "7d"], "usage clear"),
+    ] {
+        let response = json_error(&tmax(&args));
+        assert_eq!(response["operation"], operation, "{args:?}");
+    }
+}
+
+#[test]
 fn dsh_command_group_is_removed_and_dsh_targets_use_the_inventory() {
     for removed in [["dsh", "projection"], ["dsh", "connect"]] {
         let response = json_error(&tmax(&removed));

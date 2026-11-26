@@ -20,6 +20,7 @@ const icons = {
   copy:'<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   check:'<path d="m5 12 4 4L19 6"/>',
   history:'<path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2"/>',
+  usage:'<path d="M4 20V11m5 9V4m5 16v-6m5 6V8"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.info}</svg>`;
 const areas = {
@@ -28,6 +29,7 @@ const areas = {
   models:['模型','MODELS & ROUTING','管理接入下的模型，以及工具可选择的网关入口。'],
   agents:['编程工具','CONNECTED TOOLS','为编程工具选择模型，并应用到本地配置。'],
   gateway:['网关','LOCAL MODEL GATEWAY','配置网关、管理工具可选入口和查看请求记录。'],
+  usage:['用量','USAGE ANALYTICS','查看网关观测到的用量、额度读数与证据约束的洞察。'],
 };
 const agentTypes = [['codex','Codex','C',''],['pi','pi','π','amber'],['omp','omp','o','purple'],['opencode','OpenCode','O','blue'],['hermes','Hermes','H','amber'],['dsh','DeepSeek Harness','D','blue']];
 const integrationNames = {'deepseek':'DeepSeek','codex-subscription':'Codex 订阅','opencode-go':'OpenCode Go','kimi-code-plan-cn':'Kimi Code Plan · 中国','kimi-code-plan-global':'Kimi Code Plan · 全球','glm-coding-plan':'GLM Coding Plan','stepfun-token-plan':'StepFun Step Plan','minimax-cn-coding-plan':'MiniMax Coding Plan · 中国','minimax-coding-plan':'MiniMax Coding Plan · 全球','custom':'自定义集成'};
@@ -138,7 +140,7 @@ function quotaSection(data,id,mode='detail') {
   return `<h3 class="subheading">额度</h3>${notice('额度未知不代表额度为零；只显示已获取的信息，不自动请求上游。')}<p class="quota-status">${escapeHtml(quotaStatus(observation))}${sourceName?` · 来源 ${escapeHtml(sourceName)}`:''}</p>${planLine}${table}${notes.length?`<ul class="quota-notes">${notes.map(note=>`<li>${escapeHtml(note)}</li>`).join('')}</ul>`:''}<p class="quota-hint">${rows.length?'时间均为本机时区；重置为供应商报告值，不代表已经完成。':''}</p>${billing?.dashboard?`<p class="quota-dashboard"><a href="${escapeHtml(billing.dashboard)}" target="_blank" rel="noreferrer">在供应商控制台核对</a></p>`:''}${actions}`;
 }
 
-const state = {area:'overview', catalog:[], config:null, providers:[], models:[], agents:[], runtime:null, integrations:[], errors:[], revision:null, loaded:false, generation:0, modelKind:'concrete', query:'', busy:false, dialogGeneration:0};
+const state = {area:'overview', catalog:[], config:null, providers:[], models:[], agents:[], runtime:null, integrations:[], errors:[], revision:null, loaded:false, generation:0, modelKind:'concrete', query:'', busy:false, dialogGeneration:0, usagePeriod:'today', usageBreakdown:'provider', usage:null, usageError:null, usageRequest:0, usageBreakdownRequest:0, usageInsightsRequest:0};
 let toastTimer;
 let revealGeneration=0;
 const badge = (text, tone='') => `<span class="badge ${tone}">${escapeHtml(text)}</span>`;
@@ -316,10 +318,10 @@ function navigate(area) {
 }
 function render() {
   if (!state.loaded) return;
-  const actions={overview:button('添加接入','provider-add','','primary','plus'),providers:button('添加接入','provider-add','','primary','plus'),models:state.modelKind==='alias'?button('新建网关入口','gateway-entry-add','','primary','plus')+button('高级新建','alias-add','','','plus'):button('添加模型','model-add','','','plus'),agents:button('添加工具配置','agent-add','','primary','plus'),gateway:button('新建网关入口','gateway-entry-add','','primary','plus')+button('网关设置','gateway-configure','','','settings')};
+  const actions={overview:button('添加接入','provider-add','','primary','plus'),providers:button('添加接入','provider-add','','primary','plus'),models:state.modelKind==='alias'?button('新建网关入口','gateway-entry-add','','primary','plus')+button('高级新建','alias-add','','','plus'):button('添加模型','model-add','','','plus'),agents:button('添加工具配置','agent-add','','primary','plus'),gateway:button('新建网关入口','gateway-entry-add','','primary','plus')+button('网关设置','gateway-configure','','','settings'),usage:''};
   $('page-actions').innerHTML=actions[state.area];
   if (!state.config) { $('content').innerHTML=empty('暂时无法读取配置','请检查本地配置或使用高级操作查看校验结果。',button('校验配置','operation','config validate'),'info'); return; }
-  ({overview:renderOverview,providers:renderProviders,models:renderModels,agents:renderAgents,gateway:renderGateway}[state.area])();
+  ({overview:renderOverview,providers:renderProviders,models:renderModels,agents:renderAgents,gateway:renderGateway,usage:renderUsage}[state.area])();
 }
 function metric(label, value, sub, glyph, status=false) {
   return `<div class="metric"><div class="metric-top">${label}${icon(glyph)}</div><div class="metric-value ${status?'status-value':''}">${escapeHtml(value)}</div><div class="metric-bottom">${escapeHtml(sub)}</div></div>`;
@@ -401,6 +403,298 @@ function renderGateway() {
   const supervision=runtime?.supervision;
   const supervisionNames={supervised:'已由系统托管',unsupervised:'当前进程未托管',starting:'正在启动',recovering:'正在自动恢复',stopped:'已停止',blocked:'需要处理',failed:'恢复失败',unavailable:'无法确认'};
   $('content').insertAdjacentHTML('beforeend',panel('系统托管','进程恢复、网关就绪和登录启动是独立状态',`<div class="detail-facts">${fact('托管状态',supervisionNames[supervision?.state] || '未知')}${fact('系统管理器',supervision?.manager || '未知')}${fact('退出登录后继续运行',supervision?.session?.survives_logout===true?'已确认支持':supervision?.session?.survives_logout===false?'当前会话不支持':'尚未确认')}${fact('最近阻塞原因',supervision?.reason_code || '无已报告阻塞')}</div>${running?`<div class="actions">${button('重启服务','operation','gateway restart','','refresh')}</div>`:''}${supervision?detail(supervision,'查看托管与恢复详情'):''}`));
+}
+
+// Usage analytics is a read-only projection over the local ledger. Every value
+// keeps its typed state: an unknown counter, an unpriced axis, a missing
+// percentile, an unknown group key, and an unavailable store are never
+// rendered as zero. Reads are on demand; nothing polls and nothing mutates.
+const usagePeriods=[['today','今天'],['7d','7 天'],['30d','30 天'],['90d','90 天'],['all','全部']];
+const usageDimensions=[['provider','接入'],['model','模型'],['requested','请求模型'],['target','工具目标'],['protocol','原生协议'],['outcome','请求结果'],['origin','流量来源'],['day','本地日期']];
+const usagePick=(table,value,fallback='未知')=>value==null?fallback:(table[value] || String(value));
+const usagePeriodName=value=>(usagePeriods.find(([id])=>id===value) || [value,value])[1];
+const usageDimensionName=value=>(usageDimensions.find(([id])=>id===value) || [value,value])[1];
+const usageOutcomeNames={completed:'已完成',failed:'失败',rejected:'被拒绝',cancelled:'已取消',interrupted:'被中断',unknown:'结果未知'};
+const usageRecordStates={reported:'已报告',partial:'部分观测',unknown:'未知',ambiguous:'歧义'};
+const usageCoverageStates={available:'覆盖可用',absent:'尚无记录',unavailable:'覆盖不可用'};
+const usageMembershipNames={admission:'准入时间',receipt:'接收时间',mixed:'混合'};
+const usageBasisNames={consumed_percent:'已用百分比',remaining_percent:'剩余百分比',counters:'计数',credit:'Credit'};
+const usageAccessNames={available:'可用',allowed:'允许访问',blocked:'已阻止',denied:'被拒绝',limited:'受限',unavailable:'不可用',unknown:'未知',expired:'已过期'};
+const usageCostReasons={unpriced:'未定价',no_priced_axes:'无可用计价轴',mixed_billing_scope:'混合计费范围'};
+const usageRuleNames={quota_pace:'额度节奏',unpriced_usage:'未计价用量',failure_cluster:'失败聚集',cost_concentration:'成本集中',latency_regression:'延迟回归',attribution_gap:'归属缺口'};
+const usageRefusalNames={single_reading:'单次读数',binding_changed:'授权绑定已变更',window_before_coverage:'窗口早于覆盖范围',coverage_gap:'覆盖范围存在缺口',unknown_basis:'读数基准无法换算',low_usage:'用量过低',no_reset_clock:'没有合格的重置时间',mixed_credits:'混合 Credit 读数',below_threshold:'低于触发阈值',low_priced_share:'计价记录占比过低',low_samples:'样本不足',no_baseline:'没有对照周期'};
+const usageReasonNames={store_absent:'本地账本尚未创建',store_unreadable:'账本无法读取',store_corrupt:'账本已损坏',store_version_unsupported:'账本版本不受支持',read_failed:'读取失败',usage_store_unavailable:'本地用量账本不可用',no_daemon_history:'守护进程未保留用量历史'};
+const usageFailureNotes={invalid_arguments:'当前版本不接受这个用量读取参数。',unsupported_operation:'当前版本不提供此用量操作。',usage_store_unavailable:'本地用量账本不可用，不能推断用量。',internal:'本地服务内部错误。',not_found:'本地服务未提供此操作。'};
+const usageScopeNote='覆盖范围仅限网关观测：tmax 网关之外的直连与原生上游流量未观测，显式探针单独计数，诊断请求历史不在本报告内。';
+const usageNumber=value=>value==null?'未知':(Number.isSafeInteger(value)?value.toLocaleString('zh-CN'):String(value));
+// Exact decimal strings are formatted as text; no float rounding is applied.
+const usageMoney=estimate=>{const text=String(estimate ?? '');if(!/^-?\d+(\.\d+)?$/.test(text))return text || '未知';const negative=text.startsWith('-');const [whole,fraction='']=(negative?text.slice(1):text).split('.');return `${negative?'-':''}${whole}.${fraction.padEnd(6,'0').slice(0,6)}`;};
+const usageInstant=value=>value==null?'未知':quotaTime(value);
+const usageReasonText=code=>code==null?'未提供原因代码':`${usageReasonNames[code] || '请查看原因代码'}（${escapeHtml(String(code))}）`;
+const usageFailureText=response=>{const body=response?.body || {};const code=String(body.code || '未知原因');const detail=body.blockers?.[0]?.message || body.message || '';const note=usageFailureNotes[code]?`（${usageFailureNotes[code]}）`:'';return `${detail?detail+' · ':''}${code}${note} · 退出码 ${response?.exit_code ?? '未知'}`;};
+const usageActionText=action=>{
+  if(!action || typeof action!=='object')return '未提供动作';
+  if(action.operation){
+    const args=Object.entries(action.arguments || {}).flatMap(([key,values])=>Array.isArray(values)?values.map(value=>`--${key} ${value}`):[]);
+    return `建议执行：${[action.operation,...args].join(' ')}（需自行确认后执行，本页不提供执行按钮）`;
+  }
+  return String(action.message || '未提供动作');
+};
+const usageResetText=reset=>{if(reset==null)return '未返回重置时间';if(typeof reset==='string')return reset;return quotaReset(reset);};
+const usageDayLabel=key=>/^\d{4}-\d{2}-\d{2}/.test(key)?key.slice(5):key;
+async function usageFetch(operation,args) {
+  const response=await execute(operation,[],args);
+  if(!isSuccess(response))throw new Error(usageFailureText(response));
+  return response.body.data;
+}
+function usageCoverageNotice(coverage,label) {
+  const coverageState=coverage?.state;
+  const tone=coverageState==='unavailable'?'error':coverageState==='absent'?'warning':'';
+  const gaps=coverage?.gaps;
+  const range=coverage?.oldest==null&&coverage?.newest==null?'无保留记录':`${usageInstant(coverage.oldest)} 至 ${usageInstant(coverage.newest)}`;
+  const parts=[`保留范围 ${range}`,`保留记录 ${usageNumber(coverage?.retained_records)}`,`已逐出 ${usageNumber(coverage?.evicted)}`,`已丢弃 ${usageNumber(coverage?.dropped)}`,`已知缺口 ${usageNumber(Array.isArray(gaps)?gaps.length:gaps)}`];
+  if(coverage?.cleared_at!=null)parts.push(`清空时间 ${usageInstant(coverage.cleared_at)}`);
+  return notice(`<strong>${escapeHtml(label)}</strong>：${escapeHtml(usageCoverageStates[coverageState] || '状态未知')}${coverage?.reason_code!=null?` · ${usageReasonText(coverage.reason_code)}`:''}<p>${parts.map(escapeHtml).join(' · ')}</p>`,tone);
+}
+function usagePercentile(percentile,duration) {
+  if(percentile==null) {
+    if(duration?.state==='low_samples')return {value:'样本不足',sub:`${usageNumber(duration.samples)} 个样本，低于 ${usageNumber(duration.sample_minimum)} 个下限`};
+    if(duration?.state==='no_records')return {value:'无样本',sub:'本周期没有带时长的完成请求'};
+    return {value:'未知',sub:'未提供百分位或原因'};
+  }
+  return {value:`${usageNumber(percentile)} ms`,sub:`${usageNumber(duration?.samples)} 个样本 · 最近位法`};
+}
+function usageCostRow(cost) {
+  const provider=cost?.provider;
+  const estimate=cost?.estimate;
+  const value=estimate==null?badge(usagePick(usageCostReasons,cost?.estimate_reason,'未提供估算'),'amber'):`<strong class="mono">USD ${escapeHtml(usageMoney(estimate))}</strong>`;
+  const counts=`已计价 ${usageNumber(cost?.priced)} · 部分计价 ${usageNumber(cost?.partially_priced)} · 未计价 ${usageNumber(cost?.unpriced)}`;
+  return `<tr><td><strong>${escapeHtml(provider==null?'未知':providerName(provider))}</strong><small class="mono">${escapeHtml(provider==null?'未知':provider)}</small></td><td>${value}${cost?.currency&&cost.currency!=='USD'?`<small class="label-note">币种 ${escapeHtml(String(cost.currency))}</small>`:''}</td><td>${escapeHtml(counts)}</td><td>${escapeHtml((cost?.sources || []).join('、') || '无')}</td><td>${escapeHtml((cost?.unpriceable_axes || []).join('、') || '无')}</td></tr>`;
+}
+function usageCostSection(data) {
+  const costs=Array.isArray(data?.costs)?data.costs:[];
+  const omitted=data?.omitted_costs;
+  const note=notice('每个接入单独估算；不同接入、币种、窗口或单位的估算不相加，因此这里没有合计行。订阅用量按相同有效价格折算，是 API 等价估算，不是订阅费用或已发生扣款。');
+  const body=costs.length?`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>接入</th><th>成本估算</th><th>计价记录</th><th>价格来源</th><th>无法计价轴</th></tr></thead><tbody>${costs.map(usageCostRow).join('')}</tbody></table></div><p class="muted">${omitted?`另有 ${usageNumber(omitted)} 个接入超出上限未显示。`:'没有超出上限的接入。'}</p>`:empty('本周期没有接入成本','没有保留记录的接入不会出现在这里；未定价不等于零成本。','','providers',true);
+  return `<div class="section-label"><h2>成本估算</h2><p>按接入实例，不合并</p></div>${note}${body}`;
+}
+function usageRowCost(row) {
+  const cost=row?.cost;
+  if(cost && typeof cost==='object') {
+    if(cost.estimate==null)return badge(usagePick(usageCostReasons,cost.estimate_reason,'未定价'),'amber');
+    return `<span class="mono">${escapeHtml(cost.currency || 'USD')} ${escapeHtml(usageMoney(cost.estimate))}</span>`;
+  }
+  return row?.cost_reason==='cross_provider'?badge('跨接入不合计',''):'未提供';
+}
+function usageBreakdownRow(row) {
+  const tokens=row?.usage || {};
+  const key=row?.key;
+  return `<tr><td>${key==null?badge('未知','amber'):`<strong>${escapeHtml(String(key))}</strong>`}</td><td>${escapeHtml(usageNumber(row?.requests))}</td><td>${escapeHtml(usageNumber(tokens.input_tokens))}</td><td>${escapeHtml(usageNumber(tokens.output_tokens))}</td><td>${escapeHtml(usageNumber(tokens.cache_read_tokens))}</td><td>${escapeHtml(usageNumber(tokens.cache_write_tokens))}</td><td>${usageRowCost(row)}</td></tr>`;
+}
+function usageBreakdownSection(error) {
+  const dimension=state.usageBreakdown;
+  const data=state.usage?.breakdown;
+  const rows=Array.isArray(data?.rows)?data.rows:[];
+  const selector=`<select id="usage-breakdown-dimension" class="usage-select" aria-label="分组维度">${usageDimensions.map(([id,label])=>`<option value="${escapeHtml(id)}"${id===dimension?' selected':''}>${escapeHtml(label)}</option>`).join('')}</select>`;
+  const heading=`<div class="section-label"><h2>分组统计</h2><div class="actions">${selector}${button('重新读取','usage-breakdown',dimension,'small','refresh')}</div></div>`;
+  const body=error?notice('分组读取失败：'+escapeHtml(error)+'。','error')
+    :!data?empty('尚未读取分组','选择维度后读取；只显示聚合行，不显示单条用量记录。','','models',true)
+    :rows.length?`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>${escapeHtml(usageDimensionName(dimension))}</th><th>请求数</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>成本估算</th></tr></thead><tbody>${rows.map(usageBreakdownRow).join('')}</tbody></table></div><p class="muted">${data.omitted_rows?`另有 ${usageNumber(data.omitted_rows)} 行超出上限未显示。`:'没有超出上限的分组行。'}</p>`
+    :empty('本周期没有分组行','没有保留记录时不会有分组行；这不代表没有请求发生。','','models',true);
+  return heading+body;
+}
+// Inline SVG geometry only: CSP `style-src 'self'` forbids style attributes and
+// JS style mutation, so bar size comes from viewBox-scaled attributes.
+function usageTrendChart(points) {
+  const width=320,baseline=112,top=16,span=baseline-top,gap=3;
+  const barWidth=Math.max(2,(width-8)/points.length-gap);
+  const max=Math.max(...points.map(point=>point.value));
+  const step=Math.max(1,Math.ceil(points.length/6));
+  const bars=points.map((point,index)=>{
+    const x=4+index*(barWidth+gap);
+    const height=max>0&&point.value>0?Math.max(2,Math.round(point.value/max*span)):0;
+    return `<rect class="usage-bar${max>0&&point.value===max?' is-peak':''}" x="${x.toFixed(2)}" y="${(baseline-height).toFixed(2)}" width="${barWidth.toFixed(2)}" height="${height.toFixed(2)}" rx="2"><title>${escapeHtml(point.key)} · ${escapeHtml(usageNumber(point.value))} 次请求</title></rect>`;
+  }).join('');
+  const labels=points.map((point,index)=>{
+    if(index%step)return '';
+    return `<text class="usage-chart-label" x="${(4+index*(barWidth+gap)+barWidth/2).toFixed(2)}" y="${baseline+15}">${escapeHtml(usageDayLabel(point.key))}</text>`;
+  }).join('');
+  const peakIndex=max>0?points.findIndex(point=>point.value===max):-1;
+  const peak=peakIndex<0?'':`<text class="usage-chart-value" x="${(4+peakIndex*(barWidth+gap)+barWidth/2).toFixed(2)}" y="${(baseline-Math.max(2,Math.round(points[peakIndex].value/max*span))-5).toFixed(2)}">${escapeHtml(usageNumber(points[peakIndex].value))}</text>`;
+  const flat=max>0?'':notice('所选周期内各日期的请求数都为 0，因此只显示基线；这不代表没有流量发生。','warning');
+  return `<div class="usage-chart"><svg viewBox="0 0 ${width} 132" role="img" aria-label="每日请求数柱状图"><line class="usage-chart-axis" x1="2" y1="${baseline}" x2="${width-2}" y2="${baseline}"/>${bars}${labels}${peak}</svg></div>${flat}`;
+}
+function usageTrendSection(day,error) {
+  const heading=`<div class="section-label"><h2>每日趋势</h2><p>按本地日期聚合</p></div>`;
+  const note=notice('按日数据是聚合结果，不是用量记录；缺失或未知的日期不绘制，未知不等于零。');
+  if(error)return heading+note+notice('按日趋势读取失败：'+escapeHtml(error)+'。','error');
+  const rows=Array.isArray(day?.rows)?day.rows:[];
+  const known=rows.filter(row=>row?.key!=null&&row.requests!=null&&Number.isFinite(Number(row.requests)));
+  const unknownCount=rows.filter(row=>row?.key!=null&&(row.requests==null||!Number.isFinite(Number(row.requests)))).length;
+  const unknownNote=unknownCount?notice(`${unknownCount} 个本地日期的请求数未知，未绘制；未知不等于零。`,'warning'):'';
+  if(!known.length)return heading+note+unknownNote+empty('没有可绘制的按日数据','所选周期内没有按日聚合行；这不代表没有流量发生。','','models',true);
+  const points=known.slice(-45).map(row=>({key:String(row.key),value:Math.max(0,Math.round(Number(row.requests)))}));
+  const earlier=known.length-points.length;
+  const omitted=day?.omitted_rows?`<p class="muted">另有 ${usageNumber(day.omitted_rows)} 行超出上限未显示。</p>`:'';
+  const truncated=earlier?`<p class="muted">图表显示最近 ${points.length} 个日期，另有 ${earlier} 个更早的日期未绘制。</p>`:'';
+  return heading+note+unknownNote+panel('每日请求数','不含探针的终结请求；柱高按区间最高值缩放',usageTrendChart(points))+truncated+omitted;
+}
+function usageReadingRow(reading) {
+  const provider=reading?.provider;
+  const percent=reading?.percent;
+  const counters=reading?.counters;
+  const value=percent!=null?`${escapeHtml(String(percent))}%`
+    :counters!=null?`${escapeHtml(typeof counters==='object'?JSON.stringify(counters):String(counters))}${reading?.unit!=null?` ${escapeHtml(String(reading.unit))}`:''}`
+    :'读数未知';
+  return `<tr><td><strong>${escapeHtml(provider==null?'未知':providerName(provider))}</strong>${reading?.binding!=null?`<small class="mono">${escapeHtml(String(reading.binding))}</small>`:''}</td><td>${escapeHtml(reading?.window==null?'未知':String(reading.window))}</td><td>${escapeHtml(usagePick(usageBasisNames,reading?.basis))}</td><td>${value}</td><td>${escapeHtml(usageInstant(reading?.observed_at))}</td><td>${escapeHtml(reading?.source==null?'未知':String(reading.source))}</td><td>${escapeHtml(usagePick(usageAccessNames,reading?.access_state))}</td><td>${escapeHtml(usageResetText(reading?.reset))}</td></tr>`;
+}
+function usageReadingsSection(data) {
+  const readings=Array.isArray(data?.allowances)?data.allowances:[];
+  const omitted=data?.omitted_allowances;
+  const note=notice('额度读数是有日期的展示证据，不是当前额度；不从已观测用量中扣减，也不计算剩余额度。当前额度观测仍是可用性、守卫与暂停判断的唯一权威来源。');
+  const body=readings.length?`<div class="panel table-wrap"><table class="data-table"><thead><tr><th>接入</th><th>窗口</th><th>基准</th><th>读数</th><th>观测时间</th><th>来源</th><th>访问状态</th><th>重置</th></tr></thead><tbody>${readings.map(usageReadingRow).join('')}</tbody></table></div><p class="muted">${omitted?`另有 ${usageNumber(omitted)} 条读数超出上限未显示，保留的是最新读数。`:'没有超出上限的读数。'}</p>`:empty('本周期没有额度读数','发布额度观测时会保留一条带日期的读数；没有读数不代表额度未变动。','','providers',true);
+  return `<div class="section-label"><h2>额度读数</h2><p>与已观测用量分开</p></div>${note}${body}`;
+}
+function usageEvidence(evidence) {
+  if(evidence==null)return '';
+  if(typeof evidence!=='object')return `<p class="usage-claim">${escapeHtml(String(evidence))}</p>`;
+  const entries=Object.entries(evidence);
+  const scalars=entries.filter(([,value])=>value==null||['string','number','boolean'].includes(typeof value));
+  const nested=entries.filter(([,value])=>value!=null&&typeof value==='object');
+  const facts=scalars.length?`<div class="detail-facts">${scalars.map(([key,value])=>fact(`证据 · ${key}`,value==null?'未知':String(value))).join('')}</div>`:'';
+  return facts+(nested.length?detail(Object.fromEntries(nested),'查看证据中的结构化字段'):'');
+}
+function usageInsightCard(insight) {
+  return `<article class="usage-insight"><div class="usage-insight-head"><h3>${escapeHtml(usagePick(usageRuleNames,insight?.rule,'未知规则'))}</h3>${badge('建议','amber')}</div><p class="usage-claim">${escapeHtml(insight?.claim==null?'未提供结论。':String(insight.claim))}</p>${usageEvidence(insight?.evidence)}<div class="detail-facts">${fact('依赖假设',insight?.assumption==null?'无':String(insight.assumption))}${fact('建议动作',usageActionText(insight?.action))}${fact('生成时间',usageInstant(insight?.generated_at))}</div>${detail(insight,'查看洞察原始字段')}</article>`;
+}
+function usageRefusalRow(refusal) {
+  return `<div class="list-row split"><div class="grow"><strong>${escapeHtml(usagePick(usageRuleNames,refusal?.rule,'未知规则'))}</strong><small class="label-note">${escapeHtml(usagePick(usageRefusalNames,refusal?.reason,'未触发'))}${refusal?.reason!=null?` · ${escapeHtml(String(refusal.reason))}`:''}</small></div>${badge('未触发','')}</div>`;
+}
+function usageInsightsSection(insights,error) {
+  const heading=`<div class="section-label"><h2>洞察与未触发规则</h2><div class="actions">${button('重新评估','usage-insights','','small','refresh')}</div></div>`;
+  const banner=notice('洞察是确定性建议，只依据本报告证据；不会自动应用，不会创建告警，也不会修改路由、优先级、额度守卫或失败计数。');
+  if(error)return heading+banner+notice('洞察读取失败：'+escapeHtml(error)+'。','error');
+  const fired=Array.isArray(insights?.insights)?insights.insights:[];
+  const refusals=Array.isArray(insights?.refusals)?insights.refusals:[];
+  const omitted=insights?.omitted_insights,omittedRefusals=insights?.omitted_refusals;
+  const cards=fired.length?`<div class="usage-insights">${fired.map(usageInsightCard).join('')}</div>`:empty('本周期没有触发的洞察','没有规则触发；这不代表用量健康，也不代表没有问题。',refusals.length?'':'','info',true);
+  const refusalList=refusals.length?`<div class="panel"><div class="panel-header"><div><h2>未触发的规则</h2><p>每条给出第一个未满足的条件</p></div></div><div class="panel-body">${refusals.map(usageRefusalRow).join('')}</div></div>`:'';
+  const notes=[omitted?`另有 ${usageNumber(omitted)} 条洞察超出上限未显示。`:'',omittedRefusals?`另有 ${usageNumber(omittedRefusals)} 条未触发记录超出上限未显示。`:''].filter(Boolean).map(escapeHtml).join(' ');
+  return heading+banner+cards+refusalList+(notes?`<p class="muted">${notes}</p>`:'')+(!fired.length&&!refusals.length?notice('本次评估没有适用的规则范围。','warning'):'');
+}
+function usageReport(summary,day,insights,notes) {
+  const coverage=summary?.coverage;
+  const scope=notice(usageScopeNote);
+  const banner=usageCoverageNotice(coverage,'账本覆盖');
+  const readingsBanner=coverage?.readings?usageCoverageNotice(coverage.readings,'额度读数覆盖'):'';
+  if(coverage?.state!=='available') {
+    const absent=coverage?.state==='absent';
+    const reason=absent
+      ?'账本尚未记录任何用量，因此没有可显示的请求、成本或读数；未触发的规则仍会说明原因。这不代表没有流量发生。'
+      :'覆盖范围当前不可用，因此不显示请求、成本、读数或洞察；未知与不可用都不等于零。';
+    const head=banner+readingsBanner+scope+notice(reason,absent?'warning':'error');
+    // An absent store still evaluates every period-wide rule, and each refusal
+    // is that rule's first failing condition, so refusals render with their
+    // rule and reason labels. Unavailable coverage fabricates no insight or
+    // refusal, so only a failed read adds its typed notice there.
+    if(absent)return head+`<div id="usage-insights">${usageInsightsSection(insights,notes?.insights)}</div>`;
+    return head+(notes?.insights?`<div id="usage-insights">${usageInsightsSection(null,notes.insights)}</div>`:'');
+  }
+  const totals=summary.totals || {};
+  const tokens=totals.usage || {};
+  const recordStates=totals.usage_states || {};
+  const outcomes=totals.outcomes || {};
+  const duration=totals.duration || {};
+  const p50=usagePercentile(duration.p50_ms,duration),p90=usagePercentile(duration.p90_ms,duration);
+  const metrics=`<div class="metrics">${metric('请求数',usageNumber(totals.requests),'不含探针的终结请求','models')}${metric('探针请求',usageNumber(totals.probes),'单独计数，不计入客户端流量','search')}${metric('时长 p50',p50.value,p50.sub,'history',true)}${metric('时长 p90',p90.value,p90.sub,'history',true)}${metric('输入 token',usageNumber(tokens.input_tokens),'互斥桶 · 未知不等于 0','arrow')}${metric('输出 token',usageNumber(tokens.output_tokens),'互斥桶 · 未知不等于 0','arrow')}${metric('缓存读取 token',usageNumber(tokens.cache_read_tokens),'不计入输入或输出','arrow')}${metric('缓存写入 token',usageNumber(tokens.cache_write_tokens),'不计入输入或输出','arrow')}</div>`;
+  const tokenPanel=panel('Token 计数','四个互斥桶分别求和；缓存读取与写入不计入输入或输出',`<div class="detail-facts">${fact('输入 token',usageNumber(tokens.input_tokens))}${fact('输出 token',usageNumber(tokens.output_tokens))}${fact('缓存读取 token',usageNumber(tokens.cache_read_tokens))}${fact('缓存写入 token',usageNumber(tokens.cache_write_tokens))}</div><div class="detail-facts">${Object.entries(usageRecordStates).map(([key,label])=>fact(`记录状态 · ${label}`,usageNumber(recordStates[key]))).join('')}</div>${notice('token 数为供应商报告值，不能跨供应商直接比较；未知、部分与歧义的记录不计入受影响的轴，已知零是有效值。')}`);
+  const outcomePanel=panel('请求结果','按最终结果各计一次；进行中的请求不记录',`<div class="detail-facts">${Object.entries(usageOutcomeNames).map(([key,label])=>fact(label,usageNumber(outcomes[key]))).join('')}</div>${notice('结果计数是网关观测值，不代表上游是否计费。')}`);
+  const period=`<div class="detail-facts">${fact('周期',`${usagePeriodName(summary.period?.kind)} · ${usageInstant(summary.period?.since)} 至 ${usageInstant(summary.period?.until)}`)}${fact('时区',summary.period?.timezone || '未知')}${fact('周期归属时间基准',usagePick(usageMembershipNames,totals.membership_basis))}</div>`;
+  return banner+readingsBanner+scope+period+metrics+`<div class="grid-two">${tokenPanel}${outcomePanel}</div>`+usageCostSection(summary)+`<div id="usage-breakdown">${usageBreakdownSection(notes?.breakdown)}</div>`+`<div id="usage-trend">${usageTrendSection(day,notes?.day)}</div>`+usageReadingsSection(summary)+`<div id="usage-insights">${usageInsightsSection(insights,notes?.insights)}</div>`+detail(summary,'查看报告原始字段');
+}
+function usageEmptyState() {
+  return empty('按需查看用量报告','读取本地账本中经过网关的用量、每接入成本估算、按日趋势、额度读数与证据约束的洞察。只读取本地数据，不请求上游，也不会自动刷新。',button('读取用量报告','usage-read','','soft'),'usage',true);
+}
+function usagePanelBody() {
+  const cached=state.usage;
+  const error=state.usageError!=null?notice('读取失败：'+escapeHtml(state.usageError)+'。'+(cached?'已保留上一次成功读取的内容；':'')+'失败与未知都不等于零。','error'):'';
+  return error+(cached?.summary?usageReport(cached.summary,cached.day,cached.insights,cached.notes || {}):usageEmptyState());
+}
+function usageBindBreakdown() {
+  const select=$('usage-breakdown-dimension');
+  select?.addEventListener('change',()=>{dispatch('usage-breakdown',select.value).catch(error=>toast(error.message));});
+}
+function renderUsage() {
+  const tabs=usagePeriods.map(([id,label])=>`<button class="tab" role="tab" aria-selected="${state.usagePeriod===id}" data-action="usage-period" data-id="${id}">${escapeHtml(label)}</button>`).join('');
+  $('content').innerHTML=`<div class="toolbar"><div class="tabs" role="tablist" aria-label="统计周期">${tabs}</div><div class="toolbar-actions">${button('重新读取','usage-read','','small','refresh')}</div></div><div id="usage-panel">${usagePanelBody()}</div>`;
+  usageBindBreakdown();
+}
+async function usageRead() {
+  const container=$('usage-panel');if(!container)return;
+  const generation=state.generation,request=++state.usageRequest,period=state.usagePeriod;
+  // A full read re-renders every widget, so widget reads still in flight are obsolete.
+  state.usageBreakdownRequest++;state.usageInsightsRequest++;
+  container.innerHTML='<div class="loading">正在读取用量报告…</div>';
+  let summary=null;
+  try { summary=await usageFetch('usage summary',{period:[period]}); }
+  catch(error) {
+    if(state.area!=='usage'||generation!==state.generation||request!==state.usageRequest||container!==$('usage-panel'))return;
+    state.usageError=error.message;
+    container.innerHTML=usagePanelBody();
+    return;
+  }
+  const notes={};
+  const [breakdown,day,insights]=await Promise.all([
+    usageFetch('usage breakdown',{period:[period],by:[state.usageBreakdown]}).catch(error=>{notes.breakdown=error.message;return null;}),
+    usageFetch('usage breakdown',{period:[period],by:['day']}).catch(error=>{notes.day=error.message;return null;}),
+    usageFetch('usage insights',{period:[period]}).catch(error=>{notes.insights=error.message;return null;}),
+  ]);
+  if(state.area!=='usage'||generation!==state.generation||request!==state.usageRequest||container!==$('usage-panel'))return;
+  state.usage={summary,breakdown,day,insights,notes};
+  state.usageError=null;
+  container.innerHTML=usagePanelBody();
+}
+// Each usage read owns one generation: the summary read, the breakdown read, and
+// the insights read cancel only their own in-flight response. A shared counter
+// let one widget's read drop another widget's response and leave that widget's
+// loading panel on screen forever.
+function usageInvalidateReads() {
+  state.usageRequest++;state.usageBreakdownRequest++;state.usageInsightsRequest++;
+}
+async function usageBreakdownRead(dimension) {
+  if(!usageDimensions.some(([id])=>id===dimension)){toast('未知的分组维度。');return;}
+  state.usageBreakdown=dimension;
+  const container=$('usage-breakdown');
+  if(!container||!state.usage){renderUsage();return;}
+  const request=++state.usageBreakdownRequest;
+  container.innerHTML='<div class="loading">正在读取分组…</div>';
+  try {
+    const data=await usageFetch('usage breakdown',{period:[state.usagePeriod],by:[dimension]});
+    if(request!==state.usageBreakdownRequest)return;
+    state.usage.breakdown=data;state.usage.notes.breakdown=null;
+  } catch(error) {
+    if(request!==state.usageBreakdownRequest)return;
+    state.usage.notes.breakdown=error.message;
+  }
+  if(request!==state.usageBreakdownRequest||$('usage-breakdown')!==container)return;
+  container.innerHTML=usageBreakdownSection(state.usage.notes.breakdown);
+  usageBindBreakdown();
+}
+async function usageInsightsRead() {
+  const container=$('usage-insights');
+  if(!container||!state.usage){renderUsage();return;}
+  const request=++state.usageInsightsRequest;
+  container.innerHTML='<div class="loading">正在重新评估洞察…</div>';
+  try {
+    const data=await usageFetch('usage insights',{period:[state.usagePeriod]});
+    if(request!==state.usageInsightsRequest)return;
+    state.usage.insights=data;state.usage.notes.insights=null;
+  } catch(error) {
+    if(request!==state.usageInsightsRequest)return;
+    state.usage.notes.insights=error.message;
+  }
+  if(request!==state.usageInsightsRequest||$('usage-insights')!==container)return;
+  container.innerHTML=usageInsightsSection(state.usage.insights,state.usage.notes.insights);
 }
 
 function openDialog(title, body, eyebrow='WORKSPACE') {
@@ -1322,6 +1616,10 @@ async function dispatch(action,id) {
     case 'reveal': await revealKey();break;
     case 'hide-key': clearReveal();break;
     case 'history': await history();break;
+    case 'usage-period': state.usagePeriod=id;state.usageError=null;state.usage=null;usageInvalidateReads();renderUsage();await usageRead();break;
+    case 'usage-read': await usageRead();break;
+    case 'usage-breakdown': await usageBreakdownRead(id);break;
+    case 'usage-insights': await usageInsightsRead();break;
     case 'advanced': advanced(id);break;
     case 'operation': openOperation(id);break;
     case 'copy': try {await navigator.clipboard.writeText(id);toast('地址已复制');}catch(_){toast('无法自动复制，请选择地址后手动复制。');}break;

@@ -4,6 +4,7 @@ use crate::{
     inputs::{self, Runtime},
     provider_integration::{self, AcquiredObservation},
     storage::Store,
+    usage::ReadingRow,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -347,6 +348,9 @@ pub(crate) fn retain(store: &Store, runtime: &Runtime) -> Result<()> {
 
 struct Capture {
     binding: Binding,
+    /// Local provider id at capture time. A reading keeps this publication-time
+    /// label and is never refilled from later configuration.
+    provider: String,
     head_revision: String,
     quota_epoch: String,
     denial_revision: Option<String>,
@@ -391,6 +395,7 @@ fn capture(store: &Store, config: &Config, provider: &str, scope: &str) -> Resul
             .and_then(|s| s.latest_denial_revision.clone()),
         automatic_config: None,
         binding: b,
+        provider: provider.to_owned(),
         started_at: Utc::now(),
     })
 }
@@ -529,29 +534,198 @@ fn commit(
     captured: &Capture,
     acquired: Result<AcquiredObservation>,
 ) -> Result<Attempt> {
-    let _configuration = store.lock("configuration")?;
-    let _routing = store.lock("routing")?;
-    let _observations = store.lock("observations")?;
-    let runtime = inputs::read_runtime(store)?;
-    if let Some(expected) = &captured.automatic_config {
-        let loaded = runtime.loaded.as_ref().map(|view| signature(&view.config));
-        if loaded.as_ref() != Some(expected)
-            || signature(&runtime.saved.config) != *expected
-            || signature(&config::load(store)?.config) != *expected
-        {
-            return Err(Error::new(
-                "observations_changed",
-                "Loaded quota authority changed during acquisition",
-            ));
+    // The observation critical section ends before any reading work: a reading
+    // append is a bounded best-effort usage-store write and must never run
+    // while the configuration, routing, or observations store locks are held.
+    let (attempt, heads) = {
+        let _configuration = store.lock("configuration")?;
+        let _routing = store.lock("routing")?;
+        let _observations = store.lock("observations")?;
+        let runtime = inputs::read_runtime(store)?;
+        if let Some(expected) = &captured.automatic_config {
+            let loaded = runtime.loaded.as_ref().map(|view| signature(&view.config));
+            if loaded.as_ref() != Some(expected)
+                || signature(&runtime.saved.config) != *expected
+                || signature(&config::load(store)?.config) != *expected
+            {
+                return Err(Error::new(
+                    "observations_changed",
+                    "Loaded quota authority changed during acquisition",
+                ));
+            }
         }
+        let current = current_saved_binding(store, &runtime, &captured.binding)?;
+        let (mut heads, _) = quota::effective_heads(store)?;
+        let attempt = publish(&mut heads, captured, current.as_ref(), acquired, Utc::now())?;
+        prune(&mut heads, &runtime)?;
+        quota::prune_pending(store, &runtime)?;
+        quota::write_heads(store, &heads)?;
+        (attempt, heads)
+    };
+    // A reading exists only after its observation write is durable, and its
+    // append is best-effort: it never fails, delays, or repeats the publication.
+    if attempt.outcome == "completed"
+        && let Some(fact) = heads
+            .heads
+            .get(&signature(&captured.binding))
+            .and_then(|head| head.fact.as_ref())
+    {
+        append_readings(store, captured, fact);
     }
-    let current = current_saved_binding(store, &runtime, &captured.binding)?;
-    let (mut heads, _) = quota::effective_heads(store)?;
-    let attempt = publish(&mut heads, captured, current.as_ref(), acquired, Utc::now())?;
-    prune(&mut heads, &runtime)?;
-    quota::prune_pending(store, &runtime)?;
-    quota::write_heads(store, &heads)?;
     Ok(attempt)
+}
+
+/// Best-effort append of dated allowance readings for one published observation.
+///
+/// Display rows, per-window access state, and publication-time freshness are
+/// derived from the normalized fact itself; the usage store never becomes an
+/// observation source and a failed append only increments a dropped counter.
+fn append_readings(store: &Store, captured: &Capture, fact: &Fact) {
+    let Some(source) = captured.binding.source.as_deref() else {
+        return;
+    };
+    // Usage sources publish a quota display projection; an official balance
+    // publishes a remaining-credit projection of its own. Discovery sources have
+    // neither, so they produce no reading rather than an invented basis.
+    let Some(display) = provider_integration::quota_display(source, &fact.data)
+        .or_else(|| provider_integration::balance_display(source, &fact.data))
+    else {
+        return;
+    };
+    let Some(rows) = display.get("rows").and_then(Value::as_array) else {
+        return;
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let access = provider_integration::quota_access(source, &fact.data);
+    let observed = inputs::ExactInstant::from_chrono(fact.observed_at);
+    let freshness =
+        serde_json::to_string(&temporal_applicability(Some(fact), Some(source), &observed)).ok();
+    let binding = crate::usage::readings::binding_handle(
+        &captured.binding.provider_identity,
+        &captured.binding.authorization_generation,
+    );
+    let received_at_ms = Utc::now().timestamp_millis();
+    let mut readings = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Some(basis) = row.get("basis").and_then(Value::as_str) else {
+            continue;
+        };
+        readings.push(ReadingRow {
+            observed_at_ms: fact.observed_at.timestamp_millis(),
+            received_at_ms,
+            provider: captured.provider.clone(),
+            binding: binding.clone(),
+            window: window_identity(&captured.binding.scope, row.get("label")),
+            basis: basis.into(),
+            percent: row.get("percent").and_then(exact_text),
+            counters: row
+                .get("counters")
+                .and_then(|counters| serde_json::to_string(counters).ok()),
+            unit: reading_unit(row, fact),
+            source: source.into(),
+            access_state: Some(access_state(access.as_ref(), row)),
+            reset: row.get("reset").cloned().unwrap_or(Value::Null),
+            freshness: freshness.clone(),
+        });
+    }
+    if readings.is_empty() {
+        return;
+    }
+    #[cfg(test)]
+    observe_append_locks(store);
+    if crate::usage::readings::append(store, &readings).is_err() {
+        let _ = crate::usage::readings::record_dropped(store, readings.len() as i64);
+    }
+}
+
+/// Canonical window identity: one observation scope plus the display row label.
+/// The scope stays inside the identity so auth-scope and quota-scope facts for
+/// the same provider binding never mix.
+fn window_identity(scope: &str, label: Option<&Value>) -> String {
+    let label = label.cloned().unwrap_or(Value::Null);
+    serde_json::to_string(&json!({"scope": scope, "label": label}))
+        .unwrap_or_else(|_| format!("{scope}:null"))
+}
+
+fn exact_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => Some(text.clone()),
+        other => Some(other.to_string()),
+    }
+}
+
+/// Verbatim unit qualifier for one display value: a row-qualified unit such as a
+/// balance currency wins, otherwise the normalized counter unit for counter
+/// rows, otherwise the label's own unit. Never a converted unit.
+fn reading_unit(row: &Value, fact: &Fact) -> Option<String> {
+    if let Some(unit) = row.get("unit").and_then(exact_text) {
+        return Some(unit);
+    }
+    if row.get("counters").is_some() {
+        return fact
+            .data
+            .get("counter_unit")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+    }
+    row.pointer("/label/unit").and_then(exact_text)
+}
+
+/// Per-window access state when the source qualifies one, otherwise unknown.
+fn access_state(access: Option<&provider_integration::QuotaAccess>, row: &Value) -> String {
+    access
+        .and_then(|access| {
+            let window = row.pointer("/label/key").and_then(Value::as_str)?;
+            access
+                .windows
+                .iter()
+                .find(|candidate| candidate.window == window)
+                .map(|candidate| candidate.access_state.to_owned())
+        })
+        .unwrap_or_else(|| "unknown".into())
+}
+
+// Test-only probe: records, at the real append point, whether the observation
+// store locks are already released, so the no-lock-append invariant is a
+// regression test instead of a comment.
+#[cfg(test)]
+thread_local! {
+    static APPEND_LOCK_PROBE: AppendLockProbe = AppendLockProbe::default();
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct AppendLockProbe {
+    armed: std::cell::Cell<bool>,
+    observed: std::cell::RefCell<Option<[bool; 3]>>,
+}
+
+#[cfg(test)]
+fn arm_append_lock_probe() {
+    APPEND_LOCK_PROBE.with(|probe| {
+        probe.observed.borrow_mut().take();
+        probe.armed.set(true);
+    });
+}
+
+#[cfg(test)]
+fn take_append_lock_probe() -> Option<[bool; 3]> {
+    APPEND_LOCK_PROBE.with(|probe| probe.observed.borrow_mut().take())
+}
+
+#[cfg(test)]
+fn observe_append_locks(store: &Store) {
+    APPEND_LOCK_PROBE.with(|probe| {
+        if !probe.armed.replace(false) {
+            return;
+        }
+        let unlocked = ["configuration", "routing", "observations"]
+            .map(|name| store.is_locked(name).ok().flatten() == Some(false));
+        probe.observed.replace(Some(unlocked));
+    });
 }
 
 pub async fn refresh(
@@ -1062,6 +1236,7 @@ mod tests {
                 .and_then(|s| s.latest_denial_revision.clone()),
             automatic_config: None,
             binding,
+            provider: "provider".into(),
             started_at: Utc::now(),
         }
     }
@@ -3092,5 +3267,202 @@ mod tests {
             after_failure["observations"][2]["latest_attempt"]["outcome"],
             "failed"
         );
+    }
+
+    #[test]
+    fn published_usage_observation_appends_one_reading_per_window_and_dedupes() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        let initial = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &initial, Ok(go_usage())).unwrap();
+        let rows = crate::usage::readings::test_rows(&store);
+        assert_eq!(rows.len(), 3, "one reading per published window");
+        let binding = rows[0].binding.clone();
+        assert_eq!(binding.len(), 64);
+        assert!(rows.iter().all(|row| row.binding == binding));
+        assert!(rows.iter().all(|row| row.provider == "go-a"));
+        assert!(rows.iter().all(|row| row.source == "go_usage_api"));
+        assert!(rows.iter().all(|row| row.basis == "consumed_percent"));
+        assert!(
+            rows.iter()
+                .all(|row| row.access_state.as_deref() == Some("available"))
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.window.contains("\"scope\":\"quota\""))
+        );
+        let monthly = rows
+            .iter()
+            .find(|row| row.window.contains("monthly"))
+            .unwrap();
+        assert_eq!(monthly.percent.as_deref(), Some("62"));
+        assert_eq!(monthly.reset["kind"], "announced");
+        assert_eq!(monthly.reset["at"], "2026-11-09T03:13:27.000Z");
+        let freshness: Value = serde_json::from_str(monthly.freshness.as_deref().unwrap()).unwrap();
+        assert_eq!(freshness["state"], "unqualified");
+        assert_eq!(freshness["reason_code"], "source_validity_unavailable");
+        assert!(freshness["as_of"].is_null());
+        // An identical republish changes no identity or value: no reading.
+        let repeated = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &repeated, Ok(go_usage())).unwrap();
+        assert_eq!(crate::usage::readings::test_rows(&store).len(), 3);
+        // One changed window appends exactly one reading.
+        let mut changed = go_usage();
+        changed.data["usage"]["monthly"]["percent"] = json!(63);
+        let changed_capture = capture(&store, &config, "go-a", "quota").unwrap();
+        commit(&store, &changed_capture, Ok(changed)).unwrap();
+        let rows = crate::usage::readings::test_rows(&store);
+        assert_eq!(rows.len(), 4);
+        assert!(rows.last().unwrap().window.contains("monthly"));
+        assert_eq!(rows.last().unwrap().percent.as_deref(), Some("63"));
+    }
+
+    #[test]
+    fn balance_publication_retains_one_reading_per_currency_and_dedupes() {
+        let (_dir, store, config) = fixture();
+        let captured = capture(&store, &config, "original", "quota").unwrap();
+        commit(&store, &captured, Ok(balance(true))).unwrap();
+        let rows = crate::usage::readings::test_rows(&store);
+        assert_eq!(rows.len(), 2, "one reading per reported currency");
+        let binding = rows[0].binding.clone();
+        assert_eq!(binding.len(), 64);
+        assert!(rows.iter().all(|row| row.binding == binding));
+        assert!(rows.iter().all(|row| row.provider == "original"));
+        assert!(rows.iter().all(|row| row.source == "official_balance_api"));
+        assert!(rows.iter().all(|row| row.basis == "credit"));
+        assert!(rows.iter().all(|row| row.percent.is_none()));
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.access_state.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["available", "available"]
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.window.contains("\"scope\":\"quota\""))
+        );
+        let usd = rows
+            .iter()
+            .find(|row| row.window.contains("balance-USD"))
+            .unwrap();
+        // Exact decimal strings are retained; no percentage or sum is computed.
+        let counters: Value = serde_json::from_str(usd.counters.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            counters,
+            json!({"currency":"USD","total_balance":"0001.2000","granted_balance":"0.2000","topped_up_balance":"1.0000"})
+        );
+        assert_eq!(usd.unit.as_deref(), Some("USD"));
+        assert_eq!(usd.reset, json!({"kind":"none"}));
+        let freshness: Value = serde_json::from_str(usd.freshness.as_deref().unwrap()).unwrap();
+        assert_eq!(freshness["state"], "as_of_observation");
+        assert!(freshness["reason_code"].is_null());
+        let cny = rows
+            .iter()
+            .find(|row| row.window.contains("balance-CNY"))
+            .unwrap();
+        assert_eq!(cny.unit.as_deref(), Some("CNY"));
+        // A failed attempt retains the published fact but never creates a reading.
+        let failed = capture(&store, &config, "original", "quota").unwrap();
+        commit(&store, &failed, Err(Error::new("transport_error", "safe"))).unwrap();
+        assert_eq!(crate::usage::readings::test_rows(&store).len(), 2);
+        // A repeated identical publication appends no reading.
+        let repeated = capture(&store, &config, "original", "quota").unwrap();
+        commit(&store, &repeated, Ok(balance(true))).unwrap();
+        assert_eq!(crate::usage::readings::test_rows(&store).len(), 2);
+        // One changed currency value appends exactly one reading.
+        let mut changed = balance(true);
+        changed.data["balance_infos"][0]["total_balance"] = json!("0002.5000");
+        let changed_capture = capture(&store, &config, "original", "quota").unwrap();
+        commit(&store, &changed_capture, Ok(changed)).unwrap();
+        let rows = crate::usage::readings::test_rows(&store);
+        assert_eq!(rows.len(), 3);
+        assert!(rows.last().unwrap().window.contains("balance-USD"));
+        let counters: Value =
+            serde_json::from_str(rows.last().unwrap().counters.as_deref().unwrap()).unwrap();
+        assert_eq!(counters["total_balance"], "0002.5000");
+        assert_eq!(counters["granted_balance"], "0.2000");
+    }
+
+    #[test]
+    fn unavailable_balance_publication_records_values_with_unavailable_access_state() {
+        let (_dir, store, config) = fixture();
+        let captured = capture(&store, &config, "original", "quota").unwrap();
+        commit(&store, &captured, Ok(balance(false))).unwrap();
+        let rows = crate::usage::readings::test_rows(&store);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .all(|row| row.access_state.as_deref() == Some("unavailable"))
+        );
+        let usd = rows
+            .iter()
+            .find(|row| row.window.contains("balance-USD"))
+            .unwrap();
+        let counters: Value = serde_json::from_str(usd.counters.as_deref().unwrap()).unwrap();
+        assert_eq!(counters["total_balance"], "0001.2000");
+        assert_eq!(usd.unit.as_deref(), Some("USD"));
+        // A later available publication changes the access state and appends
+        // one new reading per currency; the unavailable rows stay untouched.
+        let available = capture(&store, &config, "original", "quota").unwrap();
+        commit(&store, &available, Ok(balance(true))).unwrap();
+        let rows = crate::usage::readings::test_rows(&store);
+        assert_eq!(rows.len(), 4);
+        assert!(
+            rows[2..]
+                .iter()
+                .all(|row| row.access_state.as_deref() == Some("available"))
+        );
+    }
+
+    #[test]
+    fn discovery_publication_and_failed_attempts_append_no_readings() {
+        let (_dir, store, config) = fixture();
+        let captured = capture(&store, &config, "original", "models").unwrap();
+        commit(&store, &captured, Ok(deepseek_models())).unwrap();
+        assert!(crate::usage::readings::test_rows(&store).is_empty());
+        let failed = capture(&store, &config, "original", "models").unwrap();
+        commit(&store, &failed, Err(Error::new("transport_error", "safe"))).unwrap();
+        assert!(crate::usage::readings::test_rows(&store).is_empty());
+    }
+
+    #[test]
+    fn reading_append_runs_after_all_observation_store_locks_are_released() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        arm_append_lock_probe();
+        let captured = capture(&store, &config, "go-a", "quota").unwrap();
+        let attempt = commit(&store, &captured, Ok(go_usage())).unwrap();
+        assert_eq!(attempt.outcome, "completed");
+        assert_eq!(
+            take_append_lock_probe(),
+            Some([true, true, true]),
+            "the append must run after the configuration, routing, and observations locks drop"
+        );
+        // commit also returns without leaving any observation-critical lock held.
+        for name in ["configuration", "routing", "observations"] {
+            assert!(
+                store.try_lock(name).unwrap().is_some(),
+                "{name} stayed locked after commit"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_reading_append_counts_a_gap_without_failing_commit() {
+        let (_dir, store, config) = go_fixture();
+        inputs::activate(&store, &config, &config::raw_revision(&store).unwrap()).unwrap();
+        // A ledger that opens for writing but rejects allowance rows: the append
+        // fails while the coverage counter itself can still be recorded.
+        let conn = crate::usage::ledger::open_write(&store).unwrap();
+        conn.execute_batch("DROP TABLE allowance_reading;").unwrap();
+        drop(conn);
+        let captured = capture(&store, &config, "go-a", "quota").unwrap();
+        let attempt = commit(&store, &captured, Ok(go_usage())).unwrap();
+        assert_eq!(attempt.outcome, "completed");
+        assert_eq!(read(&store).unwrap().heads.len(), 1);
+        let conn = crate::usage::ledger::open_read(&store)
+            .unwrap()
+            .expect("created ledger");
+        assert_eq!(crate::usage::ledger::meta_i64(&conn, "readings_dropped"), 3);
     }
 }

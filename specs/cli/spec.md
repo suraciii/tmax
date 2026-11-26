@@ -22,6 +22,7 @@ The command surface is a target contract; see [Implementation status](#implement
 | Calling-agent entry skill | [Skill installation](skill/spec.md) |
 | Network, gateway, and Web | [Service](service/spec.md) |
 | Probes and request history | [Diagnostics commands](service/diagnostics/spec.md) |
+| Gateway usage reports, insights, and explicit clear | [Usage analytics commands](usage/spec.md) |
 | Shared JSON and exits | [Results](results/spec.md) |
 
 ## Invocation

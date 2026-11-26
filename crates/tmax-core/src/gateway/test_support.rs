@@ -99,3 +99,44 @@ pub(super) fn publish(runtime: &Runtime, old: &Config, new: &Config, revision: &
     runtime.activate_bindings(new, false).unwrap();
     *authority = Some(Arc::new(test_snapshot(new, revision)));
 }
+
+/// Ledger rows of one isolated store, read after the runtime writer has flushed.
+pub(super) fn usage_rows(store: &Store) -> Vec<serde_json::Value> {
+    let Some(connection) = crate::usage::ledger::open_read(store).unwrap() else {
+        return Vec::new();
+    };
+    let mut statement = connection
+        .prepare(
+            "SELECT received_at_ms, admitted_at_ms, membership_ms, origin, requested_model,
+                    model_kind, provider, qualified_model, target, agent_provider, protocol,
+                    outcome, stage, reason_code, input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens, usage_state, duration_ms,
+                    cost_micros, price_source, cost_state
+             FROM usage_record ORDER BY id",
+        )
+        .unwrap();
+    let columns: Vec<String> = statement
+        .column_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let mut rows = Vec::new();
+    let mut query = statement.query([]).unwrap();
+    while let Some(row) = query.next().unwrap() {
+        let mut values = serde_json::Map::new();
+        for (index, column) in columns.iter().enumerate() {
+            let value = match row.get_ref(index).unwrap() {
+                rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                rusqlite::types::ValueRef::Integer(number) => serde_json::json!(number),
+                rusqlite::types::ValueRef::Real(number) => serde_json::json!(number),
+                rusqlite::types::ValueRef::Text(text) => {
+                    serde_json::Value::String(String::from_utf8_lossy(text).into_owned())
+                }
+                rusqlite::types::ValueRef::Blob(_) => serde_json::Value::Null,
+            };
+            values.insert(column.clone(), value);
+        }
+        rows.push(serde_json::Value::Object(values));
+    }
+    rows
+}

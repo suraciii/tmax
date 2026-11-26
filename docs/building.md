@@ -5,9 +5,15 @@ gates, and the evidence each gate retains.
 
 ## Requirements
 
-The build requires Rust 1.88 or newer and a C toolchain. The workspace carries
-no additional native library dependencies or vendored native code. `Cargo.lock`
-pins the dependency set. Build, check, lint, test, and run recipes use `--locked`.
+The build requires Rust 1.88 or newer and a C toolchain. The C toolchain compiles
+the bundled SQLite source of the embedded usage database: `cc`, `clang`, or `gcc`
+works on Unix, and Windows uses the MSVC or MinGW toolchain that matches the
+selected Rust target. The workspace installs no additional native library
+dependencies and vendors no native code of its own. `Cargo.lock` pins the
+dependency set. Build, check, lint, test, and run recipes use `--locked`.
+
+`just ci-pr` builds and checks the workspace, so a missing or unusable C
+toolchain fails that gate before review.
 
 Verification additionally requires:
 

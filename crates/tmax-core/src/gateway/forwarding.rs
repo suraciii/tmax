@@ -11,6 +11,7 @@ use super::{
 use crate::{
     config::{Auth, Config},
     diagnostics::safe_evidence,
+    usage::{WriteJob, capture::capture_record},
 };
 use axum::{
     Router,
@@ -60,7 +61,12 @@ pub(super) async fn forward(
             record.stage = "local_admission".into();
             record.reason_code = Some(e.code.clone());
             runtime.log_error(&mut record, &[]);
-            runtime.history.update(record);
+            runtime.history.update(record.clone());
+            // No flight exists yet, so this terminal rejection is captured here
+            // instead of `Flight::finish`. Destination evidence stays absent.
+            runtime
+                .usage
+                .capture(WriteJob::Usage(capture_record(&record, None)));
             return error_response(StatusCode::SERVICE_UNAVAILABLE, &e.code, &id);
         }
     };
@@ -231,6 +237,7 @@ pub(super) async fn forward(
         .and_then(|alias| alias.fallback.as_ref());
     flight.record.admitted_at = Some(now);
     flight.record.configuration_revision = Some(snapshot.revision.clone());
+    flight.pricing = Some(snapshot.clone());
     let path = match crate::provider_integration::operation_path(protocol) {
         Ok(value) => value,
         Err(error) => {
