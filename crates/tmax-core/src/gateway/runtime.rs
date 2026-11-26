@@ -12,6 +12,10 @@ use crate::{
         error_log::{self, ErrorDetail},
     },
     storage::Store,
+    usage::{
+        UsageWriter, WriteJob,
+        capture::{Pricing, capture_record},
+    },
 };
 use axum::{http::StatusCode, response::Response};
 use std::{
@@ -61,6 +65,9 @@ pub struct Runtime {
     pub store: Store,
     pub snapshot: RwLock<Option<Arc<Snapshot>>>,
     pub history: Arc<History>,
+    /// Bounded, non-blocking ledger writer owned by this runtime. It records
+    /// terminal requests by default and flushes on runtime drop.
+    pub(crate) usage: UsageWriter,
     admission: Mutex<Admission>,
     pub(super) bindings: Mutex<Bindings>,
 }
@@ -68,10 +75,12 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(store: Store, process: String) -> Result<Arc<Self>> {
         let bindings = initialize_bindings(&store)?;
+        let usage = UsageWriter::start(store.clone());
         Ok(Arc::new(Self {
             store,
             snapshot: RwLock::new(None),
             history: Arc::new(History::new(process)),
+            usage,
             admission: Mutex::new(Admission {
                 enabled: false,
                 active: HashMap::new(),
@@ -115,6 +124,7 @@ impl Runtime {
         Ok(Flight {
             runtime: self.clone(),
             record,
+            pricing: None,
             started: Instant::now(),
             cancel: rx,
             finished: false,
@@ -136,6 +146,10 @@ impl Runtime {
 pub(super) struct Flight {
     runtime: Arc<Runtime>,
     pub(super) record: Record,
+    /// Loaded configuration and accepted catalog metadata captured at admission.
+    /// Pricing resolves from the record's final destination, so a fallback is
+    /// priced against what actually served the request.
+    pub(super) pricing: Option<Arc<Snapshot>>,
     started: Instant,
     pub(super) cancel: watch::Receiver<bool>,
     pub(super) finished: bool,
@@ -200,6 +214,15 @@ impl Flight {
             Some(self.started.elapsed().as_millis().min(u64::MAX as u128) as u64);
         self.runtime.log_error(&mut self.record, &self.errors);
         self.runtime.history.update(self.record.clone());
+        // Best-effort ledger capture. This runs in sync `Drop` code on a tokio
+        // worker, so it may only enqueue: `capture` never blocks or opens I/O.
+        self.runtime.usage.capture(WriteJob::Usage(capture_record(
+            &self.record,
+            self.pricing.as_deref().map(|snapshot| Pricing {
+                config: &snapshot.config,
+                metadata: snapshot.metadata.as_deref(),
+            }),
+        )));
         self.runtime
             .admission
             .lock()

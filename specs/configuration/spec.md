@@ -46,7 +46,10 @@ current OS account; file permissions are not encryption. Storage version and
 desired-configuration format version are independent. The [product secret-protection
 contract](../product/spec.md#local-access-and-secret-protection) owns that access
 boundary and credential handoff. Ordinary request history remains in memory, not
-in the configuration or a persistent history store. The separate
+in the configuration or a persistent history store. Content-free usage records
+and allowance readings are retained by the
+[usage analytics contract](../usage-analytics/spec.md) under `~/.tmax/usage`; they
+are not request history. The separate
 [error log](../diagnostics/spec.md#persistent-gateway-error-log) retains failures.
 
 The root requires `version = 2`. Other root fields are `providers`,

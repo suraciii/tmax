@@ -32,6 +32,7 @@ num-traits = "0.2"
 serde_yaml = "0.9"
 pulldown-cmark = "0.12"
 serde_path_to_error = "0.1"
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

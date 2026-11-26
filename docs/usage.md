@@ -571,6 +571,244 @@ guarantee. See the
 [diagnostics contract](../specs/diagnostics/spec.md#persistent-gateway-error-log)
 for the event schema and storage boundary.
 
+## Usage analytics
+
+Usage analytics records what the tmax gateway observed, as a local ledger of
+typed, content-free facts. The [usage analytics contract](../specs/usage-analytics/spec.md)
+owns the behavior; this section explains what a user reads and runs.
+
+### What is recorded
+
+One terminal request creates at most one usage record. A request is terminal when
+it completed, failed, was rejected, was cancelled, was interrupted, or has a known
+unknown outcome. In-progress requests are not recorded. Retries, fallbacks, and
+individual upstream attempts do not create separate records; the record keeps the
+request's final outcome and destination evidence.
+
+A record holds typed, content-free facts only:
+
+| Fact | Recorded meaning |
+| --- | --- |
+| Time | Receipt time and admission time in UTC. Admission time is absent when admission did not occur. |
+| Origin | Ordinary client request, or an explicit paid probe. |
+| Requested model and protocol | Validated public model ID, its kind (`concrete`, `alias`, or `unknown`), and the native protocol when established. |
+| Destination | Selected local provider and qualified model, only after selection. A pre-selection rejection keeps both absent. |
+| Native attribution | Safe local Agent target and native provider entry, only when a qualified mechanism established them. |
+| Outcome | Final outcome, terminal stage, and a controlled reason code when available. |
+| Counters | Exclusive input, output, cache-read, and cache-write token counts. |
+| Duration | Observed whole-request duration when available. |
+| Cost estimate | A decimal money estimate with its currency and effective-price source, when the record can be priced. |
+
+A record never retains request identity, request or response content,
+credentials, upstream account identity, native session identity, decision
+evidence, or a correlation ID. No operation exposes an individual usage record or
+rebuilds a request timeline; reports expose aggregates only.
+
+Coverage is gateway-observed only. Traffic sent through a native direct entry,
+another gateway, or an Agent's own session files is unobserved, and usage
+analytics does not read Agent session files. The extent of that unobserved
+traffic is unknown, so a report is never a statement that no traffic occurred
+outside its coverage. An
+explicit paid probe stays distinguishable and is not counted as client traffic by
+default. Diagnostic request history is separate, memory-only evidence: a usage
+record is not diagnostic history and cannot substitute for `history inspect`.
+
+### Storage and retention
+
+The ledger is one local SQLite database file, `~/.tmax/usage/usage.db`. It is
+restricted to the current operating-system user; file permissions are not
+encryption. tmax does not upload, sync, or publish usage data, does not include it
+in logs, and does not send it through telemetry.
+
+Recording is enabled by default. There is no per-request or per-provider
+exclusion; clearing retained usage is the supported removal operation.
+
+| Retained data | Retention |
+| --- | --- |
+| Usage records | Eligible for eviction after 90 days, plus a documented row and byte bound. |
+| Allowance readings | Eligible for eviction after 45 days, plus a documented row and byte bound. |
+
+Eviction removes the oldest records first. The documented bounds are 200,000
+usage records, 100,000 allowance readings, and a 32,768-page database bound
+(128 MiB at SQLite's default 4 KiB page size). A report states the actual retained
+range and any enforcement that has not run yet. A read never prunes, rewrites, or
+mutates the ledger.
+
+A committed record survives a gateway restart. A crash can lose only uncommitted
+batched records, and that loss appears as a coverage gap, never as a fabricated
+count.
+
+### Clearing retained usage
+
+`tmax usage clear` is the explicit removal operation. `--dry-run` reports the
+counts and coverage that would be removed and deletes nothing. Execution removes
+the retained usage records and allowance readings in one bounded operation and
+reports removed and retained counts, the resulting coverage, and the execution
+time. Records committed after the clear begins remain.
+
+A successful clear starts a new coverage epoch: the `evicted` and `dropped`
+counters reset, and `cleared_at` names the epoch start.
+
+```sh
+tmax usage clear --dry-run
+tmax usage clear
+```
+
+Clearing usage is not a quota reset. It must not reset, prove, or change an
+upstream allowance. It also preserves diagnostic request history, the error log,
+provider quota observations and their current heads, routing input heads, session
+bindings, recovery state, settings, and credentials.
+
+### Reports and commands
+
+A report covers one period: `today` (the default), `7d`, `30d`, `90d`, `all`, or
+an explicit `--since`/`--until` instant range. A day-based period starts at the
+local midnight that begins its trailing calendar-day window and ends at the read
+instant, using the operating system's time zone. `all` covers the retained range
+and ends at the read instant. An explicit range is `[since, until)`; it requires
+both bounds, must be increasing, and excludes `--period`.
+
+```sh
+tmax usage summary
+tmax usage summary --period 7d
+tmax usage summary --since 2026-11-01T00:00:00Z --until 2026-11-08T00:00:00Z
+tmax usage breakdown --by provider --period 30d
+tmax usage breakdown --by requested --period 7d
+tmax usage insights --period 7d
+```
+
+| Command | Result |
+| --- | --- |
+| `usage summary` | One report: period, coverage, totals, per-provider cost estimates, allowance readings, and per-outcome counts. |
+| `usage breakdown --by DIMENSION` | The same scope, with one aggregate row per value of `DIMENSION`. |
+| `usage insights` | Fired insights and refusals over the same scope. |
+| `usage clear [--dry-run]` | Explicit removal of retained usage records and allowance readings. |
+
+`DIMENSION` is `provider`, `model`, `requested`, `target`, `protocol`, `outcome`,
+`origin`, or `day`. `--by` is required and takes exactly one value. A `day` row
+uses a local calendar date as its key. An unknown value appears as an explicit
+unknown group and is never filled from current configuration.
+
+Reads are effect-free. They must not start or contact the service, observe a
+provider, refresh a credential, prune or rewrite the store, or change routing, so
+they work while the service is stopped. The CLI and the Web
+[Usage area](web.md#common-tasks) expose the same report facts from the same
+ledger; the Web computes no second total.
+
+### Honest numbers
+
+A report keeps a known zero, an unknown value, and an absent record distinct.
+
+- An axis with no known value is null, never zero. A known zero is a value and
+  contributes zero.
+- Token totals count provider-reported tokens. They are not a comparable measure
+  across providers, and unknown, partial, and ambiguous values stay out of the
+  affected axis. Cache reads and cache writes are never added to input or output.
+- Duration percentiles require a documented minimum of 20 completed requests with
+  a known duration. Below that the report states the sample count and that the
+  percentile is unavailable.
+- Allowance readings are dated display evidence. A report never subtracts
+  observed usage from a reading and never shows a difference as remaining
+  allowance.
+
+A cost estimate is a locally computed estimate from observed counters and a
+frozen effective price. It is not a settled charge, an invoice, a subscription
+cost, or proof of what a provider billed.
+
+- The estimate is reported for one provider instance only. Reports never add
+  estimates from different provider instances, billing scopes, currencies,
+  windows, or units into one combined total, and currencies are not converted.
+- An estimate freezes when the record is written. A later price change affects new
+  records only.
+- A report separates priced, partially priced, and unpriced record counts. An
+  unpriced record never contributes zero cost and is counted beside every affected
+  total. A provider with no priced counters reports the reason `unpriced` or
+  `no_priced_axes` instead of a number.
+- The price axes `reasoning` and `cache_storage` have no observed counter and are
+  reported as unpriceable.
+- The input estimate prices the reported input counter, so it can overstate when a
+  provider counts cached prompt tokens inside that counter.
+- Subscription-backed usage is priced at the same effective price and labeled as
+  an API-equivalent estimate. API-billed and unknown-billing usage is not so
+  labeled, and a provider instance whose retained records span more than one
+  billing scope reports no combined estimate instead of adding those scopes.
+
+A report must not claim or derive account-wide usage, remaining quota, a bill, a
+provider charge, a subscription renewal, a session, project, or per-turn cost, a
+five-hour block, an upstream attempt count, a hidden absolute allowance, or token
+counts estimated from text.
+
+### Coverage and gaps
+
+Coverage is reported once per result, not per row. A report states the ledger's
+retained range, every known gap, and whether the requested period extends beyond
+coverage. Gaps come from evictions, dropped writes, clears, restart loss, and
+out-of-coverage ranges. An unreadable or unsupported store is reported as
+unavailable coverage, not as an empty or gapped report. A full write queue or a
+failed write drops records and increments a dropped counter; it never changes
+request admission, forwarding, or outcomes. The allowance reading range, count,
+and gaps are reported separately from the ledger.
+
+An empty report means no retained records inside the stated coverage. It does not
+mean that no request ran, that a provider reported zero usage, or that a provider
+allowance is untouched.
+
+An absent store means no usage was recorded yet. A corrupt or unreadable store, an
+unsupported store version, and a failed read are distinct outcomes, each reported
+with a typed reason. None is shown as an empty report, a zero total, or a
+successful read of no traffic. A read that reports unavailable coverage still
+exits 0.
+
+### Insights
+
+`tmax usage insights` evaluates a fixed set of deterministic rules over one report
+scope. An insight is dated, scoped, and evidence-bound: it names its rule, scope,
+claim, evidence, any assumption the claim depends on, and at most one suggested
+action.
+
+Insights are advisory and pull-only. They are recomputed for each read, and no
+insight history is retained. tmax never applies an insight automatically, stores
+one as a fact, or turns one into a routing rule, priority, schedule, quota guard,
+candidate eligibility, suspension, failure counter, notification, or alert. A
+suggested action names an existing supported operation and its non-secret
+arguments, with a preview or dry run where the operation supports one; when no
+operation exists the action is guidance and names no invented command.
+
+| Rule | Fires when |
+| --- | --- |
+| `quota_pace` | At least two comparable readings of the same provider binding and window exist, the ledger covers their interval, the basis converts observed tokens to a window share, the share moved by at least one percentage point, and a qualified reset exists. |
+| `unpriced_usage` | At least five unpriced records, or at least 10 percent of records, are unpriced in the period. |
+| `failure_cluster` | At least five failed or rejected records share one stage and controlled reason code in the period. |
+| `cost_concentration` | Within one provider instance, at least 80 percent of records are priced, at least 20 are priced, and one target-and-model pair holds at least 50 percent of that provider's estimated cost. |
+| `latency_regression` | The period's p90 duration is at least 1.5 times the preceding equal period's p90, with at least 20 samples in both. |
+| `attribution_gap` | At least 20 records exist and at least 50 percent have an unknown Agent target. |
+
+A rule that cannot fire reports a refusal with its rule ID, its evaluated scope,
+and the first failing condition in the rule's documented condition order. These
+are the refusal reasons, in that condition order:
+
+- `quota_pace` — `single_reading`, `binding_changed`, `window_before_coverage`,
+  `coverage_gap`, `unknown_basis`, `low_usage`, `no_reset_clock`,
+  `mixed_credits`, `below_threshold`.
+- `unpriced_usage` — `below_threshold`.
+- `failure_cluster` — `below_threshold`.
+- `cost_concentration` — `low_priced_share`, `low_samples`, `below_threshold`.
+- `latency_regression` — `low_samples`, `no_baseline`, `below_threshold`.
+- `attribution_gap` — `below_threshold`.
+
+A rule with no applicable scope is omitted from the result. Thresholds are product
+constants, not provider facts. An empty insight list with refusals is a completed
+read, not a statement that usage is healthy.
+
+A `quota_pace` claim states the observed rate, the reading interval, the reset
+assumption, and that the projection is a derived estimate which fails if the rate
+or the allowance changes. It never presents a projected remaining token count, a
+provider limit, or a confirmed exhaustion.
+
+The [usage analytics contract](../specs/usage-analytics/spec.md) and the
+[usage commands](../specs/cli/usage/spec.md) own the complete result data, the
+documented row bounds, exit codes, and every refusal reason.
+
 ## Native login and logout boundaries
 
 Native sign-in and sign-out run through a qualified native command; they are not

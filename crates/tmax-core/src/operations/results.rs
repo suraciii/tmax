@@ -75,6 +75,7 @@ pub(super) fn error_response(operation: &str, error: Error, dry_run: bool) -> Re
         "inputs_changed"
             | "credential_unavailable"
             | "storage_version_unsupported"
+            | "usage_store_unavailable"
             | "login_source_required"
             | "interactive_required"
             | "unsupported_protected_input"
@@ -315,6 +316,29 @@ mod tests {
         assert_eq!(response.exit_code, 2);
         assert_eq!(response.body["status"], "error");
         assert_eq!(response.body["blockers"][0]["code"], "migration_refused");
+    }
+
+    #[test]
+    fn blocked_usage_clear_and_invalid_usage_arguments_use_the_documented_exits() {
+        for code in ["usage_store_unavailable", "storage_version_unsupported"] {
+            let response = error_response(
+                "usage clear",
+                Error::new(code, "The local usage ledger cannot be read"),
+                false,
+            );
+            assert_eq!(response.exit_code, 3, "{code}");
+            assert_eq!(response.body["status"], "blocked");
+        }
+        for code in ["invalid_arguments", "invalid_instant"] {
+            let response = error_response(
+                "usage summary",
+                Error::new(code, "Unsupported usage scope").field("period"),
+                false,
+            );
+            assert_eq!(response.exit_code, 2, "{code}");
+            assert_eq!(response.body["status"], "error");
+            assert_eq!(response.body["data"]["field"], "period");
+        }
     }
 
     #[test]

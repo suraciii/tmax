@@ -8,6 +8,8 @@ save, activation, and Agent application. [Model selection](../model-routing/spec
 owns candidate eligibility, priority evaluation, and conversation continuity.
 [Input values and acquisition](../model-routing/inputs/spec.md#input-values-and-acquisition)
 owns current quota/reset heads, validity, replacement, and acquisition.
+The [usage analytics contract](../usage-analytics/spec.md) owns the durable usage
+ledger and the allowance reading history; those records are not diagnostic history.
 The [CLI contract](../cli/spec.md) owns command grammar,
 [dry-run and execution](../cli/spec.md#dry-run-and-execution),
 serialized results, and exit codes. CLI and Web must expose the same diagnostic
@@ -426,6 +428,11 @@ after restart. A new process must report that earlier request coverage is unavai
 not infer earlier successes, failures, or usage. Returning retained safe metadata
 through CLI/Web reads does not create a persistent history or archive capability.
 
+These bounds govern diagnostic request history and its derived aggregates. The
+[usage ledger](../usage-analytics/spec.md#usage-ledger) is a separate, content-free
+record owned by the usage analytics contract; it is not diagnostic history, cannot
+be inspected as a request, and does not relax any bound in this section.
+
 Persisted current input heads and the last acquisition attempts have the
 independent [retention lifecycle](../model-routing/inputs/spec.md#retention-and-removal).
 They must not become an archive of superseded input facts or a source for
@@ -491,7 +498,9 @@ identity/time. Its aggregates no longer include cleared records. No operation
 snapshot is persisted or reused by another call. A dry run promises neither
 future retention nor future-request suppression.
 
-`history clear` does not delete the separate persistent error log.
+`history clear` does not delete the separate persistent error log. It also does
+not delete the usage ledger or the allowance reading history, which follow the
+[usage analytics contract](../usage-analytics/spec.md#clear).
 
 Clearing or evicting history, stopping the gateway, and restarting it must not delete
 session bindings or their original decision basis, protected native-restore/recovery
@@ -511,7 +520,9 @@ fabricated zero. Incompatible units or scopes must not be summed.
 Provider account observations must remain separate from these local summaries,
 as required by the [billing contract](../product/spec.md#billing-quota-and-renewal-information).
 Local history cannot establish account-wide usage, remaining quota, or an official
-bill. Clearing history does not reset an upstream allowance.
+bill. Clearing history does not reset an upstream allowance. Usage reports over the
+separate usage ledger are not aggregates of this history; their coverage and gaps
+are bounded by that ledger's contract.
 
 Diagnostics record failures; they do not own routing policy. Explicit
 [request fallback and failure priority policies](../model-routing/spec.md#request-fallback-and-failure-priority-override)

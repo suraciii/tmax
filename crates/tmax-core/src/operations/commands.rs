@@ -10,9 +10,27 @@ struct Command {
 }
 impl Command {
     fn supports_revision(&self) -> bool {
-        self.mutation && !matches!(self.path, "skill install" | "provider login-cancel")
+        self.mutation
+            && !matches!(
+                self.path,
+                "skill install" | "provider login-cancel" | "usage clear"
+            )
     }
 }
+
+/// Report periods accepted by the `usage` command group.
+const USAGE_PERIODS: [&str; 5] = ["today", "7d", "30d", "90d", "all"];
+/// Breakdown dimensions accepted by `usage breakdown --by`.
+const USAGE_DIMENSIONS: [&str; 8] = [
+    "provider",
+    "model",
+    "requested",
+    "target",
+    "protocol",
+    "outcome",
+    "origin",
+    "day",
+];
 
 const COMMANDS: &[Command] = &[
     Command {
@@ -855,6 +873,34 @@ const COMMANDS: &[Command] = &[
         options: "",
         mutation: true,
     },
+    Command {
+        path: "usage summary",
+        min: 0,
+        max: 0,
+        options: "period since until",
+        mutation: false,
+    },
+    Command {
+        path: "usage breakdown",
+        min: 0,
+        max: 0,
+        options: "period since until by",
+        mutation: false,
+    },
+    Command {
+        path: "usage insights",
+        min: 0,
+        max: 0,
+        options: "period since until",
+        mutation: false,
+    },
+    Command {
+        path: "usage clear",
+        min: 0,
+        max: 0,
+        options: "",
+        mutation: true,
+    },
 ];
 pub fn catalog() -> Value {
     json!(COMMANDS.iter().map(|c| {
@@ -902,6 +948,8 @@ pub fn catalog() -> Value {
                 "enabled" => vec!["true", "false"],
                 "transport" => vec!["http"],
                 "weekday" => vec!["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                "period" => USAGE_PERIODS.to_vec(),
+                "by" => USAGE_DIMENSIONS.to_vec(),
                 _ => vec![],
             };
             (name.into(), json!({
@@ -1101,7 +1149,7 @@ pub fn validate(r: &Request) -> Result<()> {
             .field(key));
         }
     }
-    for key in ["state", "protocol", "agent", "snapshot"] {
+    for key in ["state", "protocol", "agent", "snapshot", "period", "by"] {
         if let Some(values) = r.arguments.get(key) {
             if values.is_empty() {
                 return Err(Error::new(
@@ -1125,6 +1173,8 @@ pub fn validate(r: &Request) -> Result<()> {
                     }
                 }
                 "snapshot" => ["accepted", "latest"].contains(&values[0].as_str()),
+                "period" => USAGE_PERIODS.contains(&values[0].as_str()),
+                "by" => USAGE_DIMENSIONS.contains(&values[0].as_str()),
                 _ => true,
             };
             if !valid {
@@ -1134,6 +1184,9 @@ pub fn validate(r: &Request) -> Result<()> {
                 );
             }
         }
+    }
+    if path.starts_with("usage ") {
+        validate_usage_scope(r, &path)?;
     }
     if (path == "model schedule replace"
         || path == "model schedule remove"
@@ -1148,9 +1201,210 @@ pub fn validate(r: &Request) -> Result<()> {
     }
     Ok(())
 }
+
+/// Validate the `usage` group's period and range contract.
+///
+/// The Web path bypasses clap, so these rules live beside the descriptor that
+/// declares the options. `--period` selects a trailing calendar window or `all`;
+/// `--since`/`--until` select one explicit `[since, until)` range. The two forms
+/// are mutually exclusive, a range needs both bounds, and the range must be
+/// increasing. `usage breakdown` requires exactly one known `--by` dimension.
+fn validate_usage_scope(r: &Request, path: &str) -> Result<()> {
+    let period = r.arguments.get("period");
+    let since = r.arguments.get("since").and_then(|v| v.first());
+    let until = r.arguments.get("until").and_then(|v| v.first());
+    if period.is_some() && (since.is_some() || until.is_some()) {
+        return Err(Error::new(
+            "invalid_arguments",
+            "A period and an explicit since/until range are mutually exclusive; keep --period or keep --since with --until",
+        )
+        .field("period"));
+    }
+    if since.is_some() != until.is_some() {
+        return Err(Error::new(
+            "invalid_arguments",
+            "An explicit range requires both --since and --until",
+        )
+        .field(if since.is_some() { "until" } else { "since" }));
+    }
+    if let (Some(since), Some(until)) = (since, until) {
+        let since = usage_instant(since, "since")?;
+        let until = usage_instant(until, "until")?;
+        if since >= until {
+            return Err(Error::new(
+                "invalid_arguments",
+                "The --since bound must precede the --until bound",
+            )
+            .field("since"));
+        }
+    }
+    if path == "usage breakdown" {
+        let dimension = r.arguments.get("by").and_then(|v| v.first());
+        let Some(dimension) = dimension else {
+            return Err(Error::new(
+                "invalid_arguments",
+                "usage breakdown requires --by with one dimension: provider, model, requested, target, protocol, outcome, origin, or day",
+            )
+            .field("by"));
+        };
+        if !USAGE_DIMENSIONS.contains(&dimension.as_str()) {
+            return Err(Error::new(
+                "invalid_arguments",
+                "Unsupported breakdown dimension; use provider, model, requested, target, protocol, outcome, origin, or day",
+            )
+            .field("by"));
+        }
+    }
+    Ok(())
+}
+
+fn usage_instant(value: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|at| at.with_timezone(&chrono::Utc))
+        .map_err(|_| {
+            Error::new(
+                "invalid_instant",
+                "Expected an RFC 3339 instant with an explicit offset, such as 2026-11-01T00:00:00Z",
+            )
+            .field(field)
+        })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn usage_commands_are_finite_and_validate_their_scope() {
+        let entries = catalog();
+        let find = |operation: &str| {
+            entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["operation"] == operation)
+                .unwrap()
+                .clone()
+        };
+        for (operation, options) in [
+            ("usage summary", vec!["period", "since", "until"]),
+            ("usage breakdown", vec!["period", "since", "until", "by"]),
+            ("usage insights", vec!["period", "since", "until"]),
+            ("usage clear", vec![]),
+        ] {
+            let entry = find(operation);
+            assert_eq!(entry["operands"]["min"], 0);
+            assert_eq!(entry["operands"]["max"], 0);
+            assert_eq!(entry["arguments"], json!(options));
+            assert_eq!(entry["mutation"], operation == "usage clear");
+            assert_eq!(entry["dry_run"], operation == "usage clear");
+            assert_eq!(entry["revision_guard"], false);
+        }
+        assert_eq!(
+            find("usage summary")["argument_metadata"]["period"]["choices"],
+            json!(["today", "7d", "30d", "90d", "all"])
+        );
+        assert_eq!(
+            find("usage breakdown")["argument_metadata"]["by"]["choices"],
+            json!([
+                "provider",
+                "model",
+                "requested",
+                "target",
+                "protocol",
+                "outcome",
+                "origin",
+                "day"
+            ])
+        );
+        let usage_request =
+            |command: &[&str], arguments: &[(&str, &[&str])], dry_run: bool| Request {
+                command: command.iter().map(|value| (*value).into()).collect(),
+                operands: vec![],
+                arguments: arguments
+                    .iter()
+                    .map(|(key, values)| {
+                        (
+                            (*key).into(),
+                            values.iter().map(|value| (*value).into()).collect(),
+                        )
+                    })
+                    .collect(),
+                dry_run,
+                if_revision: None,
+            };
+        let since = "2026-11-01T00:00:00Z";
+        let until = "2026-11-08T00:00:00Z";
+        for operation in [&["usage", "summary"][..], &["usage", "insights"][..]] {
+            for arguments in [
+                vec![],
+                vec![("period", &["today"][..])],
+                vec![("period", &["7d"][..])],
+                vec![("period", &["30d"][..])],
+                vec![("period", &["90d"][..])],
+                vec![("period", &["all"][..])],
+                vec![("since", &[since][..]), ("until", &[until][..])],
+            ] {
+                let request = usage_request(operation, &arguments, false);
+                validate(&request).unwrap();
+                assert!(validate(&usage_request(operation, &arguments, true)).is_err());
+            }
+        }
+        validate(&usage_request(
+            &["usage", "breakdown"],
+            &[("by", &["day"][..]), ("period", &["30d"][..])],
+            false,
+        ))
+        .unwrap();
+        validate(&usage_request(&["usage", "clear"], &[], false)).unwrap();
+        validate(&usage_request(&["usage", "clear"], &[], true)).unwrap();
+
+        for (command, arguments) in [
+            (
+                &["usage", "summary"][..],
+                vec![("period", &["7d"][..]), ("since", &[since][..])],
+            ),
+            (
+                &["usage", "summary"][..],
+                vec![("period", &["all"][..]), ("until", &[until][..])],
+            ),
+            (&["usage", "summary"][..], vec![("since", &[since][..])]),
+            (&["usage", "summary"][..], vec![("until", &[until][..])]),
+            (
+                &["usage", "summary"][..],
+                vec![("since", &[until][..]), ("until", &[since][..])],
+            ),
+            (
+                &["usage", "summary"][..],
+                vec![("since", &[since][..]), ("until", &[since][..])],
+            ),
+            (&["usage", "summary"][..], vec![("period", &["week"][..])]),
+            (&["usage", "summary"][..], vec![("by", &["provider"][..])]),
+            (&["usage", "breakdown"][..], vec![("period", &["7d"][..])]),
+            (&["usage", "breakdown"][..], vec![("by", &["unknown"][..])]),
+            (
+                &["usage", "breakdown"][..],
+                vec![("by", &["day", "provider"][..])],
+            ),
+            (&["usage", "clear"][..], vec![("period", &["7d"][..])]),
+            (&["usage", "clear"][..], vec![("by", &["day"][..])]),
+        ] {
+            let request = usage_request(command, &arguments, false);
+            assert_eq!(
+                validate(&request).unwrap_err().code,
+                "invalid_arguments",
+                "{command:?} {arguments:?}"
+            );
+        }
+        let request = usage_request(
+            &["usage", "summary"],
+            &[("since", &["not-an-instant"][..]), ("until", &[until][..])],
+            false,
+        );
+        assert_eq!(validate(&request).unwrap_err().code, "invalid_instant");
+        let mut guarded = usage_request(&["usage", "clear"], &[], false);
+        guarded.if_revision = Some("absent".into());
+        assert!(validate(&guarded).is_err());
+    }
+
     #[test]
     fn effort_map_catalog_and_protocol_contract_are_finite() {
         let entries = catalog();

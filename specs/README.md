@@ -37,12 +37,17 @@ and the invariants it protects.
   - [Models](cli/models/spec.md) — concrete models and explanations; nested catalog, model-alias, and priority-rule commands.
   - [Agents](cli/agents/spec.md) — targets, model choices, native application, and restoration.
   - [Service](cli/service/spec.md) — outbound network, gateway, Web, and nested request diagnostics.
+  - [Usage](cli/usage/spec.md) — gateway usage reports, insights, and explicit clear.
   - [Results](cli/results/spec.md) — compact JSON and exit codes shared by all commands.
 - [Agent session portability](sessions/spec.md) — read-only native session
   discovery and one-way native session import; [design](sessions/design.md)
   owns canonical mapping, fidelity, and native visibility boundaries.
 - [Diagnostics](diagnostics/spec.md) — scoped status evidence, historical selection
   reasons, bounded in-memory request history, and persistent gateway error logs.
+- [Usage analytics](usage-analytics/spec.md) — durable observed-usage ledger,
+  retained allowance readings, usage reports, and evidence-bound insights;
+  [design](usage-analytics/design.md) owns retention, privacy, and
+  routing-feedback boundaries.
 
 Shared vocabulary lives in [CONTEXT.md](../CONTEXT.md). The executable and shared
 runtime implement management, configuration, native adapters, Web, and gateway

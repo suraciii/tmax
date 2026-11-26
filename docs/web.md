@@ -116,6 +116,19 @@ page makes no external font, image, or script requests.
   on hide, navigation, page exit, or switching away from the tab.
   Persistent gateway errors are kept in the local [log file](usage.md#gateway-error-log),
   not in the history panel. Clearing current-process history does not delete that file.
+- **Usage** shows the gateway-observed usage report from the local usage ledger.
+  Each read states its period and time zone, the coverage it is clamped to,
+  request and per-outcome counts with probes reported separately, exclusive token
+  buckets with their `reported`, `partial`, `unknown`, and `ambiguous` states, one
+  cost entry per provider instance with its currency and priced, partially priced,
+  and unpriced counts, duration percentiles with their sample counts, breakdown
+  rows for one requested dimension, a per-local-day trend, dated allowance
+  readings kept separate from observed usage, and fired insights with their
+  refusals. The area shows no combined cost total across providers, keeps an
+  unknown value distinct from a known zero, and never subtracts observed usage from
+  an allowance reading. Reads happen on demand when the area is opened; it does not
+  auto-refresh, observe a provider, refresh a credential, or change the ledger.
+  See [usage analytics](usage.md#usage-analytics).
 
 The redesigned workspace uses Simplified Chinese labels and retains stable IDs,
 protocol names, and command names. It uses the same backend operations and local

@@ -172,6 +172,7 @@ pub fn command() -> Command {
         .subcommand(web_commands())
         .subcommand(history_commands())
         .subcommand(session_commands())
+        .subcommand(usage_commands())
 }
 
 fn help_command() -> Command {
@@ -1206,6 +1207,78 @@ fn history_commands() -> Command {
         .subcommand_required(true)
 }
 
+fn usage_commands() -> Command {
+    let period = || {
+        value("period", "PERIOD", "today (default), 7d, 30d, 90d, or all.")
+            .value_parser(["today", "7d", "30d", "90d", "all"])
+    };
+    let range = |command: Command| {
+        command
+            .arg(period())
+            .arg(
+                value(
+                    "since",
+                    "INSTANT",
+                    "Inclusive lower bound; RFC 3339 with an explicit offset, requires --until.",
+                )
+                .requires("until")
+                .conflicts_with("period"),
+            )
+            .arg(
+                value(
+                    "until",
+                    "INSTANT",
+                    "Exclusive upper bound; RFC 3339 with an explicit offset, requires --since.",
+                )
+                .requires("since")
+                .conflicts_with("period"),
+            )
+    };
+    family(
+        "usage",
+        "Report gateway-observed usage, insights, and explicit retained-data removal.",
+        Command::new("usage")
+            .subcommand(range(leaf(
+                "summary",
+                "Report gateway-observed usage for one period.",
+                "Effect-free read of the local usage ledger. It never starts or contacts the service, observes a provider, refreshes a credential, prunes or rewrites the store, or changes routing, and it works while the service is stopped. --period selects today (default), 7d, 30d, or 90d as a trailing local-calendar-day window, or all for the retained ledger. --since/--until select an explicit [since, until) range of RFC 3339 instants with explicit offsets and require each other; --period and an explicit range are mutually exclusive.\n\nCoverage is gateway-observed only: direct and native upstream traffic is unobserved, explicit probes are reported separately, and diagnostic request history is excluded. An absent, empty, corrupt, or unsupported store is reported with typed coverage and its reason, never as an empty report or a zero total. Usage counters distinguish known zero, unknown, partial, and ambiguous. No individual usage record, request handle, or request timeline is exposed.\n\nExit: 0 for a completed read, including absent, empty, or unavailable coverage; 2 for an invalid period, instant, or range.\nExample: tmax usage summary --period 7d",
+            )))
+            .subcommand(range(leaf(
+                "breakdown",
+                "Report the same usage scope with one aggregate row per DIMENSION value.",
+                "Same scope, effects, and options as usage summary, with one bounded aggregate row per value of --by: provider, model, requested, target, protocol, outcome, origin, or day. --by is required and takes exactly one value. A day row is keyed by a local calendar date. Rows beyond the bound are counted in data.omitted_rows; provider and model rows carry provider-scoped cost and the other dimensions report it as cross-provider. No individual usage record is exposed.\n\nExit: 0 for a completed read; 2 for a missing, repeated, or unknown --by, or an invalid period, instant, or range.\nExample: tmax usage breakdown --by provider --period 30d",
+            ))
+                .arg(
+                    value("by", "DIMENSION", "provider, model, requested, target, protocol, outcome, origin, or day.")
+                        .value_parser([
+                            "provider",
+                            "model",
+                            "requested",
+                            "target",
+                            "protocol",
+                            "outcome",
+                            "origin",
+                            "day",
+                        ])
+                        .required(true),
+                ))
+            .subcommand(range(leaf(
+                "insights",
+                "Report fired deterministic usage insights and refusals for one period.",
+                "Effect-free read with the same scope, effects, and options as usage summary. Reports only fired deterministic insights with their rule, scope, claim, evidence, assumption, and action, plus the bounded refusals that name why each applicable scope did not fire. An empty insight list is a completed read, not a statement that usage is healthy. It never changes routing, credentials, or retained data.\n\nExit: 0 for a completed read, including an empty insight list; 2 for an invalid period, instant, or range.\nExample: tmax usage insights --period 7d",
+            )))
+            .subcommand(mutation(
+                leaf(
+                    "clear",
+                    "Remove retained usage records and allowance readings.",
+                    "Removes the retained usage records and allowance readings in one bounded operation; records committed after the operation begins remain. A successful clear starts a new coverage epoch, so evicted and dropped counters reset and cleared_at names the epoch start. It never deletes diagnostic request history, the gateway error log, quota observations or current heads, routing input heads, session bindings, recovery state, settings, or credentials, and it never resets an upstream allowance.\n\n--dry-run reports the same removed and retained counts without deleting. An absent store clears successfully with zero removed. An unreadable or unsupported store is blocked before any deletion.\n\nExit: 0 for a completed clear or dry run; 2 for invalid arguments; 3 for an unreadable or unsupported store before deletion; 4 for a failed clear.\nExample: tmax usage clear --dry-run",
+                ),
+                true,
+                false,
+            )),
+    )
+}
+
 pub fn operation_hint(command: &Command, argv: &[OsString]) -> Option<String> {
     let mut index = 1;
     let mut current = command;
@@ -1669,6 +1742,153 @@ mod tests {
                 ])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn usage_group_help_lists_every_leaf_with_its_scope_and_exits() {
+        let root = command();
+        let usage = root
+            .get_subcommands()
+            .find(|child| child.get_name() == "usage")
+            .expect("root help lists the usage group");
+        for leaf in ["summary", "breakdown", "insights", "clear"] {
+            assert!(
+                usage
+                    .get_subcommands()
+                    .any(|child| child.get_name() == leaf),
+                "usage help lists {leaf}"
+            );
+        }
+        for (path, expected) in [
+            (vec!["usage", "summary"], "--period <PERIOD>"),
+            (vec!["usage", "summary"], "--since <INSTANT>"),
+            (vec!["usage", "breakdown"], "--by <DIMENSION>"),
+            (vec!["usage", "insights"], "--until <INSTANT>"),
+            (vec!["usage", "clear"], "--dry-run"),
+        ] {
+            let help = super::help_target(
+                &root,
+                &path
+                    .iter()
+                    .map(|part| (*part).to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .expect("usage leaf help")
+            .render_long_help()
+            .to_string();
+            assert!(help.contains(expected), "{help}");
+            assert!(help.contains("Exit:"), "{help}");
+            assert!(help.contains("Example: tmax usage"), "{help}");
+        }
+        let clear = super::help_target(&root, &["usage".into(), "clear".into()])
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(!clear.contains("--if-revision"), "{clear}");
+    }
+
+    #[test]
+    fn usage_reads_accept_one_period_or_one_range_and_clear_previews() {
+        let matches = command()
+            .try_get_matches_from(["tmax", "usage", "summary", "--period", "7d"])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.command, ["usage", "summary"]);
+        assert!(request.operands.is_empty());
+        assert_eq!(request.arguments["period"], ["7d"]);
+        assert!(!request.dry_run);
+        assert!(request.if_revision.is_none());
+
+        let matches = command()
+            .try_get_matches_from([
+                "tmax",
+                "usage",
+                "summary",
+                "--since",
+                "2026-11-01T00:00:00Z",
+                "--until",
+                "2026-11-08T00:00:00Z",
+            ])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.arguments["since"], ["2026-11-01T00:00:00Z"]);
+        assert_eq!(request.arguments["until"], ["2026-11-08T00:00:00Z"]);
+
+        let matches = command()
+            .try_get_matches_from(["tmax", "usage", "breakdown", "--by", "day"])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.command, ["usage", "breakdown"]);
+        assert_eq!(request.arguments["by"], ["day"]);
+
+        let matches = command()
+            .try_get_matches_from(["tmax", "usage", "clear", "--dry-run"])
+            .unwrap();
+        let request = super::request(&command(), &matches);
+        assert_eq!(request.command, ["usage", "clear"]);
+        assert!(request.dry_run);
+        assert!(request.if_revision.is_none());
+
+        for args in [
+            vec![
+                "tmax",
+                "usage",
+                "summary",
+                "--period",
+                "7d",
+                "--since",
+                "2026-11-01T00:00:00Z",
+            ],
+            vec![
+                "tmax",
+                "usage",
+                "summary",
+                "--period",
+                "all",
+                "--until",
+                "2026-11-08T00:00:00Z",
+            ],
+            vec![
+                "tmax",
+                "usage",
+                "summary",
+                "--since",
+                "2026-11-01T00:00:00Z",
+            ],
+            vec![
+                "tmax",
+                "usage",
+                "summary",
+                "--until",
+                "2026-11-08T00:00:00Z",
+            ],
+            vec!["tmax", "usage", "summary", "--period", "week"],
+            vec![
+                "tmax", "usage", "summary", "--period", "7d", "--period", "all",
+            ],
+            vec!["tmax", "usage", "breakdown"],
+            vec!["tmax", "usage", "breakdown", "--by", "unknown"],
+            vec![
+                "tmax",
+                "usage",
+                "breakdown",
+                "--by",
+                "day",
+                "--by",
+                "provider",
+            ],
+            vec!["tmax", "usage", "summary", "--by", "provider"],
+            vec!["tmax", "usage", "summary", "--dry-run"],
+            vec!["tmax", "usage", "insights", "--dry-run"],
+            vec!["tmax", "usage", "clear", "--period", "7d"],
+            vec!["tmax", "usage", "clear", "--if-revision", "revision"],
+            vec!["tmax", "usage", "summary", "extra-operand"],
+        ] {
+            assert!(
+                command().try_get_matches_from(args.clone()).is_err(),
+                "{args:?}"
+            );
+        }
     }
 
     fn os_args(args: &[&str]) -> Vec<OsString> {

@@ -147,7 +147,8 @@ calling agent and working directory. All tmax-owned persisted data, caches,
 logs, protected secrets, session bindings, and recovery records belong under
 `~/.tmax`; ordinary request history remains in memory. The separate
 [error log](../diagnostics/spec.md#persistent-gateway-error-log) retains bounded
-failure details locally.
+failure details locally, and the [usage ledger](../usage-analytics/spec.md#usage-ledger)
+retains bounded, content-free usage records.
 Agent actual configuration and Agent-owned credentials remain in their
 locations. Platform startup registration is an external integration, not a
 second tmax data directory.
@@ -440,6 +441,15 @@ Provider-reported upstream account usage and gateway-observed usage must appear
 separately. Local observations must not be presented as an official bill or used
 to invent remaining subscription quota. The [diagnostics contract](../diagnostics/spec.md)
 owns direct/gateway observation coverage, incomplete usage, and retained-history limits.
+
+Gateway-observed usage may be retained by the
+[usage analytics contract](../usage-analytics/spec.md). A locally computed cost is
+an estimate at a stated effective price: it must name its source, currency, and
+unpriceable usage axes. It must not be presented as a settled charge, added to
+provider-reported charges or subscription charges, or summed across currencies or
+billing scopes. Unpriced usage must not contribute a fabricated zero. A retained
+allowance reading is dated display evidence; it neither extends a quota
+observation's applicability nor becomes routing, admission, or guard evidence.
 
 A provider dashboard is not a machine-readable usage API. When no supported
 query exists, tmax must provide an explicit unknown state, a provider dashboard
@@ -1041,6 +1051,7 @@ The supplementary Web interface must have these task-oriented areas:
 | Models | Concrete qualified models with metadata overrides, capabilities, priorities and schedules; model aliases (presented as gateway entries) with public names, declared protocols, explicit candidate lists, and selection previews |
 | Agents | Five supported Agents, Agent targets and provider entries, model choices, effective configuration, preview/apply/restore |
 | Gateway | Listener lifecycle, shared key, gateway-entry list with readiness and next actions, authenticated published raw concrete-model IDs, continuity, health and request metadata |
+| Usage | Gateway-observed usage reports with their period and coverage, allowance readings kept separate from observed usage, and evidence-bound insights |
 
 The Web interface presents a Model alias as a **gateway entry**: the
 client-selectable public route name by which one or more existing Models are used
